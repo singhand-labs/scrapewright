@@ -26,9 +26,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('nativeReconnect')?.addEventListener('click', reconnectNative);
   document.getElementById('nativeCopyDiag')?.addEventListener('click', copyNativeDiagnostics);
 
-  document.getElementById('apiDocModal')?.addEventListener('click', (e) => {
-    if (e.target.classList.contains('modal') || e.target.classList.contains('modal-close')) {
-      document.getElementById('apiDocModal').classList.add('hidden');
+  document.getElementById('openSettings')?.addEventListener('click', () => {
+    document.getElementById('settingsModal').classList.remove('hidden');
+  });
+
+  // Close any modal via the × button, a backdrop click, or ESC.
+  document.addEventListener('click', (e) => {
+    if (e.target.classList.contains('modal-close')) {
+      e.target.closest('.modal')?.classList.add('hidden');
+    } else if (e.target.classList.contains('modal')) {
+      e.target.classList.add('hidden');
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      document.querySelectorAll('.modal:not(.hidden)').forEach(m => m.classList.add('hidden'));
     }
   });
 });

@@ -1,6 +1,23 @@
 body { font-family: system-ui, sans-serif; margin: 0; background: #f5f5f5; }
 .container { max-width: 800px; margin: 0 auto; padding: 20px; }
 h1 { font-size: 24px; margin-bottom: 20px; }
+.hidden { display: none !important; }
+.section-head { display: flex; justify-content: space-between; align-items: center; }
+.section-head h2 { margin: 0; }
+.settings-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #6366f1;
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.settings-btn:hover { background: #4f46e5; }
+.settings-btn .icon { width: 16px; height: 16px; }
 section { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
 input, select { display: block; width: 100%; margin: 8px 0; padding: 8px; box-sizing: border-box; }
 button { padding: 8px 16px; cursor: pointer; }
@@ -33,10 +50,6 @@ button { padding: 8px 16px; cursor: pointer; }
   z-index: 10000;
 }
 
-.modal.hidden {
-  display: none;
-}
-
 .modal-content {
   background: white;
   padding: 24px;
@@ -56,6 +69,13 @@ button { padding: 8px 16px; cursor: pointer; }
   cursor: pointer;
   color: #6b7280;
 }
+
+.modal-content h3 {
+  font-size: 15px;
+  margin: 20px 0 8px;
+  color: #374151;
+}
+.modal-content h3:first-of-type { margin-top: 0; }
 
 .api-doc-section {
   margin: 16px 0;
@@ -167,8 +187,6 @@ button { padding: 8px 16px; cursor: pointer; }
   padding-top: 6px;
   border-top: 1px solid #e5e7eb;
 }
-
-.native-error-row.hidden { display: none; }
 
 .native-error-text {
   color: #b91c1c;

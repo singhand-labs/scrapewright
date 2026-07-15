@@ -8,3 +8,11 @@ node_modules/
 # Load-test / debug captures from service-hardening sessions (user-provided
 # service dumps, console/debug logs, raw extractions — not source artifacts).
 .DS_Store
+
+# Local-only docs: superpowers workspace (plans/specs) and roadmap scratch.
+docs/superpowers/
+docs/roadmap.md
+start_claude.sh
+docs/annotation-req.md
+docs/req.md
+docs/roadmap.zh-CN.md

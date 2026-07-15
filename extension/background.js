@@ -105,6 +105,12 @@ chrome.runtime.onInstalled.addListener(() => {
   loadNativeState().finally(() => initCommunication());
 });
 
+// Toolbar icon click opens the Options (service management) page directly —
+// no popup. New services can be created from there via "+ New Service".
+chrome.action.onClicked.addListener(() => {
+  chrome.runtime.openOptionsPage();
+});
+
 // Keep Service Worker alive: alarm fires every 25s to wake up SW and reconnect if needed
 chrome.alarms.create('keepalive', { periodInMinutes: 0.4 });
 // Daily log cleanup

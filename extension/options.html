@@ -34,30 +34,17 @@
       <p class="hint">The Native Host bridges external programs to this extension. If the badge is red, Chrome can't launch the host — copy diagnostics and check the log file.</p>
     </section>
 
-    <section class="llm-config">
-      <h2>LLM Configuration</h2>
-      <select id="provider">
-        <option value="openai">OpenAI</option>
-        <option value="moonshot">Moonshot</option>
-        <option value="kimi">Kimi (Moonshot Platform)</option>
-        <option value="anthropic">Anthropic</option>
-        <option value="glm">GLM (Zhipu AI)</option>
-      </select>
-      <input type="text" id="model" placeholder="Model name (e.g. kimi-for-coding)" />
-      <input type="password" id="apiKey" placeholder="API Key" />
-      <input type="text" id="apiBaseUrl" placeholder="Base URL (optional)" />
-      <button id="saveLlm">Save LLM Config</button>
-    </section>
-
-    <section class="server-config">
-      <h2>Server Configuration</h2>
-      <input type="number" id="serverPort" placeholder="8765" min="1" max="65535" />
-      <button id="savePort">Save Port</button>
-      <p class="hint">Changes apply immediately via Native Messaging.</p>
-    </section>
-
     <section class="services">
-      <h2>Services</h2>
+      <div class="section-head">
+        <h2>Services</h2>
+        <button id="openSettings" class="settings-btn" title="LLM & server settings">
+          <svg class="icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+          Settings
+        </button>
+      </div>
       <button id="newService">+ New Service</button>
       <button id="exportAll">Export All</button>
       <button id="importBtn">Import</button>
@@ -76,6 +63,31 @@
       <button id="clearDebug">Clear Debug Logs</button>
       <p class="hint">Export and send logs when debugging issues.</p>
     </section>
+  </div>
+
+  <div id="settingsModal" class="modal hidden">
+    <div class="modal-content">
+      <span class="modal-close">&times;</span>
+      <h2>Settings</h2>
+
+      <h3>LLM Configuration</h3>
+      <select id="provider">
+        <option value="openai">OpenAI</option>
+        <option value="moonshot">Moonshot</option>
+        <option value="kimi">Kimi (Moonshot Platform)</option>
+        <option value="anthropic">Anthropic</option>
+        <option value="glm">GLM (Zhipu AI)</option>
+      </select>
+      <input type="text" id="model" placeholder="Model name (e.g. kimi-for-coding)" />
+      <input type="password" id="apiKey" placeholder="API Key" />
+      <input type="text" id="apiBaseUrl" placeholder="Base URL (optional)" />
+      <button id="saveLlm">Save LLM Config</button>
+
+      <h3>Server Configuration</h3>
+      <input type="number" id="serverPort" placeholder="8765" min="1" max="65535" />
+      <button id="savePort">Save Port</button>
+      <p class="hint">Changes apply immediately via Native Messaging.</p>
+    </div>
   </div>
 
   <div id="apiDocModal" class="modal hidden">

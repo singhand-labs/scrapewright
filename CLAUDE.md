@@ -62,7 +62,9 @@ tail -f ~/.cache/scrapewright/host.log               # Linux
 
 After modifying extension files, reload the extension at `chrome://extensions/` (click the refresh icon on the extension card). Native Host changes require restarting Chrome or disconnecting/reconnecting the extension. The extension's options page (`options.html`) shows a **Native Host Status** card with the current connection mode (Connected / Polling / Disconnected), the last error, the log file path, a Reconnect button, and a Copy Diagnostics button — check there first when investigating connectivity issues.
 
-`README.md` (English, default) and `README.zh-CN.md` (Chinese) are the canonical user-facing references — both document the full HTTP API, DSL, distributed deployment, and CDP comparison. `docs/roadmap.md` (EN) / `docs/roadmap.zh-CN.md` (ZH) hold the planned-improvements list (formerly in README). `docs/technical-whitepaper.md` (Chinese) is the design rationale. `req.md` is the original requirements spec.
+`README.md` (English, default) and `README.zh-CN.md` (Chinese) are the canonical user-facing references — both document the full HTTP API, DSL, distributed deployment, and CDP comparison. `docs/roadmap.md` (EN) / `docs/roadmap.zh-CN.md` (ZH) hold the planned-improvements list (formerly in README). `docs/technical-whitepaper.md` (Chinese) is the design rationale; `docs/technical-introduction.md` is a shorter English overview; `docs/annotation-req.md` specifies the visual-annotation protocol used during the wizard's element-selection step. `req.md` is the original requirements spec.
+
+`scripts/` holds concrete reference service definitions (`baidu3.json`, `baidu4.json`, `yuanbao.json`) — full persisted service objects including `steps`, `inputSchema`, `outputSchema`, and `config`. These are the best examples of the step-graph DSL in the wild; read one before authoring or debugging a service.
 
 ## Native Host install internals
 
@@ -87,6 +89,8 @@ When the user reports a connection failure, the diagnostic order is:
 The host writes structured logs (ISO timestamp + level + message + JSON fields) to both stderr and the log file. The log file is the lifeline when Chrome launches the host — stderr goes nowhere visible in that mode. A synchronous boot trap at the top of `host.js` catches crashes *before* the logger initializes and writes them to `startup-error.log`, so the opaque "Native host has exited" message always has a real stack trace somewhere on disk.
 
 The background service worker tracks `nativeState` (mode, lastError, connected/disconnected timestamps, reconnect attempts) in `chrome.storage.local`, updated at every connection transition. The options page polls `GET_NATIVE_STATUS` every 3 seconds to reflect this state. `RECONNECT_NATIVE` resets the polling flag and port, then calls `initCommunication()` again.
+
+**Extension-ID auto-detection** (`native-host/lib/detect-id.js`): `./bin/scrapewright setup --auto` and `./bin/scrapewright id` avoid making the user copy the extension ID from `chrome://extensions/`. The detector reads `<chrome-user-data>/<profile>/Secure Preferences` (not `Default/Preferences`, which is empty for unpacked extensions), filters `extensions.settings` to `location===4` (unpacked), reads each candidate's `manifest.json` from its `path`, and matches on name `"Scrapewright"`. Unpacked entries have `manifest:null` inline, hence the on-disk readback. A LevelDB liveness fallback (`Local Extension Settings/<id>/*.log|*.ldb` containing `nativeState`/`executionLogs`) confirms which candidate is actually active. Pure Node `fs` — no Chrome runtime — so it's safe to require from the CLI and tests.
 
 ## High-Level Architecture
 
