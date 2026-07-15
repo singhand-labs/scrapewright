@@ -14,7 +14,7 @@ Scrapewright is an LLM-driven web data extraction platform composed of a Chrome 
 | **Real browser environment** | Injected as a Chrome extension; supports JS rendering, iframes, dynamic loading |
 | **AI self-healing** | On script failure, automatically captures a DOM snapshot → LLM repairs → retry |
 | **Standard API** | HTTP API for external callers, async execution queue, JSON Schema-constrained I/O |
-| **Visual operation** | 7-step wizard, element annotation, real-time execution log |
+| **Visual operation** | 5-phase wizard, element annotation, real-time execution log |
 
 ### Tech Stack
 
@@ -133,7 +133,7 @@ extension/                # Chrome Extension (Manifest V3)
   background.js           # Service Worker — execution queue, script orchestration, retry, AI auto-fix, long-poll client
   content-script.js       # Content script — DOM op proxy, element annotation, page snapshot
   sandbox.html/js         # Sandbox page — eval/new Function runs here (MV3 CSP requirement)
-  wizard.html/js/css      # 7-step AI wizard — service create/edit flow
+  wizard.html/js/css      # 5-phase AI wizard — service create/edit flow
   options.html/js/css     # Options page — LLM settings, service management, execution history
   popup.html/js           # Popup
   lib/
@@ -415,17 +415,15 @@ A structured logging system stored by date in `chrome.storage.local`:
 
 **File:** `extension/wizard.js` + `wizard.html`
 
-A 7-step AI wizard flow:
+A 5-phase AI wizard flow:
 
-| Step | Purpose | Key functions |
-|------|---------|---------------|
-| 1 | Enter the target URL | `loadPage()` |
-| 2 | Describe the need + AI research | `startResearch()` → `continueResearch()` |
-| 3 | Annotate elements | `startAnnotationMode()` / `stopAnnotationMode()` |
-| 4 | Name the service + review/edit the script | — |
-| 5 | I/O Schema + test input | — |
-| 6 | Execute the test | `testScript()` / `runTestFromStep5()` |
-| 7 | View results + AutoFix | `updateStep7UI()` |
+| Phase | Purpose | Key functions |
+|-------|---------|---------------|
+| 1 | Enter target URL + three requirement fields, then AI research | `startResearch()` → `continueResearch()` |
+| 2 | Name the service + review/edit the step graph | — |
+| 3 | I/O Schema + test input | — |
+| 4 | Execute the test (step by step) | `runTestFromStep5()` |
+| 5 | View results + AutoFix + deploy | `confirmDeploy()` |
 
 ### AI Research Flow
 
@@ -611,7 +609,7 @@ Add a new template to the `STEP_TEMPLATES` array in `wizard-utils.js`:
 
 1. **Enable extension debug logging:** view structured `[component]`-prefixed logs in the Chrome DevTools Console.
 2. **Inspect persisted logs:** run `chrome.storage.local.get(null, console.log)` in the Console to see all stored data.
-3. **Manually test a script:** edit the script directly in wizard Step 4.
+3. **Manually test a script:** edit the script directly in wizard Phase 2.
 4. **Export debug data:** the Options page can export service configs and execution history.
 
 ## 10. Known Limitations

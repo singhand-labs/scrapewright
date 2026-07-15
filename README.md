@@ -60,7 +60,7 @@ How Scrapewright answers each — this is what makes it a different kind of **AI
 - **AI-driven** — describe *what* you want in natural language; the LLM analyzes page structure, generates the scraping script, and self-repairs on errors. Think "AI agent for the browser," but config-time instead of run-time.
 - **Real browser environment** — runs as a Chrome extension inside a full browser, with first-class JavaScript rendering, iframe traversal, and dynamic loading. No headless-detected footprint.
 - **Standardized API** — every scraping service is callable through a uniform HTTP API, with JSON Schema constraints on both input and output. The same shape every time, no matter how gnarly the target site.
-- **Visual no-code wizard** — a 7-step flow takes you from describing the requirement to a tested deployment, no code required. Non-technical users can ship a scraper.
+- **Visual no-code wizard** — a 5-phase flow takes you from describing the requirement to a tested deployment, no code required. Non-technical users can ship a scraper.
 
 
 ## Core Features
@@ -158,17 +158,15 @@ After installation, **restart Chrome** (or click **Reconnect** in the Native Hos
 
 ### 4. Create a Scraping Service
 
-On the Options page click **+ New Service** to enter the AI wizard (7 steps):
+On the Options page click **+ New Service** to enter the AI wizard (5 phases):
 
-| Step | Description |
-|------|-------------|
-| **Step 1: Target URL** | Enter the target site URL (press Enter to advance) |
-| **Step 2: Describe Needs** | Describe the scraping requirement in natural language; click **Research** (or Ctrl+Enter) and the AI analyzes the page and generates a script |
-| **Step 3: Annotate Elements** | If the AI needs help, visually annotate page elements; once done, the AI optimizes the script using your annotations |
-| **Step 4: Service Name & Script** | Name the service; review and **edit** the AI-generated script |
-| **Step 5: I/O Schema & Test Input** | Confirm input/output parameter shapes (JSON Schema) and edit the test input data |
-| **Step 6: Execute Test** | Watch the live execution log (open page → load → execute → success/failure) |
-| **Step 7: Results** | Review test results. On failure, choose **Auto-Fix** (AI self-repair) or **Deploy Anyway** (deploy despite the error) |
+| Phase | Description |
+|-------|-------------|
+| **Phase 1: Target URL & Requirements** | Enter the target site URL plus three requirement fields — input parameters, page operations & data to collect, and (optional) output structure. Click **Research** (or Ctrl+Enter); the AI analyzes the page and generates a draft service. Each field has an inline placeholder example. If the AI needs help, an interactive exploration/annotation panel appears inline. |
+| **Phase 2: Service Name & Steps** | Name the service; review and **edit** the AI-generated step graph (each step is a script with success/failure transitions). |
+| **Phase 3: I/O Schema & Test Input** | Confirm input/output parameter shapes (JSON Schema) and edit the test input data. |
+| **Phase 4: Execute Test (step by step)** | Watch the live step-by-step execution log (open page → load → each step → success/failure). |
+| **Phase 5: Results** | Review test results. On failure, choose **Auto-Fix** (AI self-repair) or **Deploy Anyway** (deploy despite the error). |
 
 ### 5. Manage Services
 

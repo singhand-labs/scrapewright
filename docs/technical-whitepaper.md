@@ -14,7 +14,7 @@ Scrapewright 是一个 LLM 驱动的网页数据采集平台，由 Chrome 扩展
 | **真实浏览器环境** | Chrome 扩展注入，支持 JS 渲染、iframe、动态加载 |
 | **AI 自愈** | 脚本失败时自动捕获 DOM 快照 → LLM 修复 → 重试 |
 | **标准 API** | HTTP API 对外服务，异步执行队列，JSON Schema 约束 I/O |
-| **可视化操作** | 7 步向导流程，元素标注，实时执行日志 |
+| **可视化操作** | 5 阶段向导流程，元素标注，实时执行日志 |
 
 ### 技术栈
 
@@ -131,7 +131,7 @@ extension/                # Chrome 扩展 (Manifest V3)
   background.js           # Service Worker — 执行队列、脚本编排、重试、AI 自动修复、长轮询客户端
   content-script.js       # 内容脚本 — DOM 操作代理、元素标注、页面快照
   sandbox.html/js         # 沙盒页面 — eval/new Function 在此执行（MV3 CSP 要求）
-  wizard.html/js/css      # 7 步 AI 向导 — 服务创建/编辑流程
+  wizard.html/js/css      # 5 阶段 AI 向导 — 服务创建/编辑流程
   options.html/js/css     # 配置页 — LLM 设置、服务管理、执行历史
   popup.html/js           # 弹出窗口
   lib/
@@ -413,17 +413,15 @@ Chrome Native Messaging 协议实现：
 
 **文件：** `extension/wizard.js` + `wizard.html`
 
-7 步 AI 向导流程：
+5 阶段 AI 向导流程：
 
-| 步骤 | 功能 | 关键函数 |
+| 阶段 | 功能 | 关键函数 |
 |------|------|----------|
-| 1 | 输入目标 URL | `loadPage()` |
-| 2 | 描述需求 + AI 研究 | `startResearch()` → `continueResearch()` |
-| 3 | 标注元素 | `startAnnotationMode()` / `stopAnnotationMode()` |
-| 4 | 命名服务 + 查看/编辑脚本 | — |
-| 5 | I/O Schema + 测试输入 | — |
-| 6 | 执行测试 | `testScript()` / `runTestFromStep5()` |
-| 7 | 查看结果 + AutoFix | `updateStep7UI()` |
+| 1 | 输入目标 URL + 三项需求，然后 AI 研究 | `startResearch()` → `continueResearch()` |
+| 2 | 命名服务 + 查看/编辑步骤图 | — |
+| 3 | I/O Schema + 测试输入 | — |
+| 4 | 执行测试（逐步） | `runTestFromStep5()` |
+| 5 | 查看结果 + AutoFix + 部署 | `confirmDeploy()` |
 
 ### AI 研究流程
 
@@ -609,7 +607,7 @@ MV3 的 Service Worker 会在 30s 无活动后休眠。通过 `chrome.alarms.cre
 
 1. **开启扩展调试**：在 Chrome DevTools Console 中查看 `[component]` 前缀的结构化日志
 2. **查看持久化日志**：在 Console 中执行 `chrome.storage.local.get(null, console.log)` 查看所有存储数据
-3. **手动测试脚本**：在向导 Step 4 中直接编辑脚本代码
+3. **手动测试脚本**：在向导阶段 2 中直接编辑脚本代码
 4. **导出调试数据**：Options 页面可导出服务配置和执行历史
 
 ## 10. 已知限制
