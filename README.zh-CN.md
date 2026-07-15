@@ -1,8 +1,4 @@
-<p align="center">
-  <img src="logo.png" width="220" alt="Scrapewright logo">
-</p>
-
-# Scrapewright
+# <img src="logo.png" width="44" style="vertical-align:middle" alt="Scrapewright"> Scrapewright
 
 **开源、自部署的 AI 网页采集平台 —— 用自然语言生成可被外部程序调用的 HTTP API 采集服务。**
 
@@ -15,11 +11,13 @@
 
 > 由 [湖南星汉数智科技有限公司](https://www.singhand.com) 开发与维护 · 采用 [**GPLv3**](./LICENSE) 开源协议发布
 
-Scrapewright 是一个 **基于大语言模型（LLM）的智能网页数据采集平台**：用自然语言描述"想采集什么"，LLM 会自动分析目标网页、生成采集脚本、在真实的 Chrome 浏览器中执行，并返回结构化 JSON 数据 —— 无需手写 CSS 选择器，无需维护 Playwright / Puppeteer 爬虫代码。
+Scrapewright 是一个 **基于大语言模型（LLM）的智能网页数据采集平台**，也是一个 **AI 网络爬虫**：用自然语言描述"想采集什么"，LLM 会自动分析目标网页、生成采集脚本、在真实的 Chrome 浏览器中执行，并返回结构化 JSON 数据 —— 无需手写 CSS 选择器，无需维护 Playwright / Puppeteer 爬虫代码。同一套步骤图（step-graph）引擎还可作为轻量级的 **Web 测试自动化** / 浏览器自动化工具：点击、输入、等待、断言、分支，声明式、可重放、可自愈。
 
-项目以 **Chrome 扩展（Manifest V3）** + 轻量级 **Node.js Native Messaging Host** 双层架构实现，运行在你日常使用的浏览器中：已有的登录态、Cookie、浏览器指纹直接复用，因此需要登录的网站、有反爬检测的网站都能"开箱即用"。每个采集服务都通过统一的 **REST / HTTP API** 对外暴露，输入输出均有 JSON Schema 约束，可便捷集成到任意后端系统、数据管道、RPA 流程或 AI 智能体（Agent）工作流中。
+项目以 **Chrome 扩展（Manifest V3）** + 轻量级 **Node.js Native Messaging Host** 双层架构实现，**直接在真实浏览器中执行 —— 这是它处理"难啃"页面的核心优势**：重 JS 的 SPA 单页应用、异步加载（XHR / fetch / 流式）的内容、深层嵌套的同源 iframe、以及复杂的多步交互（翻页、详情页逐条下钻、弹窗关闭、登录流程）都能完整渲染 DOM、正常运行，且没有 `navigator.webdriver` 痕迹。已有的登录态、Cookie、浏览器指纹直接复用，因此需要登录的网站、有反爬检测的网站都能"开箱即用"。每个采集服务都通过统一的 **REST / HTTP API** 对外暴露，输入输出均有 JSON Schema 约束，可便捷集成到任意后端系统、数据管道、RPA 流程或 AI 智能体（Agent）工作流中。
 
-**典型场景：** 需要登录态的网站采集（企业内网、付费内容平台、SaaS 后台）、AI 对话机器人回答采集、低频高价值查询、知识图谱构建，以及面向非技术用户的无代码数据提取。
+**典型场景：** 需要登录态的网站采集（企业内网、付费内容平台、SaaS 后台）、AI 对话机器人回答采集、列表分页 + 详情页逐条采集、iframe 嵌套的政府/门户类网站、低频高价值查询、知识图谱构建、Web 测试自动化，以及面向非技术用户的无代码数据提取。
+
+技术白皮书：**[中文](docs/technical-whitepaper.md)** · [English](docs/technical-whitepaper.en.md)
 
 > ### 快速开始
 >

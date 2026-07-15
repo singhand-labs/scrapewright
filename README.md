@@ -1,8 +1,4 @@
-<p align="center">
-  <img src="logo.png" width="220" alt="Scrapewright logo">
-</p>
-
-# Scrapewright
+# <img src="logo.png" width="44" style="vertical-align:middle" alt="Scrapewright"> Scrapewright
 
 **The open-source, self-hosted AI web scraper that turns natural language into HTTP API services.**
 
@@ -15,11 +11,13 @@
 
 > Developed and maintained by [Hunan Singhand Intelligent Data Technology Co.,Ltd](https://www.singhand.com) · Released under [**GPLv3**](./LICENSE)
 
-Scrapewright is an **LLM-powered web scraping platform** that converts plain-English descriptions of what you want to extract into reusable, HTTP-callable scraping services. Describe the target page and fields in natural language, and a large language model analyzes the site, generates the scraping script, runs it inside a real Chrome browser, and returns structured JSON — no CSS selectors to hand-write, no Playwright or Puppeteer code to maintain.
+Scrapewright is an **LLM-powered web scraping platform** and **AI web crawler** that converts plain-English descriptions of what you want to extract into reusable, HTTP-callable scraping services. Describe the target page and fields in natural language, and a large language model analyzes the site, generates the scraping script, runs it inside a real Chrome browser, and returns structured JSON — no CSS selectors to hand-write, no Playwright or Puppeteer code to maintain. The same step-graph engine also doubles as a lightweight **web test automation** / browser automation tool: click, type, wait, assert, branch — declarative, replayable, self-healing.
 
-Built as a **Chrome Extension (Manifest V3)** plus a lightweight **Node.js Native Messaging Host**, Scrapewright runs inside your everyday browser: your logins, cookies, and fingerprint carry over as-is, so login-required and anti-bot-protected sites just work. Every scraping service is exposed through a standard **REST / HTTP API** with JSON Schema I/O, so it drops cleanly into any backend, data pipeline, RPA flow, or AI agent stack.
+Because it runs as a **Chrome Extension (Manifest V3)** plus a lightweight **Node.js Native Messaging Host**, Scrapewright executes inside a genuine browser — its core advantage for hard targets. JavaScript-heavy SPAs, asynchronously loaded (XHR / fetch / streaming) content, deeply nested same-origin iframes, and complex multi-step interactions (pagination, detail-page drill-down, modal dismissal, login flows) all just work, with full DOM rendering and no `navigator.webdriver` footprint. Your logins, cookies, and fingerprint carry over as-is, so login-required and anti-bot-protected sites work out of the box. Every scraping service is exposed through a standard **REST / HTTP API** with JSON Schema I/O, so it drops cleanly into any backend, data pipeline, RPA flow, or AI agent stack.
 
-**Great for:** login-required sites (intranets, paid content, SaaS dashboards), AI chatbot answer capture, low-frequency high-value queries, knowledge-graph building, and no-code data extraction for non-developers.
+**Great for:** login-required sites (intranets, paid content, SaaS dashboards), AI chatbot answer capture, paginated list + detail-page crawling, iframe-heavy government / portal pages, low-frequency high-value queries, knowledge-graph building, web test automation, and no-code data extraction for non-developers.
+
+Design whitepaper: **[English](docs/technical-whitepaper.en.md)** · [中文](docs/technical-whitepaper.md)
 
 > ### Quick start
 >
