@@ -298,7 +298,7 @@ function goToPhase(n) {
     if (!document.getElementById('serviceName').value && wizardState.serviceName) {
       document.getElementById('serviceName').value = wizardState.serviceName;
     }
-    const pageOps = (wizardState.requirements && wizardState.requirements.pageOps) || wizardState.description || '';
+    const pageOps = wizardState.requirements?.pageOps || wizardState.description || '';
     if (!wizardState.serviceName && pageOps) {
       const suggested = pageOps.slice(0, 30).replace(/\s+$/, '');
       document.getElementById('serviceName').value = suggested;
@@ -1563,9 +1563,7 @@ async function testScript() {
     } catch (e) { /* background may be unavailable */ }
   }
 
-  if (wizardState.phase !== 6) {
-    goToPhase(5);
-  }
+  goToPhase(5);
   await debugLogger.persist();
 }
 
