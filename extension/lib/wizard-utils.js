@@ -506,6 +506,19 @@ function buildAutoFixSystemMessage(description) {
   return base + '\n\n[GLOBAL CONTEXT]\nThe user\'s original scraping requirement:\n"' + desc + '"\n[/GLOBAL CONTEXT]';
 }
 
+function buildRequirementsBlock(requirements) {
+  const r = requirements || {};
+  const inputParams = (r.inputParams || '').trim();
+  const pageOps = (r.pageOps || '').trim();
+  const outputStruct = (r.outputStruct || '').trim();
+  return [
+    '## User Requirements',
+    '- Input parameters: ' + (inputParams || '(none specified)'),
+    '- Page operations & data to collect: ' + (pageOps || '(unspecified)'),
+    '- Output structure: ' + (outputStruct || '(unspecified — infer)')
+  ].join('\n');
+}
+
 function fillEntryUrlDefaults(steps, defaultUrl) {
   if (!Array.isArray(steps) || !defaultUrl) return steps || [];
   return steps.map(step => {
@@ -712,7 +725,7 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
@@ -724,6 +737,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.SCRIPT_DSL_GUIDE = SCRIPT_DSL_GUIDE;
   window.appendGlobalContextBlock = appendGlobalContextBlock;
   window.buildAutoFixSystemMessage = buildAutoFixSystemMessage;
+  window.buildRequirementsBlock = buildRequirementsBlock;
   window.fillEntryUrlDefaults = fillEntryUrlDefaults;
   window.normalizeStepTopology = normalizeStepTopology;
   window.DEFAULT_POLL_MAX_ITERATIONS = DEFAULT_POLL_MAX_ITERATIONS;
