@@ -42,7 +42,6 @@ How Scrapewright answers each:
 - **Standardized API** — every scraping service is callable through a uniform HTTP API, with JSON Schema constraints on both input and output.
 - **Visual wizard** — a 7-step flow takes you from describing the requirement to a tested deployment, no code required.
 
-> For deeper design philosophy and product positioning, see [`docs/technical-introduction.md`](./docs/technical-introduction.md) (Chinese).
 
 ## Core Features
 
@@ -711,9 +710,6 @@ Chrome Manifest V3 imposes several hard constraints that directly shaped the des
 | Service worker can be killed after ~30s idle | Long-poll loops may break | `chrome.alarms` heartbeat every 24s, auto-reconnect on disconnect |
 | `chrome.storage.local` capped at 10MB | Large job data may overflow | 100-job cap + 24h TTL cleanup; future migration to IndexedDB |
 
-## Roadmap
-
-Identified improvement directions (job cancellation, Service Worker keep-alive, storage optimization, visual debugging, adaptive waits, state persistence) have been moved to a standalone document: [`docs/roadmap.md`](./docs/roadmap.md).
 
 ## Copyright & License
 
