@@ -141,20 +141,20 @@ CRITICAL: When an annotation has a selector AND a waitCondition, THAT selector i
 - purpose: check-login → if the element is present, return { done:true, loginRequired:true } so the orchestrator can surface LOGIN_REQUIRED.`;
 
 const ANNOTATION_PURPOSES = [
-  { value: 'submit', label: '提交（submit）' },
-  { value: 'toggle', label: '切换状态（如深度思考）' },
-  { value: 'navigate', label: '导航/翻页' },
-  { value: 'expand', label: '展开/折叠' },
-  { value: 'wait-for-load', label: '等待加载完成' },
-  { value: 'check-login', label: '检测登录态' },
-  { value: 'verify-state', label: '验证状态' },
-  { value: 'other', label: '其他（自由输入）…' }
+  { value: 'submit', label: 'Submit' },
+  { value: 'toggle', label: 'Toggle State (e.g. deep-thinking)' },
+  { value: 'navigate', label: 'Navigate / Paginate' },
+  { value: 'expand', label: 'Expand / Collapse' },
+  { value: 'wait-for-load', label: 'Wait for Load' },
+  { value: 'check-login', label: 'Check Login State' },
+  { value: 'verify-state', label: 'Verify State' },
+  { value: 'other', label: 'Other (free text)…' }
 ];
 const WAIT_CONDITIONS = [
-  { value: 'appear', label: '元素出现' },
-  { value: 'disappear', label: '元素消失' },
-  { value: 'textStable', label: '文本停止变化' },
-  { value: 'attributeChange', label: '属性变化' }
+  { value: 'appear', label: 'Element Appears' },
+  { value: 'disappear', label: 'Element Disappears' },
+  { value: 'textStable', label: 'Text Stabilizes' },
+  { value: 'attributeChange', label: 'Attribute Changes' }
 ];
 
 // Build the annotations block fed to the LLM. Emits intent fields only when
