@@ -1,0 +1,10 @@
+# Dependencies
+node_modules/
+
+# Debug scratch files — ad-hoc LLM/console captures, not source artifacts.
+# Listed explicitly to avoid accidentally ignoring future legitimate files.
+/chrome-crawler-debug-*.json
+
+# Load-test / debug captures from service-hardening sessions (user-provided
+# service dumps, console/debug logs, raw extractions — not source artifacts).
+.DS_Store

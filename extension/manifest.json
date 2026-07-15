@@ -1,0 +1,45 @@
+{
+  "manifest_version": 3,
+  "name": "Scrapewright",
+  "version": "0.1.0",
+  "description": "LLM-powered web scraping platform",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "alarms",
+    "scripting",
+    "tabs",
+    "nativeMessaging",
+    "offscreen"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content-script.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_page": "options.html",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "sandbox": {
+    "pages": ["sandbox.html"]
+  }
+}

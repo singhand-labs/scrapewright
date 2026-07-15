@@ -1,0 +1,189 @@
+body { font-family: system-ui, sans-serif; margin: 0; background: #f5f5f5; }
+.container { max-width: 800px; margin: 0 auto; padding: 20px; }
+h1 { font-size: 24px; margin-bottom: 20px; }
+section { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+input, select { display: block; width: 100%; margin: 8px 0; padding: 8px; box-sizing: border-box; }
+button { padding: 8px 16px; cursor: pointer; }
+.service-card { border: 1px solid #ddd; padding: 12px; margin: 8px 0; border-radius: 4px; }
+.badge { font-size: 12px; padding: 2px 6px; border-radius: 4px; margin-left: 8px; }
+.badge.enabled { background: #10b981; color: white; }
+.badge.disabled { background: #ef4444; color: white; }
+.svc-url { color: #666; font-size: 13px; margin: 4px 0; }
+.svc-io { font-size: 12px; color: #0369a1; background: #f0f9ff; padding: 4px 8px; border-radius: 4px; margin: 4px 0; }
+.toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  padding: 12px 24px; border-radius: 6px; color: white; font-size: 14px;
+  z-index: 9999; transition: opacity 0.3s; min-width: 200px; text-align: center;
+}
+.toast.info { background: #3b82f6; }
+.toast.error { background: #ef4444; }
+.toast.success { background: #10b981; }
+.exec-entry { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid #eee; font-size: 13px; }
+.exec-time { color: #666; min-width: 160px; }
+.exec-svc { flex: 1; }
+.svc-steps { font-size: 12px; color: #666; margin: 4px 0; }
+
+.modal {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+
+.modal.hidden {
+  display: none;
+}
+
+.modal-content {
+  background: white;
+  padding: 24px;
+  border-radius: 8px;
+  max-width: 700px;
+  max-height: 85vh;
+  overflow: auto;
+  width: 90%;
+  position: relative;
+}
+
+.modal-close {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  font-size: 24px;
+  cursor: pointer;
+  color: #6b7280;
+}
+
+.api-doc-section {
+  margin: 16px 0;
+}
+
+.api-doc-section h3 {
+  font-size: 14px;
+  margin: 0 0 8px 0;
+  color: #374151;
+}
+
+.api-doc-section pre {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  padding: 12px;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-size: 13px;
+  margin: 0;
+}
+
+.api-doc-section code {
+  font-family: 'Courier New', monospace;
+}
+
+.api-doc-section .endpoint {
+  background: #f0f9ff;
+  color: #0369a1;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+}
+
+.api-doc-section .hint {
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: 4px;
+}
+
+.btn-api-doc {
+  padding: 4px 10px;
+  font-size: 12px;
+  background: #6366f1;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-right: 8px;
+}
+
+/* === Native Host Status card ============================================== */
+
+.native-host-status .native-status-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.native-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 4px;
+  color: white;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.native-badge.native    { background: #10b981; }  /* green — connected via native messaging */
+.native-badge.polling   { background: #f59e0b; }  /* amber — degraded, long-poll fallback */
+.native-badge.disconnected { background: #ef4444; } /* red — no host reachable */
+.native-badge.unknown   { background: #6b7280; }  /* gray — haven't checked yet */
+
+.native-mode-desc {
+  font-size: 13px;
+  color: #374151;
+}
+
+.native-details {
+  background: #f9fafb;
+  border-radius: 4px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.native-detail-row {
+  display: flex;
+  padding: 2px 0;
+  gap: 6px;
+}
+
+.native-detail-row .native-label {
+  color: #6b7280;
+  min-width: 130px;
+}
+
+.native-detail-row .native-value {
+  color: #111827;
+  word-break: break-all;
+}
+
+.native-error-row {
+  display: flex;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.native-error-row.hidden { display: none; }
+
+.native-error-text {
+  color: #b91c1c;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.native-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-secondary {
+  background: #f3f4f6;
+  color: #374151;
+  border: 1px solid #d1d5db;
+}

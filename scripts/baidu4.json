@@ -1,0 +1,137 @@
+[
+  {
+    "annotations": [],
+    "config": {
+      "autoCloseTab": true,
+      "enabled": true,
+      "maxRetries": 1,
+      "maxStepIterations": 50,
+      "timeoutMs": 60000
+    },
+    "createdAt": 1782395702462,
+    "displayName": "baidu4",
+    "id": "a5dfca46-ae3e-495c-9df2-0de23bd54a8a",
+    "inputSchema": {
+      "properties": {
+        "question": {
+          "description": "要向百度AI问答提出的问题",
+          "type": "string"
+        }
+      },
+      "required": [
+        "question"
+      ],
+      "type": "object"
+    },
+    "name": "baidu4",
+    "outputSchema": {
+      "properties": {
+        "answer": {
+          "description": "AI最终回答内容",
+          "type": "string"
+        },
+        "question": {
+          "description": "原始问题",
+          "type": "string"
+        },
+        "thinking": {
+          "description": "AI深度思考过程",
+          "type": "string"
+        }
+      },
+      "required": [
+        "question",
+        "thinking",
+        "answer"
+      ],
+      "type": "object"
+    },
+    "sampleInput": {
+      "question": "什么是人工智能？请简要说明。"
+    },
+    "steps": [
+      {
+        "annotations": [
+          {
+            "note": "The annotated selector targets span.deep-search-text inside the model button. On the current page, the model button shows 'DS-V4 Pro' text. The deep thinking toggle may require first clicking the model-select-wrapper button to open a dropdown, then selecting deep thinking. The script handles both direct click and dropdown scenarios.",
+            "originalSelector": "div:nth-of-type(1) > div.\n._chat-container_r2am5_1\n > div._chat-container-body_r2am5_1 > div.\n._chat-container-wrapper_r2am5_4\n:nth-of-type(2) > div.\n._chat-container-pc_17wcg_8\n > div._chat-container-main-wrapper_17wcg_17 > div._new-page_17wcg_35:nth-of-type(2) > div:nth-of-type(1) > div.\n.chat-input-home\n:nth-of-type(2) > div.chat-input-background > div.input-root > div.ci-root\n.ci-ai-search\n > div.\n.two-line-input\n:nth-of-type(1) > div.ci-wrapper.ci-normal-wrapper:nth-of-type(4) > div.ci-container:nth-of-type(1) > div.ci-tool:nth-of-type(3) > div.ci-left-tool:nth-of-type(1) > div.ci-left-tools-wrapper:nth-of-type(1) > div.\n.model-select-wrapper\n:nth-of-type(1) > span.ci-tooltip > div.\n.ci-model-button\n > div.internet-search-icon > span.deep-search-text"
+          }
+        ],
+        "condition": null,
+        "entryUrl": "https://chat.baidu.com",
+        "id": "1",
+        "maxIterations": 3,
+        "name": "开启深度思考模式",
+        "needsAnnotation": false,
+        "onFailure": "2",
+        "onSuccess": "2",
+        "script": "// The original selector contained literal newlines (\\n) which made it an invalid CSS selector.\n// We remove the newlines and use a simplified, robust selector based on the actual DOM structure.\nconst deepThinkSelector = '.model-select-wrapper .ci-model-button';\n\n// Check if the deep thinking button exists\nconst exists = await $exists(deepThinkSelector, 5000);\n\nif (exists) {\n  // Read current text to check state\n  const currentText = await $extract(deepThinkSelector, 'textContent', 5000);\n  \n  // Click to toggle deep thinking mode on\n  await $click(deepThinkSelector);\n  \n  // Wait a moment for the toggle to take effect\n  await new Promise(r => setTimeout(r, 1500));\n  \n  // Verify the toggle happened - check if text changed or button state changed\n  const newText = await $extract(deepThinkSelector, 'textContent', 5000);\n  \n  return {\n    deepThinkingEnabled: true,\n    previousText: currentText,\n    currentText: newText,\n    toggled: currentText !== newText\n  };\n} else {\n  // The button might not be visible yet or might have a different structure\n  // Try alternative: look for the model-select-wrapper area\n  const modelButtonExists = await $exists('.model-select-wrapper .ci-model-button', 3000);\n  \n  if (modelButtonExists) {\n    // Click the model button to open the dropdown, then look for deep thinking option\n    await $click('.model-select-wrapper .ci-model-button');\n    await new Promise(r => setTimeout(r, 1000));\n    \n    // Check if deep thinking option appeared\n    const deepOptionExists = await $exists('.deep-search-text', 3000);\n    if (deepOptionExists) {\n      await $click('.deep-search-text');\n      await new Promise(r => setTimeout(r, 1500));\n      return { deepThinkingEnabled: true, method: 'dropdown' };\n    }\n  }\n  \n  return {\n    deepThinkingEnabled: false,\n    error: 'Deep thinking button not found'\n  };\n}"
+      },
+      {
+        "annotations": [],
+        "condition": null,
+        "entryUrl": "https://chat.baidu.com",
+        "id": "2",
+        "maxIterations": 3,
+        "name": "输入问题并提交",
+        "needsAnnotation": false,
+        "onFailure": "3",
+        "onSuccess": "3",
+        "script": "// Type the question into the textarea\nawait $type('#chat-textarea', __input__.question);\n\n// Brief pause to ensure input is registered\nawait new Promise(r => setTimeout(r, 500));\n\n// Click the submit button\nawait $click('#ci-submit-button-ai');\n\n// Wait a moment for the question to be submitted and page to start transitioning\nawait new Promise(r => setTimeout(r, 2000));\n\n// Verify submission happened - check if the textarea is cleared or chat response area appeared\nconst textareaValue = await $extract('#chat-textarea', 'value', 3000);\n\n// If textarea still has the question text, submission may not have worked\nif (textareaValue && textareaValue.trim() === __input__.question.trim()) {\n  // Retry: click submit again\n  await $click('#ci-submit-button-ai');\n  await new Promise(r => setTimeout(r, 2000));\n}\n\nreturn {\n  submitted: true,\n  question: __input__.question\n};"
+      },
+      {
+        "annotations": [
+          {
+            "description": "",
+            "domPath": "div#conversation-flow-content > div.\n.chat-qa-container\n:nth-of-type(3) > div.conversation-flow-answer-container._answer-container_u2k25_22:nth-of-type(2) > div.answer-box\n.\n > div.chat-search-answer-generate:nth-of-type(1) > div.undefined.cs-swiper-layout-answer:nth-of-type(1) > div.cos-swiper > div.cos-swiper-content:nth-of-type(1) > div.cos-swiper-list.cos-swiper-transition-none:nth-of-type(2) > div.cos-swiper-item.generate-swiper-item > div.cs-answer-container > div.chat-search-answer-generate-item > div.cs-hover-menu\n._menu-wrapper_gtq6q_1\n:nth-of-type(2) > div.\n.cs-answer-hover-menu-container\n > span.\n.\n:nth-of-type(2) > span._icon_haof8_12 > span._audio-icon-wrapper_5xja6_1.undefined > span._audio-icon_5xja6_1",
+            "elementType": "span",
+            "html": "<span rl-type=\"stop\" disable-close-input=\"\" class=\"_audio-icon_5xja6_1 \" style=\"\">\n                \n                <!--952-->\n                    <div class=\"_pause-icon_5xja6_19\">\n                        <i class=\"cos-icon cos-icon-volume _play-icon_5xja6_36\"></i><!--953-->\n                        <!--955-->\n                        <!--956-->\n                    </div>\n                    <div class=\"_play-icon_5xja6_36 _play-icon-svg_5xja6_36 \" style=\"display: none;\">\n                        ",
+            "purpose": "wait-for-load",
+            "sampleText": "",
+            "selector": "div:nth-of-type(1) > div.\n._chat-container_r2am5_1\n > div._chat-container-body_r2am5_1 > div.\n._chat-container-wrapper_r2am5_4\n:nth-of-type(2) > div.\n._chat-container-pc_9xsfz_152\n > div.\n._chat-container-main-wrapper_9xsfz_162\n:nth-of-type(1) > div._chat-container-main_9xsfz_5:nth-of-type(2) > div._chat-container-main-area_9xsfz_5.chat-container-main-area > div._chat-container-main-stream_9xsfz_15 > div.\n._chat-body-container_u2k25_1\n > div._content-area_u2k25_9 > div.conversation-flow-content._scroll-content_u2k25_32 > div.\n.chat-qa-container\n:nth-of-type(3) > div.conversation-flow-answer-container._answer-container_u2k25_22:nth-of-type(2) > div.answer-box\n.\n > div.chat-search-answer-generate:nth-of-type(1) > div.undefined.cs-swiper-layout-answer:nth-of-type(1) > div.cos-swiper > div.cos-swiper-content:nth-of-type(1) > div.cos-swiper-list.cos-swiper-transition-none:nth-of-type(2) > div.cos-swiper-item.generate-swiper-item > div.cs-answer-container > div.chat-search-answer-generate-item > div.cs-hover-menu\n._menu-wrapper_gtq6q_1\n:nth-of-type(2) > div.\n.cs-answer-hover-menu-container\n > span.\n.\n:nth-of-type(2) > span._icon_haof8_12 > span._audio-icon-wrapper_5xja6_1.undefined > span._audio-icon_5xja6_1",
+            "text": "",
+            "type": "wait",
+            "waitCondition": "appear"
+          }
+        ],
+        "condition": null,
+        "entryUrl": "https://chat.baidu.com",
+        "id": "3",
+        "maxIterations": 30,
+        "name": "等待AI回答完成",
+        "needsAnnotation": false,
+        "onFailure": "4",
+        "onSuccess": "SELF",
+        "script": "// Wait a bit for generation to start\nawait new Promise(r => setTimeout(r, 3000));\n\n// Check if the answer container has finished generating\n// The container changes from data-status=\"GENERATING\" to data-status=\"COMPLETE\"\nconst isComplete = await $exists('.cs-answer-container[data-status=\"COMPLETE\"]', 3000);\n\nif (isComplete) {\n  // Verify content stability to ensure streaming is fully done\n  const stable = await $waitForStable('.cs-answer-container[data-status=\"COMPLETE\"] .cosd-markdown-content', {\n    interval: 1500,\n    stableChecks: 2,\n    maxMs: 20000\n  });\n  \n  if (stable) {\n    return { done: true };\n  }\n}\n\nreturn { done: false };"
+      },
+      {
+        "annotations": [
+          {
+            "originalIndex": 0,
+            "outputField": "thinking",
+            "reason": "Simplified the extremely long nth-of-type path to target the thinking steps container by its stable class names while preserving the exact DOM structure path.",
+            "revisedSelector": "div.ai-entry-block.ai-thinking-steps > div._thinking-steps_1eyeq_1 > div._collapse-container_er9xf_1 > main._expand_er9xf_20"
+          },
+          {
+            "originalIndex": 1,
+            "outputField": "answer",
+            "reason": "The answer is split across multiple ai-markdown blocks with cosd-markdown-content. Using $list to collect all markdown content blocks and joining them captures the complete answer.",
+            "revisedSelector": "div.ai-entry-block.ai-markdown div.cosd-markdown-content"
+          }
+        ],
+        "condition": null,
+        "entryUrl": "https://chat.baidu.com",
+        "id": "4",
+        "maxIterations": 5,
+        "name": "提取思考过程和答案",
+        "needsAnnotation": false,
+        "onFailure": "SELF",
+        "onSuccess": "TERMINATE",
+        "script": "// 1. Extract Thinking Process\nconst thinkingSelector = 'div.ai-entry-block.ai-thinking-steps > div._thinking-steps_1eyeq_1 > div._collapse-container_er9xf_1 > main._expand_er9xf_20';\nlet thinking = '';\ntry {\n  thinking = await $extract(thinkingSelector, null, 5000);\n} catch(e) {\n  thinking = '';\n}\n\n// 2. Extract Answer\n// The previous selector `div.ai-entry-block.ai-markdown div.cosd-markdown-content` was too broad and included the thinking process DOM.\n// We exclude the `.ai-thinking-steps` block to ensure we only get the actual answer.\nconst answerSelector = 'div.ai-entry-block.ai-markdown:not(.ai-thinking-steps) div.cosd-markdown-content';\nconst answerMarkdownBlocks = await $list(answerSelector);\nlet answer = '';\nif (answerMarkdownBlocks && answerMarkdownBlocks.length > 0) {\n  answer = answerMarkdownBlocks.map(el => el.textContent).join('\\n\\n');\n}\n\n// 3. Validate extraction (Rule 4: Must not return empty as success)\nif (!thinking || thinking.trim().length < 10) {\n  return { done: false };\n}\nif (!answer || answer.trim().length < 10) {\n  return { done: false };\n}\n\n// 4. Return conforming to output schema\nreturn {\n  question: __input__.question,\n  thinking: thinking.trim(),\n  answer: answer.trim()\n};"
+      }
+    ],
+    "targetUrl": "https://chat.baidu.com",
+    "updatedAt": 1782395702463,
+    "userDescription": "打开目标网站（百度AI问答），点击深度思考按钮开启深度思考模式，将外部传入进来给本系统的问题（字符串）在目标网站的输入框中进行提问，提交问题后等待答案完全返回，提取其中的思考过程和答案，组装成json返回给外部。"
+  }
+]

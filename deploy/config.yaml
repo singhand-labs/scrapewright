@@ -1,0 +1,8 @@
+# Scrapewright Cluster Configuration
+basePort: 8760          # Starting HTTP port (instance 0 = 8760, instance 1 = 8761, ...)
+baseDebugPort: 9220     # Starting Chrome remote debugging port
+instances: 5            # Number of parallel instances
+extensionPath: ../extension
+nativeHostPath: ../native-host
+profileBaseDir: ./profiles
+headless: false         # Set true for headless mode (no login state)

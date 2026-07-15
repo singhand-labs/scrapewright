@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>New Service - Scrapewright</title>
+  <link rel="stylesheet" href="wizard.css">
+</head>
+<body>
+  <div class="container">
+    <h1 id="pageTitle">Create New Service</h1>
+
+    <div id="loading" class="hidden">
+      <div class="spinner"></div>
+      <div id="loadingText">Processing...</div>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+
+    <div id="phase1" class="step">
+      <h2>Phase 1: Target URL</h2>
+      <input type="url" id="targetUrl" placeholder="https://example.com" />
+      <button id="btnPhase1Next">Next</button>
+    </div>
+
+    <div id="phase2" class="step hidden">
+      <h2>Phase 2: Describe Your Needs</h2>
+      <textarea id="description" rows="6" placeholder="Describe what you want to scrape..."></textarea>
+      <button id="btnPhase2Back">Back</button>
+      <button id="btnPhase2Research">Research</button>
+
+      <div id="explorationPanel" class="exploration-panel hidden">
+        <h3>Interactive Exploration</h3>
+        <p id="explorationDescription"></p>
+        <label>Sample Input (JSON):</label>
+        <textarea id="explorationSampleInput" rows="4"></textarea>
+        <div class="exploration-buttons">
+          <button id="btnRunExploration" class="btn-primary">Run Exploration</button>
+          <button id="btnSkipExploration">Skip Exploration</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="phase3" class="step hidden">
+      <h2>Phase 3: Service Name & Steps</h2>
+      <input type="text" id="serviceName" placeholder="Service name" />
+
+      <div class="template-section">
+        <label>Template (optional):</label>
+        <select id="templateSelect">
+          <option value="">-- Custom / AI Generated --</option>
+          <option value="extract-list">Extract List</option>
+          <option value="pagination">Pagination Loop</option>
+          <option value="form-submit">Form Submit</option>
+          <option value="login-then-scrape">Login Then Scrape</option>
+        </select>
+        <button id="btnApplyTemplate">Apply Template</button>
+      </div>
+
+      <div class="step-list-header">
+        <h3>Steps</h3>
+        <button id="btnAddStep">+ Add Step</button>
+      </div>
+      <div id="stepList"></div>
+
+      <div class="step-nav">
+        <button id="btnPhase3Back">Back</button>
+        <button id="btnPhase3Next">Next</button>
+      </div>
+    </div>
+
+    <div id="phase4" class="step hidden">
+      <h2>Phase 4: I/O Schema & Test Input</h2>
+      <label>Input Schema (JSON):</label>
+      <textarea id="inputSchemaEditor" rows="6"></textarea>
+      <label>Output Schema (JSON):</label>
+      <textarea id="outputSchemaEditor" rows="6"></textarea>
+      <label>Test Input (JSON):</label>
+      <textarea id="testInputEditor" rows="4"></textarea>
+      <button id="btnPhase4Test">Run Test</button>
+      <button id="btnPhase4Back">Back</button>
+    </div>
+
+    <div id="phase5" class="step hidden">
+      <h2>Phase 5: Execute Test (step by step)</h2>
+      <div id="executionTimeline"></div>
+      <div id="executionLog"></div>
+      <button id="btnPhase5Back">Back</button>
+    </div>
+
+    <div id="phase6" class="step hidden">
+      <h2>Phase 6: Results</h2>
+      <div id="serviceNameDisplay"></div>
+      <div id="ioSummary"></div>
+      <div id="testStatus"></div>
+      <div id="resultSummary"></div>
+      <details id="rawOutputDetails" class="hidden">
+        <summary>Raw JSON output</summary>
+        <pre id="testResults"></pre>
+      </details>
+      <pre id="currentScript"></pre>
+      <button id="btnPhase6EditSteps">Edit Steps</button>
+      <div id="fixControls" class="hidden">
+        <button id="btnRetryTest">Retry Test</button>
+        <button id="btnAutoFix">Auto-Fix</button>
+        <button id="btnDeployAnyway">Deploy Anyway</button>
+      </div>
+      <div id="feedbackArea" class="hidden">
+        <textarea id="feedbackInput" rows="4" placeholder="Describe what's wrong or how to fix it..."></textarea>
+        <button id="btnFixAgain">Fix Again</button>
+      </div>
+      <div id="deployControls" class="hidden">
+        <button id="btnPhase6Deploy">Looks Good - Deploy</button>
+        <button id="btnPhase6Back">Back</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="snapshotModal" class="modal hidden">
+    <div class="modal-content">
+      <span class="modal-close">&times;</span>
+      <h3>Step Snapshot</h3>
+      <pre id="snapshotContent"></pre>
+    </div>
+  </div>
+
+  <script src="lib/service-registry.js"></script>
+  <script src="lib/llm-client.js"></script>
+  <script src="lib/offscreen-executor.js"></script>
+  <script src="lib/script-executor.js"></script>
+  <script src="lib/wizard-utils.js"></script>
+  <script src="lib/html-cleaner.js"></script>
+  <script src="lib/step-orchestrator.js"></script>
+  <script src="lib/debug-logger.js"></script>
+  <script src="wizard.js"></script>
+</body>
+</html>

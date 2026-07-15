@@ -1,0 +1,15 @@
+{
+  "name": "scrapewright-native-host",
+  "version": "0.1.0",
+  "description": "Native messaging host for Scrapewright extension",
+  "license": "GPL-3.0-only",
+  "author": "湖南星汉数智科技有限公司 (https://www.singhand.com)",
+  "main": "host.js",
+  "scripts": {
+    "start": "node host.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

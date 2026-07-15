@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Unified Scrapewright CLI. Delegates to node; locates itself via BASH_SOURCE
+# so it works regardless of CWD.
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec node "$DIR/../native-host/scrapewright.js" "$@"

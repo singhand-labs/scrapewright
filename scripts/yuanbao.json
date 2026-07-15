@@ -1,0 +1,133 @@
+[
+  {
+    "annotations": [],
+    "config": {
+      "autoCloseTab": true,
+      "enabled": true,
+      "maxRetries": 1,
+      "maxStepIterations": 50,
+      "timeoutMs": 60000
+    },
+    "createdAt": 1782537561007,
+    "displayName": "yuanbao",
+    "id": "6a9b3d97-d321-4b6f-9d92-a4d715d8c1e2",
+    "inputSchema": {
+      "properties": {
+        "question": {
+          "description": "要向元宝AI提问的问题",
+          "type": "string"
+        }
+      },
+      "required": [
+        "question"
+      ],
+      "type": "object"
+    },
+    "name": "yuanbao",
+    "outputSchema": {
+      "properties": {
+        "answer": {
+          "description": "AI的最终回答",
+          "type": "string"
+        },
+        "question": {
+          "description": "原始问题",
+          "type": "string"
+        },
+        "thinking": {
+          "description": "AI的思考过程",
+          "type": "string"
+        }
+      },
+      "required": [
+        "question",
+        "thinking",
+        "answer"
+      ],
+      "type": "object"
+    },
+    "sampleInput": {
+      "question": "请解释什么是量子计算，并说明其与传统计算的主要区别。"
+    },
+    "steps": [
+      {
+        "annotations": [],
+        "condition": null,
+        "entryUrl": "https://yuanbao.tencent.com/chat/naQivTmsDa",
+        "id": "1",
+        "maxIterations": 3,
+        "name": "检查并开启深度思考模式",
+        "needsAnnotation": false,
+        "onFailure": "TERMINATE",
+        "onSuccess": "2",
+        "script": "// Selector for the deep thinking toggle button (verbatim from annotation)\nconst deepThinkSelector = 'div.ThinkSelector_iconContainer__5HMzp.ThinkSelector_allIcon__Ndq_t';\n\n// Check if deep thinking is already enabled by looking for the 'selected' class\nconst deepThinkEl = await $(deepThinkSelector);\nconst isEnabled = deepThinkEl.className.includes('ThinkSelector_selected__YUTmh');\n\nif (!isEnabled) {\n  // Click to enable deep thinking mode\n  await $click(deepThinkSelector);\n  // Wait a moment for the UI to update\n  await new Promise(r => setTimeout(r, 1500));\n  \n  // Verify it's now enabled\n  const verifyEl = await $(deepThinkSelector);\n  const nowEnabled = verifyEl.className.includes('ThinkSelector_selected__YUTmh');\n  if (!nowEnabled) {\n    return { done: false };\n  }\n}\n\nreturn { done: true, deepThinkingEnabled: true };"
+      },
+      {
+        "annotations": [
+          {
+            "newSelector": "div.style__text-area__edit___BKkcb",
+            "originalSelector": "div:nth-of-type(1) > div > div.yb-layout.agent-layout > div.yb-layout__content.agent-layout__content:nth-of-type(5) > div.agent-dialogue > div.agent-dialogue__content-wrapper > div.agent-dialogue__content:nth-of-type(1) > div.SplitPane.agent-dialogue__content-split-pane > div.Pane.vertical:nth-of-type(1) > div.agent-dialogue__content--common.agent-dialogue__content--common-not-speaking > div.agent-dialogue__content--common__input.agent-chat__input-box:nth-of-type(3) > div.agent-dialogue__content--common__input__content:nth-of-type(2) > div > div.agent-dialogue__content--common__input-box:nth-of-type(2) > div > div.style__text-area___JRVgQ.yb-input-box-textarea > div.style__text-area__wrapper___v8PgB:nth-of-type(2) > div.style__text-area__start___B3hfY.style__text-area__start--placeholder___TuTF8:nth-of-type(2) > div > div.style__text-area__edit___BKkcb",
+            "reason": "The full path selector is extremely long and fragile. The page HTML shows the contenteditable div has a unique class 'style__text-area__edit___BKkcb' and is inside #searchbar-editor. Using the shorter class-based selector is more robust and matches the actual DOM structure."
+          }
+        ],
+        "condition": null,
+        "entryUrl": "https://yuanbao.tencent.com/chat/naQivTmsDa",
+        "id": "2",
+        "maxIterations": 3,
+        "name": "输入问题并提交",
+        "needsAnnotation": false,
+        "onFailure": "TERMINATE",
+        "onSuccess": "3",
+        "script": "// Step 2: Type the question into the input area and click submit\n// Use the exact annotated selector for the contenteditable input area\nconst inputSelector = 'div.style__text-area__edit___BKkcb';\nconst submitSelector = '#yuanbao-send-btn';\n\n// Type the question from external input\nawait $type(inputSelector, __input__.question);\n\n// Brief delay to ensure the input is registered and the send button becomes active\nawait new Promise(r => setTimeout(r, 1000));\n\n// Click the submit button\nawait $click(submitSelector);\n\n// Wait a moment for the submission to be processed\nawait new Promise(r => setTimeout(r, 2000));\n\n// Verify submission happened - check that the input area is cleared or a response area appeared\nconst inputEl = await $exists(inputSelector, 3000);\nlet inputText = '';\nif (inputEl) {\n  try {\n    inputText = await $extract(inputSelector, 'textContent', 3000);\n  } catch(e) {\n    // If extraction fails, assume it was cleared\n  }\n}\n\n// If the input still contains the question text, the submission may not have worked\nif (inputText && inputText.trim().length > 0 && inputText.trim() === String(__input__.question).trim()) {\n  // Retry: click submit again\n  await $click(submitSelector);\n  await new Promise(r => setTimeout(r, 2000));\n}\n\nreturn {\n  submitted: true,\n  question: __input__.question\n};"
+      },
+      {
+        "annotations": [],
+        "condition": null,
+        "entryUrl": "https://yuanbao.tencent.com/chat/naQivTmsDa",
+        "id": "3",
+        "maxIterations": 20,
+        "name": "等待AI回答完成",
+        "needsAnnotation": false,
+        "onFailure": "TERMINATE",
+        "onSuccess": "4",
+        "script": "// Step 3: Wait for AI response to complete by polling for the annotated completion signal\n// The annotated selector targets the 'Repeat' (重新生成) icon in the toolbar of the latest AI response\n// This icon only appears after the AI finishes generating its response\n\n// Wait 3 seconds before first check to allow response to start streaming\nawait new Promise(r => setTimeout(r, 3000));\n\n// Check if the completion signal (Repeat icon) has appeared\nconst done = await $exists('div:nth-of-type(1) > div > div.yb-layout.agent-layout > div.yb-layout__content.agent-layout__content:nth-of-type(5) > div.agent-dialogue > div.agent-dialogue__content-wrapper > div.agent-dialogue__content:nth-of-type(1) > div.SplitPane.agent-dialogue__content-split-pane > div.Pane.vertical:nth-of-type(1) > div.agent-dialogue__content--common.agent-dialogue__content--common-not-speaking > div.agent-dialogue__content--common__content:nth-of-type(2) > div.agent-chat__list.agent-chat__list__hunyuan > div.agent-chat__list__content-wrapper:nth-of-type(2) > div.agent-chat__list__content:nth-of-type(2) > div.agent-chat__list__item.agent-chat__list__item--ai:nth-of-type(3) > div.agent-chat__list__item__content > div.agent-chat__bubble.agent-chat__bubble--ai:nth-of-type(2) > div.agent-chat__bubble__content > div.agent-chat__conv--ai__toolbar:nth-of-type(2) > div.agent-chat__toolbar.agent-chat__toolbar_new:nth-of-type(2) > div.agent-chat__toolbar__right:nth-of-type(2) > div:nth-of-type(5) > div.Repeat_icon__oL8u_.Repeat_with-hover__PDJ30 > span.yb-icon.iconfont-yb', 5000);\n\nif (done) {\n  // Also verify content stability - ensure the answer text is not still streaming\n  // Use a broader selector for the AI response content to check stability\n  const stable = await $waitForStable('.agent-chat__list__item--last .hyc-content-md-done', {\n    interval: 1500,\n    stableChecks: 2,\n    maxMs: 15000\n  });\n  \n  if (stable) {\n    return { done: true };\n  }\n  return { done: false };\n}\n\nreturn { done: false };"
+      },
+      {
+        "annotations": [
+          {
+            "originalSelector": "div:nth-of-type(1) > div > div.yb-layout.agent-layout > div.yb-layout__content.agent-layout__content:nth-of-type(5) > div.agent-dialogue > div.agent-dialogue__content-wrapper > div.agent-dialogue__content:nth-of-type(1) > div.SplitPane.agent-dialogue__content-split-pane > div.Pane.vertical:nth-of-type(1) > div.agent-dialogue__content--common.agent-dialogue__content--common-not-speaking > div.agent-dialogue__content--common__content:nth-of-type(2) > div.agent-chat__list.agent-chat__list__hunyuan > div.agent-chat__list__content-wrapper:nth-of-type(2) > div.agent-chat__list__content:nth-of-type(2) > div.agent-chat__list__item.agent-chat__list__item--ai:nth-of-type(3) > div.agent-chat__list__item__content > div.agent-chat__bubble.agent-chat__bubble--ai:nth-of-type(2) > div.agent-chat__bubble__content > div.agent-chat__conv--ai__speech_show:nth-of-type(1) > div:nth-of-type(2) > div.agent-chat__speech-text--box.agent-chat__speech-text--box-left > div.hyc-component-deepsearch-cot > div.hyc-component-deepsearch-cot__think.hyc-component-deepsearch-cot__think--expand:nth-of-type(1) > div.hyc-component-deepsearch-cot__think__content:nth-of-type(2) > div.hyc-component-deepsearch-cot__think__content__item.hyc-component-deepsearch-cot__think__content__item-text > div.hyc-content-md.hyc-content-md-done > div.hyc-common-markdown.hyc-common-markdown-style",
+            "reason": "The original selector uses nth-of-type(3) for the AI item and nth-of-type(2) for bubble, but the actual page has the AI item as the last child with class 'agent-chat__list__item--last'. Simplified to use the stable class-based selector anchored on the last AI item.",
+            "revisedSelector": "div.agent-chat__list__item--ai.agent-chat__list__item--last div.hyc-component-deepsearch-cot__think__content div.hyc-common-markdown.hyc-common-markdown-style"
+          },
+          {
+            "originalSelector": "div:nth-of-type(1) > div > div.yb-layout.agent-layout > div.yb-layout__content.agent-layout__content:nth-of-type(5) > div.agent-dialogue > div.agent-dialogue__content-wrapper > div.agent-dialogue__content:nth-of-type(1) > div.SplitPane.agent-dialogue__content-split-pane > div.Pane.vertical:nth-of-type(1) > div.agent-dialogue__content--common.agent-dialogue__content--common-not-speaking > div.agent-dialogue__content--common__content:nth-of-type(2) > div.agent-chat__list.agent-chat__list__hunyuan > div.agent-chat__list__content-wrapper:nth-of-type(2) > div.agent-chat__list__content:nth-of-type(2) > div.agent-chat__list__item.agent-chat__list__item--ai:nth-of-type(3) > div.agent-chat__list__item__content > div.agent-chat__bubble.agent-chat__bubble--ai:nth-of-type(2) > div.agent-chat__bubble__content > div.agent-chat__conv--ai__speech_show:nth-of-type(1) > div:nth-of-type(2) > div.agent-chat__speech-text--box.agent-chat__speech-text--box-left > div.hyc-component-deepsearch-cot > div.hyc-content-md.hyc-content-md-done:nth-of-type(2) > div.hyc-common-markdown.hyc-common-markdown-style",
+            "reason": "Same structural simplification. The answer is the second hyc-content-md-done child inside hyc-component-deepsearch-cot, within the last AI chat item.",
+            "revisedSelector": "div.agent-chat__list__item--ai.agent-chat__list__item--last div.hyc-component-deepsearch-cot > div.hyc-content-md.hyc-content-md-done:nth-of-type(2) > div.hyc-common-markdown.hyc-common-markdown-style"
+          }
+        ],
+        "condition": null,
+        "entryUrl": "https://yuanbao.tencent.com/chat/naQivTmsDa",
+        "id": "4",
+        "maxIterations": 5,
+        "name": "提取思考过程和答案",
+        "needsAnnotation": false,
+        "onFailure": "TERMINATE",
+        "onSuccess": "5",
+        "script": "// Extract thinking process using the annotated selector\nlet thinking = '';\ntry {\n  thinking = await $extract('div.agent-chat__list__item--ai.agent-chat__list__item--last div.hyc-component-deepsearch-cot__think__content div.hyc-common-markdown.hyc-common-markdown-style', undefined, 5000);\n} catch (e) {\n  thinking = '';\n}\n\n// Extract answer using the annotated selector\nlet answer = '';\ntry {\n  answer = await $extract('div.agent-chat__list__item--ai.agent-chat__list__item--last div.hyc-component-deepsearch-cot > div.hyc-content-md.hyc-content-md-done:nth-of-type(2) > div.hyc-common-markdown.hyc-common-markdown-style', undefined, 5000);\n} catch (e) {\n  answer = '';\n}\n\n// If answer is empty, try a broader selector for the answer content\nif (!answer) {\n  try {\n    answer = await $extract('div.agent-chat__list__item--ai.agent-chat__list__item--last div.hyc-component-deepsearch-cot > div.hyc-content-md.hyc-content-md-done:last-child > div.hyc-common-markdown.hyc-common-markdown-style', undefined, 5000);\n  } catch (e2) {\n    answer = '';\n  }\n}\n\n// Validate extraction - retry if both are empty\nif (!thinking && !answer) {\n  return { done: false };\n}\n\nreturn {\n  thinking: thinking || '',\n  answer: answer || '',\n  question: __input__.question || ''\n};"
+      },
+      {
+        "condition": null,
+        "entryUrl": "https://yuanbao.tencent.com/chat/naQivTmsDa",
+        "id": "5",
+        "maxIterations": 1,
+        "name": "返回最终结果",
+        "onFailure": "TERMINATE",
+        "onSuccess": "TERMINATE",
+        "script": "const result = __lastResult__;\n\nreturn {\n  question: result.question || __input__.question,\n  thinking: result.thinking || '',\n  answer: result.answer || ''\n};"
+      }
+    ],
+    "targetUrl": "https://yuanbao.tencent.com/chat/naQivTmsDa",
+    "updatedAt": 1782537561010,
+    "userDescription": "打开目标网站（元宝AI问答），检查界面是否开启了深度思考模式，若未开启，则点击界面深度思考按钮开启深度思考模式，然后接收外部传入参数为一个字符串（问题），在目标网站中输入问题进行提问，提交问题后等待答案完全返回，提取其中的思考过程和答案，组装成json返回给外部。"
+  }
+]

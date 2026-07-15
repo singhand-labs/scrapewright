@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Scrapewright - Services</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Scrapewright</h1>
+    <div id="toast" class="toast hidden"></div>
+
+    <section class="native-host-status">
+      <h2>Native Host Status</h2>
+      <div class="native-status-row">
+        <span id="nativeStatusBadge" class="native-badge unknown">Checking…</span>
+        <span id="nativeModeDesc" class="native-mode-desc"></span>
+      </div>
+      <div id="nativeDetails" class="native-details">
+        <div class="native-detail-row"><span class="native-label">Port:</span> <span id="nativePort" class="native-value">—</span></div>
+        <div class="native-detail-row"><span class="native-label">Connected:</span> <span id="nativeConnectedAt" class="native-value">—</span></div>
+        <div class="native-detail-row"><span class="native-label">Disconnected:</span> <span id="nativeDisconnectedAt" class="native-value">—</span></div>
+        <div class="native-detail-row"><span class="native-label">Reconnect attempts:</span> <span id="nativeReconnectAttempts" class="native-value">—</span></div>
+        <div class="native-detail-row"><span class="native-label">Log file:</span> <code id="nativeLogFile" class="native-value">—</code></div>
+        <div class="native-detail-row native-error-row hidden" id="nativeErrorRow">
+          <span class="native-label">Last error:</span>
+          <span id="nativeError" class="native-error-text"></span>
+        </div>
+      </div>
+      <div class="native-actions">
+        <button id="nativeReconnect">Reconnect</button>
+        <button id="nativeCopyDiag" class="btn-secondary">Copy Diagnostics</button>
+      </div>
+      <p class="hint">The Native Host bridges external programs to this extension. If the badge is red, Chrome can't launch the host — copy diagnostics and check the log file.</p>
+    </section>
+
+    <section class="llm-config">
+      <h2>LLM Configuration</h2>
+      <select id="provider">
+        <option value="openai">OpenAI</option>
+        <option value="moonshot">Moonshot</option>
+        <option value="kimi">Kimi (Moonshot Platform)</option>
+        <option value="anthropic">Anthropic</option>
+        <option value="glm">GLM (Zhipu AI)</option>
+      </select>
+      <input type="text" id="model" placeholder="Model name (e.g. kimi-for-coding)" />
+      <input type="password" id="apiKey" placeholder="API Key" />
+      <input type="text" id="apiBaseUrl" placeholder="Base URL (optional)" />
+      <button id="saveLlm">Save LLM Config</button>
+    </section>
+
+    <section class="server-config">
+      <h2>Server Configuration</h2>
+      <input type="number" id="serverPort" placeholder="8765" min="1" max="65535" />
+      <button id="savePort">Save Port</button>
+      <p class="hint">Changes apply immediately via Native Messaging.</p>
+    </section>
+
+    <section class="services">
+      <h2>Services</h2>
+      <button id="newService">+ New Service</button>
+      <button id="exportAll">Export All</button>
+      <button id="importBtn">Import</button>
+      <input type="file" id="importFile" accept=".json" class="hidden" />
+      <div id="serviceList"></div>
+    </section>
+
+    <section class="exec-history">
+      <h2>Execution History</h2>
+      <div id="execLogList"></div>
+    </section>
+
+    <section class="debug-logs">
+      <h2>Debug Logs</h2>
+      <button id="exportDebug">Export Debug Logs</button>
+      <button id="clearDebug">Clear Debug Logs</button>
+      <p class="hint">Export and send logs when debugging issues.</p>
+    </section>
+  </div>
+
+  <div id="apiDocModal" class="modal hidden">
+    <div class="modal-content">
+      <span class="modal-close">&times;</span>
+      <h2 id="apiDocTitle">API Documentation</h2>
+      <button id="apiDocDownloadMd" class="btn-secondary">⬇ Download Markdown</button>
+      <div id="apiDocBody"></div>
+    </div>
+  </div>
+
+  <script src="lib/service-registry.js"></script>
+  <script src="lib/import-utils.js"></script>
+  <script src="lib/wizard-utils.js"></script>
+  <script src="lib/service-doc.js"></script>
+  <script src="lib/debug-logger.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>
