@@ -177,6 +177,7 @@ async function loadEditMode() {
     pageOps: svc.userDescription || svc.displayName || '',
     outputStruct: ''
   };
+  wizardState.description = buildRequirementsBlock(wizardState.requirements);
   wizardState.serviceName = svc.displayName || '';
   wizardState.steps = svc.steps || [];
   wizardState.inputSchema = svc.inputSchema || { type: 'object' };
@@ -1322,6 +1323,8 @@ async function startResearch() {
     showToast('Please describe the page operations and data to collect before researching', 'error', 5000);
     return;
   }
+  // Re-read targetUrl here because the URL field now lives on the same phase-1
+  // screen as the requirement fields and may have been edited after load.
   wizardState.targetUrl = document.getElementById('targetUrl').value;
   wizardState.requirements = { inputParams, pageOps, outputStruct };
   wizardState.description = buildRequirementsBlock(wizardState.requirements);
@@ -2078,7 +2081,7 @@ async function confirmDeploy() {
   const service = {
     id: wizardState.editingServiceId || crypto.randomUUID(),
     name: existingService ? existingService.name : await generateUniqueSlug(wizardState.serviceName || 'service', registry, wizardState.editingServiceId),
-    displayName: wizardState.serviceName || ((wizardState.requirements && wizardState.requirements.pageOps) || wizardState.description || '').slice(0, 30),
+    displayName: wizardState.serviceName || (wizardState.requirements?.pageOps || wizardState.description || '').slice(0, 30),
     userDescription: wizardState.userDescription || wizardState.description || '',
     requirements: wizardState.requirements || null,
     targetUrl: wizardState.targetUrl,
