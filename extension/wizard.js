@@ -6,6 +6,7 @@ let wizardState = {
   phase: 1,
   targetUrl: '',
   description: '',
+  requirements: { inputParams: '', pageOps: '', outputStruct: '' },
   userDescription: '',
   annotations: [],
   steps: [],
@@ -171,6 +172,11 @@ async function loadEditMode() {
   wizardState.targetUrl = svc.targetUrl;
   wizardState.description = svc.displayName || '';
   wizardState.userDescription = svc.userDescription || svc.displayName || '';
+  wizardState.requirements = svc.requirements || {
+    inputParams: '',
+    pageOps: svc.userDescription || svc.displayName || '',
+    outputStruct: ''
+  };
   wizardState.serviceName = svc.displayName || '';
   wizardState.steps = svc.steps || [];
   wizardState.inputSchema = svc.inputSchema || { type: 'object' };
@@ -181,7 +187,9 @@ async function loadEditMode() {
   wizardState.phase = 2;
 
   document.getElementById('targetUrl').value = svc.targetUrl;
-  document.getElementById('description').value = svc.displayName || '';
+  document.getElementById('reqInputParams').value = wizardState.requirements.inputParams || '';
+  document.getElementById('reqPageOps').value = wizardState.requirements.pageOps || '';
+  document.getElementById('reqOutputStruct').value = wizardState.requirements.outputStruct || '';
   document.getElementById('serviceName').value = svc.displayName || '';
   document.getElementById('pageTitle').textContent = 'Edit Service: ' + svc.displayName;
   renderStepList();
@@ -1305,18 +1313,19 @@ async function startResearch() {
     return;
   }
 
-  // Read description directly from the textarea. The wizard has no Phase that
-  // explicitly syncs it on transition (Phase 2 only has Back / Research), so
-  // without this read the value is lost. Empty description means the LLM has
-  // no task context and produces generic selectors
-  // (observed in tianyan.log line 301: "Description: \n").
-  const description = (document.getElementById('description').value || '').trim();
-  if (!description) {
-    showToast('Please describe what you want to extract before researching', 'error', 5000);
+  // Read the three structured requirement fields. pageOps is the essential
+  // operational description — without it the LLM has no task context.
+  const inputParams = (document.getElementById('reqInputParams').value || '').trim();
+  const pageOps = (document.getElementById('reqPageOps').value || '').trim();
+  const outputStruct = (document.getElementById('reqOutputStruct').value || '').trim();
+  if (!pageOps) {
+    showToast('Please describe the page operations and data to collect before researching', 'error', 5000);
     return;
   }
-  wizardState.description = description;
-  if (!wizardState.userDescription) wizardState.userDescription = description;
+  wizardState.targetUrl = document.getElementById('targetUrl').value;
+  wizardState.requirements = { inputParams, pageOps, outputStruct };
+  wizardState.description = buildRequirementsBlock(wizardState.requirements);
+  if (!wizardState.userDescription) wizardState.userDescription = wizardState.description;
 
   const tab = await chrome.tabs.create({ url: wizardState.targetUrl, active: true });
   wizardState.researchTabId = tab.id;
@@ -2069,8 +2078,9 @@ async function confirmDeploy() {
   const service = {
     id: wizardState.editingServiceId || crypto.randomUUID(),
     name: existingService ? existingService.name : await generateUniqueSlug(wizardState.serviceName || 'service', registry, wizardState.editingServiceId),
-    displayName: wizardState.serviceName || wizardState.description.slice(0, 30),
+    displayName: wizardState.serviceName || ((wizardState.requirements && wizardState.requirements.pageOps) || wizardState.description || '').slice(0, 30),
     userDescription: wizardState.userDescription || wizardState.description || '',
+    requirements: wizardState.requirements || null,
     targetUrl: wizardState.targetUrl,
     steps: wizardState.steps,
     inputSchema: wizardState.inputSchema,
