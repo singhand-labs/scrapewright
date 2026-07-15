@@ -25,7 +25,9 @@ let wizardState = {
   postSnapshot: null,
   explorationData: null,
   llmHistory: [],
-  stepAnnotationTabs: {}
+  stepAnnotationTabs: {},
+  testAbortController: null,
+  testAborted: false
 };
 
 function buildSystemMessageWithGlobalContext(baseSystemContent) {
@@ -117,13 +119,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('btnPhase5Deploy').addEventListener('click', confirmDeploy);
   document.getElementById('btnPhase5Back').addEventListener('click', () => goToPhase(4));
   document.getElementById('btnPhase5EditSteps').addEventListener('click', () => goToPhase(2));
-  document.getElementById('btnRetryTest').addEventListener('click', () => testScript());
-  document.getElementById('btnAutoFix').addEventListener('click', () => autoFix(document.getElementById('feedbackInput').value));
+  document.getElementById('btnRetryTest').addEventListener('click', () => {
+    wizardState.testAborted = false;
+    testScript();
+  });
+  document.getElementById('btnAutoFix').addEventListener('click', () => {
+    wizardState.testAborted = false;
+    autoFix(document.getElementById('feedbackInput').value);
+  });
   document.getElementById('btnDeployAnyway').addEventListener('click', () => {
     goToPhase(5);
     confirmDeploy();
   });
   document.getElementById('btnFixAgain').addEventListener('click', () => {
+    wizardState.testAborted = false;
     autoFix(document.getElementById('feedbackInput').value);
   });
   document.getElementById('btnAddStep')?.addEventListener('click', addStep);
@@ -302,6 +311,11 @@ function renderResultSummary(result) {
 }
 
 function goToPhase(n) {
+  if (wizardState.testAbortController && !wizardState.testAbortController.signal.aborted) {
+    wizardState.testAbortController.abort();
+    wizardState.testAborted = true;
+    appendLog('Test aborted: you navigated away from the test.', 'info');
+  }
   if (n === 2) {
     renderStepList();
     if (!document.getElementById('serviceName').value && wizardState.serviceName) {
@@ -1388,6 +1402,7 @@ async function startResearch() {
 }
 
 async function runTestFromStep5() {
+  wizardState.testAborted = false;
   const parsed = validateTestInput(
     document.getElementById('inputSchemaEditor').value,
     document.getElementById('outputSchemaEditor').value,
@@ -1420,6 +1435,7 @@ async function testScript() {
   wizardState.lastError = null;
   wizardState.lastErrorStepId = null;
   wizardState.lastErrorSnapshot = null;
+  wizardState.testAbortController = new AbortController();
   debugLogger.log('info', 'wizard', 'testScript start', {
     targetUrl: wizardState.targetUrl,
     stepCount: wizardState.steps?.length,
@@ -1467,6 +1483,9 @@ async function testScript() {
         if (!ready) appendLog('Warning: content script not responding; proceeding anyway.');
       },
       executeScript: async (tabId, script, input, timeoutMs) => {
+        if (wizardState.testAbortController?.signal.aborted) {
+          throw new Error('TEST_ABORTED');
+        }
         appendLog('Executing script via offscreen...');
         const executor = new OffscreenExecutor(tabId);
         executor.timeoutMs = timeoutMs || 30000;
@@ -1561,12 +1580,17 @@ async function testScript() {
     // being called from inside an existing autoFix iteration) and only for
     // errors the LLM can plausibly fix. LOGIN_REQUIRED etc. skip straight to
     // the manual UI.
-    const autoFixable = !/LOGIN_REQUIRED/i.test(e.message || '');
-    if (!wizardState.autoFixing && autoFixable) {
-      appendLog('Test failed — auto-fixing (up to 3 attempts before asking you)...', 'info');
-      await autoFix(null);
+    if (e.message === 'TEST_ABORTED') {
+      wizardState.testAborted = true;
+      appendLog('Test aborted by user.', 'info');
     } else {
-      updatePhaseUI('failure');
+      const autoFixable = !/LOGIN_REQUIRED/i.test(e.message || '');
+      if (!wizardState.autoFixing && autoFixable) {
+        appendLog('Test failed — auto-fixing (up to 3 attempts before asking you)...', 'info');
+        await autoFix(null);
+      } else {
+        updatePhaseUI('failure');
+      }
     }
   } finally {
     if (tab) await chrome.tabs.remove(tab.id).catch(() => {});
@@ -1574,9 +1598,12 @@ async function testScript() {
     try {
       await chrome.runtime.sendMessage({ type: 'RELEASE_EXEC_LOCK' });
     } catch (e) { /* background may be unavailable */ }
+    wizardState.testAbortController = null;
   }
 
-  goToPhase(5);
+  if (!wizardState.testAborted) {
+    goToPhase(5);
+  }
   await debugLogger.persist();
 }
 
@@ -1730,6 +1757,7 @@ async function autoFix(userFeedback = null) {
   wizardState.autoFixing = true;
   try {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      if (wizardState.testAborted) break;
       let success = false;
       let fatal = false;
       try {
