@@ -105,23 +105,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  document.getElementById('btnPhase1Next').addEventListener('click', () => goToPhase(2));
-  document.getElementById('btnPhase2Back').addEventListener('click', () => goToPhase(1));
-  document.getElementById('btnPhase2Research').addEventListener('click', startResearch);
+  document.getElementById('btnPhase1Research').addEventListener('click', startResearch);
   document.getElementById('btnRunExploration')?.addEventListener('click', onRunExploration);
   document.getElementById('btnSkipExploration')?.addEventListener('click', onSkipExploration);
-  document.getElementById('btnPhase3Next').addEventListener('click', () => goToPhase(4));
+  document.getElementById('btnPhase2Next').addEventListener('click', () => goToPhase(3));
+  document.getElementById('btnPhase2Back').addEventListener('click', () => goToPhase(1));
+  document.getElementById('btnPhase3Test').addEventListener('click', runTestFromStep5);
   document.getElementById('btnPhase3Back').addEventListener('click', () => goToPhase(2));
-  document.getElementById('btnPhase4Test').addEventListener('click', runTestFromStep5);
   document.getElementById('btnPhase4Back').addEventListener('click', () => goToPhase(3));
+  document.getElementById('btnPhase5Deploy').addEventListener('click', confirmDeploy);
   document.getElementById('btnPhase5Back').addEventListener('click', () => goToPhase(4));
-  document.getElementById('btnPhase6Deploy').addEventListener('click', confirmDeploy);
-  document.getElementById('btnPhase6Back').addEventListener('click', () => goToPhase(5));
-  document.getElementById('btnPhase6EditSteps').addEventListener('click', () => goToPhase(3));
+  document.getElementById('btnPhase5EditSteps').addEventListener('click', () => goToPhase(2));
   document.getElementById('btnRetryTest').addEventListener('click', () => testScript());
   document.getElementById('btnAutoFix').addEventListener('click', () => autoFix(document.getElementById('feedbackInput').value));
   document.getElementById('btnDeployAnyway').addEventListener('click', () => {
-    goToPhase(6);
+    goToPhase(5);
     confirmDeploy();
   });
   document.getElementById('btnFixAgain').addEventListener('click', () => {
@@ -146,9 +144,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   initStepListDelegation();
 
   document.getElementById('targetUrl').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') goToPhase(2);
+    if (e.key === 'Enter') document.getElementById('reqInputParams').focus();
   });
-  document.getElementById('description').addEventListener('keydown', (e) => {
+  document.getElementById('reqPageOps').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && e.ctrlKey) startResearch();
   });
 
@@ -180,7 +178,7 @@ async function loadEditMode() {
   wizardState.annotations = svc.annotations || [];
   wizardState.sampleInput = svc.sampleInput || {};
   wizardState.llmHistory = [];
-  wizardState.phase = 3;
+  wizardState.phase = 2;
 
   document.getElementById('targetUrl').value = svc.targetUrl;
   document.getElementById('description').value = svc.displayName || '';
@@ -295,19 +293,19 @@ function renderResultSummary(result) {
 }
 
 function goToPhase(n) {
-  if (n === 2) wizardState.targetUrl = document.getElementById('targetUrl').value;
-  if (n === 3) {
+  if (n === 2) {
     renderStepList();
     if (!document.getElementById('serviceName').value && wizardState.serviceName) {
       document.getElementById('serviceName').value = wizardState.serviceName;
     }
-    if (!wizardState.serviceName && wizardState.description) {
-      const suggested = wizardState.description.slice(0, 30).replace(/\s+$/, '');
+    const pageOps = (wizardState.requirements && wizardState.requirements.pageOps) || wizardState.description || '';
+    if (!wizardState.serviceName && pageOps) {
+      const suggested = pageOps.slice(0, 30).replace(/\s+$/, '');
       document.getElementById('serviceName').value = suggested;
       wizardState.serviceName = suggested;
     }
   }
-  if (n === 4) {
+  if (n === 3) {
     syncStepsFromEditor();
     wizardState.serviceName = document.getElementById('serviceName').value || wizardState.serviceName;
     document.getElementById('inputSchemaEditor').value = JSON.stringify(wizardState.inputSchema, null, 2);
@@ -1288,7 +1286,7 @@ async function continueResearch(tabId, config, pageInfo, postPageInfo) {
       outputSchema: parsed.outputSchema,
       sampleInput: parsed.sampleInput
     });
-    goToPhase(3);
+    goToPhase(2);
   } catch (e) {
     debugLogger.log('error', 'wizard', 'Step generation (generateStepsWithSelectors) failed', {
       error: e.message, stack: e.stack, rawLLMOutput: e.rawLLMOutput
@@ -1389,7 +1387,7 @@ async function runTestFromStep5() {
   wizardState.inputSchema = parsed.inputSchema;
   wizardState.outputSchema = parsed.outputSchema;
   wizardState.testInput = parsed.testInput;
-  goToPhase(5);
+  goToPhase(4);
   document.getElementById('executionLog').innerHTML = '';
   appendLog('Starting test...');
   await testScript();
@@ -1566,7 +1564,7 @@ async function testScript() {
   }
 
   if (wizardState.phase !== 6) {
-    goToPhase(6);
+    goToPhase(5);
   }
   await debugLogger.persist();
 }
