@@ -30,12 +30,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('settingsModal').classList.remove('hidden');
   });
 
-  // Close any modal via the × button, a backdrop click, or ESC.
+  // Close any modal via the × button or ESC (not backdrop click — mis-clicks
+  // would discard in-progress form edits).
   document.addEventListener('click', (e) => {
     if (e.target.classList.contains('modal-close')) {
       e.target.closest('.modal')?.classList.add('hidden');
-    } else if (e.target.classList.contains('modal')) {
-      e.target.classList.add('hidden');
     }
   });
   document.addEventListener('keydown', (e) => {
