@@ -102,7 +102,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         sid => wizardState.stepAnnotationTabs[sid] === updatedTabId
       );
       if (trackedStepIds.length === 0) return;
-      showToast('Target tab reloaded — annotations cleared. Click 开始标注 again to re-select elements.', 'error', 6000);
+      showToast('Target tab reloaded — annotations cleared. Click Start Annotating again to re-select elements.', 'error', 6000);
     });
   }
 
@@ -352,9 +352,9 @@ function renderStepList() {
         <label>Entry URL:
           <input type="url" class="step-entry-url" value="${escapeHtml(step.entryUrl || '')}" placeholder="(optional, for annotation)">
         </label>
-        <button class="btn-step-open-webpage" data-index="${index}">打开网页</button>
-        <button class="btn-step-start-annotation" data-index="${index}">开始标注</button>
-        <button class="btn-step-complete-annotation" data-index="${index}">完成标注</button>
+        <button class="btn-step-open-webpage" data-index="${index}">Open Page</button>
+        <button class="btn-step-start-annotation" data-index="${index}">Start Annotating</button>
+        <button class="btn-step-complete-annotation" data-index="${index}">Finish Annotation</button>
       </div>
       ${(step.annotations && step.annotations.length)
         ? `<div class="step-annotation-list">
@@ -472,7 +472,7 @@ async function openStepWebpage(stepIndex) {
   try {
     const tab = await chrome.tabs.create({ url, active: true });
     wizardState.stepAnnotationTabs[step.id] = tab.id;
-    showToast('Tab opened. Navigate the page to the desired state, then click 开始标注.', 'info');
+    showToast('Tab opened. Navigate the page to the desired state, then click Start Annotating.', 'info');
   } catch (e) {
     showToast('Failed to open tab: ' + e.message, 'error');
   }
@@ -484,13 +484,13 @@ async function startStepAnnotation(stepIndex) {
   if (!step) return;
   const tabId = wizardState.stepAnnotationTabs[step.id];
   if (!tabId) {
-    showToast('Please click 打开网页 first to open a tab for this step', 'error');
+    showToast('Please click Open Page first to open a tab for this step', 'error');
     return;
   }
   try {
     await chrome.tabs.get(tabId);
   } catch (e) {
-    showToast('The tab for this step was closed. Please click 打开网页 again.', 'error');
+    showToast('The tab for this step was closed. Please click Open Page again.', 'error');
     delete wizardState.stepAnnotationTabs[step.id];
     return;
   }
@@ -500,7 +500,7 @@ async function startStepAnnotation(stepIndex) {
       inputSchema: wizardState.inputSchema,
       outputSchema: wizardState.outputSchema
     });
-    showToast('Annotation mode on. Click elements, then click 完成标注 when done.', 'info');
+    showToast('Annotation mode on. Click elements, then click Finish Annotation when done.', 'info');
   } catch (e) {
     try {
       await chrome.tabs.reload(tabId);
@@ -536,13 +536,13 @@ async function completeStepAnnotation(stepIndex) {
 async function _completeStepAnnotationInner(stepIndex, step) {
   const tabId = wizardState.stepAnnotationTabs[step.id];
   if (!tabId) {
-    showToast('Please click 打开网页 and 开始标注 first', 'error');
+    showToast('Please click Open Page and Start Annotating first', 'error');
     return;
   }
   try {
     await chrome.tabs.get(tabId);
   } catch (e) {
-    showToast('The tab for this step was closed. Please click 打开网页 and 开始标注 again.', 'error');
+    showToast('The tab for this step was closed. Please click Open Page and Start Annotating again.', 'error');
     delete wizardState.stepAnnotationTabs[step.id];
     return;
   }
@@ -561,7 +561,7 @@ async function _completeStepAnnotationInner(stepIndex, step) {
   }
 
   if (!captured || !captured.annotations || captured.annotations.length === 0) {
-    showToast('No annotations captured. Click 开始标注 and select elements first.', 'error');
+    showToast('No annotations captured. Click Start Annotating and select elements first.', 'error');
     return;
   }
 
