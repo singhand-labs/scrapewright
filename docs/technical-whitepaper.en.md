@@ -76,6 +76,35 @@ Scrapewright is an LLM-driven web data extraction platform composed of a Chrome 
 
 Two channels connect the Host and the extension; the active one is chosen automatically:
 
+```
+External program
+    |
+    | HTTP POST /api/v1/services/{name}/execute
+    v
++------------------+                          +------------------+
+|  host.js         |  Native Messaging (stdin |  background.js   |
+|  (Node.js)       |  /stdout, Chrome-launched)| (Service Worker)|
+|                  |                          +--------+---------+
+|  or HTTP long-   |                          |                 |
+|  polling:        | <---- HTTP long-poll ----|  Auto-fallback  |
+|  /extension/poll |                          |                 |
+|  /extension/resp |                          |                 |
++------------------+                          +--------+---------+
+                                                       |
+                                                       | chrome.tabs.sendMessage
+                                                       v
+                                              +------------------+
+                                              | content-script.js|
+                                              +--------+---------+
+                                                       |
+                                                       | postMessage
+                                                       v
+                                              +------------------+
+                                              | sandbox.html     |
+                                              |  (eval allowed)  |
+                                              +------------------+
+```
+
 | Channel | Trigger | Direction | Protocol |
 |---------|---------|-----------|----------|
 | Native Messaging | Chrome auto-launches the Host | stdin/stdout pipe | length-prefixed JSON |
@@ -94,6 +123,52 @@ MV3's Content Security Policy (CSP) forbids `eval` / `new Function` in the Servi
 2. **A sandboxed iframe inside `offscreen.js`** — the primary execution path, created via the Offscreen API as an independent document.
 
 Both sandboxes load `sandbox.html` (declared as a sandbox page in `manifest.json`) and have `eval` permission.
+
+### 2.4 Project Layout
+
+The repository is organized as follows:
+
+```
+extension/                # Chrome Extension (Manifest V3)
+  background.js           # Service Worker — execution queue, script orchestration, retry, AI auto-fix, long-poll client
+  content-script.js       # Content script — DOM op proxy, element annotation, page snapshot
+  sandbox.html/js         # Sandbox page — eval/new Function runs here (MV3 CSP requirement)
+  wizard.html/js/css      # 7-step AI wizard — service create/edit flow
+  options.html/js/css     # Options page — LLM settings, service management, execution history
+  popup.html/js           # Popup
+  lib/
+    llm-client.js         # LLM client — supports OpenAI / Moonshot / Kimi / Anthropic / GLM
+    offscreen-executor.js # Script executor — Offscreen API wrapper with timeout protection
+    step-orchestrator.js  # Step orchestrator — conditional step-graph execution, loop detection, auto-retry
+    service-registry.js   # Service registry — persisted to chrome.storage.local
+    wizard-utils.js       # Wizard utilities — DSL guide, JSON sanitization, schema rendering
+    import-utils.js       # Import utilities — data validation, dedup filtering
+    dom-snapshot.js       # DOM snapshot — compact structure extraction (used by tests)
+    debug-logger.js       # Debug logger — structured logs + auto-cleanup
+    script-executor.js    # Legacy executor (kept for $openTab compatibility)
+  test/                   # Extension unit tests
+
+native-host/              # Node.js Native Messaging Host
+  host.js                 # HTTP server — Native Messaging + HTTP long-polling dual transport
+  lib/
+    native-messaging.js   # Length-prefixed JSON codec (UTF-8 safe)
+  install-host.sh         # Linux / macOS installer
+  install-host.ps1        # Windows installer
+  host.cmd                # Windows launcher wrapper
+  test/                   # Tests
+```
+
+### 2.5 Chrome MV3 Constraints
+
+Chrome Manifest V3 imposes several hard constraints that directly shaped the design:
+
+| Constraint | Impact | Mitigation |
+|------------|--------|------------|
+| Service worker cannot run an HTTP server | Extension can't expose an API directly | Add a Node.js Native Messaging Host as the HTTP bridge |
+| `eval` / `new Function` forbidden in service worker and content script | Cannot execute user scripts directly | Create a sandbox iframe (declared in manifest) and run dynamic code there |
+| Each extension can have only 1 offscreen document | Script execution surface is a singleton | Serialize execution through ExecutionQueue; multi-instance deployment sidesteps the limit |
+| Service worker can be killed after ~30s idle | Long-poll loops may break | `chrome.alarms` heartbeat every 24s, auto-reconnect on disconnect |
+| `chrome.storage.local` capped at 10MB | Large job data may overflow | 100-job cap + 24h TTL cleanup; future migration to IndexedDB |
 
 ## 3. Core Data Flow
 
@@ -199,6 +274,8 @@ The orchestrator executes a directed step graph. Each step contains:
 | `onSuccess` | Step id to jump to on success (`'TERMINATE'` ends) |
 | `onFailure` | Step id to jump to on failure / give-up (condition false, retries exhausted, or returned `{failed:true}`) |
 | `maxIterations` | Max executions of this step (default 1; `>1` enables polling/retry: returning `{done:false}` reruns itself) |
+
+> **No `SELF` sentinel.** Earlier versions used `onSuccess: 'SELF'` for self-loops with a counterintuitive convention (`{done:true}` exited via `onFailure`). This is removed. Polling/retry is now expressed by `maxIterations>1` + returning `{done:false}`; `onSuccess`/`onFailure` always point at another step id or `TERMINATE`.
 
 **Loop detection:** Before execution, cycles in the step graph are detected automatically. When a step's `onSuccess` points to an earlier step, every step on the cyclic path has its `maxIterations` auto-boosted to the global cap (default 50).
 
@@ -362,6 +439,10 @@ User describes the need
       → user annotates elements
       → LLM refines the script based on the annotations
 ```
+
+**Two-round HTML protocol:** to avoid truncating large pages while keeping token usage efficient, the research phase runs in two rounds. Round one sends the LLM a compact DOM summary (~8000 tokens) and gets back candidate selectors. Round two fetches only the full HTML of those candidate elements so the LLM can confirm or correct them.
+
+**Element annotation assist:** when the LLM's selector confidence is below threshold, the visual element annotation mode kicks in automatically, turning user intent into structured annotations that the LLM consumes directly.
 
 ### AutoFix
 
@@ -543,3 +624,48 @@ Add a new template to the `STEP_TEMPLATES` array in `wizard-utils.js`:
 | AI repair retries at most 2 times | Prevents infinite retry loops | Complex errors may need manual repair |
 | No built-in login-state management | No cookie management feature | Pages requiring login need a manual login first |
 | Default API key is `dev-key` | Development convenience | Production must set `SCRAPEWRIGHT_API_KEY` |
+
+## 11. Development & Contributing
+
+### Running tests
+
+```bash
+# Run Native Host tests
+cd native-host && npm test
+
+# Run a single test file
+cd native-host && node --test test/host.test.js
+
+# Run extension tests (needs jsdom from the repo root)
+cd extension && node --test test/*.test.js lib/*.test.js
+```
+
+### Starting the Host manually (custom port)
+
+```bash
+cd native-host && node host.js --port=19880
+```
+
+In manual mode, the extension auto-falls-back to HTTP long-polling; make sure the port on the extension Options page under **Server Configuration** matches the `--port` argument.
+
+### Restarting after a code update
+
+After editing extension files, reload the extension at `chrome://extensions/` (click the refresh icon on the extension card). After editing Native Host code, restart the Host process.
+
+**Windows (PowerShell, admin):**
+```powershell
+# Kill the old process
+taskkill /F /IM node.exe
+# Close and restart Chrome
+taskkill /F /IM chrome.exe
+start chrome
+```
+
+**Linux / macOS:**
+```bash
+# Kill the old process
+pkill -f "node.*host.js"
+# Restart Chrome or reload the extension
+```
+
+After restarting Chrome, refresh the extension at `chrome://extensions/`; Chrome will launch the Native Host with the new code. In manual-start mode, just `Ctrl+C` the current `node host.js` and run it again.
