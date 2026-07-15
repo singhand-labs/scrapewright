@@ -1,6 +1,10 @@
+<p align="center">
+  <img src="logo.png" width="220" alt="Scrapewright logo">
+</p>
+
 # Scrapewright
 
-**LLM-powered web scraping platform**
+**The open-source, self-hosted AI web scraper that turns natural language into HTTP API services.**
 
 **English** | [简体中文](./README.zh-CN.md)
 
@@ -11,7 +15,27 @@
 
 > Developed and maintained by [Hunan Singhand Intelligent Data Technology Co.,Ltd](https://www.singhand.com) · Released under [**GPLv3**](./LICENSE)
 
-Scrapewright tightly couples large language models (LLMs) with browser automation: describe what you want to scrape in natural language, and the system automatically analyzes the target page, generates the scraping script, executes it, and returns structured data. Built as a Chrome Extension (Manifest V3) plus a Node.js Native Messaging Host, it exposes a standard HTTP API that drops cleanly into any backend system, data pipeline, or automation workflow.
+Scrapewright is an **LLM-powered web scraping platform** that converts plain-English descriptions of what you want to extract into reusable, HTTP-callable scraping services. Describe the target page and fields in natural language, and a large language model analyzes the site, generates the scraping script, runs it inside a real Chrome browser, and returns structured JSON — no CSS selectors to hand-write, no Playwright or Puppeteer code to maintain.
+
+Built as a **Chrome Extension (Manifest V3)** plus a lightweight **Node.js Native Messaging Host**, Scrapewright runs inside your everyday browser: your logins, cookies, and fingerprint carry over as-is, so login-required and anti-bot-protected sites just work. Every scraping service is exposed through a standard **REST / HTTP API** with JSON Schema I/O, so it drops cleanly into any backend, data pipeline, RPA flow, or AI agent stack.
+
+**Great for:** login-required sites (intranets, paid content, SaaS dashboards), AI chatbot answer capture, low-frequency high-value queries, knowledge-graph building, and no-code data extraction for non-developers.
+
+> ### Quick start
+>
+> After loading the `extension/` folder at `chrome://extensions/` (Developer mode → Load unpacked):
+>
+> ```bash
+> ./bin/scrapewright setup --auto     # auto-detect extension ID, install native host, self-check
+> ```
+>
+> Then open the extension → **Options** → configure your LLM (OpenAI / Moonshot Kimi / Anthropic / GLM) → **+ New Service** → describe what you want to scrape in natural language → test → deploy → call it from anywhere:
+>
+> ```bash
+> curl -X POST http://localhost:8765/api/v1/services/my-service/execute \
+>   -H "X-API-Key: $SCRAPEWRIGHT_API_KEY" -H "Content-Type: application/json" \
+>   -d '{"input": {"query": "hello"}}'
+> ```
 
 ## Table of Contents
 
@@ -23,24 +47,23 @@ Scrapewright tightly couples large language models (LLMs) with browser automatio
 - [Project Structure](#project-structure) · [Communication Architecture](#communication-architecture) · [Development](#development)
 - [Comparison with Other Solutions](#comparison-with-other-solutions)
 - [Distributed Deployment](#distributed-deployment) · [Technical Architecture](#technical-architecture)
-- [Roadmap](#roadmap)
 - [Copyright & License](#copyright--license)
 
 ## Background: Why Scrapewright
 
-Traditional web scraping tools (Scrapy, Puppeteer, BeautifulSoup, etc.) share several pain points:
+Traditional web scraping tools and browser-automation frameworks — Scrapy, Puppeteer, Playwright, Selenium, BeautifulSoup, Cheerio — share several pain points that make web data extraction harder than it should be:
 
-1. **High development cost** — every target site needs hand-written selectors, pagination handling, and anti-bot countermeasures. Maintenance cost keeps accumulating as sites change.
-2. **Painful dynamic pages** — SPA, nested iframes, and JavaScript-rendered content are hard to reach via plain HTTP requests.
-3. **Poor reusability** — scraping scripts are typically bespoke per site; they don't transfer to structurally similar pages.
-4. **No unified interface** — different scraping jobs have no standardized input/output shape, which makes orchestration and scaling hard.
+1. **High development cost** — every target site needs hand-written CSS selectors, pagination handling, and anti-bot countermeasures. Maintenance cost keeps accumulating as sites change.
+2. **Painful dynamic pages** — SPA frameworks (React, Vue, Angular), nested iframes, and JavaScript-rendered content are hard to reach via plain HTTP requests or simple HTML parsers.
+3. **Poor reusability** — scraping scripts are typically bespoke per site; they don't transfer to structurally similar pages, so the spider you wrote for site A won't help with site B.
+4. **No unified interface** — different scraping jobs have no standardized input/output shape, which makes orchestration, scheduling, and scaling hard.
 
-How Scrapewright answers each:
+How Scrapewright answers each — this is what makes it a different kind of **AI web scraper**:
 
-- **AI-driven** — describe *what* you want; the LLM analyzes page structure, generates the scraping script, and self-repairs on errors.
-- **Real browser environment** — runs as a Chrome extension inside a full browser, with first-class JavaScript rendering, iframe traversal, and dynamic loading.
-- **Standardized API** — every scraping service is callable through a uniform HTTP API, with JSON Schema constraints on both input and output.
-- **Visual wizard** — a 7-step flow takes you from describing the requirement to a tested deployment, no code required.
+- **AI-driven** — describe *what* you want in natural language; the LLM analyzes page structure, generates the scraping script, and self-repairs on errors. Think "AI agent for the browser," but config-time instead of run-time.
+- **Real browser environment** — runs as a Chrome extension inside a full browser, with first-class JavaScript rendering, iframe traversal, and dynamic loading. No headless-detected footprint.
+- **Standardized API** — every scraping service is callable through a uniform HTTP API, with JSON Schema constraints on both input and output. The same shape every time, no matter how gnarly the target site.
+- **Visual no-code wizard** — a 7-step flow takes you from describing the requirement to a tested deployment, no code required. Non-technical users can ship a scraper.
 
 
 ## Core Features
@@ -128,8 +151,8 @@ After installation, **restart Chrome** (or click **Reconnect** in the Native Hos
 
 ### 3. Configure the LLM
 
-1. Click the extension icon → click **Options** to open the config page
-2. Under **LLM Configuration**, fill in:
+1. Click the extension icon → the **Options** (service management) page opens
+2. Click **Settings** (top-right) → under **LLM Configuration**, fill in:
    - **Provider** — pick an LLM provider (OpenAI / Moonshot / Kimi / Anthropic / GLM)
    - **Model** — model name (e.g. `gpt-4o`, `kimi-for-coding`, `glm-5.1`)
    - **API Key** — your API key
@@ -304,7 +327,7 @@ Same response shape as `/wait`, but non-blocking — returns the current state i
 POST /api/v1/jobs/{jobId}/cancel
 ```
 
-Only queued jobs (`status: "queued"`) can be cancelled. (Cancellation of in-flight jobs is on the roadmap.)
+Only queued jobs (`status: "queued"`) can be cancelled. In-flight jobs cannot be cancelled.
 
 #### List all jobs
 

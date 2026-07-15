@@ -1,7 +1,7 @@
 {
   "name": "scrapewright",
   "version": "0.1.0",
-  "description": "LLM-powered web scraping platform built as a Chrome Extension with a Node.js Native Messaging Host.",
+  "description": "Open-source, self-hosted AI web scraper that turns natural-language descriptions into reusable HTTP API services. Chrome extension (MV3) + Node.js native host. No-code, login-state aware, agent-friendly.",
   "license": "GPL-3.0-only",
   "author": "湖南星汉数智科技有限公司 (https://www.singhand.com)",
   "homepage": "https://github.com/singhand-labs/scrapewright",
