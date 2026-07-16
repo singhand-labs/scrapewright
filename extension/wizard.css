@@ -11,7 +11,9 @@ pre { background: #1e1e1e; color: #d4d4d4; padding: 16px; overflow-x: auto; bord
 #testStatus.failure { background: #fee2e2; color: #991b1b; }
 #testStatus.fixing { background: #fef9c3; color: #854d0e; }
 #currentScript { max-height: 200px; font-size: 12px; }
-#feedbackArea textarea { margin: 8px 0; font-family: inherit; }
+#feedbackInput { margin: 8px 0; font-family: inherit; }
+#phase5Actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+#phase5Actions button { margin-right: 0; }
 label { display: block; margin-top: 12px; font-weight: 600; }
 #serviceName { margin-bottom: 12px; }
 #inputSchemaEditor, #outputSchemaEditor, #testInputEditor {

@@ -102,17 +102,12 @@
       </details>
       <pre id="currentScript"></pre>
       <button id="btnPhase5EditSteps">Edit Steps</button>
-      <div id="fixControls" class="hidden">
-        <button id="btnRetryTest">Retry Test</button>
-        <button id="btnAutoFix">Auto-Fix</button>
-        <button id="btnDeployAnyway">Deploy Anyway</button>
-      </div>
-      <div id="feedbackArea" class="hidden">
-        <textarea id="feedbackInput" rows="4" placeholder="Describe what's wrong or how to fix it..."></textarea>
-        <button id="btnFixAgain">Fix Again</button>
-      </div>
-      <div id="deployControls" class="hidden">
-        <button id="btnPhase5Deploy">Looks Good - Deploy</button>
+      <textarea id="feedbackInput" rows="3" placeholder="Optional hint: describe what to change or what data you expected..."></textarea>
+      <div id="phase5Actions">
+        <button id="btnRetryTest" class="hidden">Retry Test</button>
+        <button id="btnAutoFix" class="hidden">Auto-Fix</button>
+        <button id="btnDeployAnyway" class="hidden">Deploy Anyway</button>
+        <button id="btnPhase5Deploy" class="hidden">Looks Good - Deploy</button>
         <button id="btnPhase5Back">Back</button>
       </div>
     </div>
