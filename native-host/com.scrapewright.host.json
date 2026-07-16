@@ -1,9 +1,0 @@
-{
-  "name": "com.scrapewright.host",
-  "description": "Scrapewright Native Messaging Host",
-  "path": "HOST_PATH_PLACEHOLDER",
-  "type": "stdio",
-  "allowed_origins": [
-    "chrome-extension://EXTENSION_ID_PLACEHOLDER/"
-  ]
-}

@@ -478,7 +478,7 @@ if (require.main === module) {
 }
 
 // --- doctor -----------------------------------------------------------------
-// Ran via `node host.js --doctor`. Same surface as install-host.sh --doctor
+// Ran via `node host.js --doctor`. Same surface as `scrapewright doctor`
 // but useful when the wrapper/manifest side is fine and you want to debug the
 // running host's view of the world.
 
