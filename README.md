@@ -42,7 +42,6 @@ Design whitepaper: **[English](docs/technical-whitepaper.en.md)** · [中文](do
 - [System Requirements](#system-requirements)
 - [Installation](#installation) · [Startup Modes](#startup-modes) · [Troubleshooting](#troubleshooting--faq)
 - [HTTP API](#http-api) · [Script DSL](#script-dsl)
-- [Project Structure](#project-structure) · [Communication Architecture](#communication-architecture) · [Development](#development)
 - [Comparison with Other Solutions](#comparison-with-other-solutions)
 - [Distributed Deployment](#distributed-deployment) · [Technical Architecture](#technical-architecture)
 - [Copyright & License](#copyright--license)
@@ -61,7 +60,7 @@ How Scrapewright answers each — this is what makes it a different kind of **AI
 - **AI-driven** — describe *what* you want in natural language; the LLM analyzes page structure, generates the scraping script, and self-repairs on errors. Think "AI agent for the browser," but config-time instead of run-time.
 - **Real browser environment** — runs as a Chrome extension inside a full browser, with first-class JavaScript rendering, iframe traversal, and dynamic loading. No headless-detected footprint.
 - **Standardized API** — every scraping service is callable through a uniform HTTP API, with JSON Schema constraints on both input and output. The same shape every time, no matter how gnarly the target site.
-- **Visual no-code wizard** — a 7-step flow takes you from describing the requirement to a tested deployment, no code required. Non-technical users can ship a scraper.
+- **Visual no-code wizard** — a 5-phase flow takes you from describing the requirement to a tested deployment, no code required. Non-technical users can ship a scraper.
 
 
 ## Core Features
@@ -159,17 +158,15 @@ After installation, **restart Chrome** (or click **Reconnect** in the Native Hos
 
 ### 4. Create a Scraping Service
 
-On the Options page click **+ New Service** to enter the AI wizard (7 steps):
+On the Options page click **+ New Service** to enter the AI wizard (5 phases):
 
-| Step | Description |
-|------|-------------|
-| **Step 1: Target URL** | Enter the target site URL (press Enter to advance) |
-| **Step 2: Describe Needs** | Describe the scraping requirement in natural language; click **Research** (or Ctrl+Enter) and the AI analyzes the page and generates a script |
-| **Step 3: Annotate Elements** | If the AI needs help, visually annotate page elements; once done, the AI optimizes the script using your annotations |
-| **Step 4: Service Name & Script** | Name the service; review and **edit** the AI-generated script |
-| **Step 5: I/O Schema & Test Input** | Confirm input/output parameter shapes (JSON Schema) and edit the test input data |
-| **Step 6: Execute Test** | Watch the live execution log (open page → load → execute → success/failure) |
-| **Step 7: Results** | Review test results. On failure, choose **Auto-Fix** (AI self-repair) or **Deploy Anyway** (deploy despite the error) |
+| Phase | Description |
+|-------|-------------|
+| **Phase 1: Target URL & Requirements** | Enter the target site URL plus three requirement fields — input parameters, page operations & data to collect, and (optional) output structure. Click **Research** (or Ctrl+Enter); the AI analyzes the page and generates a draft service. Each field has an inline placeholder example. If the AI needs help, an interactive exploration/annotation panel appears inline. |
+| **Phase 2: Service Name & Steps** | Name the service; review and **edit** the AI-generated step graph (each step is a script with success/failure transitions). |
+| **Phase 3: I/O Schema & Test Input** | Confirm input/output parameter shapes (JSON Schema) and edit the test input data. |
+| **Phase 4: Execute Test (step by step)** | Watch the live step-by-step execution log (open page → load → each step → success/failure). |
+| **Phase 5: Results** | Review test results. On failure, choose **Auto-Fix** (AI self-repair) or **Deploy Anyway** (deploy despite the error). |
 
 ### 5. Manage Services
 
@@ -445,112 +442,6 @@ Scripts also have access to injected context:
 - `__stepResults__` — a map of return values from all steps, keyed by step id
 - `__lastResult__` — the previous step's return value
 
-## Project Structure
-
-```
-extension/                # Chrome Extension (Manifest V3)
-  background.js           # Service Worker — execution queue, script orchestration, retry, AI auto-fix, long-poll client
-  content-script.js       # Content script — DOM op proxy, element annotation, page snapshot
-  sandbox.html/js         # Sandbox page — eval/new Function runs here (MV3 CSP requirement)
-  wizard.html/js/css      # 7-step AI wizard — service create/edit flow
-  options.html/js/css     # Options page — LLM settings, service management, execution history
-  popup.html/js           # Popup
-  lib/
-    llm-client.js         # LLM client — supports OpenAI / Moonshot / Kimi / Anthropic / GLM
-    offscreen-executor.js # Script executor — Offscreen API wrapper with timeout protection
-    step-orchestrator.js  # Step orchestrator — conditional step-graph execution, loop detection, auto-retry
-    service-registry.js   # Service registry — persisted to chrome.storage.local
-    wizard-utils.js       # Wizard utilities — DSL guide, JSON sanitization, schema rendering
-    import-utils.js       # Import utilities — data validation, dedup filtering
-    dom-snapshot.js       # DOM snapshot — compact structure extraction (used by tests)
-    debug-logger.js       # Debug logger — structured logs + auto-cleanup
-    script-executor.js    # Legacy executor (kept for $openTab compatibility)
-  test/                   # Extension unit tests
-
-native-host/              # Node.js Native Messaging Host
-  host.js                 # HTTP server — Native Messaging + HTTP long-polling dual transport
-  lib/
-    native-messaging.js   # Length-prefixed JSON codec (UTF-8 safe)
-  install-host.sh         # Linux / macOS installer
-  install-host.ps1        # Windows installer
-  host.cmd                # Windows launcher wrapper
-  test/                   # Tests
-```
-
-## Communication Architecture
-
-```
-External program
-    |
-    | HTTP POST /api/v1/services/{name}/execute
-    v
-+------------------+                          +------------------+
-|  host.js         |  Native Messaging (stdin |  background.js   |
-|  (Node.js)       |  /stdout, Chrome-launched)| (Service Worker)|
-|                  |                          +--------+---------+
-|  or HTTP long-   |                          |                 |
-|  polling:        | <---- HTTP long-poll ----|  Auto-fallback  |
-|  /extension/poll |                          |                 |
-|  /extension/resp |                          |                 |
-+------------------+                          +--------+---------+
-                                                       |
-                                                       | chrome.tabs.sendMessage
-                                                       v
-                                              +------------------+
-                                              | content-script.js|
-                                              +--------+---------+
-                                                       |
-                                                       | postMessage
-                                                       v
-                                              +------------------+
-                                              | sandbox.html     |
-                                              |  (eval allowed)  |
-                                              +------------------+
-```
-
-The Host and extension communicate over two channels and switch automatically:
-1. **Native Messaging** — used when Chrome auto-launches the Host (stdin/stdout pipe, low latency)
-2. **HTTP long-polling** — used when the Host is started manually (the extension polls `GET /api/v1/extension/poll` and posts responses to `POST /api/v1/extension/response`)
-
-## Development
-
-```bash
-# Run Native Host tests
-cd native-host && npm test
-
-# Run a single test file
-cd native-host && node --test test/host.test.js
-
-# Start the Host manually (custom port)
-cd native-host && node host.js --port=19880
-```
-
-After editing extension files, reload the extension at `chrome://extensions/` (click the refresh icon on the extension card). After editing Native Host code, restart the Host process.
-
-### Restarting after a code update
-
-To pick up code changes, restart the Host process:
-
-**Windows (PowerShell, admin):**
-```powershell
-# Kill the old process
-taskkill /F /IM node.exe
-# Close and restart Chrome
-taskkill /F /IM chrome.exe
-start chrome
-```
-
-**Linux / macOS:**
-```bash
-# Kill the old process
-pkill -f "node.*host.js"
-# Restart Chrome or reload the extension
-```
-
-After restarting Chrome, refresh the extension at `chrome://extensions/`; Chrome will launch the Native Host with the new code.
-
-In manual-start mode, just `Ctrl+C` the current `node host.js` and run it again.
-
 ## Comparison with Other Solutions
 
 AI-assisted web scraping / browser automation falls into four technical lanes. Scrapewright sits in the **client-side extension** lane, complementary to the other three rather than a replacement.
@@ -688,48 +579,9 @@ In K8s each Pod runs 1 Chrome + 1 `host.js`, with the `/health` endpoint serving
 
 ## Technical Architecture
 
-### Three-layer bridge
+Scrapewright is built on four pillars: a **three-layer bridge** (external program → Node.js HTTP Host → Chrome Extension → target page) that works around MV3's ban on HTTP servers in the service worker; a **step-graph orchestration engine** (`StepOrchestrator`) that runs a directed graph of named steps with conditional edges, polling/retry budgets, and cross-step data flow; **sandboxed script execution** via a single offscreen-hosted iframe where `eval`/`new Function` is permitted under MV3 CSP; and a **dual transport** (Native Messaging + HTTP long-polling fallback) between the Host and the extension. AI-driven script generation, step-level auto-repair, and visual element annotation sit on top of these pillars.
 
-```
-External program → HTTP API → Node.js Host → Native Messaging / HTTP long-polling → Chrome Extension → target page
-```
-
-This shape comes from a Chrome MV3 constraint: a service worker cannot run an HTTP server directly. The Node.js process doubles as the HTTP server and the Native Messaging Host, avoiding the complexity of multi-process deployment. When Native Messaging is unavailable, the system automatically falls back to HTTP long-polling.
-
-### Multi-step orchestration engine
-
-A service is defined by a step graph; each step carries a script, a condition, success/failure transition targets, and a max-iteration budget:
-
-- **Directed-graph execution:** `onSuccess` (success → next) / `onFailure` (failure / give-up → fallback) point at the next step id, or `TERMINATE` (stop).
-- **Poll / retry:** a step with `maxIterations>1` returning `{ done:false }` reruns itself; on data or `{done:true}` it follows `onSuccess`; when the budget is exhausted or it returns `{failed:true}` it follows `onFailure` (the `SELF` sentinel is no longer used).
-- **Dual iteration guard:** per-step `maxIterations` + global `maxStepIterations` (default 50) prevent runaway loops.
-- **Cross-step data flow:** `__stepResults__` (history results indexed by step id) and `__lastResult__` (previous step's result, carrying state across a step's own retries).
-
-### AI-driven script generation and repair
-
-1. **Two-round HTML protocol:** round one sends a compact DOM summary (~8000 tokens) and the LLM returns candidate selectors; round two fetches only the full HTML of the candidate elements so the LLM can confirm or correct. This avoids truncation while keeping token usage efficient.
-2. **Step-level auto-repair:** on failure, only the failing step's script is rewritten; the step-graph topology is preserved. Repair uses the current page's DOM snapshot + error context + prior step results.
-3. **Element annotation assist:** when the LLM's selector confidence is below threshold, the visual element annotation mode kicks in automatically, turning user intent into structured annotations.
-
-### Cross-iframe scraping
-
-Every `$` API automatically traverses same-origin iframes. `querySelectorDeep` searches the main document and all same-origin iframe DOMs; `$list` aggregates matches across all documents. This is essential for sites that lean heavily on iframe nesting (e.g. government bulletin pages).
-
-### Security sandbox
-
-User scripts run inside a dedicated sandbox iframe (declared via the `sandbox` key in `manifest.json`) — the only context where `new Function()` / `eval()` is permitted under MV3. Scripts can only interact with the target page through the whitelisted API (`$`, `$click`, etc.); they cannot reach `chrome.*` APIs or the page's own JavaScript context.
-
-### Key Chrome MV3 constraints
-
-Chrome Manifest V3 imposes several hard constraints that directly shaped the design:
-
-| Constraint | Impact | Mitigation |
-|------------|--------|------------|
-| Service worker cannot run an HTTP server | Extension can't expose an API directly | Add a Node.js Native Messaging Host as the HTTP bridge |
-| `eval` / `new Function` forbidden in service worker and content script | Cannot execute user scripts directly | Create a sandbox iframe (declared in manifest) and run dynamic code there |
-| Each extension can have only 1 offscreen document | Script execution surface is a singleton | Serialize execution through ExecutionQueue; multi-instance deployment sidesteps the limit |
-| Service worker can be killed after ~30s idle | Long-poll loops may break | `chrome.alarms` heartbeat every 24s, auto-reconnect on disconnect |
-| `chrome.storage.local` capped at 10MB | Large job data may overflow | 100-job cap + 24h TTL cleanup; future migration to IndexedDB |
+See the [Technical Whitepaper](docs/technical-whitepaper.en.md) for the full architecture, data flow, module reference, file-tree layout, Chrome MV3 constraint table, and development/contributing guide.
 
 
 ## Copyright & License

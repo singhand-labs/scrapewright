@@ -16,16 +16,19 @@
     <div id="toast" class="toast hidden"></div>
 
     <div id="phase1" class="step">
-      <h2>Phase 1: Target URL</h2>
+      <h2>Phase 1: Target URL & Requirements</h2>
       <input type="url" id="targetUrl" placeholder="https://example.com" />
-      <button id="btnPhase1Next">Next</button>
-    </div>
 
-    <div id="phase2" class="step hidden">
-      <h2>Phase 2: Describe Your Needs</h2>
-      <textarea id="description" rows="6" placeholder="Describe what you want to scrape..."></textarea>
-      <button id="btnPhase2Back">Back</button>
-      <button id="btnPhase2Research">Research</button>
+      <label for="reqInputParams">Input parameters</label>
+      <textarea id="reqInputParams" rows="3" placeholder="e.g. keyword (search term), page (page number, 1-based)"></textarea>
+
+      <label for="reqPageOps">Page operations &amp; data to collect</label>
+      <textarea id="reqPageOps" rows="5" placeholder="e.g. type keyword into the search box and submit; go to page N; open each list item and extract title, price, publish date, and detail URL"></textarea>
+
+      <label for="reqOutputStruct">Output structure (optional)</label>
+      <textarea id="reqOutputStruct" rows="3" placeholder="e.g. { title, price, publishedAt, detailUrl } (leave empty for AI to infer)"></textarea>
+
+      <button id="btnPhase1Research">Research</button>
 
       <div id="explorationPanel" class="exploration-panel hidden">
         <h3>Interactive Exploration</h3>
@@ -39,8 +42,8 @@
       </div>
     </div>
 
-    <div id="phase3" class="step hidden">
-      <h2>Phase 3: Service Name & Steps</h2>
+    <div id="phase2" class="step hidden">
+      <h2>Phase 2: Service Name & Steps</h2>
       <input type="text" id="serviceName" placeholder="Service name" />
 
       <div class="template-section">
@@ -62,32 +65,32 @@
       <div id="stepList"></div>
 
       <div class="step-nav">
-        <button id="btnPhase3Back">Back</button>
-        <button id="btnPhase3Next">Next</button>
+        <button id="btnPhase2Back">Back</button>
+        <button id="btnPhase2Next">Next</button>
       </div>
     </div>
 
-    <div id="phase4" class="step hidden">
-      <h2>Phase 4: I/O Schema & Test Input</h2>
+    <div id="phase3" class="step hidden">
+      <h2>Phase 3: I/O Schema & Test Input</h2>
       <label>Input Schema (JSON):</label>
       <textarea id="inputSchemaEditor" rows="6"></textarea>
       <label>Output Schema (JSON):</label>
       <textarea id="outputSchemaEditor" rows="6"></textarea>
       <label>Test Input (JSON):</label>
       <textarea id="testInputEditor" rows="4"></textarea>
-      <button id="btnPhase4Test">Run Test</button>
+      <button id="btnPhase3Test">Run Test</button>
+      <button id="btnPhase3Back">Back</button>
+    </div>
+
+    <div id="phase4" class="step hidden">
+      <h2>Phase 4: Execute Test (step by step)</h2>
+      <div id="executionTimeline"></div>
+      <div id="executionLog"></div>
       <button id="btnPhase4Back">Back</button>
     </div>
 
     <div id="phase5" class="step hidden">
-      <h2>Phase 5: Execute Test (step by step)</h2>
-      <div id="executionTimeline"></div>
-      <div id="executionLog"></div>
-      <button id="btnPhase5Back">Back</button>
-    </div>
-
-    <div id="phase6" class="step hidden">
-      <h2>Phase 6: Results</h2>
+      <h2>Phase 5: Results</h2>
       <div id="serviceNameDisplay"></div>
       <div id="ioSummary"></div>
       <div id="testStatus"></div>
@@ -97,7 +100,7 @@
         <pre id="testResults"></pre>
       </details>
       <pre id="currentScript"></pre>
-      <button id="btnPhase6EditSteps">Edit Steps</button>
+      <button id="btnPhase5EditSteps">Edit Steps</button>
       <div id="fixControls" class="hidden">
         <button id="btnRetryTest">Retry Test</button>
         <button id="btnAutoFix">Auto-Fix</button>
@@ -108,8 +111,8 @@
         <button id="btnFixAgain">Fix Again</button>
       </div>
       <div id="deployControls" class="hidden">
-        <button id="btnPhase6Deploy">Looks Good - Deploy</button>
-        <button id="btnPhase6Back">Back</button>
+        <button id="btnPhase5Deploy">Looks Good - Deploy</button>
+        <button id="btnPhase5Back">Back</button>
       </div>
     </div>
   </div>

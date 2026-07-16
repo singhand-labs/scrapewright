@@ -6,6 +6,7 @@ let wizardState = {
   phase: 1,
   targetUrl: '',
   description: '',
+  requirements: { inputParams: '', pageOps: '', outputStruct: '' },
   userDescription: '',
   annotations: [],
   steps: [],
@@ -101,27 +102,25 @@ document.addEventListener('DOMContentLoaded', async () => {
         sid => wizardState.stepAnnotationTabs[sid] === updatedTabId
       );
       if (trackedStepIds.length === 0) return;
-      showToast('Target tab reloaded — annotations cleared. Click 开始标注 again to re-select elements.', 'error', 6000);
+      showToast('Target tab reloaded — annotations cleared. Click Start Annotating again to re-select elements.', 'error', 6000);
     });
   }
 
-  document.getElementById('btnPhase1Next').addEventListener('click', () => goToPhase(2));
-  document.getElementById('btnPhase2Back').addEventListener('click', () => goToPhase(1));
-  document.getElementById('btnPhase2Research').addEventListener('click', startResearch);
+  document.getElementById('btnPhase1Research').addEventListener('click', startResearch);
   document.getElementById('btnRunExploration')?.addEventListener('click', onRunExploration);
   document.getElementById('btnSkipExploration')?.addEventListener('click', onSkipExploration);
-  document.getElementById('btnPhase3Next').addEventListener('click', () => goToPhase(4));
+  document.getElementById('btnPhase2Next').addEventListener('click', () => goToPhase(3));
+  document.getElementById('btnPhase2Back').addEventListener('click', () => goToPhase(1));
+  document.getElementById('btnPhase3Test').addEventListener('click', runTestFromStep5);
   document.getElementById('btnPhase3Back').addEventListener('click', () => goToPhase(2));
-  document.getElementById('btnPhase4Test').addEventListener('click', runTestFromStep5);
   document.getElementById('btnPhase4Back').addEventListener('click', () => goToPhase(3));
+  document.getElementById('btnPhase5Deploy').addEventListener('click', confirmDeploy);
   document.getElementById('btnPhase5Back').addEventListener('click', () => goToPhase(4));
-  document.getElementById('btnPhase6Deploy').addEventListener('click', confirmDeploy);
-  document.getElementById('btnPhase6Back').addEventListener('click', () => goToPhase(5));
-  document.getElementById('btnPhase6EditSteps').addEventListener('click', () => goToPhase(3));
+  document.getElementById('btnPhase5EditSteps').addEventListener('click', () => goToPhase(2));
   document.getElementById('btnRetryTest').addEventListener('click', () => testScript());
   document.getElementById('btnAutoFix').addEventListener('click', () => autoFix(document.getElementById('feedbackInput').value));
   document.getElementById('btnDeployAnyway').addEventListener('click', () => {
-    goToPhase(6);
+    goToPhase(5);
     confirmDeploy();
   });
   document.getElementById('btnFixAgain').addEventListener('click', () => {
@@ -146,9 +145,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   initStepListDelegation();
 
   document.getElementById('targetUrl').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') goToPhase(2);
+    if (e.key === 'Enter') document.getElementById('reqInputParams').focus();
   });
-  document.getElementById('description').addEventListener('keydown', (e) => {
+  document.getElementById('reqPageOps').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && e.ctrlKey) startResearch();
   });
 
@@ -173,6 +172,12 @@ async function loadEditMode() {
   wizardState.targetUrl = svc.targetUrl;
   wizardState.description = svc.displayName || '';
   wizardState.userDescription = svc.userDescription || svc.displayName || '';
+  wizardState.requirements = svc.requirements || {
+    inputParams: '',
+    pageOps: svc.userDescription || svc.displayName || '',
+    outputStruct: ''
+  };
+  wizardState.description = buildRequirementsBlock(wizardState.requirements);
   wizardState.serviceName = svc.displayName || '';
   wizardState.steps = svc.steps || [];
   wizardState.inputSchema = svc.inputSchema || { type: 'object' };
@@ -180,10 +185,12 @@ async function loadEditMode() {
   wizardState.annotations = svc.annotations || [];
   wizardState.sampleInput = svc.sampleInput || {};
   wizardState.llmHistory = [];
-  wizardState.phase = 3;
+  wizardState.phase = 2;
 
   document.getElementById('targetUrl').value = svc.targetUrl;
-  document.getElementById('description').value = svc.displayName || '';
+  document.getElementById('reqInputParams').value = wizardState.requirements.inputParams || '';
+  document.getElementById('reqPageOps').value = wizardState.requirements.pageOps || '';
+  document.getElementById('reqOutputStruct').value = wizardState.requirements.outputStruct || '';
   document.getElementById('serviceName').value = svc.displayName || '';
   document.getElementById('pageTitle').textContent = 'Edit Service: ' + svc.displayName;
   renderStepList();
@@ -295,19 +302,19 @@ function renderResultSummary(result) {
 }
 
 function goToPhase(n) {
-  if (n === 2) wizardState.targetUrl = document.getElementById('targetUrl').value;
-  if (n === 3) {
+  if (n === 2) {
     renderStepList();
     if (!document.getElementById('serviceName').value && wizardState.serviceName) {
       document.getElementById('serviceName').value = wizardState.serviceName;
     }
-    if (!wizardState.serviceName && wizardState.description) {
-      const suggested = wizardState.description.slice(0, 30).replace(/\s+$/, '');
+    const pageOps = wizardState.requirements?.pageOps || wizardState.description || '';
+    if (!wizardState.serviceName && pageOps) {
+      const suggested = pageOps.slice(0, 30).replace(/\s+$/, '');
       document.getElementById('serviceName').value = suggested;
       wizardState.serviceName = suggested;
     }
   }
-  if (n === 4) {
+  if (n === 3) {
     syncStepsFromEditor();
     wizardState.serviceName = document.getElementById('serviceName').value || wizardState.serviceName;
     document.getElementById('inputSchemaEditor').value = JSON.stringify(wizardState.inputSchema, null, 2);
@@ -345,9 +352,9 @@ function renderStepList() {
         <label>Entry URL:
           <input type="url" class="step-entry-url" value="${escapeHtml(step.entryUrl || '')}" placeholder="(optional, for annotation)">
         </label>
-        <button class="btn-step-open-webpage" data-index="${index}">打开网页</button>
-        <button class="btn-step-start-annotation" data-index="${index}">开始标注</button>
-        <button class="btn-step-complete-annotation" data-index="${index}">完成标注</button>
+        <button class="btn-step-open-webpage" data-index="${index}">Open Page</button>
+        <button class="btn-step-start-annotation" data-index="${index}">Start Annotating</button>
+        <button class="btn-step-complete-annotation" data-index="${index}">Finish Annotation</button>
       </div>
       ${(step.annotations && step.annotations.length)
         ? `<div class="step-annotation-list">
@@ -465,7 +472,7 @@ async function openStepWebpage(stepIndex) {
   try {
     const tab = await chrome.tabs.create({ url, active: true });
     wizardState.stepAnnotationTabs[step.id] = tab.id;
-    showToast('Tab opened. Navigate the page to the desired state, then click 开始标注.', 'info');
+    showToast('Tab opened. Navigate the page to the desired state, then click Start Annotating.', 'info');
   } catch (e) {
     showToast('Failed to open tab: ' + e.message, 'error');
   }
@@ -477,13 +484,13 @@ async function startStepAnnotation(stepIndex) {
   if (!step) return;
   const tabId = wizardState.stepAnnotationTabs[step.id];
   if (!tabId) {
-    showToast('Please click 打开网页 first to open a tab for this step', 'error');
+    showToast('Please click Open Page first to open a tab for this step', 'error');
     return;
   }
   try {
     await chrome.tabs.get(tabId);
   } catch (e) {
-    showToast('The tab for this step was closed. Please click 打开网页 again.', 'error');
+    showToast('The tab for this step was closed. Please click Open Page again.', 'error');
     delete wizardState.stepAnnotationTabs[step.id];
     return;
   }
@@ -493,7 +500,7 @@ async function startStepAnnotation(stepIndex) {
       inputSchema: wizardState.inputSchema,
       outputSchema: wizardState.outputSchema
     });
-    showToast('Annotation mode on. Click elements, then click 完成标注 when done.', 'info');
+    showToast('Annotation mode on. Click elements, then click Finish Annotation when done.', 'info');
   } catch (e) {
     try {
       await chrome.tabs.reload(tabId);
@@ -529,13 +536,13 @@ async function completeStepAnnotation(stepIndex) {
 async function _completeStepAnnotationInner(stepIndex, step) {
   const tabId = wizardState.stepAnnotationTabs[step.id];
   if (!tabId) {
-    showToast('Please click 打开网页 and 开始标注 first', 'error');
+    showToast('Please click Open Page and Start Annotating first', 'error');
     return;
   }
   try {
     await chrome.tabs.get(tabId);
   } catch (e) {
-    showToast('The tab for this step was closed. Please click 打开网页 and 开始标注 again.', 'error');
+    showToast('The tab for this step was closed. Please click Open Page and Start Annotating again.', 'error');
     delete wizardState.stepAnnotationTabs[step.id];
     return;
   }
@@ -554,7 +561,7 @@ async function _completeStepAnnotationInner(stepIndex, step) {
   }
 
   if (!captured || !captured.annotations || captured.annotations.length === 0) {
-    showToast('No annotations captured. Click 开始标注 and select elements first.', 'error');
+    showToast('No annotations captured. Click Start Annotating and select elements first.', 'error');
     return;
   }
 
@@ -1288,7 +1295,7 @@ async function continueResearch(tabId, config, pageInfo, postPageInfo) {
       outputSchema: parsed.outputSchema,
       sampleInput: parsed.sampleInput
     });
-    goToPhase(3);
+    goToPhase(2);
   } catch (e) {
     debugLogger.log('error', 'wizard', 'Step generation (generateStepsWithSelectors) failed', {
       error: e.message, stack: e.stack, rawLLMOutput: e.rawLLMOutput
@@ -1307,18 +1314,21 @@ async function startResearch() {
     return;
   }
 
-  // Read description directly from the textarea. The wizard has no Phase that
-  // explicitly syncs it on transition (Phase 2 only has Back / Research), so
-  // without this read the value is lost. Empty description means the LLM has
-  // no task context and produces generic selectors
-  // (observed in tianyan.log line 301: "Description: \n").
-  const description = (document.getElementById('description').value || '').trim();
-  if (!description) {
-    showToast('Please describe what you want to extract before researching', 'error', 5000);
+  // Read the three structured requirement fields. pageOps is the essential
+  // operational description — without it the LLM has no task context.
+  const inputParams = (document.getElementById('reqInputParams').value || '').trim();
+  const pageOps = (document.getElementById('reqPageOps').value || '').trim();
+  const outputStruct = (document.getElementById('reqOutputStruct').value || '').trim();
+  if (!pageOps) {
+    showToast('Please describe the page operations and data to collect before researching', 'error', 5000);
     return;
   }
-  wizardState.description = description;
-  if (!wizardState.userDescription) wizardState.userDescription = description;
+  // Re-read targetUrl here because the URL field now lives on the same phase-1
+  // screen as the requirement fields and may have been edited after load.
+  wizardState.targetUrl = document.getElementById('targetUrl').value;
+  wizardState.requirements = { inputParams, pageOps, outputStruct };
+  wizardState.description = buildRequirementsBlock(wizardState.requirements);
+  if (!wizardState.userDescription) wizardState.userDescription = wizardState.description;
 
   const tab = await chrome.tabs.create({ url: wizardState.targetUrl, active: true });
   wizardState.researchTabId = tab.id;
@@ -1389,7 +1399,7 @@ async function runTestFromStep5() {
   wizardState.inputSchema = parsed.inputSchema;
   wizardState.outputSchema = parsed.outputSchema;
   wizardState.testInput = parsed.testInput;
-  goToPhase(5);
+  goToPhase(4);
   document.getElementById('executionLog').innerHTML = '';
   appendLog('Starting test...');
   await testScript();
@@ -1565,9 +1575,7 @@ async function testScript() {
     } catch (e) { /* background may be unavailable */ }
   }
 
-  if (wizardState.phase !== 6) {
-    goToPhase(6);
-  }
+  goToPhase(5);
   await debugLogger.persist();
 }
 
@@ -2073,8 +2081,9 @@ async function confirmDeploy() {
   const service = {
     id: wizardState.editingServiceId || crypto.randomUUID(),
     name: existingService ? existingService.name : await generateUniqueSlug(wizardState.serviceName || 'service', registry, wizardState.editingServiceId),
-    displayName: wizardState.serviceName || wizardState.description.slice(0, 30),
+    displayName: wizardState.serviceName || (wizardState.requirements?.pageOps || wizardState.description || '').slice(0, 30),
     userDescription: wizardState.userDescription || wizardState.description || '',
+    requirements: wizardState.requirements || null,
     targetUrl: wizardState.targetUrl,
     steps: wizardState.steps,
     inputSchema: wizardState.inputSchema,

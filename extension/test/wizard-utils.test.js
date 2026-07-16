@@ -1,6 +1,6 @@
-const { describe, it } = require('node:test');
+const { describe, it, test } = require('node:test');
 const assert = require('node:assert/strict');
-const { parseSchemaFields, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS } = require('../lib/wizard-utils');
+const { parseSchemaFields, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, buildRequirementsBlock } = require('../lib/wizard-utils');
 
 describe('parseSchemaFields', () => {
   it('returns field names with types', () => {
@@ -719,5 +719,34 @@ describe('normalizeStepTopology', () => {
   it('returns an empty changed list for a non-array input', () => {
     assert.deepEqual(normalizeStepTopology(null), { changed: [] });
     assert.deepEqual(normalizeStepTopology(undefined), { changed: [] });
+  });
+});
+
+describe('buildRequirementsBlock', () => {
+  test('formats a fully-specified requirements object as a labeled block', () => {
+    const block = buildRequirementsBlock({ inputParams: 'keyword', pageOps: 'search and extract title', outputStruct: '{ title }' });
+    assert.equal(block, [
+      '## User Requirements',
+      '- Input parameters: keyword',
+      '- Page operations & data to collect: search and extract title',
+      '- Output structure: { title }'
+    ].join('\n'));
+  });
+
+  test('uses default markers when output structure is empty', () => {
+    const block = buildRequirementsBlock({ inputParams: 'keyword', pageOps: 'search', outputStruct: '' });
+    assert.ok(block.includes('- Output structure: (unspecified — infer)'));
+  });
+
+  test('uses default markers when input params and page ops are empty', () => {
+    const block = buildRequirementsBlock({ inputParams: '', pageOps: '', outputStruct: '' });
+    assert.ok(block.includes('- Input parameters: (none specified)'));
+    assert.ok(block.includes('- Page operations & data to collect: (unspecified)'));
+  });
+
+  test('handles null/undefined gracefully', () => {
+    const block = buildRequirementsBlock(null);
+    assert.ok(block.startsWith('## User Requirements'));
+    assert.ok(block.includes('(none specified)'));
   });
 });

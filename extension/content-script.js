@@ -17,20 +17,20 @@
   // modules (it runs injected in the page), so the small preset list is
   // duplicated here. Update both together when adding a purpose/condition.
   const PURPOSES = [
-    { value: 'submit', label: '提交' },
-    { value: 'toggle', label: '切换状态' },
-    { value: 'navigate', label: '导航/翻页' },
-    { value: 'expand', label: '展开/折叠' },
-    { value: 'wait-for-load', label: '等待加载完成' },
-    { value: 'check-login', label: '检测登录态' },
-    { value: 'verify-state', label: '验证状态' },
-    { value: 'other', label: '其他…' }
+    { value: 'submit', label: 'Submit' },
+    { value: 'toggle', label: 'Toggle State' },
+    { value: 'navigate', label: 'Navigate / Paginate' },
+    { value: 'expand', label: 'Expand / Collapse' },
+    { value: 'wait-for-load', label: 'Wait for Load' },
+    { value: 'check-login', label: 'Check Login State' },
+    { value: 'verify-state', label: 'Verify State' },
+    { value: 'other', label: 'Other…' }
   ];
   const WAIT_CONDITIONS = [
-    { value: 'appear', label: '元素出现' },
-    { value: 'disappear', label: '元素消失' },
-    { value: 'textStable', label: '文本停止变化' },
-    { value: 'attributeChange', label: '属性变化' }
+    { value: 'appear', label: 'Element Appears' },
+    { value: 'disappear', label: 'Element Disappears' },
+    { value: 'textStable', label: 'Text Stabilizes' },
+    { value: 'attributeChange', label: 'Attribute Changes' }
   ];
   // Annotation listener tracking — documents we've attached capture-phase
   // click/mouseover/keydown listeners to (top doc + same-origin iframe docs).
@@ -859,17 +859,17 @@
     // ---- Step 1: type selection ----
     function renderStep1() {
       menu.innerHTML = `
-        <div style="font-weight:600; margin-bottom:8px;">选择标注类型</div>
-        <div style="font-size:11px; color:#6b7280; margin-bottom:8px;">元素: ${(text || '(no text)').replace(/</g, '&lt;').slice(0, 60)} · &lt;${tagLower}&gt;</div>
-        <button data-type="click" style="display:block; width:100%; margin:2px 0; padding:6px 8px; text-align:left; cursor:pointer; border:1px solid #e5e7eb; background:white; border-radius:3px;">click — 点击元素</button>
-        <button data-type="input" style="display:block; width:100%; margin:2px 0; padding:6px 8px; text-align:left; cursor:pointer; border:1px solid #e5e7eb; background:white; border-radius:3px;">input — 输入框</button>
-        <button data-type="extract" style="display:block; width:100%; margin:2px 0; padding:6px 8px; text-align:left; cursor:pointer; border:1px solid #e5e7eb; background:white; border-radius:3px;">extract — 提取文本/属性</button>
-        <button data-type="check" style="display:block; width:100%; margin:2px 0; padding:6px 8px; text-align:left; cursor:pointer; border:1px solid #e5e7eb; background:white; border-radius:3px;">check — 读取属性</button>
-        <button data-type="wait" style="display:block; width:100%; margin:2px 0; padding:6px 8px; text-align:left; cursor:pointer; border:1px solid #e5e7eb; background:white; border-radius:3px;">wait — 等待元素</button>
+        <div style="font-weight:600; margin-bottom:8px;">Choose Annotation Type</div>
+        <div style="font-size:11px; color:#6b7280; margin-bottom:8px;">Element: ${(text || '(no text)').replace(/</g, '&lt;').slice(0, 60)} · &lt;${tagLower}&gt;</div>
+        <button data-type="click" style="display:block; width:100%; margin:2px 0; padding:6px 8px; text-align:left; cursor:pointer; border:1px solid #e5e7eb; background:white; border-radius:3px;">click — click element</button>
+        <button data-type="input" style="display:block; width:100%; margin:2px 0; padding:6px 8px; text-align:left; cursor:pointer; border:1px solid #e5e7eb; background:white; border-radius:3px;">input — input field</button>
+        <button data-type="extract" style="display:block; width:100%; margin:2px 0; padding:6px 8px; text-align:left; cursor:pointer; border:1px solid #e5e7eb; background:white; border-radius:3px;">extract — extract text/attribute</button>
+        <button data-type="check" style="display:block; width:100%; margin:2px 0; padding:6px 8px; text-align:left; cursor:pointer; border:1px solid #e5e7eb; background:white; border-radius:3px;">check — read attribute</button>
+        <button data-type="wait" style="display:block; width:100%; margin:2px 0; padding:6px 8px; text-align:left; cursor:pointer; border:1px solid #e5e7eb; background:white; border-radius:3px;">wait — wait for element</button>
         <hr style="margin:8px 0; border:none; border-top:1px solid #e5e7eb;">
-        <button data-type="key" style="display:block; width:100%; margin:2px 0; padding:6px 8px; text-align:left; cursor:pointer; border:1px solid #bfdbfe; background:#dbeafe; border-radius:3px;">key — 字段名 (表头)</button>
-        <button data-type="value" style="display:block; width:100%; margin:2px 0; padding:6px 8px; text-align:left; cursor:pointer; border:1px solid #bbf7d0; background:#dcfce7; border-radius:3px;">value — 字段值 (表内容)</button>
-        <button data-type="cancel" style="display:block; width:100%; margin:8px 0 0; padding:6px 8px; text-align:left; cursor:pointer; border:1px solid #e5e7eb; background:white; border-radius:3px;">取消</button>
+        <button data-type="key" style="display:block; width:100%; margin:2px 0; padding:6px 8px; text-align:left; cursor:pointer; border:1px solid #bfdbfe; background:#dbeafe; border-radius:3px;">key — field name (header)</button>
+        <button data-type="value" style="display:block; width:100%; margin:2px 0; padding:6px 8px; text-align:left; cursor:pointer; border:1px solid #bbf7d0; background:#dcfce7; border-radius:3px;">value — field value (cell)</button>
+        <button data-type="cancel" style="display:block; width:100%; margin:8px 0 0; padding:6px 8px; text-align:left; cursor:pointer; border:1px solid #e5e7eb; background:white; border-radius:3px;">Cancel</button>
       `;
       positionMenu(menu, e.clientX, e.clientY);
     }
@@ -906,54 +906,54 @@
       menu.innerHTML = '';
       const header = document.createElement('div');
       header.style.cssText = 'font-weight:600; margin-bottom:8px;';
-      header.textContent = '类型: ' + type;
+      header.textContent = 'Type: ' + type;
       menu.appendChild(header);
 
       // key/value types have no intent dropdowns — straight confirm.
       if (type !== 'key' && type !== 'value') {
         if (type === 'click' || type === 'check' || type === 'input') {
-          menu.appendChild(buildSelect('cc-purpose', '意图 (purpose)', PURPOSES, '— 选择 —'));
+          menu.appendChild(buildSelect('cc-purpose', 'Intent (purpose)', PURPOSES, '— Select —'));
           const otherWrap = document.createElement('div');
           otherWrap.id = 'cc-purpose-other-wrap';
           otherWrap.style.cssText = 'margin:4px 0; display:none;';
           const otherInput = document.createElement('input');
           otherInput.type = 'text';
           otherInput.id = 'cc-purpose-other';
-          otherInput.placeholder = '自定义意图…';
+          otherInput.placeholder = 'Custom intent…';
           otherInput.style.cssText = 'width:100%; padding:4px 6px; border:1px solid #d1d5db; border-radius:3px; font-size:13px; box-sizing:border-box;';
           otherWrap.appendChild(otherInput);
           menu.appendChild(otherWrap);
         }
         if (type === 'check' || type === 'wait') {
-          menu.appendChild(buildSelect('cc-wait', '等待条件 (waitCondition)', WAIT_CONDITIONS, '— 选择 —'));
+          menu.appendChild(buildSelect('cc-wait', 'Wait condition', WAIT_CONDITIONS, '— Select —'));
         }
         if (type === 'extract') {
           const outProps = Object.keys(annotationSchemas.outputSchema?.properties || {});
           if (outProps.length) {
-            menu.appendChild(buildSelect('cc-output', '输出字段 (outputField)',
-              outProps.map(k => ({ value: k, label: k })), '— 选择 —'));
+            menu.appendChild(buildSelect('cc-output', 'Output field',
+              outProps.map(k => ({ value: k, label: k })), '— Select —'));
           } else {
             const note = document.createElement('div');
             note.style.cssText = 'font-size:11px; color:#9ca3af; margin:4px 0;';
-            note.textContent = '(无 outputSchema，跳过 outputField)';
+            note.textContent = '(no outputSchema, outputField skipped)';
             menu.appendChild(note);
           }
         }
         if (type === 'input') {
           const inProps = Object.keys(annotationSchemas.inputSchema?.properties || {});
           if (inProps.length) {
-            menu.appendChild(buildSelect('cc-input', '输入字段 (inputField)',
-              inProps.map(k => ({ value: k, label: k })), '— 选择 —'));
+            menu.appendChild(buildSelect('cc-input', 'Input field',
+              inProps.map(k => ({ value: k, label: k })), '— Select —'));
           } else {
             const note = document.createElement('div');
             note.style.cssText = 'font-size:11px; color:#9ca3af; margin:4px 0;';
-            note.textContent = '(无 inputSchema，跳过 inputField)';
+            note.textContent = '(no inputSchema, inputField skipped)';
             menu.appendChild(note);
           }
         }
       }
 
-      // Buttons: 确认 / 返回 / 取消
+      // Buttons: Confirm / Back / Cancel
       const btnRow = document.createElement('div');
       btnRow.style.cssText = 'display:flex; gap:6px; margin-top:10px;';
       const mkBtn = (label, kind) => {
@@ -966,9 +966,9 @@
         b.dataset.action = kind;
         return b;
       };
-      btnRow.appendChild(mkBtn('确认', 'confirm'));
-      btnRow.appendChild(mkBtn('返回', 'back'));
-      btnRow.appendChild(mkBtn('取消', 'cancel'));
+      btnRow.appendChild(mkBtn('Confirm', 'confirm'));
+      btnRow.appendChild(mkBtn('Back', 'back'));
+      btnRow.appendChild(mkBtn('Cancel', 'cancel'));
       menu.appendChild(btnRow);
       positionMenu(menu, e.clientX, e.clientY);
     }

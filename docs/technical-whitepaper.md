@@ -14,7 +14,7 @@ Scrapewright 是一个 LLM 驱动的网页数据采集平台，由 Chrome 扩展
 | **真实浏览器环境** | Chrome 扩展注入，支持 JS 渲染、iframe、动态加载 |
 | **AI 自愈** | 脚本失败时自动捕获 DOM 快照 → LLM 修复 → 重试 |
 | **标准 API** | HTTP API 对外服务，异步执行队列，JSON Schema 约束 I/O |
-| **可视化操作** | 7 步向导流程，元素标注，实时执行日志 |
+| **可视化操作** | 5 阶段向导流程，元素标注，实时执行日志 |
 
 ### 技术栈
 
@@ -75,6 +75,34 @@ Scrapewright 是一个 LLM 驱动的网页数据采集平台，由 Chrome 扩展
 
 Host 与扩展之间有两条通信通道，自动选择：
 
+```
+外部程序
+    |
+    | HTTP POST /api/v1/services/{name}/execute
+    v
++------------------+                          +------------------+
+|  host.js         |  Native Messaging (stdin  |  background.js   |
+|  (Node.js)       |  /stdout, Chrome 自动启动) |  (Service Worker)|
+|                  |                          +--------+---------+
+|  或 HTTP 长轮询:  |                          |                 |
+|  /extension/poll | <---- HTTP 长轮询 -------  |  自动回退        |
+|  /extension/resp |                          |                 |
++------------------+                          +--------+---------+
+                                                       |
+                                                       | chrome.tabs.sendMessage
+                                                       v
+                                              +------------------+
+                                              | content-script.js|
+                                              +--------+---------+
+                                                       |
+                                                       | postMessage
+                                                       v
+                                              +------------------+
+                                              | sandbox.html     |
+                                              |  (eval allowed)  |
+                                              +------------------+
+```
+
 | 通道 | 触发条件 | 方向 | 协议 |
 |------|----------|------|------|
 | Native Messaging | Chrome 自动启动 Host | stdin/stdout 管道 | 长度前缀 JSON |
@@ -93,6 +121,52 @@ MV3 的内容安全策略（CSP）禁止在 Service Worker 和内容脚本中使
 2. **offscreen.js 内的沙盒 iframe** — 主要执行路径，通过 Offscreen API 创建独立文档
 
 两个沙盒都加载 `sandbox.html`（在 `manifest.json` 中声明为 sandbox page），具有 `eval` 权限。
+
+### 2.4 项目布局
+
+代码仓库的组织结构如下：
+
+```
+extension/                # Chrome 扩展 (Manifest V3)
+  background.js           # Service Worker — 执行队列、脚本编排、重试、AI 自动修复、长轮询客户端
+  content-script.js       # 内容脚本 — DOM 操作代理、元素标注、页面快照
+  sandbox.html/js         # 沙盒页面 — eval/new Function 在此执行（MV3 CSP 要求）
+  wizard.html/js/css      # 5 阶段 AI 向导 — 服务创建/编辑流程
+  options.html/js/css     # 配置页 — LLM 设置、服务管理、执行历史
+  popup.html/js           # 弹出窗口
+  lib/
+    llm-client.js         # LLM 客户端 — 支持 OpenAI/Moonshot/Kimi/Anthropic/GLM
+    offscreen-executor.js # 脚本执行器 — Offscreen API 包装，含超时保护
+    step-orchestrator.js  # 步骤编排器 — 条件步骤图执行、循环检测、自动重试
+    service-registry.js   # 服务注册表 — chrome.storage.local 持久化
+    wizard-utils.js       # 向导工具函数 — DSL 指南、JSON 清洗、Schema 渲染
+    import-utils.js       # 导入工具函数 — 数据验证、去重过滤
+    dom-snapshot.js       # DOM 快照 — 压缩结构提取（测试用）
+    debug-logger.js       # 调试日志 — 结构化日志 + 自动清理
+    script-executor.js    # 旧版执行器（保留兼容 $openTab）
+  test/                   # 扩展单元测试
+
+native-host/              # Node.js Native Messaging Host
+  host.js                 # HTTP 服务器 — Native Messaging + HTTP 长轮询双通道
+  lib/
+    native-messaging.js   # 长度前缀 JSON 编解码（UTF-8 安全）
+  install-host.sh         # Linux/macOS 安装脚本
+  install-host.ps1        # Windows 安装脚本
+  host.cmd                # Windows 启动包装器
+  test/                   # 测试文件
+```
+
+### 2.5 Chrome MV3 关键约束
+
+Chrome Manifest V3 对扩展架构施加了多项硬限制，直接影响了系统设计：
+
+| 约束 | 影响 | 应对 |
+|------|------|------|
+| Service Worker 无法运行 HTTP 服务器 | 扩展无法直接对外暴露 API | 引入 Node.js Native Messaging Host 作为 HTTP 桥接 |
+| 禁止在 Service Worker 和 Content Script 中使用 `eval`/`new Function` | 无法直接执行用户脚本 | 创建 sandbox iframe（manifest 中声明），在其中执行动态代码 |
+| 每个扩展只能有 1 个 offscreen document | 脚本执行环境为单例 | 通过 ExecutionQueue 串行化执行，多实例部署绕过此限制 |
+| Service Worker 空闲 ~30s 后可被杀死 | 长轮询循环可能中断 | `chrome.alarms` 每 24s 心跳保活，断连后自动重连 |
+| `chrome.storage.local` 上限 10MB | 大量 Job 数据可能超限 | 100 条 Job 上限 + 24h TTL 清理，后续可迁移到 IndexedDB |
 
 ## 3. 核心数据流
 
@@ -198,6 +272,8 @@ content-script.js 接收 TAB_RESULT:
 | `onSuccess` | 成功时跳转到的步骤 ID（`'TERMINATE'` 结束） |
 | `onFailure` | 失败/放弃时跳转到的步骤 ID（条件为假、重试耗尽、或返回 `{failed:true}`） |
 | `maxIterations` | 步骤最大执行次数（默认 1；`>1` 启用轮询/重试：返回 `{done:false}` 时重跑自身） |
+
+> **不再使用 `SELF` 哨兵。** 早期版本用 `onSuccess: 'SELF'` 表达自循环，但其约定反直觉（`{done:true}` 反而走 `onFailure`）。该约定已移除。轮询/重试现在由 `maxIterations>1` + 返回 `{done:false}` 表达；`onSuccess`/`onFailure` 始终指向另一个步骤 ID 或 `TERMINATE`。
 
 **循环检测：** 执行前自动检测步骤图中的环。当某个步骤的 `onSuccess` 指向一个更早的步骤时，环路径上所有步骤的 `maxIterations` 会被自动提升到全局上限（默认 50）。
 
@@ -337,17 +413,15 @@ Chrome Native Messaging 协议实现：
 
 **文件：** `extension/wizard.js` + `wizard.html`
 
-7 步 AI 向导流程：
+5 阶段 AI 向导流程：
 
-| 步骤 | 功能 | 关键函数 |
+| 阶段 | 功能 | 关键函数 |
 |------|------|----------|
-| 1 | 输入目标 URL | `loadPage()` |
-| 2 | 描述需求 + AI 研究 | `startResearch()` → `continueResearch()` |
-| 3 | 标注元素 | `startAnnotationMode()` / `stopAnnotationMode()` |
-| 4 | 命名服务 + 查看/编辑脚本 | — |
-| 5 | I/O Schema + 测试输入 | — |
-| 6 | 执行测试 | `testScript()` / `runTestFromStep5()` |
-| 7 | 查看结果 + AutoFix | `updateStep7UI()` |
+| 1 | 输入目标 URL + 三项需求，然后 AI 研究 | `startResearch()` → `continueResearch()` |
+| 2 | 命名服务 + 查看/编辑步骤图 | — |
+| 3 | I/O Schema + 测试输入 | — |
+| 4 | 执行测试（逐步） | `runTestFromStep5()` |
+| 5 | 查看结果 + AutoFix + 部署 | `confirmDeploy()` |
 
 ### AI 研究流程
 
@@ -361,6 +435,10 @@ Chrome Native Messaging 协议实现：
       → 用户标注元素
       → LLM 根据标注优化脚本
 ```
+
+**两轮 HTML 协议：** 为避免截断大页面同时保持 token 效率，研究阶段分两轮进行。第一轮发送压缩的 DOM 结构摘要（~8000 tokens）给 LLM，得到候选选择器；第二轮只获取这些候选元素的完整 HTML，供 LLM 确认或修正。
+
+**元素标注辅助：** 当 LLM 对选择器置信度低于阈值时，自动触发可视化元素标注模式，将用户意图转化为结构化注解，LLM 可直接消费。
 
 ### AutoFix 自动修复
 
@@ -529,7 +607,7 @@ MV3 的 Service Worker 会在 30s 无活动后休眠。通过 `chrome.alarms.cre
 
 1. **开启扩展调试**：在 Chrome DevTools Console 中查看 `[component]` 前缀的结构化日志
 2. **查看持久化日志**：在 Console 中执行 `chrome.storage.local.get(null, console.log)` 查看所有存储数据
-3. **手动测试脚本**：在向导 Step 4 中直接编辑脚本代码
+3. **手动测试脚本**：在向导阶段 2 中直接编辑脚本代码
 4. **导出调试数据**：Options 页面可导出服务配置和执行历史
 
 ## 10. 已知限制
@@ -542,3 +620,48 @@ MV3 的 Service Worker 会在 30s 无活动后休眠。通过 `chrome.alarms.cre
 | AI 修复最多重试 2 次 | 防止无限重试循环 | 复杂错误可能需要手动修复 |
 | 不支持登录态采集 | 无 Cookie 管理功能 | 需要登录的页面需手动登录后执行 |
 | 默认 API Key 为 dev-key | 开发便利性 | 生产环境必须设置 `SCRAPEWRIGHT_API_KEY` |
+
+## 11. 开发与贡献
+
+### 运行测试
+
+```bash
+# 运行 Native Host 测试
+cd native-host && npm test
+
+# 运行单个测试文件
+cd native-host && node --test test/host.test.js
+
+# 运行扩展测试（需要在仓库根目录安装 jsdom）
+cd extension && node --test test/*.test.js lib/*.test.js
+```
+
+### 手动启动 Host（指定端口）
+
+```bash
+cd native-host && node host.js --port=19880
+```
+
+手动模式下扩展会自动回退到 HTTP 长轮询；请确保扩展 Options 页 **Server Configuration** 中的端口与 `--port` 参数一致。
+
+### 更新代码后重启
+
+修改扩展代码后，在 `chrome://extensions/` 页面点击扩展卡片上的刷新图标即可生效。修改 Native Host 代码后需要重启 Host 进程。
+
+**Windows (PowerShell, 管理员):**
+```powershell
+# 杀掉旧进程
+taskkill /F /IM node.exe
+# 关闭并重启 Chrome
+taskkill /F /IM chrome.exe
+start chrome
+```
+
+**Linux / macOS:**
+```bash
+# 杀掉旧进程
+pkill -f "node.*host.js"
+# 重启 Chrome 或重新加载扩展
+```
+
+重启 Chrome 后，在 `chrome://extensions/` 页面刷新扩展，Chrome 会自动启动新代码的 Native Host。手动启动模式只需 `Ctrl+C` 停掉当前 `node host.js`，然后重新运行即可。

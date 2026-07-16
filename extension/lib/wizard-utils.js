@@ -141,20 +141,20 @@ CRITICAL: When an annotation has a selector AND a waitCondition, THAT selector i
 - purpose: check-login → if the element is present, return { done:true, loginRequired:true } so the orchestrator can surface LOGIN_REQUIRED.`;
 
 const ANNOTATION_PURPOSES = [
-  { value: 'submit', label: '提交（submit）' },
-  { value: 'toggle', label: '切换状态（如深度思考）' },
-  { value: 'navigate', label: '导航/翻页' },
-  { value: 'expand', label: '展开/折叠' },
-  { value: 'wait-for-load', label: '等待加载完成' },
-  { value: 'check-login', label: '检测登录态' },
-  { value: 'verify-state', label: '验证状态' },
-  { value: 'other', label: '其他（自由输入）…' }
+  { value: 'submit', label: 'Submit' },
+  { value: 'toggle', label: 'Toggle State (e.g. deep-thinking)' },
+  { value: 'navigate', label: 'Navigate / Paginate' },
+  { value: 'expand', label: 'Expand / Collapse' },
+  { value: 'wait-for-load', label: 'Wait for Load' },
+  { value: 'check-login', label: 'Check Login State' },
+  { value: 'verify-state', label: 'Verify State' },
+  { value: 'other', label: 'Other (free text)…' }
 ];
 const WAIT_CONDITIONS = [
-  { value: 'appear', label: '元素出现' },
-  { value: 'disappear', label: '元素消失' },
-  { value: 'textStable', label: '文本停止变化' },
-  { value: 'attributeChange', label: '属性变化' }
+  { value: 'appear', label: 'Element Appears' },
+  { value: 'disappear', label: 'Element Disappears' },
+  { value: 'textStable', label: 'Text Stabilizes' },
+  { value: 'attributeChange', label: 'Attribute Changes' }
 ];
 
 // Build the annotations block fed to the LLM. Emits intent fields only when
@@ -506,6 +506,19 @@ function buildAutoFixSystemMessage(description) {
   return base + '\n\n[GLOBAL CONTEXT]\nThe user\'s original scraping requirement:\n"' + desc + '"\n[/GLOBAL CONTEXT]';
 }
 
+function buildRequirementsBlock(requirements) {
+  const r = requirements || {};
+  const inputParams = (r.inputParams || '').trim();
+  const pageOps = (r.pageOps || '').trim();
+  const outputStruct = (r.outputStruct || '').trim();
+  return [
+    '## User Requirements',
+    '- Input parameters: ' + (inputParams || '(none specified)'),
+    '- Page operations & data to collect: ' + (pageOps || '(unspecified)'),
+    '- Output structure: ' + (outputStruct || '(unspecified — infer)')
+  ].join('\n');
+}
+
 function fillEntryUrlDefaults(steps, defaultUrl) {
   if (!Array.isArray(steps) || !defaultUrl) return steps || [];
   return steps.map(step => {
@@ -712,7 +725,7 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
@@ -724,6 +737,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.SCRIPT_DSL_GUIDE = SCRIPT_DSL_GUIDE;
   window.appendGlobalContextBlock = appendGlobalContextBlock;
   window.buildAutoFixSystemMessage = buildAutoFixSystemMessage;
+  window.buildRequirementsBlock = buildRequirementsBlock;
   window.fillEntryUrlDefaults = fillEntryUrlDefaults;
   window.normalizeStepTopology = normalizeStepTopology;
   window.DEFAULT_POLL_MAX_ITERATIONS = DEFAULT_POLL_MAX_ITERATIONS;
