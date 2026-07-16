@@ -40,6 +40,7 @@ label { display: block; margin-top: 12px; font-weight: 600; }
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   padding: 40px; gap: 16px;
 }
+#loading.hidden { display: none; }
 .spinner {
   width: 32px; height: 32px; border: 3px solid #e5e7eb; border-top-color: #3b82f6;
   border-radius: 50%; animation: spin 0.8s linear infinite;
