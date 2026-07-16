@@ -28,6 +28,15 @@ Many websites load content dynamically inside iframes. All $ APIs automatically 
 - $wait and $ APIs will find elements inside same-origin iframes automatically
 - For $openTab detail pages, the snapshot includes the detail page content including any same-origin iframe content
 
+TARGETING A SPECIFIC IFRAME (deterministic, multi-iframe pages):
+When a page has MULTIPLE iframes with similar markup (common on government / bid / portal sites — e.g. one iframe per tab, each with the same .ewb-info-main container), a plain selector like '.ewb-info-main > p > u' is ambiguous and $ APIs may match the wrong iframe. Pin the selector to a specific iframe with the iframe-prefix syntax:
+  iframe<iframe-css>::<inner-css>
+Examples:
+- $('iframe#zbggframe1::u > font')                          — element inside iframe with id="zbggframe1"
+- $('iframe[src="content.html"]::p.MsoNormal > u')          — element inside iframe with that src
+- $extract('iframe#iframe1::iframe#iframe2::#deep')         — nested iframes (chain the prefix)
+The <iframe-css> part is evaluated in the PARENT document and must match the <iframe> element itself (typically iframe#id or iframe[src="..."]). The <inner-css> part is a normal CSS selector evaluated inside that iframe's document. The prefix works in every $ API ($, $click, $type, $extract, $wait, $exists, $check, $list, $count, $waitForStable). Prefer this prefix whenever the snapshot shows the data lives inside an iframe element — the prefix is the only way to guarantee the right iframe is targeted.
+
 INPUT DATA:
 - The external program's input is available as the variable __input__ (an object).
 - Example: await $type('#search', __input__.query);
