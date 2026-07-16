@@ -8,6 +8,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   document.getElementById('saveLlm').addEventListener('click', saveLlmConfig);
   document.getElementById('savePort').addEventListener('click', saveServerPort);
+  document.getElementById('testConnection').addEventListener('click', testServerConnection);
   document.getElementById('newService').addEventListener('click', createNewService);
   document.getElementById('exportAll').addEventListener('click', exportAll);
   document.getElementById('importBtn').addEventListener('click', () => {
@@ -47,16 +48,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 // --- Native host status -----------------------------------------------------
 
 const NATIVE_BADGE_LABELS = {
-  native:       'Connected',
-  polling:      'Polling',
+  connected:    'Connected',
   disconnected: 'Disconnected',
   unknown:      'Checking…'
 };
 
 const NATIVE_MODE_DESCRIPTIONS = {
-  native:       'Launched by Chrome via Native Messaging. Best latency.',
-  polling:      'Degraded — running standalone; extension polls via HTTP. Run install-host.',
-  disconnected: 'No host reachable. Install or diagnose the native host.',
+  connected:    'Host reachable at the configured port.',
+  disconnected: 'Host not running or wrong port. Run scrapewright doctor.',
   unknown:      'Service worker still starting up.'
 };
 
@@ -78,9 +77,14 @@ async function loadNativeStatus() {
 function renderNativeStatus(s) {
   const badge = document.getElementById('nativeStatusBadge');
   const desc  = document.getElementById('nativeModeDesc');
-  const effectiveMode = s.hostReachable ? s.mode : (s.mode || 'disconnected');
+  // Normalize: 'polling' (from background.js) → 'connected' (UI label).
+  // 'native' should never appear post-HTTP-only migration, but normalize
+  // defensively in case of stale persisted state.
+  let effectiveMode = s.hostReachable ? s.mode : (s.mode || 'disconnected');
+  if (effectiveMode === 'polling' || effectiveMode === 'native') effectiveMode = 'connected';
+
   badge.className = 'native-badge ' + (effectiveMode || 'unknown');
-  badge.textContent = NATIVE_BADGE_LABELS[effectiveMode] || effectiveMode || 'Unknown';
+  badge.textContent = NATIVE_BADGE_LABELS[effectiveMode] || 'Checking…';
   desc.textContent = NATIVE_MODE_DESCRIPTIONS[effectiveMode] || '';
 
   document.getElementById('nativePort').textContent = s.port || '—';
@@ -92,7 +96,7 @@ function renderNativeStatus(s) {
 
   const errRow = document.getElementById('nativeErrorRow');
   const errEl  = document.getElementById('nativeError');
-  if (s.lastError && effectiveMode !== 'native') {
+  if (s.lastError && effectiveMode !== 'connected') {
     errRow.classList.remove('hidden');
     errEl.textContent = s.lastError;
   } else {
@@ -182,6 +186,26 @@ async function saveServerPort() {
   }
   const response = await chrome.runtime.sendMessage({ type: 'SAVE_SERVER_PORT', port });
   showToast(response.success ? 'Port saved and applied.' : 'Failed: ' + (response.error || 'unknown'), response.success ? 'success' : 'error');
+}
+
+async function testServerConnection() {
+  const port = parseInt(document.getElementById('serverPort').value, 10) || 8765;
+  const result = document.getElementById('connectionResult');
+  result.textContent = 'Testing...';
+  result.className = 'connection-result';
+  try {
+    const r = await fetch(`http://localhost:${port}/health`, { signal: AbortSignal.timeout(3000) });
+    if (r.ok) {
+      result.textContent = '✓ Connected';
+      result.className = 'connection-result ok';
+    } else {
+      result.textContent = '✗ HTTP ' + r.status;
+      result.className = 'connection-result fail';
+    }
+  } catch (e) {
+    result.textContent = '✗ ' + (e.message || 'unreachable');
+    result.className = 'connection-result fail';
+  }
 }
 
 async function loadLlmConfig() {
