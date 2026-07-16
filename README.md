@@ -13,7 +13,7 @@
 
 Scrapewright is an **LLM-powered web scraping platform** and **AI web crawler** that converts plain-English descriptions of what you want to extract into reusable, HTTP-callable scraping services. Describe the target page and fields in natural language, and a large language model analyzes the site, generates the scraping script, runs it inside a real Chrome browser, and returns structured JSON — no CSS selectors to hand-write, no Playwright or Puppeteer code to maintain. The same step-graph engine also doubles as a lightweight **web test automation** / browser automation tool: click, type, wait, assert, branch — declarative, replayable, self-healing.
 
-Because it runs as a **Chrome Extension (Manifest V3)** plus a lightweight **Node.js Native Messaging Host**, Scrapewright executes inside a genuine browser — its core advantage for hard targets. JavaScript-heavy SPAs, asynchronously loaded (XHR / fetch / streaming) content, deeply nested same-origin iframes, and complex multi-step interactions (pagination, detail-page drill-down, modal dismissal, login flows) all just work, with full DOM rendering and no `navigator.webdriver` footprint. Your logins, cookies, and fingerprint carry over as-is, so login-required and anti-bot-protected sites work out of the box. Every scraping service is exposed through a standard **REST / HTTP API** with JSON Schema I/O, so it drops cleanly into any backend, data pipeline, RPA flow, or AI agent stack.
+Because it runs as a **Chrome Extension (Manifest V3)** plus a lightweight **Node.js background service (HTTP)**, Scrapewright executes inside a genuine browser — its core advantage for hard targets. JavaScript-heavy SPAs, asynchronously loaded (XHR / fetch / streaming) content, deeply nested same-origin iframes, and complex multi-step interactions (pagination, detail-page drill-down, modal dismissal, login flows) all just work, with full DOM rendering and no `navigator.webdriver` footprint. Your logins, cookies, and fingerprint carry over as-is, so login-required and anti-bot-protected sites work out of the box. Every scraping service is exposed through a standard **REST / HTTP API** with JSON Schema I/O, so it drops cleanly into any backend, data pipeline, RPA flow, or AI agent stack.
 
 **Great for:** login-required sites (intranets, paid content, SaaS dashboards), AI chatbot answer capture, paginated list + detail-page crawling, iframe-heavy government / portal pages, low-frequency high-value queries, knowledge-graph building, web test automation, and no-code data extraction for non-developers.
 
@@ -24,7 +24,7 @@ Design whitepaper: **[English](docs/technical-whitepaper.en.md)** · [中文](do
 > After loading the `extension/` folder at `chrome://extensions/` (Developer mode → Load unpacked):
 >
 > ```bash
-> ./bin/scrapewright setup --auto     # auto-detect extension ID, install native host, self-check
+> ./bin/scrapewright install     # install host as an OS background service (default port 8765)
 > ```
 >
 > Then open the extension → **Options** → configure your LLM (OpenAI / Moonshot Kimi / Anthropic / GLM) → **+ New Service** → describe what you want to scrape in natural language → test → deploy → call it from anywhere:
@@ -40,7 +40,7 @@ Design whitepaper: **[English](docs/technical-whitepaper.en.md)** · [中文](do
 - [Background: Why Scrapewright](#background-why-scrapewright)
 - [Core Features](#core-features)
 - [System Requirements](#system-requirements)
-- [Installation](#installation) · [Startup Modes](#startup-modes) · [Troubleshooting](#troubleshooting--faq)
+- [Installation](#installation) · [Host Status](#host-status) · [Troubleshooting](#troubleshooting--faq)
 - [HTTP API](#http-api) · [Script DSL](#script-dsl)
 - [Comparison with Other Solutions](#comparison-with-other-solutions)
 - [Distributed Deployment](#distributed-deployment) · [Technical Architecture](#technical-architecture)
@@ -74,7 +74,7 @@ How Scrapewright answers each — this is what makes it a different kind of **AI
 | **AI auto-repair** | On execution failure, captures a DOM snapshot, analyzes the error, and asks the LLM to rewrite the script before retrying |
 | **Element intent annotation** | Visually annotate page elements with intent (click / type / extract / wait), specify wait conditions (appear / disappear / content-stable) and output field mappings, so the LLM consumes your intent directly instead of guessing |
 | **Service management** | Import/export, enable/disable, edit existing services, and one-click export of Markdown API docs (handy for sharing or feeding to AI agents) |
-| **Unified ops CLI** | `./bin/scrapewright` (setup / doctor / status / restart / logs / id) auto-detects the extension ID — no manual transcription |
+| **Unified ops CLI** | `./bin/scrapewright` (install / start / stop / restart / status / doctor / logs) manages the host as an OS background service across Linux, macOS, and Windows |
 | **Async execution queue** | Concurrent requests queue automatically and return asynchronously; well suited to batch scraping |
 
 ## System Requirements
@@ -89,62 +89,45 @@ How Scrapewright answers each — this is what makes it a different kind of **AI
 1. Open Chrome and navigate to `chrome://extensions/`
 2. Toggle on **Developer mode** in the top-right corner
 3. Click **Load unpacked** and select the project's `extension/` directory
-4. After it loads, note the **Extension ID** shown on the extension card (e.g. `dmbnejooocdfjmnebpglhedhfcgncgdl`) — you'll need it for the Native Host install
+4. After it loads, note the **Extension ID** shown on the extension card (e.g. `dmbnejooocdfjmnebpglhedhfcgncgdl`) — for your own reference; the host install does not require it
 
-### 2. Install the Native Messaging Host
+### 2. Install the Host
 
-> **Recommended: one-line install.** The unified CLI at the project root auto-detects the extension ID from Chrome (no need to copy from `chrome://extensions/`), installs the Native Host, and self-checks:
-> ```bash
-> ./bin/scrapewright setup --auto
-> ```
-
-`scrapewright` command overview (full text at `./bin/scrapewright help`):
-
-| Command | Purpose |
-|---------|---------|
-| `scrapewright setup --auto` | Auto-detect extension ID + install + self-check (first choice on a new machine) |
-| `scrapewright status` | Show host process, connection state, and whether the ID matches the manifest |
-| `scrapewright doctor` | Full diagnostic (node / manifest / wrapper / path-drift) + `/health` probe |
-| `scrapewright restart` | Kill the host; in native mode, click **Reconnect** in the extension's Options to let Chrome relaunch it (use after editing host.js) |
-| `scrapewright logs -f` | Tail the host log in real time |
-| `scrapewright id` | Detect the current extension ID and check for drift vs the manifest |
-| `scrapewright uninstall` | Uninstall the Native Host |
-
-> On Windows use `.\bin\scrapewright.cmd ...` (same commands). The `install-host.sh` / `install-host.ps1` scripts below are the lower-level primitives the CLI calls internally — reach for them directly in CI or when you need manual control.
-
-The Native Messaging Host is a Node.js process that bridges the HTTP API and the Chrome extension.
+The host runs as an OS background service so the extension can reach it over HTTP. It auto-starts at login, restarts on crash, and survives Chrome restarts and version updates.
 
 **Linux / macOS:**
 
 ```bash
-cd native-host
-npm install
-./install-host.sh <extension-id>
-```
-
-Example:
-```bash
-./install-host.sh dmbnejooocdfjmnebpglhedhfcgncgdl
+./bin/scrapewright install                    # default port 8765
+./bin/scrapewright install --port=9123        # custom port
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-cd native-host
-npm install
-.\install-host.ps1 -ExtensionId "<extension-id>"
+.\bin\scrapewright.cmd install                # default port 8765
+.\bin\scrapewright.cmd install --port=9123
 ```
 
-> **Note:** `<extension-id>` must be the actual Extension ID; wildcards are not supported by Chrome. Find it on `chrome://extensions/`.
+This registers a systemd user unit (Linux), a launchd LaunchAgent (macOS), or a scheduled task at logon (Windows). The port is baked into the service file at install time — re-running `install` with a new port rewrites the service file and restarts the host.
 
-The installer registers the Native Messaging Host with the system:
-- Linux / macOS: writes `~/.config/google-chrome/NativeMessagingHosts/com.scrapewright.host.json`
-  (macOS: `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.scrapewright.host.json`)
-- Windows: writes registry key `HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.scrapewright.host`
+`scrapewright` command overview (full text at `./bin/scrapewright help`):
 
-> **Important:** The Native Messaging manifest stores the **absolute path** to `host-launcher`. Make sure to run the installer from the project directory you'll actually use for development/running. If you later **move or rename the project directory** (e.g. extracting from a downloaded `scrapewright-master` archive into a permanent location), you must re-run `./install-host.sh <extension-id>` (Windows: `.\install-host.ps1 -ExtensionId <id>`). Otherwise Chrome keeps launching the stale Host from the old directory, and you'll see "Native Messaging never connects, extension silently falls back to long-polling". Run `./install-host.sh --doctor` (Windows: `.\install-host.ps1 -Doctor`) to self-check.
+| Command | Purpose |
+|---------|---------|
+| `scrapewright install [--port=N]` | Install the host as an OS service and start it (first choice on a new machine) |
+| `scrapewright status` | Show service state, `/health`, and port match |
+| `scrapewright doctor` | Full diagnostic: service installed? running? `/health` reachable? port match? path drift? orphaned manifest? |
+| `scrapewright start` / `stop` / `restart` | Service control (use `restart` after editing `host.js`) |
+| `scrapewright run [--port=N]` | Run host in the foreground (for debugging / one-off runs) |
+| `scrapewright logs [-f]` | Tail the host log in real time |
+| `scrapewright uninstall` | Stop and remove the OS service |
 
-After installation, **restart Chrome** (or click **Reconnect** in the Native Host Status card on the extension's Options page).
+> On Windows use `.\bin\scrapewright.cmd ...` (same commands).
+
+After install, open the extension → **Options** → under **Server Configuration**, verify the port field matches what you installed with (default `8765`), then click **Test Connection**. The host status badge should read **Connected**.
+
+> **Note:** If you later **move or rename the project directory**, the service file still points at the old absolute path. Re-run `./bin/scrapewright install` from the new location to rewrite it. `./bin/scrapewright doctor` detects this drift and prints the fix command.
 
 ### 3. Configure the LLM
 
@@ -181,64 +164,59 @@ In the **Services** section of the Options page:
 
 The bottom of the Options page shows **Execution History** (the most recent 20 runs) with timestamp, service name, and success/failure status.
 
-## Startup Modes
+## Host Status
 
-The Host supports two communication modes: **Native Messaging** (Chrome auto-launches it) and **HTTP long-polling** (you start it manually). The two modes auto-switch; no extra configuration is needed.
+There is one transport between the host and the extension: **HTTP long-polling**. The extension pulls requests via `GET /api/v1/extension/poll` and replies via `POST /api/v1/extension/response`. The host is brought up by the OS service supervisor (installed in step 2) — no manual start needed.
 
-### Mode A: Native Messaging (recommended)
+The extension's options page shows one of two states:
 
-After step 2 of installation, Chrome automatically connects to the Host via Native Messaging on startup — nothing to do manually.
+- **Connected** — host reachable at the configured port.
+- **Disconnected** — host not running, or the port doesn't match.
 
-### Mode B: Manual Start (HTTP long-polling)
+If disconnected, check in order:
 
-If Native Messaging is unavailable (not installed, install failed, or you want manual control), start the Host by hand and the extension will fall back to HTTP long-polling automatically:
+1. `./bin/scrapewright status` — is the service installed and running?
+2. The port in the extension's options page under **Server Configuration** matches what `scrapewright install --port=N` was given (default `8765`).
+3. `./bin/scrapewright doctor` — full diagnostics.
+
+You can also run the host in the foreground for debugging:
 
 ```bash
-# Default port 8765
-cd native-host && node host.js
-
-# Custom port (must match the port set on the extension Options page under Server Configuration)
-cd native-host && node host.js --port=19880
-
-# Or via environment variable
-SCRAPEWRIGHT_PORT=19880 node host.js
+./bin/scrapewright run                       # default port 8765
+./bin/scrapewright run --port=19880          # custom port
 ```
 
-On startup you'll see:
-```
-[ScrapewrightHost] Startup diagnostics:
-  Mode: HTTP Long-Polling (manual start)
-  Extension should connect to: http://localhost:19880/api/v1/extension/poll
-
-Scrapewright host listening on port 19880
-  Waiting for extension to connect via long-polling...
-  Ensure extension settings use port 19880
-```
-
-> **Note:** In manual mode, make sure the port on the extension Options page under **Server Configuration** matches the `--port` argument. The extension auto-falls-back to long-polling whenever Native Messaging drops.
+> **Note:** In foreground mode, make sure the port on the extension's options page matches the `--port` argument.
 
 ## Troubleshooting / FAQ
 
-**Symptom:** The extension reports "Native host has exited", Native Messaging never works, or the Host log shows `native stdin closed WITHOUT ever receiving an extension message` / `Falling back to poll mode`.
+### Service won't start
 
-1. **Most common cause: the project directory was moved.** The Native Messaging manifest stores the **absolute path** at install time. If you relocated the project from `~/Downloads/scrapewright-master` to `~/projects/scrapewright`, Chrome is still launching the stale `host.js` from the old location; it's incompatible with the new extension and stdin closes immediately. Fix: re-run `./install-host.sh <extension-id>` (Windows: `.\install-host.ps1 -ExtensionId <id>`) from the new directory.
+Run `./bin/scrapewright doctor`. Common causes:
 
-2. **Run the diagnostic:**
-   ```bash
-   cd native-host && ./install-host.sh --doctor        # macOS / Linux
-   .\install-host.ps1 -Doctor                          # Windows
-   ```
-   Pay attention to the `path points into current host dir` check — it compares the manifest path to the script's current directory, prints a fix command on drift, and runs a wrapper smoke test to verify node + host.js initialize cleanly.
+- **Node not found** — the service file pins an absolute path to `node`; if you upgraded Node or moved it, re-run `./bin/scrapewright install` to rewrite the path.
+- **Port already in use** — pick another with `./bin/scrapewright install --port=N` (and update the port in the extension's options page to match).
+- **Project moved** — the service file points at the old absolute path; re-run `./bin/scrapewright install` from the new directory. Doctor detects this drift and prints the fix command.
+- **Orphaned Native Messaging artifacts from a previous install** — doctor detects and removes leftover manifests automatically, with a one-line notice.
 
-3. **Tail the Host log:**
-   ```bash
-   tail -f ~/Library/Logs/scrapewright/host.log      # macOS
-   tail -f ~/.cache/scrapewright/host.log            # Linux
-   Get-Content -Wait "$env:LOCALAPPDATA\scrapewright\host.log" -Tail 20   # Windows
-   ```
-   A healthy connection shows `mode: native messaging (Chrome-launched)` *not* followed by "closed WITHOUT ever receiving". Boot crashes (before the logger initializes) land in `startup-error.log` next to `host.log` — that's the real stack trace behind Chrome's opaque "Native host has exited".
+### Port mismatch
 
-4. **When you don't want to restart Chrome:** click **Reconnect** in the **Native Host Status** card on the extension's Options page (lighter than restarting Chrome). After editing Host code, you still need to restart Chrome or reload the extension.
+If the host is listening on `:9123` but the extension is polling `:8765`, the options page shows **Disconnected**. Update the port field under **Server Configuration** to match what you installed with, then click **Test Connection**.
+
+### Tail the host log
+
+```bash
+./bin/scrapewright logs -f                       # all platforms (CLI)
+tail -f ~/Library/Logs/scrapewright/host.log      # macOS
+tail -f ~/.cache/scrapewright/host.log            # Linux
+Get-Content -Wait "$env:LOCALAPPDATA\scrapewright\host.log" -Tail 20   # Windows
+```
+
+Boot crashes (before the logger initializes) land in `startup-error.log` next to `host.log` — that's the real stack trace behind an opaque startup failure.
+
+### Picking up code changes
+
+After editing `host.js`, run `./bin/scrapewright restart` to bring up the new code. After editing extension files, reload the extension at `chrome://extensions/` (click the refresh icon on the extension card).
 
 ## HTTP API
 
@@ -375,7 +353,7 @@ Response:
 | Field | Description |
 |-------|-------------|
 | `status` | `"ok"` = extension connected; `"degraded"` = extension not connected |
-| `extensionConnected` | Whether the extension is connected via Native Messaging or long-polling |
+| `extensionConnected` | Whether the extension is currently connected to the host via HTTP long-polling |
 | `queueLength` | Number of queued jobs |
 | `queueRunning` | Whether a job is currently executing |
 | `uptime` | Host process uptime in seconds |
@@ -579,7 +557,7 @@ In K8s each Pod runs 1 Chrome + 1 `host.js`, with the `/health` endpoint serving
 
 ## Technical Architecture
 
-Scrapewright is built on four pillars: a **three-layer bridge** (external program → Node.js HTTP Host → Chrome Extension → target page) that works around MV3's ban on HTTP servers in the service worker; a **step-graph orchestration engine** (`StepOrchestrator`) that runs a directed graph of named steps with conditional edges, polling/retry budgets, and cross-step data flow; **sandboxed script execution** via a single offscreen-hosted iframe where `eval`/`new Function` is permitted under MV3 CSP; and a **dual transport** (Native Messaging + HTTP long-polling fallback) between the Host and the extension. AI-driven script generation, step-level auto-repair, and visual element annotation sit on top of these pillars.
+Scrapewright is built on four pillars: a **three-layer bridge** (external program → Node.js HTTP Host → Chrome Extension → target page) that works around MV3's ban on HTTP servers in the service worker; a **step-graph orchestration engine** (`StepOrchestrator`) that runs a directed graph of named steps with conditional edges, polling/retry budgets, and cross-step data flow; **sandboxed script execution** via a single offscreen-hosted iframe where `eval`/`new Function` is permitted under MV3 CSP; and a **single HTTP-based transport** (long-polling both ways) between the Host and the extension, with the Host running as a per-OS background service. AI-driven script generation, step-level auto-repair, and visual element annotation sit on top of these pillars.
 
 See the [Technical Whitepaper](docs/technical-whitepaper.en.md) for the full architecture, data flow, module reference, file-tree layout, Chrome MV3 constraint table, and development/contributing guide.
 
