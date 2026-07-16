@@ -131,10 +131,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     goToPhase(5);
     confirmDeploy();
   });
-  document.getElementById('btnFixAgain').addEventListener('click', () => {
-    wizardState.testAborted = false;
-    autoFix(document.getElementById('feedbackInput').value);
-  });
   document.getElementById('btnAddStep')?.addEventListener('click', addStep);
   document.getElementById('btnApplyTemplate')?.addEventListener('click', () => {
     const templateId = document.getElementById('templateSelect').value;
@@ -212,14 +208,14 @@ function showPhase(n) {
 }
 
 function updatePhaseUI(state) {
-  const fixControls = document.getElementById('fixControls');
-  const feedbackArea = document.getElementById('feedbackArea');
-  const deployControls = document.getElementById('deployControls');
+  const btnRetryTest = document.getElementById('btnRetryTest');
+  const btnAutoFix = document.getElementById('btnAutoFix');
+  const btnDeployAnyway = document.getElementById('btnDeployAnyway');
+  const btnPhase5Deploy = document.getElementById('btnPhase5Deploy');
+  const feedbackInput = document.getElementById('feedbackInput');
   const testStatus = document.getElementById('testStatus');
 
-  fixControls.classList.add('hidden');
-  feedbackArea.classList.add('hidden');
-  deployControls.classList.add('hidden');
+  [btnRetryTest, btnAutoFix, btnDeployAnyway, btnPhase5Deploy].forEach(b => b.classList.add('hidden'));
   testStatus.className = '';
 
   document.getElementById('serviceNameDisplay').textContent = 'Service: ' + (wizardState.serviceName || 'Unnamed');
@@ -228,15 +224,16 @@ function updatePhaseUI(state) {
   if (state === 'success') {
     testStatus.textContent = 'All steps passed!';
     testStatus.className = 'success';
-    deployControls.classList.remove('hidden');
-    feedbackArea.classList.remove('hidden');
-    document.getElementById('feedbackInput').placeholder = 'Results not what you expected? Describe what to change...';
+    btnPhase5Deploy.classList.remove('hidden');
+    btnAutoFix.classList.remove('hidden');
+    feedbackInput.placeholder = 'Results not what you expected? Describe what to change...';
   } else if (state === 'empty-result') {
     testStatus.textContent = 'Test passed but extracted data is empty — extraction may not be working correctly.';
     testStatus.className = 'fixing';
-    fixControls.classList.remove('hidden');
-    feedbackArea.classList.remove('hidden');
-    document.getElementById('feedbackInput').placeholder = 'Describe what data you expected and how to fix the extraction...';
+    btnRetryTest.classList.remove('hidden');
+    btnAutoFix.classList.remove('hidden');
+    btnDeployAnyway.classList.remove('hidden');
+    feedbackInput.placeholder = 'Describe what data you expected and how to fix the extraction...';
     debugLogger.log('warn', 'wizard', 'Empty result detected, showing fix controls');
   } else if (state === 'failure') {
     const stepInfo = wizardState.lastErrorStepId ? ' (step: ' + wizardState.lastErrorStepId + ')' : '';
@@ -244,11 +241,10 @@ function updatePhaseUI(state) {
       ? 'Test failed: ' + wizardState.lastError + stepInfo
       : 'Test failed';
     testStatus.className = 'failure';
-    fixControls.classList.remove('hidden');
-    if (wizardState.fixAttemptCount > 0) {
-      feedbackArea.classList.remove('hidden');
-    }
-    document.getElementById('feedbackInput').placeholder = 'Describe what\'s wrong or how to fix it...';
+    btnRetryTest.classList.remove('hidden');
+    btnAutoFix.classList.remove('hidden');
+    btnDeployAnyway.classList.remove('hidden');
+    feedbackInput.placeholder = 'Describe what\'s wrong or how to fix it...';
   } else if (state === 'fixing') {
     testStatus.textContent = 'Fixing step (attempt #' + (wizardState.fixAttemptCount + 1) + ')...';
     testStatus.className = 'fixing';
@@ -1345,7 +1341,7 @@ async function startResearch() {
   wizardState.description = buildRequirementsBlock(wizardState.requirements);
   if (!wizardState.userDescription) wizardState.userDescription = wizardState.description;
 
-  const tab = await chrome.tabs.create({ url: wizardState.targetUrl, active: true });
+  const tab = await chrome.tabs.create({ url: wizardState.targetUrl, active: false });
   wizardState.researchTabId = tab.id;
 
   try {
@@ -1747,7 +1743,7 @@ async function autoFix(userFeedback = null) {
     return;
   }
 
-  // userFeedback provided → single attempt (Fix Again button flow).
+  // userFeedback provided → single attempt (Auto-Fix button with hint).
   // userFeedback null → up to 3 silent retries before giving up and asking
   // the user for a hint. Triggered automatically by testScript on failure.
   const MAX_ATTEMPTS = userFeedback ? 1 : 3;
@@ -1775,7 +1771,7 @@ async function autoFix(userFeedback = null) {
       }
     }
     if (!userFeedback) {
-      appendLog('Auto-fix gave up after ' + MAX_ATTEMPTS + ' attempts. Add a hint below and click Fix Again.', 'warn');
+      appendLog('Auto-fix gave up after ' + MAX_ATTEMPTS + ' attempts. Add a hint below and click Auto-Fix.', 'warn');
     }
     updatePhaseUI('failure');
   } finally {

@@ -64,7 +64,7 @@ After modifying extension files, reload the extension at `chrome://extensions/` 
 
 `README.md` (English, default) and `README.zh-CN.md` (Chinese) are the canonical user-facing references — both document the full HTTP API, DSL, distributed deployment, and CDP comparison. `docs/technical-whitepaper.md` (中文) and `docs/technical-whitepaper.en.md` (English) are the design whitepaper — architecture, data flow, module reference, and extension guide. `req.md` is the original requirements spec (local only).
 
-`scripts/` holds concrete reference service definitions (`baidu3.json`, `baidu4.json`, `yuanbao.json`) — full persisted service objects including `steps`, `inputSchema`, `outputSchema`, and `config`. These are the best examples of the step-graph DSL in the wild; read one before authoring or debugging a service.
+`examples/` holds concrete reference service definitions (`baidu4.json`, `yuanbao.json`) — full persisted service objects including `steps`, `inputSchema`, `outputSchema`, and `config`. These are the best examples of the step-graph DSL in the wild; read one before authoring or debugging a service.
 
 ## Native Host install internals
 
