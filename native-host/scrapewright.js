@@ -215,9 +215,12 @@ async function cmdDoctor(jsonOut) {
       f(d.check + ': ' + d.detail);
     }
     if (artifacts.files.length || artifacts.registryKeys.length) {
-      warn('Legacy Native Messaging artifacts detected. Re-run with --fix-migrate to remove:');
+      warn('Legacy Native Messaging artifacts detected — removing:');
       for (const f of artifacts.files) info('  ' + f);
       for (const k of artifacts.registryKeys) info('  ' + k);
+      const removed = migration.removeLegacyArtifacts({});
+      for (const f of removed.removedFiles) ok('removed ' + f);
+      for (const k of removed.removedKeys) ok('removed registry ' + k);
     }
   }
   const healthy = diagnostics.every(d => d.ok);

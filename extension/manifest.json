@@ -9,7 +9,6 @@
     "alarms",
     "scripting",
     "tabs",
-    "nativeMessaging",
     "offscreen"
   ],
   "host_permissions": [
