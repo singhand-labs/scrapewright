@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // Boot trap — must run before any require() that could fail.
 // If a required module is missing/syntactically broken, Node exits before
-// logger initializes, and Chrome only surfaces the opaque "Native host has
-// exited". We dump the real error synchronously to startup-error.log so
-// doctor / users can see what actually crashed.
+// the logger initializes, and the OS service supervisor (systemd / launchd /
+// Task Scheduler) just sees a non-zero exit. We dump the real error
+// synchronously to startup-error.log so doctor / users can see what
+// actually crashed.
 //
 // __bootReady flips to true once logger is wired up (see below); at that
 // point the boot trap detaches and the runtime trap (which logs and keeps
@@ -37,7 +38,6 @@ try {
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
-const { encodeMessage, decodeStream } = require('./lib/native-messaging');
 const { logger, resolveLogPath } = require('./lib/logger');
 
 // Logger is up — boot phase is over. The runtime trap below takes over.
@@ -66,14 +66,6 @@ let pollResponse = null;
 let messageQueue = [];
 let heartbeatTimer = null;
 
-// Native Messaging (when Chrome launches this host)
-const isChromeLaunched = !process.stdin.isTTY;
-let nativeOutput = null;
-// True once the extension sends its first message over the native channel.
-// Distinguishes "stdin closed normally" from "stdin closed without ever
-// receiving a message" (path drift / stale wrapper / origin mismatch).
-let nativeMessageEverReceived = false;
-
 // Startup diagnostics
 logger.info('host starting', {
   node: process.version,
@@ -81,35 +73,13 @@ logger.info('host starting', {
   pid: process.pid,
   port: PORT,
   apiKeySet: API_KEY !== 'dev-key',
-  stdinIsTTY: !!process.stdin.isTTY,
-  chromeLaunched: isChromeLaunched,
   logFile: resolveLogPath()
 });
 
-if (isChromeLaunched) {
-  logger.info('mode: native messaging (Chrome-launched)');
-  nativeOutput = process.stdout;
-  const decoder = decodeStream();
-  process.stdin.on('data', (chunk) => {
-    for (const msg of decoder(chunk)) {
-      handleIncomingMessage(msg);
-    }
-  });
-  process.stdin.on('end', () => {
-    if (nativeMessageEverReceived) {
-      logger.info('native stdin channel closed (normal — extension disconnected or Chrome is restarting). Falling back to poll mode if possible.');
-    } else {
-      logger.error('native stdin closed WITHOUT ever receiving an extension message — likely path drift (stale wrapper), origin mismatch, or extension never connected. Falling back to poll mode if possible. Run ./install-host.sh --doctor (or .\\install-host.ps1 -Doctor).');
-    }
-    nativeOutput = null;
-  });
-  process.stdin.on('error', (err) => {
-    logger.error('native stdin error', { message: err.message });
-    nativeOutput = null;
-  });
-} else {
-  logger.info('mode: HTTP long-polling (manual start)', { pollUrl: 'http://localhost:' + PORT + '/api/v1/extension/poll' });
-}
+logger.info('mode: http server', {
+  port: PORT,
+  invokedBy: process.env.SCRAPEWRIGHT_INVOKED_BY || 'foreground'
+});
 
 process.on('uncaughtException', (err) => {
   logger.error('uncaughtException', { message: err.message, stack: err.stack });
@@ -120,17 +90,12 @@ process.on('unhandledRejection', (reason) => {
 });
 
 function handleIncomingMessage(msg) {
-  nativeMessageEverReceived = true;
   logger.info('extension→host message', { reqId: msg.reqId, type: msg.type });
   const pending = pendingRequests.get(msg.reqId);
   if (pending) {
     clearTimeout(pending.timer);
     pendingRequests.delete(msg.reqId);
     pending.resolve(msg);
-    return;
-  }
-  if (msg.type === 'SET_PORT') {
-    handleSetPort(msg.port);
   }
 }
 
@@ -146,26 +111,14 @@ function sendToExtension(message) {
     }, 60000);
     pendingRequests.set(reqId, { resolve, reject, timer });
 
-    // Try Native Messaging first (lower latency)
-    if (nativeOutput) {
-      try {
-        nativeOutput.write(encodeMessage(msg));
-      } catch (err) {
-        clearTimeout(timer);
-        pendingRequests.delete(reqId);
-        reject(err);
-        return;
-      }
-    } else if (pollResponse) {
-      // Deliver via pending poll
+    if (pollResponse) {
       clearTimeout(heartbeatTimer);
       pollResponse.statusCode = 200;
       pollResponse.end(JSON.stringify(msg));
       pollResponse = null;
     } else {
-      // Queue for next poll
       messageQueue.push(msg);
-      logger.warn('message queued (extension not connected)', { reqId: msg.reqId, type: msg.type, queueDepth: messageQueue.length });
+      logger.warn('message queued (extension not connected)', { reqId, type: msg.type, queueDepth: messageQueue.length });
     }
   });
 }
@@ -242,7 +195,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 async function handleHealthCheck(req, res) {
-  const extensionConnected = !!(nativeOutput || pollResponse);
+  const extensionConnected = !!pollResponse;
   let queueLength = 0;
   let queueRunning = false;
 
@@ -506,31 +459,6 @@ function readBody(req) {
   });
 }
 
-function handleSetPort(newPort) {
-  newPort = parseInt(newPort);
-  if (!newPort || newPort < 1 || newPort > 65535) {
-    logger.warn('invalid port requested; ignoring', { requested: newPort });
-    return;
-  }
-  if (server.listening && newPort === currentPort) {
-    logger.info('port unchanged; no-op', { port: newPort });
-    return;
-  }
-  logger.info('switching port', { from: currentPort, to: newPort });
-  server.close(() => {
-    server.once('error', (err) => {
-      if (err.code === 'EADDRINUSE') {
-        logger.warn('new port in use; restoring previous', { attempted: newPort, restored: currentPort });
-        server.listen(currentPort);
-      }
-    });
-    server.listen(newPort, () => {
-      currentPort = newPort;
-      logger.info('now listening on new port', { port: currentPort });
-    });
-  });
-}
-
 // EADDRINUSE on initial startup is fatal — record it loudly so the doctor
 // can surface the conflict from the log file.
 server.on('error', (err) => {
@@ -544,10 +472,8 @@ server.on('error', (err) => {
 if (require.main === module) {
   server.listen(currentPort, () => {
     logger.info('listening for HTTP', { port: currentPort });
-    if (!isChromeLaunched) {
-      process.stderr.write('  Waiting for extension to connect via long-polling on port ' + currentPort + '.\n');
-      process.stderr.write('  Test: curl -H "x-api-key: ' + API_KEY + '" http://localhost:' + currentPort + '/api/v1/jobs\n');
-    }
+    process.stderr.write('  Waiting for extension to connect via long-polling on port ' + currentPort + '.\n');
+    process.stderr.write('  Test: curl -H "x-api-key: ' + API_KEY + '" http://localhost:' + currentPort + '/api/v1/jobs\n');
   });
 }
 
@@ -582,4 +508,4 @@ function runDoctor() {
   }
 }
 
-module.exports = { server, sendToExtension, handleSetPort, handleExecuteRequest, handleJobStatusRequest, handleJobWaitRequest, handleJobsListRequest, handleServicesListRequest, handleCancelRequest, handleStepAddRequest, handleStepUpdateRequest, handleStepDeleteRequest };
+module.exports = { server, sendToExtension, handleExecuteRequest, handleJobStatusRequest, handleJobWaitRequest, handleJobsListRequest, handleServicesListRequest, handleCancelRequest, handleStepAddRequest, handleStepUpdateRequest, handleStepDeleteRequest };
