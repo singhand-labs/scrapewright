@@ -52,15 +52,13 @@ class ExecutionQueue {
 const executionQueue = new ExecutionQueue();
 
 // Communication channels
-let nativePort = null;
-let usePolling = false;
 let pollingActive = false;
 let serverPort = 8765;
 
 // Native host connection state — surfaced to the options page UI.
 // Persisted to chrome.storage.local so SW restarts don't lose the last error.
 let nativeState = {
-  mode: 'unknown',         // 'native' | 'polling' | 'disconnected' | 'unknown'
+  mode: 'unknown',         // 'polling' | 'disconnected' | 'unknown'
   lastError: null,         // string from last disconnect/failure
   connectedAt: null,       // timestamp of current successful connection
   disconnectedAt: null,    // timestamp of last disconnect
@@ -78,7 +76,11 @@ async function persistNativeState() {
 async function loadNativeState() {
   try {
     const { nativeState: saved } = await chrome.storage.local.get('nativeState');
-    if (saved) nativeState = { ...nativeState, ...saved };
+    if (saved) {
+      nativeState = { ...nativeState, ...saved };
+      // Migration: pre-HTTP-only versions stored mode='native'; normalize to 'polling'.
+      if (nativeState.mode === 'native') nativeState.mode = 'polling';
+    }
   } catch {}
 }
 
@@ -86,7 +88,7 @@ function setNativeMode(mode, errorMessage = null) {
   const now = Date.now();
   const prev = nativeState.mode;
   nativeState.mode = mode;
-  if (mode === 'native' || mode === 'polling') {
+  if (mode === 'polling') {
     nativeState.connectedAt = now;
     nativeState.lastError = null;
   } else if (mode === 'disconnected') {
@@ -119,7 +121,7 @@ chrome.alarms.create('logCleanup', { periodInMinutes: 60 });
 chrome.alarms.create('jobCleanup', { periodInMinutes: 10 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'keepalive') {
-    if (!nativePort && !pollingActive) {
+    if (!pollingActive) {
       debugLogger.log('info', 'background', 'Keepalive alarm: reconnecting');
       initCommunication();
     }
@@ -136,80 +138,28 @@ async function initCommunication() {
 
   pruneJobQueue();
 
-  // If already connected via native messaging, skip
-  if (nativePort) return;
-
-  // If already polling, skip
   if (pollingActive) return;
 
   nativeState.reconnectAttempts++;
   persistNativeState();
 
-  // Always try long-polling first — it connects to an existing host process.
-  // Native Messaging would launch a NEW host process, leaving the old one orphaned.
   try {
     const probe = await fetch(`http://localhost:${serverPort}/api/v1/extension/poll`, {
       signal: AbortSignal.timeout(3000)
     });
     if (probe.ok) {
-      debugLogger.log('info', 'background', 'Existing host found via HTTP, using long-polling');
-      startLongPolling();
-      return;
+      debugLogger.log('info', 'background', 'Host reachable, using long-polling');
     }
   } catch (e) {
-    // Host not running via HTTP — try Native Messaging
+    // Will be retried by startLongPolling's reconnect loop.
   }
 
-  try {
-    connectNativeHost();
-  } catch (e) {
-    console.error('[Scrapewright] Native Messaging init failed:', e);
-    setNativeMode('disconnected', e.message || 'init failed');
-    startLongPolling();
-  }
-}
-
-function connectNativeHost() {
-  if (typeof chrome.runtime.connectNative !== 'function') {
-    console.error('[Scrapewright] chrome.runtime.connectNative not available');
-    setNativeMode('disconnected', 'chrome.runtime.connectNative unavailable — extension lacks nativeMessaging permission or Chrome build lacks the API');
-    startLongPolling();
-    return;
-  }
-
-  try {
-    nativePort = chrome.runtime.connectNative('com.scrapewright.host');
-    nativePort.onMessage.addListener(async (message) => {
-      const response = await handleHostMessage(message);
-      if (response && nativePort) {
-        nativePort.postMessage(response);
-      }
-    });
-    nativePort.onDisconnect.addListener((err) => {
-      // chrome.runtime.lastError is sometimes the more useful message; fall back to err.
-      const lastErr = chrome.runtime.lastError;
-      const msg = (lastErr && lastErr.message) || err?.message || 'disconnected without error';
-      console.log('[Scrapewright] Native host disconnected', msg);
-      nativePort = null;
-      setNativeMode('disconnected', msg);
-      if (!pollingActive) {
-        startLongPolling();
-      }
-    });
-    usePolling = false;
-    setNativeMode('native');
-    debugLogger.log('info', 'background', 'Native Messaging connected');
-  } catch (e) {
-    console.error('[Scrapewright] Native Messaging error:', e);
-    setNativeMode('disconnected', e.message);
-    startLongPolling();
-  }
+  startLongPolling();
 }
 
 async function startLongPolling() {
   if (pollingActive) return;
   pollingActive = true;
-  usePolling = true;
 
   debugLogger.log('info', 'background', 'Starting long-polling', { port: serverPort });
 
@@ -951,14 +901,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'SAVE_SERVER_PORT') {
     chrome.storage.local.set({ serverPort: message.port }).then(async () => {
       serverPort = message.port;
-      if (nativePort) {
-        nativePort.postMessage({ type: 'SET_PORT', port: message.port });
-      }
-      // Restart polling with new port if using polling
-      if (usePolling && pollingActive) {
-        pollingActive = false;
-        startLongPolling();
-      }
+      // Restart polling with the new port
+      pollingActive = false;
+      await initCommunication();
       sendResponse({ success: true });
     });
     return true;
@@ -982,14 +927,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       logFileHint = '~/.cache/scrapewright/host.log';
     }
     sendResponse({
-      mode: nativePort ? 'native' : (pollingActive ? 'polling' : nativeState.mode),
+      mode: pollingActive ? 'polling' : nativeState.mode,
       lastError: nativeState.lastError,
       connectedAt: nativeState.connectedAt,
       disconnectedAt: nativeState.disconnectedAt,
       reconnectAttempts: nativeState.reconnectAttempts,
       port: serverPort,
       logFileHint,
-      hostReachable: !!(nativePort || pollingActive)
+      hostReachable: pollingActive
     });
     return false;
   }
@@ -998,7 +943,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       debugLogger.log('info', 'background', 'Manual reconnect requested');
       // Reset polling flag so initCommunication can try again
       pollingActive = false;
-      nativePort = null;
       await initCommunication();
       sendResponse({ ok: true });
     })();
