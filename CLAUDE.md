@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Scrapewright is an LLM-powered web scraping platform built as a Chrome Extension (Manifest V3) with a Node.js Native Messaging Host. External programs call configurable scraping services via a local HTTP API. The extension provides an AI-guided interactive wizard for service creation.
+Scrapewright is an LLM-powered web scraping platform built as a Chrome Extension (Manifest V3) with a Node.js HTTP background service. The host runs as a per-OS service (systemd user unit / launchd LaunchAgent / Windows scheduled task at logon) installed by `./bin/scrapewright install`. External programs call configurable scraping services via a local HTTP API. The extension provides an AI-guided interactive wizard for service creation.
 
 A **service** is a *step graph* (a small state machine of named steps), not a single script. Each step runs a scraping snippet in a sandbox; `onSuccess`/`onFailure` edges route control between steps to express loops, branches, and pagination. See "Step Graph model" below.
 
@@ -14,26 +14,16 @@ A **service** is a *step graph* (a small state machine of named steps), not a si
 
 ```bash
 # === Unified CLI (recommended entrypoint) — ./bin/scrapewright ===
-# Auto-detects the extension id (no hand-copying), installs, diagnoses, restarts, tails logs.
-./bin/scrapewright setup --auto    # one-shot install on a new machine
-./bin/scrapewright status          # host process + /health + id-drift check
-./bin/scrapewright doctor          # full diagnostic (exits non-zero if sick)
-./bin/scrapewright restart         # kill host (then Reconnect in options to relaunch; use after editing host.js)
-./bin/scrapewright logs -f         # tail host log
-./bin/scrapewright id              # detect loaded extension id + drift vs manifest
-
-# === Native host install / diagnose (macOS & Linux) — underlying primitives ===
-cd native-host
-./install-host.sh <extension-id>   # install (find id at chrome://extensions/)
-./install-host.sh --doctor         # diagnostic: node, manifest, port, recent log
-./install-host.sh --uninstall      # remove manifest + wrapper
-node host.js --doctor              # host's own view: env, last 15 log lines
-
-# === Native host install / diagnose (Windows, PowerShell) ===
-cd native-host
-.\install-host.ps1 <extension-id>  # install (find id at chrome://extensions/)
-.\install-host.ps1 -Doctor         # diagnostic: node, manifest, port, registry, recent log
-.\install-host.ps1 -Uninstall      # remove registry key + manifest + wrapper
+./bin/scrapewright install [--port=N]   # install OS service (default port 8765)
+./bin/scrapewright install --no-autostart   # install without auto-start at login
+./bin/scrapewright status               # service state + /health
+./bin/scrapewright doctor               # full diagnostic (exits non-zero if sick)
+./bin/scrapewright start                # start the service
+./bin/scrapewright stop                 # stop the service
+./bin/scrapewright restart              # restart service (picks up host.js changes)
+./bin/scrapewright run [--port=N]       # foreground run (debugging, log-watching)
+./bin/scrapewright logs -f              # tail host log
+./bin/scrapewright uninstall            # stop + remove OS service
 
 # === Native host tests ===
 cd native-host && npm test                       # node --test test/*.test.js
@@ -46,7 +36,7 @@ cd extension && node --test test/step-orchestrator.test.js # single file
 # Note: tests live in BOTH extension/test/ and extension/lib/ (e.g. lib/service-registry.test.js).
 # They require via relative paths ('../lib/...'), so run node --test from extension/.
 
-# === Run host manually (dev mode; falls back to HTTP long-polling transport) ===
+# === Run host manually (dev mode; uses HTTP long-polling transport) ===
 cd native-host && node host.js
 node host.js --port=19880              # or SCRAPEWRIGHT_PORT=19880 node host.js
 curl http://localhost:8765/health      # health check (no auth)
@@ -60,51 +50,47 @@ tail -f ~/.cache/scrapewright/host.log               # Linux
 # Boot crashes (before logger init) land in startup-error.log next to host.log.
 ```
 
-After modifying extension files, reload the extension at `chrome://extensions/` (click the refresh icon on the extension card). Native Host changes require restarting Chrome or disconnecting/reconnecting the extension. The extension's options page (`options.html`) shows a **Native Host Status** card with the current connection mode (Connected / Polling / Disconnected), the last error, the log file path, a Reconnect button, and a Copy Diagnostics button — check there first when investigating connectivity issues.
+After modifying extension files, reload the extension at `chrome://extensions/` (click the refresh icon on the extension card). Host-side changes require `./bin/scrapewright restart` to pick up. The extension's options page (`options.html`) shows a **Host Status** card with the current connection state (Connected / Disconnected), the last error, the log file path, a Reconnect button, and a Copy Diagnostics button — check there first when investigating connectivity issues.
 
 `README.md` (English, default) and `README.zh-CN.md` (Chinese) are the canonical user-facing references — both document the full HTTP API, DSL, distributed deployment, and CDP comparison. `docs/technical-whitepaper.md` (中文) and `docs/technical-whitepaper.en.md` (English) are the design whitepaper — architecture, data flow, module reference, and extension guide. `req.md` is the original requirements spec (local only).
 
 `examples/` holds concrete reference service definitions (`baidu4.json`, `yuanbao.json`) — full persisted service objects including `steps`, `inputSchema`, `outputSchema`, and `config`. These are the best examples of the step-graph DSL in the wild; read one before authoring or debugging a service.
 
-## Native Host install internals
+## Service install internals
 
-`install-host.sh` (macOS/Linux) and `install-host.ps1` (Windows) each generate two artifacts:
+`./bin/scrapewright install [--port=N] [--no-autostart]` writes a per-OS service file via `native-host/lib/service-install/`:
 
-1. **A wrapper script** that `exec`s node via its absolute path:
-   - macOS/Linux: `native-host/host-launcher.sh` with `#!/bin/bash` shebang. This works around Chrome launching native hosts with a minimal PATH on macOS (where Homebrew/nvm node isn't on `/usr/bin`), which is the most common cause of `Unchecked runtime.lastError: Native host has exited`.
-   - Windows: `native-host\host-launcher.cmd` (`@echo off` + `node.exe host.js %*`). Windows has the same PATH problem — Chrome doesn't see the user's `nodejs` install location.
-2. **A manifest registration**:
-   - macOS: `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.scrapewright.host.json`
-   - Linux: `~/.config/google-chrome/NativeMessagingHosts/com.scrapewright.host.json`
-   - Windows: registry key `HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.scrapewright.host` with `(Default)` = manifest path (manifest written next to `host.js`).
+- **Linux:** systemd user unit at `~/.config/systemd/user/scrapewright.service`. Auto-start via `systemctl --user enable --now scrapewright` + `loginctl enable-linger <user>` (so the user manager runs at boot).
+- **macOS:** launchd LaunchAgent at `~/Library/LaunchAgents/com.scrapewright.host.plist`. Auto-start via `launchctl bootstrap gui/<uid> <plist>`. `KeepAlive=true` restarts on crash.
+- **Windows:** scheduled task `ScrapewrightHost` with `-AtLogOn` trigger. Registered via PowerShell `Register-ScheduledTask`. No admin required.
 
-In all cases the manifest `path` points to the wrapper, not `host.js` directly.
+Each service file embeds three things at install time: absolute node path (resolved by `lib/service-install/locate-node.js` via `process.execPath`), absolute host.js path, and the port as `--port=N` arg. So a user running `scrapewright install --port=9123` gets a service pinned to that port.
 
-When the user reports a connection failure, the diagnostic order is:
-1. **Extension options page** — check the Native Host Status card. Red badge = Chrome can't launch the host; copy diagnostics.
-2. `./install-host.sh --doctor` (or `.\install-host.ps1 -Doctor`) — checks node, manifest, port (and registry on Windows), prints recent log. It also runs a **path-drift check**: if the manifest's `path` resolves outside the current `native-host/` directory (the classic "user moved the project dir" failure — Chrome silently launches a stale wrapper from the old location), doctor fails with the exact re-install command, and its wrapper smoke test invokes the wrapper the manifest *actually* points at, not just the current-dir launcher.
-3. `tail -f <log-file>` (or `Get-Content -Wait` on Windows) — watch the host's view of what Chrome is sending.
-4. `node host.js --doctor` — last 15 log lines from the host's perspective.
+**Migration safety net:** `scrapewright doctor` and `scrapewright install` detect and remove any legacy Native Messaging artifacts (manifest JSON on Linux/macOS, registry key on Windows) via `native-host/lib/migration.js`. Always prints a one-line notice — never silent.
 
-The host writes structured logs (ISO timestamp + level + message + JSON fields) to both stderr and the log file. The log file is the lifeline when Chrome launches the host — stderr goes nowhere visible in that mode. A synchronous boot trap at the top of `host.js` catches crashes *before* the logger initializes and writes them to `startup-error.log`, so the opaque "Native host has exited" message always has a real stack trace somewhere on disk.
+**Diagnostic order for connection failures:**
+1. **Extension options page** → Host Status card. Red badge = host unreachable.
+2. `./bin/scrapewright status` — service installed? `/health` reachable?
+3. `./bin/scrapewright doctor` — full diagnostics (service, host, migration state, port match).
+4. `./bin/scrapewright logs -f` — host's view of incoming requests.
 
-The background service worker tracks `nativeState` (mode, lastError, connected/disconnected timestamps, reconnect attempts) in `chrome.storage.local`, updated at every connection transition. The options page polls `GET_NATIVE_STATUS` every 3 seconds to reflect this state. `RECONNECT_NATIVE` resets the polling flag and port, then calls `initCommunication()` again.
+The host writes structured logs (ISO timestamp + level + message + JSON fields) to both stderr and the log file. The log file is the lifeline when the OS service supervisor launches the host — stderr goes to the journal/launchd log. A synchronous boot trap at the top of `host.js` catches crashes *before* the logger initializes and writes them to `startup-error.log`.
 
-**Extension-ID auto-detection** (`native-host/lib/detect-id.js`): `./bin/scrapewright setup --auto` and `./bin/scrapewright id` avoid making the user copy the extension ID from `chrome://extensions/`. The detector reads `<chrome-user-data>/<profile>/Secure Preferences` (not `Default/Preferences`, which is empty for unpacked extensions), filters `extensions.settings` to `location===4` (unpacked), reads each candidate's `manifest.json` from its `path`, and matches on name `"Scrapewright"`. Unpacked entries have `manifest:null` inline, hence the on-disk readback. A LevelDB liveness fallback (`Local Extension Settings/<id>/*.log|*.ldb` containing `nativeState`/`executionLogs`) confirms which candidate is actually active. Pure Node `fs` — no Chrome runtime — so it's safe to require from the CLI and tests.
+The background service worker tracks `nativeState` (mode, lastError, connected/disconnected timestamps, reconnect attempts) in `chrome.storage.local`, updated at every connection transition. `mode` is `'polling'` (extension connected via long-poll) or `'disconnected'`; the legacy `'native'` value is migrated to `'polling'` on load. The options page polls `GET_NATIVE_STATUS` every 3 seconds. `RECONNECT_NATIVE` resets the polling flag and calls `initCommunication()` again.
 
 ## High-Level Architecture
 
-### Two-Process Design + dual transport
+### Two-Process Design
 
 ```
 External Program
       |
       | HTTP POST /api/v1/services/{name}/execute   (X-API-Key header)
       v
-+-------------+   Native Messaging (stdin/stdout,    +------------------+
-|  host.js    |   length-prefixed JSON)   OR         | background.js    |
-|  (Node.js   | <====== HTTP long-poll fallback =====| (Service Worker) |
-|   HTTP srv) |   /extension/poll + /extension/resp  +--------+---------+
++-------------+   HTTP long-polling                 +------------------+
+|  host.js    | <=================================> | background.js    |
+|  (Node.js   |   /api/v1/extension/poll            | (Service Worker) |
+|   HTTP srv) |   /api/v1/extension/response        +--------+---------+
 +-------------+                                             |
                                                     chrome.tabs / chrome.scripting
                                                     / offscreen messaging
@@ -123,13 +109,13 @@ External Program
                                                   +------------------+
 ```
 
-1. **Native Host** (`native-host/host.js`): HTTP server (default `:8765`, `SCRAPEWRIGHT_PORT`/`--port=`) that forwards requests to the extension. Uses `lib/native-messaging.js` for length-prefixed JSON over stdin/stdout. Authenticates external requests with `X-API-Key` → `SCRAPEWRIGHT_API_KEY` env (default `dev-key`).
+1. **Host** (`native-host/host.js`): HTTP server (default `:8765`, `SCRAPEWRIGHT_PORT`/`--port=`) that forwards requests to the extension via HTTP long-polling (`GET /api/v1/extension/poll` for delivery, `POST /api/v1/extension/response` for replies). Authenticates external requests with `X-API-Key` → `SCRAPEWRIGHT_API_KEY` env (default `dev-key`).
 2. **Background** (`extension/background.js`): Service Worker. Owns the `ExecutionQueue` that serializes all service calls. Orchestrates scraping via `StepOrchestrator` (step graph), opens tabs, runs steps, retries on failure, AI auto-fix. Maintains the transport to the host.
 3. **Offscreen** (`extension/offscreen.js` + `lib/offscreen-executor.js`): The **primary** script execution surface. `OffscreenExecutor` ensures a single offscreen document exists (`chrome.offscreen`), which itself hosts the sandbox iframe and a `tabIdStack` so concurrent-looking DOM requests route back to the originating tab.
 4. **Sandbox** (`extension/sandbox.html` + `sandbox.js`): Declared sandbox page in `manifest.json`. The only place where `new Function()`/`eval()` is allowed (MV3 CSP). Scripts execute here; `$` API calls are forwarded up to the offscreen doc, then to background, then to the content script of the target tab.
 5. **Content Script** (`extension/content-script.js`): Injected into all pages (`document_idle`). Performs the actual DOM operations, element annotation, and DOM snapshot capture. Its script-execution path is now **legacy** — kept only for `$openTab` (see below).
 
-**Dual transport.** `background.js: initCommunication()` first probes `GET /api/v1/extension/poll` over HTTP; if the host is reachable that way it uses **HTTP long-polling** (extension pulls requests via `poll`, replies via `POST /api/v1/extension/response`). It also calls `connectNativeHost()` to establish the native-messaging port. The two paths are alternatives — long-polling is what makes "manually start `node host.js`" work without Chrome spawning the host. The options-page status card shows which mode is active.
+**HTTP-only transport.** `background.js: initCommunication()` probes `GET /api/v1/extension/poll` over HTTP; if the host is reachable, it uses **HTTP long-polling** (extension pulls requests via `poll`, replies via `POST /api/v1/extension/response`). There is no other transport. The host runs as an OS service (Linux systemd / macOS launchd / Windows scheduled task) installed by `./bin/scrapewright install`, so it's always available when the user is logged in.
 
 ### Step Graph model (the core mental model)
 
@@ -216,9 +202,9 @@ Snapshots come from `lib/dom-snapshot.js`, cleaned/sanitized for the LLM by `lib
 
 **MV3 CSP Compliance:** No `eval`/`new Function` in content scripts or service workers. All dynamic script execution must go through the sandbox page (now reached via the offscreen document). Never add inline event handlers (`onclick`) in HTML — use `addEventListener` in JS.
 
-**Native Messaging Install:** Run `./install-host.sh <extension-id>` (macOS/Linux) or `.\install-host.ps1 <extension-id>` (Windows) from `native-host/`. Each script writes a wrapper using the absolute path to node, plus the manifest registration (JSON file on macOS/Linux, registry key on Windows). Wildcards (`chrome-extension://*/`) are rejected by Chrome — get the exact extension ID from `chrome://extensions/` after loading the unpacked extension. Run `--doctor` (`-Doctor` on Windows) whenever connection fails — it surfaces node-version mismatches, port conflicts, missing manifest fields, missing registry keys (Windows only), and the last log entries.
+**Service install:** Run `./bin/scrapewright install` (Linux/macOS) or `.\bin\scrapewright.cmd install` (Windows). The CLI writes a per-OS service file (systemd unit / launchd plist / scheduled task) at install time, embedding the absolute node path, host.js path, and port. Custom port: `scrapewright install --port=N`. Run `scrapewright doctor` whenever connection fails — it surfaces service-not-installed, host-unreachable, port-mismatch, and legacy-artifact states.
 
-**Cross-Platform:** Windows uses `.cmd` wrapper + registry key (`HKCU`). Linux/macOS use JSON manifest in the NativeMessagingHosts dir.
+**Cross-Platform:** Linux uses systemd user unit + `loginctl enable-linger`. macOS uses launchd LaunchAgent. Windows uses scheduled task at logon (no admin required). All three are per-user scope.
 
 **Concurrency:** Only one service execution runs at a time. The `ExecutionQueue` in `background.js` serializes all calls. This is required because the offscreen document hosts a single shared sandbox iframe and `tabIdStack` — concurrent executions would route DOM requests to the wrong tab. For higher throughput, scale horizontally: run multiple host instances on different ports behind a load balancer (`deploy/scrapewright-manager.sh`, `deploy/Dockerfile`, `deploy/k8s.yaml`) — see README "Distributed deployment".
 
