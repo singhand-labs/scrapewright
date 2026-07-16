@@ -545,6 +545,16 @@ All `$` APIs automatically search the main document and same-origin iframes. The
 
 `$list` collects elements across all documents and returns them merged.
 
+**Iframe-prefixed selectors.** When a page has multiple iframes with similar markup (e.g. one iframe per tab on government / bid / portal sites), a plain selector is ambiguous. Pin a selector to a specific iframe with the `iframe<css>::<inner>` syntax:
+
+```
+iframe#iframe1::p > u                       // element inside iframe#iframe1
+iframe[src="content.html"]::p.MsoNormal      // resolve iframe by attribute
+iframe#iframe1::iframe#iframe2::#deep        // nested iframes (chain the prefix)
+```
+
+The `<css>` part is a CSS selector for the `<iframe>` element evaluated in the parent document; `<inner>` is a normal CSS selector evaluated inside that iframe's document. Works in every `$` API. `generateSelector` / `getDomPath` (used by the annotation recorder) emit this prefix automatically when the user picks an element inside an iframe, so annotated selectors are deterministic at extraction time. The shared logic lives in `extension/lib/iframe-selector.js` (loaded as a content script before `content-script.js`).
+
 ## 8. Configuration & Deployment
 
 ### 8.1 Environment Variables

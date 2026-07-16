@@ -1,6 +1,12 @@
 // NOTE: This module is used for Node.js testing. The production implementation
-// lives inline in extension/content-script.js (getCompressedSnapshot, getElementFullHtml).
-// Keep both implementations in sync.
+// lives inline in extension/content-script.js (getCompressedSnapshot,
+// getElementFullHtml). Keep both implementations in sync.
+//
+// Iframe-aware selector support is shared with lib/iframe-selector.js, which
+// is loaded as a content script before content-script.js (see manifest.json).
+// We require it here so the test copy exercises the same logic.
+
+const IframeSelector = require('./iframe-selector');
 
 function getCompressedSnapshot() {
   if (!document || !document.documentElement || !document.body) {
@@ -8,7 +14,11 @@ function getCompressedSnapshot() {
   }
 
   const REMOVE_TAGS = new Set([
-    'SCRIPT', 'STYLE', 'LINK', 'IFRAME', 'IMG', 'VIDEO', 'AUDIO', 'CANVAS', 'SVG', 'NOSCRIPT'
+    'SCRIPT', 'STYLE', 'LINK', 'IMG', 'VIDEO', 'AUDIO', 'CANVAS', 'SVG', 'NOSCRIPT'
+    // NOTE: IFRAME is intentionally NOT in this set. Same-origin iframe
+    // content is inlined into the snapshot so the LLM can reason about it
+    // (matches the production implementation in content-script.js). Cross-
+    // origin iframes are replaced with a placeholder.
   ]);
   const CONTAINER_TAGS = new Set([
     'DIV', 'SPAN', 'P', 'SECTION', 'ARTICLE', 'HEADER', 'FOOTER', 'NAV', 'ASIDE', 'MAIN'
@@ -75,6 +85,24 @@ function getCompressedSnapshot() {
     const tag = node.tagName.toLowerCase();
     const attrs = buildAttrs(node);
 
+    // Inline same-origin iframe content so the LLM can write selectors
+    // against it. Without this, every selector the LLM writes that targets
+    // iframe content returns no match in the snapshot.
+    if (tag === 'iframe') {
+      try {
+        const doc = node.contentDocument;
+        if (doc && doc.body) {
+          const parts = [];
+          for (const child of doc.body.childNodes) {
+            const compressed = walk(child, depth + 1);
+            if (compressed) parts.push(compressed);
+          }
+          return parts.length ? `<div data-iframe>${parts.join('')}</div>` : '';
+        }
+      } catch (e) { /* cross-origin */ }
+      return '';
+    }
+
     const parts = [];
     for (const child of node.childNodes) {
       parts.push(walk(child, depth + 1));
@@ -101,17 +129,20 @@ function getCompressedSnapshot() {
 }
 
 function getElementFullHtml(selector) {
+  // Iframe-prefixed selectors (iframe#x::inner) and legacy selectors that
+  // resolve inside same-origin iframes both go through querySelectorDeep.
+  // Required for the wizard research phase: when LLM candidates target iframe
+  // elements, the LLM needs the full HTML to confirm or revise them.
   let el;
   try {
-    el = document.querySelector(selector);
+    const found = IframeSelector.querySelectorDeep(document, selector);
+    el = found ? found.element : null;
   } catch (e) {
-    // Invalid CSS selector (e.g., IDs containing colons like `radix-:rfm:`
+    // Invalid CSS selector (e.g. IDs containing colons like `radix-:rfm:`
     // that the LLM sometimes copies verbatim from the page snapshot).
-    // Without this guard, querySelector throws synchronously and crashes
-    // the GET_ELEMENTS_HTML listener, surfacing in the wizard as a generic
-    // "Error message from listener couldn't be parsed or was empty."
     return { selector, found: false, error: 'INVALID_SELECTOR: ' + (e && e.message ? e.message : String(e)) };
   }
+
   if (!el) {
     return { selector, found: false };
   }

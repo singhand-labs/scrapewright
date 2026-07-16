@@ -212,10 +212,20 @@
   }
 
   // ===== Deep DOM Search (main doc + same-origin iframes) =====
+  // Delegates to lib/iframe-selector.js (loaded as a content script before
+  // content-script.js — see manifest.json). That library understands the
+  // `iframe<css>::<inner-css>` selector syntax used to target elements inside
+  // a specific iframe deterministically. Without a prefix, both functions
+  // preserve the legacy "search top doc then iterate same-origin iframes"
+  // behavior so existing services keep working.
+  const IframeSelectorLib = (typeof window !== 'undefined' && window.IframeSelector) || null;
+
   function querySelectorDeep(sel) {
+    if (IframeSelectorLib) {
+      return IframeSelectorLib.querySelectorDeep(document, sel);
+    }
     let el = document.querySelector(sel);
     if (el) return { element: el, doc: document };
-
     const iframes = document.querySelectorAll('iframe');
     for (const iframe of iframes) {
       try {
@@ -230,6 +240,9 @@
   }
 
   function querySelectorAllDeep(sel) {
+    if (IframeSelectorLib) {
+      return IframeSelectorLib.querySelectorAllDeep(document, sel);
+    }
     const results = [];
     function collectFromDoc(doc) {
       doc.querySelectorAll(sel).forEach(el => results.push(el));
@@ -449,29 +462,24 @@
   }
 
   function domCount(sel) {
-    let count = document.querySelectorAll(sel).length;
-    document.querySelectorAll('iframe').forEach(iframe => {
-      try {
-        const doc = iframe.contentDocument;
-        if (doc) count += doc.querySelectorAll(sel).length;
-      } catch { /* cross-origin */ }
-    });
+    let count;
+    try {
+      count = querySelectorAllDeep(sel).length;
+    } catch (err) {
+      sendDebugLog('error', 'content-script', 'domCount invalid selector', { selector: sel, error: err.message });
+      count = 0;
+    }
     sendDebugLog('info', 'content-script', 'domCount result', { selector: sel, count });
     return count;
   }
 
   function domList(sel) {
     const results = [];
-    function collectFromDoc(doc) {
-      doc.querySelectorAll(sel).forEach(el => results.push(elToData(el)));
+    try {
+      querySelectorAllDeep(sel).forEach(el => results.push(elToData(el)));
+    } catch (err) {
+      sendDebugLog('error', 'content-script', 'domList invalid selector', { selector: sel, error: err.message });
     }
-    try { collectFromDoc(document); } catch {}
-    document.querySelectorAll('iframe').forEach(iframe => {
-      try {
-        const doc = iframe.contentDocument;
-        if (doc) collectFromDoc(doc);
-      } catch { /* cross-origin */ }
-    });
     sendDebugLog('info', 'content-script', 'domList result', { selector: sel, count: results.length });
     return results;
   }
@@ -811,7 +819,12 @@
     // element so the non-technical annotator visually confirms the pick.
     const elementLabel = document.createElement('div');
     elementLabel.setAttribute('data-cc-element-label', '');
-    const rect = target.getBoundingClientRect?.() || {};
+    const rawRect = target.getBoundingClientRect?.() || {};
+    // target's rect is iframe-viewport-relative when the click landed inside
+    // an iframe; translate to top-level viewport so the label and menu render
+    // at the right spot (they're appended to top-level document.body).
+    const rect = translateRectToTopLevel(target, rawRect);
+    const coords = clientCoordsToTopLevel(target, e.clientX, e.clientY);
     elementLabel.style.cssText =
       'position:fixed; z-index:999998; max-width:260px; padding:3px 7px;' +
       'background:#111827; color:#fff; font:12px/1.4 sans-serif;' +
@@ -871,7 +884,7 @@
         <button data-type="value" style="display:block; width:100%; margin:2px 0; padding:6px 8px; text-align:left; cursor:pointer; border:1px solid #bbf7d0; background:#dcfce7; border-radius:3px;">value — field value (cell)</button>
         <button data-type="cancel" style="display:block; width:100%; margin:8px 0 0; padding:6px 8px; text-align:left; cursor:pointer; border:1px solid #e5e7eb; background:white; border-radius:3px;">Cancel</button>
       `;
-      positionMenu(menu, e.clientX, e.clientY);
+      positionMenu(menu, coords.x, coords.y);
     }
 
     // Build a labelled <select> from a list of {value,label} options.
@@ -970,7 +983,7 @@
       btnRow.appendChild(mkBtn('Back', 'back'));
       btnRow.appendChild(mkBtn('Cancel', 'cancel'));
       menu.appendChild(btnRow);
-      positionMenu(menu, e.clientX, e.clientY);
+      positionMenu(menu, coords.x, coords.y);
     }
 
     function commit(type) {
@@ -1070,7 +1083,7 @@
     });
 
     renderStep1();
-    positionMenu(menu, e.clientX, e.clientY);
+    positionMenu(menu, coords.x, coords.y);
 
     sendDebugLog('info', 'content-script', 'annotation menu built', {
       selector,
@@ -1090,6 +1103,45 @@
 
   function onKeyDown(e) {
     if (e.key === 'Escape') stopAnnotationMode();
+  }
+
+  // Translate a getBoundingClientRect() (iframe-viewport-relative when the
+  // target lives inside an iframe) into top-level-viewport coordinates by
+  // walking up the iframe chain and adding each iframe element's offset.
+  // Without this, the annotation menu / element label render at the wrong
+  // position when the user clicks inside an iframe — the click's clientX/Y
+  // and the target's rect are both iframe-viewport-relative, but the menu
+  // is appended to the top-level document.body.
+  function translateRectToTopLevel(target, rect) {
+    if (!target || !rect) return rect || {};
+    let ownerDoc = target.ownerDocument;
+    if (!ownerDoc || ownerDoc === document) return rect;
+    let top = rect.top, left = rect.left, bottom = rect.bottom, right = rect.right;
+    while (ownerDoc && ownerDoc !== document) {
+      const parentWin = ownerDoc.defaultView;
+      if (!parentWin || parentWin === parentWin.parent) break;
+      const parentDoc = parentWin.parent.document;
+      let iframeEl = null;
+      try {
+        const candidates = parentDoc.querySelectorAll('iframe');
+        for (const c of candidates) {
+          if (c.contentWindow === parentWin) { iframeEl = c; break; }
+        }
+      } catch (e) { break; }
+      if (!iframeEl) break;
+      const offset = iframeEl.getBoundingClientRect();
+      top += offset.top;
+      left += offset.left;
+      bottom += offset.top;
+      right += offset.left;
+      ownerDoc = parentDoc;
+    }
+    return { top, left, bottom, right, width: rect.width, height: rect.height };
+  }
+
+  function clientCoordsToTopLevel(target, clientX, clientY) {
+    const rect = translateRectToTopLevel(target, { top: clientY, left: clientX, bottom: clientY, right: clientX, width: 0, height: 0 });
+    return { x: rect.left, y: rect.top };
   }
 
   // Semantic clickable elements a user typically wants to annotate. When a
@@ -1158,31 +1210,48 @@
   }
 
   function generateSelector(el) {
-    if (el.id) return `#${el.id}`;
-    const path = [];
-    let current = el;
-    while (current && current !== document.body) {
-      let selector = current.tagName.toLowerCase();
-      if (current.className) {
-        const classes = classStr(current).split(' ').filter(c => c).slice(0, 2);
-        if (classes.length) selector += '.' + classes.join('.');
+    // If the element lives inside one or more same-origin iframes, prefix the
+    // selector with `iframe<css>::...` for each iframe in the chain. Without
+    // this prefix, querySelectorDeep would fall back to "search every iframe"
+    // which is non-deterministic when multiple iframes have similar content
+    // (e.g. the 5 iframe tabs on government bidding pages).
+    const iframeChain = IframeSelectorLib ? IframeSelectorLib.buildIframeChain(el, document) : [];
+    const ownerDoc = el.ownerDocument || document;
+    const ownerBody = ownerDoc.body || ownerDoc.documentElement;
+    let inner;
+    if (el.id) {
+      inner = `#${el.id}`;
+    } else {
+      const path = [];
+      let current = el;
+      while (current && current !== ownerBody) {
+        let selector = current.tagName.toLowerCase();
+        if (current.className) {
+          const classes = classStr(current).split(' ').filter(c => c).slice(0, 2);
+          if (classes.length) selector += '.' + classes.join('.');
+        }
+        const siblings = Array.from(current.parentNode?.children || []);
+        const sameTag = siblings.filter(s => s.tagName === current.tagName);
+        if (sameTag.length > 1) {
+          const index = sameTag.indexOf(current) + 1;
+          selector += `:nth-of-type(${index})`;
+        }
+        path.unshift(selector);
+        current = current.parentNode;
       }
-      const siblings = Array.from(current.parentNode?.children || []);
-      const sameTag = siblings.filter(s => s.tagName === current.tagName);
-      if (sameTag.length > 1) {
-        const index = sameTag.indexOf(current) + 1;
-        selector += `:nth-of-type(${index})`;
-      }
-      path.unshift(selector);
-      current = current.parentNode;
+      inner = path.join(' > ');
     }
-    return path.join(' > ');
+    if (iframeChain.length === 0) return inner;
+    return IframeSelectorLib.formatIframeSelector(iframeChain, inner);
   }
 
   function getDomPath(el) {
+    const iframeChain = IframeSelectorLib ? IframeSelectorLib.buildIframeChain(el, document) : [];
+    const ownerDoc = el.ownerDocument || document;
+    const ownerBody = ownerDoc.body || ownerDoc.documentElement;
     const parts = [];
     let current = el;
-    while (current && current !== document.body && current.parentElement) {
+    while (current && current !== ownerBody && current.parentElement) {
       let seg = current.tagName.toLowerCase();
       if (current.id) {
         seg += '#' + current.id;
@@ -1201,7 +1270,9 @@
       parts.unshift(seg);
       current = current.parentElement;
     }
-    return parts.join(' > ');
+    const inner = parts.join(' > ');
+    if (iframeChain.length === 0) return inner;
+    return IframeSelectorLib.formatIframeSelector(iframeChain, inner);
   }
 
   // ===== DOM Snapshot =====
@@ -1365,9 +1436,16 @@
   }
 
   function getElementFullHtml(selector) {
+    // Use querySelectorDeep so iframe-prefixed selectors (e.g.
+    // `iframe#zbggframe1::p > u`) and legacy selectors that match elements
+    // inside same-origin iframes both resolve. The wizard's research phase
+    // calls GET_ELEMENT_HTML with LLM candidate selectors; without deep
+    // traversal, every iframe-targeted candidate returns found:false and the
+    // LLM never sees the full HTML needed to confirm or revise selectors.
     let el;
     try {
-      el = document.querySelector(selector);
+      const found = querySelectorDeep(selector);
+      el = found ? found.element : null;
     } catch (e) {
       // Invalid CSS selector (e.g., IDs containing colons like `radix-:rfm:`
       // that the LLM sometimes copies verbatim from the page snapshot).

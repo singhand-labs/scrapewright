@@ -543,6 +543,16 @@ interface ElementData {
 
 `$list` 在所有文档中收集元素并合并返回。
 
+**带 iframe 前缀的选择器。** 当页面有多个结构相似的 iframe（如政府/招投标/门户类网站每个 Tab 一个 iframe）时，普通选择器存在歧义。用 `iframe<css>::<inner>` 语法把选择器固定到某个具体 iframe：
+
+```
+iframe#iframe1::p > u                       // iframe#iframe1 内的元素
+iframe[src="content.html"]::p.MsoNormal      // 通过属性定位 iframe
+iframe#iframe1::iframe#iframe2::#deep        // 嵌套 iframe（前缀链式）
+```
+
+`<css>` 部分是在父文档中匹配 `<iframe>` 元素的 CSS 选择器；`<inner>` 是在该 iframe 文档中执行的普通 CSS 选择器。所有 `$` API 都支持。标注录制器（`generateSelector` / `getDomPath`）在用户选中 iframe 内的元素时会自动加上此前缀，从而保证标注得到的选择器在抽取时确定地命中正确 iframe。共享逻辑位于 `extension/lib/iframe-selector.js`（作为 content script 在 `content-script.js` 之前加载）。
+
 ## 8. 配置与部署
 
 ### 8.1 环境变量
