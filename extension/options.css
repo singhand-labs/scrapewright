@@ -147,8 +147,7 @@ button { padding: 8px 16px; cursor: pointer; }
   letter-spacing: 0.5px;
 }
 
-.native-badge.native    { background: #10b981; }  /* green — connected via native messaging */
-.native-badge.polling   { background: #f59e0b; }  /* amber — degraded, long-poll fallback */
+.native-badge.connected    { background: #10b981; }  /* green — host reachable at configured port */
 .native-badge.disconnected { background: #ef4444; } /* red — no host reachable */
 .native-badge.unknown   { background: #6b7280; }  /* gray — haven't checked yet */
 
@@ -205,3 +204,7 @@ button { padding: 8px 16px; cursor: pointer; }
   color: #374151;
   border: 1px solid #d1d5db;
 }
+
+.connection-result { margin-left: 8px; font-weight: 600; }
+.connection-result.ok { color: #166534; }
+.connection-result.fail { color: #991b1b; }

@@ -11,7 +11,7 @@
     <div id="toast" class="toast hidden"></div>
 
     <section class="native-host-status">
-      <h2>Native Host Status</h2>
+      <h2>Host Status</h2>
       <div class="native-status-row">
         <span id="nativeStatusBadge" class="native-badge unknown">Checking…</span>
         <span id="nativeModeDesc" class="native-mode-desc"></span>
@@ -31,7 +31,7 @@
         <button id="nativeReconnect">Reconnect</button>
         <button id="nativeCopyDiag" class="btn-secondary">Copy Diagnostics</button>
       </div>
-      <p class="hint">The Native Host bridges external programs to this extension. If the badge is red, Chrome can't launch the host — copy diagnostics and check the log file.</p>
+      <p class="hint">The host runs as an OS background service (systemd / launchd / scheduled task). If the badge is red, the host isn't reachable — copy diagnostics or run <code>scrapewright doctor</code>.</p>
     </section>
 
     <section class="services">
@@ -86,7 +86,9 @@
       <h3>Server Configuration</h3>
       <input type="number" id="serverPort" placeholder="8765" min="1" max="65535" />
       <button id="savePort">Save Port</button>
-      <p class="hint">Changes apply immediately via Native Messaging.</p>
+      <button id="testConnection" class="btn-secondary">Test Connection</button>
+      <span id="connectionResult" class="connection-result"></span>
+      <p class="hint">Host runs as an OS service. Port must match what <code>scrapewright install --port=N</code> was given.</p>
     </div>
   </div>
 
