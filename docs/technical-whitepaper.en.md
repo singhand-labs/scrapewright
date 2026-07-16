@@ -1,10 +1,10 @@
 # Scrapewright — System Technical Whitepaper
 
-> Version: 0.1.0 | Last updated: 2026-06-09 · [中文版](./technical-whitepaper.md)
+> Version: 0.1.0 | Last updated: 2026-07-16 · [中文版](./technical-whitepaper.md)
 
 ## 1. System Overview
 
-Scrapewright is an LLM-driven web data extraction platform composed of a Chrome Extension (Manifest V3) and a Node.js Native Messaging Host. Users describe a scraping need in natural language; an LLM automatically analyzes the target page structure, generates a scraping script, executes it inside a real browser, and returns structured data.
+Scrapewright is an LLM-driven web data extraction platform composed of a Chrome Extension (Manifest V3) and a Node.js background service (HTTP server). Users describe a scraping need in natural language; an LLM automatically analyzes the target page structure, generates a scraping script, executes it inside a real browser, and returns structured data.
 
 ### Design Goals
 
@@ -20,7 +20,7 @@ Scrapewright is an LLM-driven web data extraction platform composed of a Chrome 
 
 - Chrome Extension Manifest V3 (Service Worker + Offscreen API + sandboxed iframe)
 - Vanilla JavaScript (no front-end framework dependency)
-- Node.js >= 18 (Native Messaging Host)
+- Node.js >= 18 (HTTP background service)
 - OpenAI-compatible API (supports OpenAI, Moonshot, Kimi, Anthropic, GLM)
 
 ## 2. System Architecture
@@ -34,19 +34,18 @@ Scrapewright is an LLM-driven web data extraction platform composed of a Chrome 
 └────────────────────────────┬─────────────────────────────────────┘
                              │
 ┌────────────────────────────▼─────────────────────────────────────┐
-│                   Native Messaging Host                          │
-│                     (Node.js process)                            │
+│                   HTTP Host (Node.js background service)          │
 │                                                                  │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐   │
-│  │ HTTP Server  │  │ Native Msg   │  │ Extension Poll       │   │
-│  │ (API router) │  │ (stdin/out)  │  │ (long-poll channel)  │   │
-│  └──────┬───────┘  └──────┬───────┘  └──────────┬───────────┘   │
-│         └─────────────────┼──────────────────────┘               │
-│                           │                                      │
+│  ┌──────────────┐  ┌──────────────────────┐                      │
+│  │ HTTP Server  │  │ Extension Poll       │                      │
+│  │ (API router) │  │ (long-poll channel)  │                      │
+│  └──────┬───────┘  └──────────┬───────────┘                      │
+│         └─────────────────┬────┘                                  │
+│                           │                                       │
 │              sendToExtension() — unified send                    │
 │              handleIncomingMessage() — unified receive           │
 └───────────────────────────┼──────────────────────────────────────┘
-                            │ Chrome Native Messaging / HTTP long-poll
+                            │ HTTP long-polling (both directions)
 ┌───────────────────────────▼──────────────────────────────────────┐
 │                   Chrome Extension (Manifest V3)                 │
 │                                                                  │
@@ -54,7 +53,7 @@ Scrapewright is an LLM-driven web data extraction platform composed of a Chrome 
 │  │              background.js (Service Worker)                  ││
 │  │  ExecutionQueue ── ServiceRegistry ── LLMClient              ││
 │  │  StepOrchestrator ── OffscreenExecutor ── AutoFix            ││
-│  │  LongPollingClient ── NativeMessagingPort                    ││
+│  │  LongPollingClient                                            ││
 │  └────────┬──────────────────────┬──────────────────────────────┘│
 │           │                      │                               │
 │  chrome.tabs.sendMessage   chrome.runtime.sendMessage            │
@@ -72,9 +71,14 @@ Scrapewright is an LLM-driven web data extraction platform composed of a Chrome 
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-### 2.2 Two Communication Channels
+### 2.2 Single Communication Channel (HTTP long-polling)
 
-Two channels connect the Host and the extension; the active one is chosen automatically:
+The extension and host communicate exclusively over HTTP long-polling:
+
+- The extension issues `GET /api/v1/extension/poll` and holds the connection until the host has a request to deliver.
+- The extension replies via `POST /api/v1/extension/response`.
+
+The host runs as an OS background service (systemd user unit / launchd LaunchAgent / Windows scheduled task). The extension only needs to know the port the host listens on (default 8765; configurable via `chrome.storage.local` and `scrapewright install --port=N`).
 
 ```
 External program
@@ -82,38 +86,27 @@ External program
     | HTTP POST /api/v1/services/{name}/execute
     v
 +------------------+                          +------------------+
-|  host.js         |  Native Messaging (stdin |  background.js   |
-|  (Node.js)       |  /stdout, Chrome-launched)| (Service Worker)|
-|                  |                          +--------+---------+
-|  or HTTP long-   |                          |                 |
-|  polling:        | <---- HTTP long-poll ----|  Auto-fallback  |
-|  /extension/poll |                          |                 |
-|  /extension/resp |                          |                 |
-+------------------+                          +--------+---------+
-                                                       |
-                                                       | chrome.tabs.sendMessage
-                                                       v
-                                              +------------------+
-                                              | content-script.js|
-                                              +--------+---------+
-                                                       |
-                                                       | postMessage
-                                                       v
-                                              +------------------+
-                                              | sandbox.html     |
-                                              |  (eval allowed)  |
-                                              +------------------+
+|  host.js         |   HTTP long-polling      |  background.js   |
+|  (Node.js        | <-----------------------> |  (Service Worker)|
+|   background     |  /extension/poll          +--------+---------+
+|   service)       |  /extension/response      |                 |
++------------------+                           |                 |
+                                               v chrome.tabs.sendMessage
+                                               +------------------+
+                                               | content-script.js|
+                                               +--------+---------+
+                                                        |
+                                                        | postMessage
+                                                        v
+                                               +------------------+
+                                               | sandbox.html     |
+                                               |  (eval allowed)  |
+                                               +------------------+
 ```
 
-| Channel | Trigger | Direction | Protocol |
-|---------|---------|-----------|----------|
-| Native Messaging | Chrome auto-launches the Host | stdin/stdout pipe | length-prefixed JSON |
-| HTTP long-poll | Host started manually | extension polls actively | HTTP GET/POST |
+**Why we dropped Native Messaging:** the MV3 service worker is killed after ~5 minutes of idleness, and `chrome.runtime.connectNative` does not reliably reconnect on worker restart. Chrome's own version updates invalidate live native connections. On macOS, Homebrew upgrades can shift `/usr/local/bin/node`, silently breaking the absolute path embedded in the manifest. Length-prefixed JSON framing drifts out of sync after long uptime, leaving the port in a zombie state. HTTP is stateless — every `fetch()` is a fresh request, naturally tolerant of transient failure, debuggable with `curl`, and works identically for local-dev and distributed-server deployments.
 
-**Selection logic** (`background.js:initCommunication`):
-1. Probe the HTTP port first (3s timeout) — if a Host is already running, use long-polling.
-2. HTTP unavailable → try Native Messaging (`chrome.runtime.connectNative`).
-3. Both fail → reconnect on a timer (25s keepalive alarm).
+**Connection logic** (`background.js:initCommunication`): probe `GET /api/v1/extension/poll` → if reachable, enter long-polling mode; if not, mark disconnected and let the keepalive heartbeat (via `chrome.alarms`, roughly every 24s) retry automatically.
 
 ### 2.3 Dual-Sandbox Design
 
@@ -148,12 +141,16 @@ extension/                # Chrome Extension (Manifest V3)
     script-executor.js    # Legacy executor (kept for $openTab compatibility)
   test/                   # Extension unit tests
 
-native-host/              # Node.js Native Messaging Host
-  host.js                 # HTTP server — Native Messaging + HTTP long-polling dual transport
+native-host/              # Node.js HTTP background service
+  host.js                 # HTTP server — receives external API calls and forwards them to the extension via long-polling
   lib/
-    native-messaging.js   # Length-prefixed JSON codec (UTF-8 safe)
-  install-host.sh         # Linux / macOS installer
-  install-host.ps1        # Windows installer
+    service-install/      # OS service installers (systemd / launchd / scheduled task)
+      locate-node.js      # Resolve absolute path to node (PATH-independent)
+      linux.js            # Write ~/.config/systemd/user/scrapewright.service
+      macos.js            # Write ~/Library/LaunchAgents/com.scrapewright.host.plist
+      windows.js          # Register scheduled task ScrapewrightHost (PowerShell)
+      index.js            # Dispatch by process.platform
+    migration.js          # Detect and clean up legacy Native Messaging artifacts (manifest / registry)
   host.cmd                # Windows launcher wrapper
   test/                   # Tests
 ```
@@ -164,7 +161,7 @@ Chrome Manifest V3 imposes several hard constraints that directly shaped the des
 
 | Constraint | Impact | Mitigation |
 |------------|--------|------------|
-| Service worker cannot run an HTTP server | Extension can't expose an API directly | Add a Node.js Native Messaging Host as the HTTP bridge |
+| Service worker cannot run an HTTP server | Extension can't expose an API directly | Introduce a Node.js HTTP background service as the bridge (run as an OS service) |
 | `eval` / `new Function` forbidden in service worker and content script | Cannot execute user scripts directly | Create a sandbox iframe (declared in manifest) and run dynamic code there |
 | Each extension can have only 1 offscreen document | Script execution surface is a singleton | Serialize execution through ExecutionQueue; multi-instance deployment sidesteps the limit |
 | Service worker can be killed after ~30s idle | Long-poll loops may break | `chrome.alarms` heartbeat every 24s, auto-reconnect on disconnect |
@@ -385,22 +382,33 @@ Two snapshot modes:
 - Removes scripts, styles, hidden elements, navigation/sidebar noise.
 - Attribute values are truncated to 200 characters.
 
-### 4.7 Native Messaging
+### 4.7 service-install (OS service installer)
 
-**File:** `native-host/lib/native-messaging.js`
+**File:** `native-host/lib/service-install/`
 
-Chrome Native Messaging protocol implementation:
+Provides three OS-specific service installers — Linux (systemd user unit), macOS (launchd LaunchAgent), and Windows (scheduled task) — invoked by the `scrapewright install` subcommand.
 
-```
-Encoding: 4-byte little-endian length + UTF-8 JSON byte stream
-Decoding: state buffer + frame splitting + JSON.parse
-```
+- `locate-node.js` — resolves the absolute path to `node` (uses `process.execPath` directly), independent of PATH and therefore immune to the different PATH settings Chrome / systemd / osascript each impose.
+- `linux.js` — writes `~/.config/systemd/user/scrapewright.service`, calls `systemctl --user daemon-reload` + `systemctl --user enable --now scrapewright`, and runs `loginctl enable-linger <user>` so the user manager starts at boot (rather than waiting for first login). The unit sets `Restart=on-failure`, so the service comes back within ~3 seconds of a crash.
+- `macos.js` — writes `~/Library/LaunchAgents/com.scrapewright.host.plist`, calls `launchctl bootstrap gui/<uid> <plist>`. `RunAtLoad=true` + `KeepAlive=true` ensure launch at login and automatic restart on crash.
+- `windows.js` — registers scheduled task `ScrapewrightHost` via PowerShell `Register-ScheduledTask -Trigger New-ScheduledTaskTrigger -AtLogOn`, running as the current user with `-LogonType Interactive` (no admin / UAC required). Sets `RestartCount 3` + `RestartInterval` of 1 minute.
+- `index.js` — dispatches to `linux` / `macos` / `windows` by `process.platform`; unsupported platforms throw with a hint to use `scrapewright run` for foreground execution.
 
-**Defenses:**
-- A length field over 10MB is treated as corrupt; the buffer is discarded and reset.
-- On JSON.parse failure, the corrupt frame is skipped without interrupting subsequent messages.
+Each service file embeds three things at install time: the absolute path to `node`, the absolute path to `host.js`, and the port (written into `ExecStart` / `ProgramArguments` / `-Argument` as `--port=N`). So `scrapewright install --port=9123` pins the resulting service to port 9123. After install, the service auto-starts at user login; the OS supervisor restarts it within seconds of a crash; on logout/reboot it comes back at next login/boot.
 
-### 4.8 DebugLogger
+### 4.8 migration (migration safety net)
+
+**File:** `native-host/lib/migration.js`
+
+Detects and removes Native Messaging artifacts left by previous installs (manifest JSON files / Windows registry key). Called automatically by `scrapewright doctor` and `scrapewright install`, always with a one-line terminal notice — never silent.
+
+- `findLegacyArtifacts()` — probes the following locations:
+  - Linux: `~/.config/google-chrome/NativeMessagingHosts/com.scrapewright.host.json`
+  - macOS: `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.scrapewright.host.json`
+  - Windows: registry key `HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.scrapewright.host` (probed via `reg query`)
+- `removeLegacyArtifacts()` — deletes each file / calls `reg delete /f` to clear the registry key, returning the lists of files and keys actually removed (the caller prints the user-visible notice). Failures are best-effort skipped (e.g. a file held by another process) and never abort the main flow.
+
+### 4.9 DebugLogger
 
 **File:** `extension/lib/debug-logger.js`
 
@@ -477,19 +485,24 @@ GET  /jobs/{id}                → returns the current state immediately
 
 ### 6.3 Messaging Protocol
 
-Message format between the Host and the extension:
+The host and extension communicate bidirectionally over stateless HTTP long-polling:
+
+- **Request delivery:** `GET /api/v1/extension/poll` — the extension opens a long-poll. The host blocks on that connection until a request is pending, then returns the full request object. When the queue is empty it returns `204 No Content` on timeout, and the extension immediately issues the next poll.
+- **Response delivery:** `POST /api/v1/extension/response` — the extension POSTs the execution result (with `reqId`) to the host, which resolves the corresponding waiter by `reqId`.
+
+Request/response message format (HTTP JSON body):
 
 ```typescript
-// Request
+// Host → extension (poll response body)
 interface HostMessage {
   type: 'EXECUTE' | 'GET_JOB_STATUS' | 'GET_JOBS' | 'GET_SERVICES' | 'CANCEL_JOB';
-  reqId: number;        // request id
+  reqId: number;        // request id, used to match the response
   serviceName?: string;
   input?: object;
   jobId?: string;
 }
 
-// Response
+// Extension → host (response request body)
 interface ExtensionResponse {
   reqId: number;
   success: boolean;
@@ -499,6 +512,8 @@ interface ExtensionResponse {
   error?: string;
 }
 ```
+
+Because each HTTP request is independent, there is no connection "establish / maintain / disconnect" state machine. A transient failure (service worker restart, network blip, Chrome version upgrade) takes down at most a single `fetch()`; the next retry recovers.
 
 ## 7. Scraping Script DSL
 
@@ -638,7 +653,7 @@ Add a new template to the `STEP_TEMPLATES` array in `wizard-utils.js`:
 ### Running tests
 
 ```bash
-# Run Native Host tests
+# Run background-service tests
 cd native-host && npm test
 
 # Run a single test file
@@ -648,32 +663,41 @@ cd native-host && node --test test/host.test.js
 cd extension && node --test test/*.test.js lib/*.test.js
 ```
 
-### Starting the Host manually (custom port)
+### Running the host in the foreground (custom port, for debugging)
 
 ```bash
+./bin/scrapewright run --port=19880
+# or invoke node directly
 cd native-host && node host.js --port=19880
 ```
 
-In manual mode, the extension auto-falls-back to HTTP long-polling; make sure the port on the extension Options page under **Server Configuration** matches the `--port` argument.
+In foreground mode the extension still uses the same HTTP long-polling protocol; make sure the port on the extension Options page under **Server Configuration** matches the `--port` argument (`./bin/scrapewright doctor` detects a port mismatch on either side and prints a hint).
+
+### Install as an OS service (recommended for production)
+
+```bash
+./bin/scrapewright install               # install and start (default port 8765)
+./bin/scrapewright install --port=9123   # pin to a custom port
+./bin/scrapewright status                # service status + /health
+./bin/scrapewright doctor                # full diagnostic
+./bin/scrapewright restart               # restart the service after editing code
+./bin/scrapewright logs -f               # tail the log
+./bin/scrapewright uninstall             # stop and remove the service
+```
+
+The service starts automatically at user login; on crash the OS supervisor (systemd / launchd / scheduled task) restarts it within seconds. `scrapewright doctor` and `install` automatically detect and clean up legacy Native Messaging artifacts (manifest files / Windows registry key), printing a one-line terminal notice.
 
 ### Restarting after a code update
 
-After editing extension files, reload the extension at `chrome://extensions/` (click the refresh icon on the extension card). After editing Native Host code, restart the Host process.
+After editing extension files, reload the extension at `chrome://extensions/` (click the refresh icon on the extension card). After editing background-service code, run `./bin/scrapewright restart` to restart the service — no Chrome restart is needed, because HTTP is stateless: the extension's next `fetch()` hits the new process.
 
-**Windows (PowerShell, admin):**
+**Windows (PowerShell):**
 ```powershell
-# Kill the old process
-taskkill /F /IM node.exe
-# Close and restart Chrome
-taskkill /F /IM chrome.exe
-start chrome
+# Force-restart the service
+./bin/scrapewright restart
 ```
 
 **Linux / macOS:**
 ```bash
-# Kill the old process
-pkill -f "node.*host.js"
-# Restart Chrome or reload the extension
+./bin/scrapewright restart
 ```
-
-After restarting Chrome, refresh the extension at `chrome://extensions/`; Chrome will launch the Native Host with the new code. In manual-start mode, just `Ctrl+C` the current `node host.js` and run it again.
