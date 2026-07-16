@@ -519,6 +519,22 @@ function buildRequirementsBlock(requirements) {
   ].join('\n');
 }
 
+function suggestServiceName(url) {
+  if (!url) return '';
+  try {
+    const u = new URL(url);
+    return u.hostname.replace(/^www\./, '') || '';
+  } catch {
+    // URL constructor throws on strings without a protocol — prepend one and retry
+    try {
+      const u2 = new URL('http://' + url);
+      return u2.hostname.replace(/^www\./, '') || '';
+    } catch {
+      return '';
+    }
+  }
+}
+
 function fillEntryUrlDefaults(steps, defaultUrl) {
   if (!Array.isArray(steps) || !defaultUrl) return steps || [];
   return steps.map(step => {
@@ -725,7 +741,7 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
@@ -738,6 +754,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.appendGlobalContextBlock = appendGlobalContextBlock;
   window.buildAutoFixSystemMessage = buildAutoFixSystemMessage;
   window.buildRequirementsBlock = buildRequirementsBlock;
+  window.suggestServiceName = suggestServiceName;
   window.fillEntryUrlDefaults = fillEntryUrlDefaults;
   window.normalizeStepTopology = normalizeStepTopology;
   window.DEFAULT_POLL_MAX_ITERATIONS = DEFAULT_POLL_MAX_ITERATIONS;

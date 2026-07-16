@@ -1,6 +1,6 @@
 const { describe, it, test } = require('node:test');
 const assert = require('node:assert/strict');
-const { parseSchemaFields, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, buildRequirementsBlock } = require('../lib/wizard-utils');
+const { parseSchemaFields, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, buildRequirementsBlock, suggestServiceName } = require('../lib/wizard-utils');
 
 describe('parseSchemaFields', () => {
   it('returns field names with types', () => {
@@ -748,5 +748,26 @@ describe('buildRequirementsBlock', () => {
     const block = buildRequirementsBlock(null);
     assert.ok(block.startsWith('## User Requirements'));
     assert.ok(block.includes('(none specified)'));
+  });
+});
+
+describe('suggestServiceName', () => {
+  it('returns hostname without www prefix', () => {
+    assert.equal(suggestServiceName('https://www.example.com/search'), 'example.com');
+  });
+
+  it('returns hostname without path', () => {
+    assert.equal(suggestServiceName('https://news.ycombinator.com/item?id=1'), 'news.ycombinator.com');
+  });
+
+  it('handles URL without protocol', () => {
+    assert.equal(suggestServiceName('example.com'), 'example.com');
+  });
+
+  it('returns empty string for invalid URL', () => {
+    assert.equal(suggestServiceName('not a url'), '');
+    assert.equal(suggestServiceName(''), '');
+    assert.equal(suggestServiceName(null), '');
+    assert.equal(suggestServiceName(undefined), '');
   });
 });
