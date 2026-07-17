@@ -600,12 +600,12 @@
     }
 
     if (message.type === 'GET_ELEMENT_HTML') {
-      sendResponse({ element: getElementFullHtml(message.selector) });
+      sendResponse({ element: window.DomCleaner.getElementFullHtml(message.selector) });
       return true;
     }
 
     if (message.type === 'GET_ELEMENTS_HTML') {
-      const elements = message.selectors.map(sel => getElementFullHtml(sel));
+      const elements = message.selectors.map(sel => window.DomCleaner.getElementFullHtml(sel));
       sendResponse({ elements });
       return true;
     }
@@ -1276,84 +1276,9 @@
   }
 
   // ===== DOM Snapshot =====
-  // NOTE: getCompressedSnapshot and getElementFullHtml are also implemented
-  // in extension/lib/dom-snapshot.js for testing. Keep both in sync.
-  function getCompressedSnapshot() {
-    function compressNode(node, depth) {
-      if (depth > 20) return '';
-      if (node.nodeType === Node.TEXT_NODE) {
-        const text = node.textContent.trim();
-        if (!text) return '';
-        if (/^\d+[\d,.]*$/.test(text) || text.length <= 20) return escapeHtml(text);
-        return escapeHtml(text.slice(0, 20)) + '...';
-      }
-      if (node.nodeType !== Node.ELEMENT_NODE) return '';
-
-      const tag = node.tagName.toLowerCase();
-      if (['script','style','link','img','video','audio','canvas','svg','noscript'].includes(tag)) {
-        return '';
-      }
-      if (tag === 'iframe') {
-        try {
-          const doc = node.contentDocument;
-          if (doc?.body) {
-            const parts = [];
-            for (const child of doc.body.childNodes) {
-              const compressed = compressNode(child, depth + 1);
-              if (compressed) parts.push(compressed);
-            }
-            return parts.length ? `<div data-iframe>${parts.join('')}</div>` : '';
-          }
-        } catch { /* cross-origin */ }
-        return '';
-      }
-
-      const attrs = [];
-      if (node.id) attrs.push(`id="${escapeHtml(node.id)}"`);
-      if (node.name) attrs.push(`name="${escapeHtml(node.name)}"`);
-      const classes = classStr(node).split(' ').filter(c => c).slice(0, 2);
-      if (classes.length) attrs.push(`class="${escapeHtml(classes.join(' '))}"`);
-      if (node.placeholder) attrs.push(`placeholder="${escapeHtml(node.placeholder.slice(0, 30))}"`);
-      if (node.type) attrs.push(`type="${escapeHtml(node.type)}"`);
-      if (tag === 'a' && node.getAttribute('href')) {
-        const hrefVal = node.getAttribute('href');
-        const truncated = hrefVal.length > 100 ? hrefVal.slice(0, 100) + '...' : hrefVal;
-        attrs.push(`href="${escapeHtml(truncated)}"`);
-      }
-
-      const attrStr = attrs.length ? ' ' + attrs.join(' ') : '';
-      const parts = [];
-      for (const child of node.childNodes) {
-        const compressed = compressNode(child, depth + 1);
-        if (compressed) parts.push(compressed);
-      }
-      const children = parts.join('');
-      if (!children && ['div','span','p','section','article','header','footer','nav','aside','main'].includes(tag)) {
-        return `<${tag}${attrStr}></${tag}>`;
-      }
-      return `<${tag}${attrStr}>${children}</${tag}>`;
-    }
-
-    function escapeHtml(str) {
-      if (!str) return '';
-      return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-    }
-
-    return {
-      structure: compressNode(document.documentElement, 0),
-      textSummary: document.body?.textContent?.slice(0, 3000) || '',
-      url: location.href,
-      title: document.title
-    };
-  }
-
   function getDomSnapshot(mode) {
     if (mode === 'compressed') {
-      return getCompressedSnapshot();
+      return window.DomCleaner.getCompressedSnapshot();
     }
 
     const clone = document.documentElement.cloneNode(true);
@@ -1367,27 +1292,31 @@
       try {
         const liveIframes = document.querySelectorAll('iframe');
         let doc = null;
+        let liveIframe = null;
         for (const iframe of liveIframes) {
           if (iframe.getAttribute('src') === src || iframe.src === el.getAttribute('src')) {
             doc = iframe.contentDocument;
+            liveIframe = iframe;
             if (doc?.body) break;
           }
         }
-        if (doc?.body) {
+        if (doc?.body && liveIframe) {
           const content = doc.body.cloneNode(true);
           content.querySelectorAll('script, style, link, video, audio, canvas, svg, noscript').forEach(c => c.remove());
-          const wrapper = document.createElement('div');
-          wrapper.setAttribute('data-iframe-src', src);
-          while (content.firstChild) wrapper.appendChild(content.firstChild);
-          el.replaceWith(wrapper);
+          // Reuse the iframe element but mark it with the prefix and replace its
+          // children with the inlined same-origin body. Keeps both snapshot paths
+          // (compressed and full) emitting the same iframe marker.
+          const prefix = window.DomCleaner.buildIframePrefix(liveIframe);
+          el.setAttribute('data-iframe-prefix', prefix);
+          while (el.firstChild) el.removeChild(el.firstChild);
+          while (content.firstChild) el.appendChild(content.firstChild);
         } else {
           el.remove();
         }
       } catch {
-        const placeholder = document.createElement('div');
-        placeholder.setAttribute('data-iframe-src', src);
-        placeholder.textContent = '[cross-origin iframe]';
-        el.replaceWith(placeholder);
+        // Cross-origin iframe: leave the element in place but mark it so the LLM
+        // sees the boundary. contentDocument access is blocked at runtime.
+        el.setAttribute('data-cross-origin-iframe', src);
       }
     });
 
@@ -1432,35 +1361,6 @@
       title: document.title,
       html: html,
       textContent: document.body.innerText.slice(0, 15000)
-    };
-  }
-
-  function getElementFullHtml(selector) {
-    // Use querySelectorDeep so iframe-prefixed selectors (e.g.
-    // `iframe#zbggframe1::p > u`) and legacy selectors that match elements
-    // inside same-origin iframes both resolve. The wizard's research phase
-    // calls GET_ELEMENT_HTML with LLM candidate selectors; without deep
-    // traversal, every iframe-targeted candidate returns found:false and the
-    // LLM never sees the full HTML needed to confirm or revise selectors.
-    let el;
-    try {
-      const found = querySelectorDeep(selector);
-      el = found ? found.element : null;
-    } catch (e) {
-      // Invalid CSS selector (e.g., IDs containing colons like `radix-:rfm:`
-      // that the LLM sometimes copies verbatim from the page snapshot).
-      // Without this guard, querySelector throws synchronously and crashes
-      // the GET_ELEMENTS_HTML listener, surfacing in the wizard as a generic
-      // "Error message from listener couldn't be parsed or was empty."
-      return { selector, found: false, error: 'INVALID_SELECTOR: ' + (e && e.message ? e.message : String(e)) };
-    }
-    if (!el) return { selector, found: false };
-    return {
-      selector,
-      found: true,
-      outerHTML: el.outerHTML,
-      innerText: el.innerText || '',
-      attributes: Array.from(el.attributes).map(a => ({ name: a.name, value: a.value }))
     };
   }
 
