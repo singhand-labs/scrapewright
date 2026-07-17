@@ -100,7 +100,33 @@ function hideLoading() {
 }
 
 function updateUrlTemplateHint(sampleInput) {
-  // Stub — real implementation lands in Task 5.
+  const hintEl = document.getElementById('urlTemplateHint');
+  if (!hintEl) return;
+  const params = window.UrlTemplate
+    ? window.UrlTemplate.extractTemplateParams(wizardState.targetUrl || '')
+    : [];
+  if (params.length === 0) {
+    hintEl.classList.add('hidden');
+    hintEl.innerHTML = '';
+    return;
+  }
+  const paramsList = params.map(p => '<code>{{' + p + '}}</code>').join(', ');
+  const sample = (sampleInput && typeof sampleInput === 'object') ? sampleInput : {};
+  let preview;
+  try {
+    preview = window.UrlTemplate.resolveTargetUrl(
+      wizardState.targetUrl,
+      Object.fromEntries(params.map(p => [p, sample[p] != null ? sample[p] : '<' + p + '>']))
+    );
+  } catch (e) {
+    preview = '(provide all parameters to preview)';
+  }
+  hintEl.innerHTML =
+    '<span class="hint-label">URL template detected.</span> ' +
+    paramsList + ' will be replaced with the matching input parameter at runtime. ' +
+    'Sample preview: <code></code>';
+  hintEl.lastElementChild.textContent = preview;
+  hintEl.classList.remove('hidden');
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -171,6 +197,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   document.getElementById('targetUrl').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') document.getElementById('reqInputParams').focus();
+  });
+  document.getElementById('targetUrl').addEventListener('input', (e) => {
+    wizardState.targetUrl = e.target.value;
+    updateUrlTemplateHint(wizardState.researchSampleInput || null);
   });
   document.getElementById('reqPageOps').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && e.ctrlKey) startResearch();
@@ -1411,9 +1441,11 @@ async function startResearch() {
     wizardState.targetUrl = exploration.targetUrlTemplate;
     const urlInput = document.getElementById('targetUrl');
     if (urlInput) urlInput.value = exploration.targetUrlTemplate;
+    wizardState.researchSampleInput = exploration.sampleInput;
     updateUrlTemplateHint(exploration.sampleInput);
     console.log('Applied targetUrlTemplate from Research:', exploration.targetUrlTemplate);
   } else {
+    wizardState.researchSampleInput = exploration.sampleInput;
     updateUrlTemplateHint(exploration.sampleInput);
   }
 
