@@ -775,7 +775,7 @@ Return JSON with:
   const result = await client.chat([
     { role: 'system', content: buildSystemMessageWithGlobalContext('You are a web scraping expert. Return JSON only.') },
     { role: 'user', content: prompt }
-  ], { jsonMode: true });
+  ], { jsonMode: true, maxTokens: 8192 });
 
   const cleaned = cleanLLMResponse(result);
   let parsed;

@@ -82,9 +82,26 @@ class LLMClient {
       throw new Error(`LLM API returned unexpected format. Expected data.choices[0].message.content, got: ${JSON.stringify(data).slice(0, 200)}`);
     }
 
-    const content = data.choices[0].message.content;
+    const message = data.choices[0].message;
+    const finishReason = data.choices[0].finish_reason;
+    const usage = data.usage || {};
+    console.log('[LLMClient] Response finish_reason:', finishReason);
+    console.log('[LLMClient] Response usage:', JSON.stringify(usage));
+
+    const content = message.content;
     console.log('[LLMClient] Response content length:', content?.length);
     console.log('[LLMClient] Response content preview:', content?.slice(0, 300));
+
+    if (!content || !String(content).trim()) {
+      const detail = JSON.stringify({ finish_reason: finishReason, usage, model: this.model });
+      console.error('[LLMClient] Empty content from LLM:', detail);
+      const hint = finishReason === 'length'
+        ? ' (finish_reason=length — raise maxTokens; the model could not fit a complete response in the token budget)'
+        : finishReason === 'content_filter'
+          ? ' (finish_reason=content_filter — the response was filtered)'
+          : '';
+      throw new Error(`LLM API returned empty content${hint}. Detail: ${detail}`);
+    }
 
     return content;
   }
