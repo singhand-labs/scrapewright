@@ -513,6 +513,7 @@ async function handleExecute(serviceName, input) {
 
   let lastError = null;
   const maxRetries = service.config.maxRetries;
+  const tabLoadTimeoutMs = service.config.tabLoadTimeoutMs ?? 60000;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
@@ -522,7 +523,7 @@ async function handleExecute(serviceName, input) {
       const result = await StepOrchestrator.execute(service, input, {
         createTab: async (url) => {
           const tab = await chrome.tabs.create({ url, active: false });
-          await waitForTabLoad(tab.id);
+          await waitForTabLoad(tab.id, tabLoadTimeoutMs);
           // WS2.1: wait for the content-script to be listening before the first
           // DOM_REQUEST — prevents the RELAY_FAILED (tabId:null) race.
           const csReady = await waitForContentScript(tab.id);
@@ -533,7 +534,7 @@ async function handleExecute(serviceName, input) {
           return tab;
         },
         waitForTabLoad: async (tabId) => {
-          await waitForTabLoad(tabId);
+          await waitForTabLoad(tabId, tabLoadTimeoutMs);
           sendLog('Page loaded successfully');
         },
         executeScript: async (tabId, script, input, timeoutMs) => {
@@ -649,7 +650,7 @@ async function handleExecute(serviceName, input) {
   return { success: false, error: lastError?.message || 'Execution failed', steps: sanitizeSteps(lastError?.steps) };
 }
 
-function waitForTabLoad(tabId) {
+function waitForTabLoad(tabId, timeoutMs = 60000) {
   return new Promise((resolve, reject) => {
     // Check if already loaded
     chrome.tabs.get(tabId, (tab) => {
@@ -666,8 +667,8 @@ function waitForTabLoad(tabId) {
       chrome.tabs.onUpdated.addListener(listener);
       setTimeout(() => {
         chrome.tabs.onUpdated.removeListener(listener);
-        reject(new Error('Tab load timeout after 30s'));
-      }, 30000);
+        reject(new Error(`Tab load timeout after ${Math.round(timeoutMs / 1000)}s`));
+      }, timeoutMs);
     });
   });
 }
