@@ -67,4 +67,14 @@ function isInstalled({ homeDir } = {}) {
   return fs.existsSync(unitPath(homeDir));
 }
 
-module.exports = { install, uninstall, start, stop, restart, isInstalled, unitPath };
+function readInstallSpec({ homeDir } = {}) {
+  const target = unitPath(homeDir);
+  if (!fs.existsSync(target)) return null;
+  const text = fs.readFileSync(target, 'utf8');
+  // Parse ExecStart=/path/to/node /path/to/host.js --port=N
+  const m = text.match(/ExecStart=(\S+)\s+(\S+)\s+--port=(\d+)/);
+  if (!m) return null;
+  return { nodePath: m[1], hostJsPath: m[2], port: parseInt(m[3], 10) };
+}
+
+module.exports = { install, uninstall, start, stop, restart, isInstalled, readInstallSpec, unitPath };

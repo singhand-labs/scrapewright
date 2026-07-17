@@ -41,9 +41,9 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 function hostJsPath() { return HOST_JS; }
 function nodePath() { return locateNode(); }
 
-function httpGet(p) {
+function httpGet(port, p) {
   return new Promise(resolve => {
-    const req = http.get({ hostname: 'localhost', port: PORT, path: p, timeout: 3000 }, res => {
+    const req = http.get({ hostname: 'localhost', port, path: p, timeout: 3000 }, res => {
       let data = '';
       res.on('data', c => (data += c));
       res.on('end', () => {
@@ -169,25 +169,36 @@ function cmdRun(opts) {
 }
 
 async function cmdStatus(jsonOut) {
-  const installed = serviceInstall.isInstalled({ homeDir: os.homedir() });
-  const health = await httpGet('/health');
+  const installSpec = serviceInstall.readInstallSpec({ homeDir: os.homedir() });
+  const installed = !!installSpec && serviceInstall.isInstalled({ homeDir: os.homedir() });
+  // Prefer the baked port for the probe; fall back to CLI/env port.
+  const probePort = installSpec ? installSpec.port : PORT;
+  const health = await httpGet(probePort, '/health');
   const out = {
     installed,
+    installedPort: installSpec ? installSpec.port : null,
+    cliPort: PORT,
+    portMatch: installSpec ? installSpec.port === PORT : null,
     health: health && health.json ? health.json : null,
-    healthReachable: !!(health && health.json),
-    port: PORT
+    healthReachable: !!(health && health.json)
   };
   if (jsonOut) {
     console.log(JSON.stringify(out, null, 2));
     return out.healthReachable ? 0 : 1;
   }
   say('Scrapewright service');
-  if (installed) ok('service installed');
-  else fail('service not installed — run: scrapewright install');
+  if (installed) {
+    ok('service installed (port ' + installSpec.port + ')');
+    if (installSpec.port !== PORT) {
+      warn('CLI/env port is ' + PORT + ', service is on ' + installSpec.port + ' — probing ' + installSpec.port);
+    }
+  } else {
+    fail('service not installed — run: scrapewright install');
+  }
   if (health && health.json) {
     ok('/health: ' + JSON.stringify(health.json));
   } else {
-    warn('host not reachable on :' + PORT);
+    warn('host not reachable on :' + probePort);
   }
   return out.healthReachable ? 0 : 1;
 }
@@ -195,12 +206,40 @@ async function cmdStatus(jsonOut) {
 async function cmdDoctor(jsonOut) {
   const diagnostics = [];
 
-  const installed = serviceInstall.isInstalled({ homeDir: os.homedir() });
-  diagnostics.push({ check: 'service_installed', ok: installed, detail: installed ? 'yes' : 'not installed' });
+  const installSpec = serviceInstall.readInstallSpec({ homeDir: os.homedir() });
+  const installed = !!installSpec && serviceInstall.isInstalled({ homeDir: os.homedir() });
+  diagnostics.push({ check: 'service_installed', ok: installed, detail: installed ? 'yes (port ' + installSpec.port + ')' : 'not installed' });
 
-  const health = await httpGet('/health');
+  // Path drift — do the baked paths still exist?
+  if (installSpec) {
+    const nodeExists = installSpec.nodePath ? fs.existsSync(installSpec.nodePath) : false;
+    const hostExists = installSpec.hostJsPath ? fs.existsSync(installSpec.hostJsPath) : false;
+    const pathsOk = nodeExists && hostExists;
+    const driftDetail = [];
+    if (!nodeExists) driftDetail.push('node missing: ' + installSpec.nodePath);
+    if (!hostExists) driftDetail.push('host.js missing: ' + installSpec.hostJsPath);
+    diagnostics.push({
+      check: 'service_paths_exist',
+      ok: pathsOk,
+      detail: pathsOk ? 'paths valid' : driftDetail.join('; ') + ' — re-run scrapewright install'
+    });
+
+    // Port match — does the baked port match the CLI/env port?
+    const portMatch = installSpec.port === PORT;
+    diagnostics.push({
+      check: 'port_match',
+      ok: portMatch,
+      detail: portMatch
+        ? 'service port ' + installSpec.port + ' matches CLI port ' + PORT
+        : 'service port ' + installSpec.port + ' ≠ CLI port ' + PORT + ' (SCRAPEWRIGHT_PORT=' + (process.env.SCRAPEWRIGHT_PORT || 'unset') + ')'
+    });
+  }
+
+  // Probe using the baked port if available (more accurate than CLI default).
+  const probePort = installSpec ? installSpec.port : PORT;
+  const health = await httpGet(probePort, '/health');
   const reachable = !!(health && health.json);
-  diagnostics.push({ check: 'host_reachable', ok: reachable, detail: reachable ? 'OK' : 'cannot reach :'+PORT });
+  diagnostics.push({ check: 'host_reachable', ok: reachable, detail: reachable ? 'OK on :' + probePort : 'cannot reach :' + probePort });
 
   const artifacts = migration.findLegacyArtifacts({});
   const clean = artifacts.files.length === 0 && artifacts.registryKeys.length === 0;

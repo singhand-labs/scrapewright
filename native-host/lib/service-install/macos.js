@@ -83,4 +83,20 @@ function isInstalled({ homeDir } = {}) {
   return fs.existsSync(plistPath(homeDir));
 }
 
-module.exports = { install, uninstall, start, stop, restart, isInstalled, plistPath, LABEL };
+function readInstallSpec({ homeDir } = {}) {
+  const target = plistPath(homeDir);
+  if (!fs.existsSync(target)) return null;
+  const text = fs.readFileSync(target, 'utf8');
+  // Plist has three <string> entries under ProgramArguments: node, host.js, --port=N
+  const strings = [...text.matchAll(/<string>([^<]+)<\/string>/g)].map(m => m[1]);
+  const portStr = strings.find(s => s.startsWith('--port='));
+  if (strings.length < 2 || !portStr) return null;
+  // Filter out the SCRAPEWRIGHT_INVOKED_BY env value (also a <string>) by
+  // requiring strings to look like the actual node binary and host.js path.
+  const nodePath = strings.find(s => /(^|\/)node(-exe)?$/.test(s) || /node\.exe$/.test(s));
+  const hostJsPath = strings.find(s => /host\.js$/.test(s));
+  if (!nodePath || !hostJsPath) return null;
+  return { nodePath, hostJsPath, port: parseInt(portStr.split('=')[1], 10) };
+}
+
+module.exports = { install, uninstall, start, stop, restart, isInstalled, readInstallSpec, plistPath, LABEL };

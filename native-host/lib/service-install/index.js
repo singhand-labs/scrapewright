@@ -17,5 +17,6 @@ function start() { return forCurrentPlatform().start(); }
 function stop() { return forCurrentPlatform().stop(); }
 function restart() { return forCurrentPlatform().restart(); }
 function isInstalled(opts) { return forCurrentPlatform().isInstalled(opts); }
+function readInstallSpec(opts) { return forCurrentPlatform().readInstallSpec(opts); }
 
-module.exports = { install, uninstall, start, stop, restart, isInstalled, currentPlatform };
+module.exports = { install, uninstall, start, stop, restart, isInstalled, readInstallSpec, currentPlatform };
