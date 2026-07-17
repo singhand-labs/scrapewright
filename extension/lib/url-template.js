@@ -50,3 +50,8 @@ if (typeof module !== 'undefined' && module.exports) {
 if (typeof window !== 'undefined') {
   window.UrlTemplate = { extractTemplateParams, resolveTargetUrl };
 }
+// Service Worker scope (no window/module): expose on `self` so importScripts
+// consumers (background.js, step-orchestrator.js) can address UrlTemplate.* .
+if (typeof self !== 'undefined' && typeof window === 'undefined' && typeof module === 'undefined') {
+  self.UrlTemplate = { extractTemplateParams, resolveTargetUrl };
+}
