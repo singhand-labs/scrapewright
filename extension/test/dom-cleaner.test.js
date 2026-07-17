@@ -450,8 +450,27 @@ describe('getCompressedSnapshot', () => {
     doc.close();
 
     const result = getCompressedSnapshot();
-    assert.ok(result.structure.includes('data-iframe-prefix="iframe[name="content-frame"]::"'),
+    assert.ok(result.structure.includes('data-iframe-prefix="iframe[name=&quot;content-frame&quot;]::"'),
       'expected name-based prefix, got: ' + result.structure);
+  });
+
+  it('escapes quotes in iframe name when emitting data-iframe-prefix', () => {
+    setupJSDOM(`<html><body><iframe name='bad"name'></iframe></body></html>`);
+    const iframe = document.querySelector('iframe');
+    const doc = iframe.contentDocument;
+    doc.open();
+    doc.write('<!DOCTYPE html><html><body><p>x</p></body></html>');
+    doc.close();
+
+    const result = getCompressedSnapshot();
+    // The attribute value must not terminate early. After parse-back, the
+    // structure string should contain an escaped quote, not a raw one that
+    // would break attribute parsing.
+    assert.ok(result.structure.includes('&quot;'),
+      'expected HTML-escaped quote in data-iframe-prefix, got: ' + result.structure);
+    // The marker tag itself must still be an iframe (not broken mid-attribute).
+    assert.ok(result.structure.includes('<iframe'),
+      'expected iframe element intact, got: ' + result.structure);
   });
 
   it('uses nth-of-type prefix when iframe has neither id nor name', () => {
