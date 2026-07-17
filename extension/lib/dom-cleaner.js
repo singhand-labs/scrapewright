@@ -485,7 +485,7 @@
               if (compressed) parts.push(compressed);
             }
             const prefix = buildIframePrefix(node);
-            const attrs = buildAttrs(node) + ` data-iframe-prefix="${prefix}"`;
+            const attrs = buildAttrs(node) + ` data-iframe-prefix="${escapeHtml(prefix)}"`;
             return parts.length ? `<iframe${attrs}>${parts.join('')}</iframe>` : '';
           }
         } catch (_) { /* cross-origin: omit */ }
