@@ -129,6 +129,14 @@ function updateUrlTemplateHint(sampleInput) {
   hintEl.classList.remove('hidden');
 }
 
+function buildUrlTemplateNotice(targetUrl) {
+  if (!window.UrlTemplate) return '';
+  const params = window.UrlTemplate.extractTemplateParams(targetUrl || '');
+  if (params.length === 0) return '';
+  const list = params.map(p => `{{${p}}} (resolved from input.${p})`).join(', ');
+  return `URL Template Notice. The target URL contains these placeholders: ${list}. They will be substituted BEFORE the page loads, so the page is already on the parameterized URL when your script runs. Do NOT generate $type / $click steps to enter these values into form fields. Generate only the post-load operations (scroll, extract, paginate by other means, etc.).\n\n`;
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   await loadEditMode();
   showPhase(wizardState.phase);
@@ -888,7 +896,7 @@ Return JSON with:
 
 async function generateStepsWithSelectors(config, pageInfo, confirmedSelectors, postPageInfo, detailPageInfo) {
   const client = new LLMClient(config);
-  let prompt = `${SCRIPT_DSL_GUIDE}
+  let prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${SCRIPT_DSL_GUIDE}
 
 Create a web scraping workflow for this page.
 
@@ -1049,7 +1057,7 @@ Do NOT assume linear pairing. Infer key-value pairs using BOTH:
 Do not blindly pair nth key with nth value — verify via dual signals above.
 ` : '';
 
-  const prompt = `${SCRIPT_DSL_GUIDE}
+  const prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${SCRIPT_DSL_GUIDE}
 
 Generate the script for a SINGLE step in an existing scraping workflow.
 
@@ -1724,7 +1732,7 @@ async function improveStepWithAI(stepIndex, userFeedback) {
     ? `Page structure:\n${pageSnapshot.structure || ''}\n\nPage text:\n${pageSnapshot.textContent || pageSnapshot.textSummary || ''}`
     : snapshotSection;
 
-  const prompt = `${SCRIPT_DSL_GUIDE}
+  const prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${SCRIPT_DSL_GUIDE}
 
 Improve the following step script based on user feedback.
 Return ONLY the improved JavaScript code, no explanation.
@@ -1962,7 +1970,7 @@ If your script does NOT use $openTab, $wait / $ / $extract will run against the 
 
   let prompt;
   if (isFailureFix) {
-    prompt = `${SCRIPT_DSL_GUIDE}
+    prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${SCRIPT_DSL_GUIDE}
 
 The following step failed. Fix it — primarily its script, but you MAY also adjust THIS step's onSuccess / onFailure / maxIterations if the runtime shows the step flow itself is wrong (the steps were generated before seeing this page state, so the topology can be a best guess). Do NOT add or remove steps; only edit this step's own fields.
 
@@ -2010,7 +2018,7 @@ ${RETURN_FORMAT}`;
       ? JSON.stringify(wizardState.testResult, null, 2)
       : '(no output)';
 
-    prompt = `${SCRIPT_DSL_GUIDE}
+    prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${SCRIPT_DSL_GUIDE}
 
 The test passed but the user is not satisfied with the extraction results. Improve the step script based on their feedback.
 
