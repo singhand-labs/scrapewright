@@ -1531,7 +1531,7 @@ async function testScript() {
     const service = {
       targetUrl: wizardState.targetUrl,
       steps: wizardState.steps,
-      config: { timeoutMs: DEPLOY_TIMEOUT_MS, maxRetries: 0, autoCloseTab: true, maxStepIterations: 50 }
+      config: { timeoutMs: DEPLOY_TIMEOUT_MS, maxRetries: 0, autoCloseTab: true, maxStepIterations: 50, tabLoadTimeoutMs: 60000 }
     };
 
     appendLog('Starting step execution...');
@@ -1543,7 +1543,7 @@ async function testScript() {
         return tab;
       },
       waitForTabLoad: async (tabId) => {
-        await withTimeout(waitForTabLoad(tabId), 30000, 'Page load timeout (30s)');
+        await withTimeout(waitForTabLoad(tabId), 60000, 'Page load timeout (60s)');
         appendLog('Page loaded.');
         // WS2.1: wait for the content-script to be listening before the first
         // DOM_REQUEST — prevents the RELAY_FAILED (tabId:null) race.
@@ -2194,7 +2194,7 @@ async function confirmDeploy() {
     outputSchema: wizardState.outputSchema,
     sampleInput: wizardState.sampleInput,
     annotations: wizardState.annotations,
-    config: existingService ? existingService.config : { enabled: true, timeoutMs: DEPLOY_TIMEOUT_MS, maxRetries: 1, autoCloseTab: true, maxStepIterations: 50 },
+    config: existingService ? existingService.config : { enabled: true, timeoutMs: DEPLOY_TIMEOUT_MS, maxRetries: 1, autoCloseTab: true, maxStepIterations: 50, tabLoadTimeoutMs: 60000 },
     createdAt: existingService ? existingService.createdAt : Date.now()
   };
 
@@ -2203,7 +2203,7 @@ async function confirmDeploy() {
   setTimeout(() => { window.location.href = 'options.html'; }, 1000);
 }
 
-function waitForTabLoad(tabId) {
+function waitForTabLoad(tabId, timeoutMs = 60000) {
   return new Promise((resolve, reject) => {
     const listener = (updatedTabId, info) => {
       if (updatedTabId === tabId && info.status === 'complete') {
@@ -2214,8 +2214,8 @@ function waitForTabLoad(tabId) {
     chrome.tabs.onUpdated.addListener(listener);
     setTimeout(() => {
       chrome.tabs.onUpdated.removeListener(listener);
-      reject(new Error('Tab load timeout'));
-    }, 30000);
+      reject(new Error(`Tab load timeout after ${Math.round(timeoutMs / 1000)}s`));
+    }, timeoutMs);
   });
 }
 
