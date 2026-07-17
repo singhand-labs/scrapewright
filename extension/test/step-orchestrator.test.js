@@ -2,6 +2,11 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 global.debugLogger = { log: () => {} };
 const { StepOrchestrator } = require('../lib/step-orchestrator');
+// In the Service Worker, url-template.js is loaded via importScripts and its
+// top-level functions become globals. In Node tests, require() scopes them to
+// the module, so attach them to global to mirror the runtime.
+const urlTemplate = require('../lib/url-template');
+global.UrlTemplate = urlTemplate;
 
 function makeMockDeps(overrides = {}) {
   return {
@@ -338,5 +343,52 @@ describe('StepOrchestrator', () => {
     assert.equal(steps[0].onSuccess, '2', 'appendStepWithChainLink relinked step 1 -> step 2');
     assert.equal(steps[1].onSuccess, '3', 'appendStepWithChainLink relinked step 2 -> step 3');
     assert.equal(steps[2].onSuccess, 'TERMINATE', 'final step remains the terminator');
+  });
+
+  it('resolves {{param}} placeholders in targetUrl before createTab', async () => {
+    const service = {
+      targetUrl: 'https://example.com/search?q={{keyword}}',
+      steps: [
+        { id: 'a', name: 'Step A', script: 'return 1;', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }
+      ],
+      config: {}
+    };
+    let openedUrl = null;
+    const deps = makeMockDeps({
+      createTab: async (url) => { openedUrl = url; return { id: 1, url }; }
+    });
+    await StepOrchestrator.execute(service, { keyword: 'shoes' }, deps);
+    assert.equal(openedUrl, 'https://example.com/search?q=shoes');
+  });
+
+  it('throws MISSING_URL_PARAM when a templated param is absent from input', async () => {
+    const service = {
+      targetUrl: 'https://example.com/search?q={{keyword}}',
+      steps: [
+        { id: 'a', name: 'Step A', script: 'return 1;', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }
+      ],
+      config: {}
+    };
+    const deps = makeMockDeps();
+    await assert.rejects(
+      () => StepOrchestrator.execute(service, {}, deps),
+      (err) => err.code === 'MISSING_URL_PARAM' && err.paramName === 'keyword'
+    );
+  });
+
+  it('passes plain targetUrl through unchanged', async () => {
+    const service = {
+      targetUrl: 'https://example.com/search?q=shoes',
+      steps: [
+        { id: 'a', name: 'Step A', script: 'return 1;', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }
+      ],
+      config: {}
+    };
+    let openedUrl = null;
+    const deps = makeMockDeps({
+      createTab: async (url) => { openedUrl = url; return { id: 1, url }; }
+    });
+    await StepOrchestrator.execute(service, {}, deps);
+    assert.equal(openedUrl, 'https://example.com/search?q=shoes');
   });
 });

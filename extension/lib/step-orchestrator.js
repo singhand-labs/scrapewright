@@ -18,9 +18,15 @@ class StepOrchestrator {
     const maxStepIterations = config.maxStepIterations ?? 50;
     const autoCloseTab = config.autoCloseTab ?? true;
 
-    const tab = await deps.createTab(service.targetUrl);
+    const resolvedUrl = UrlTemplate.resolveTargetUrl(service.targetUrl, input);
+    if (resolvedUrl !== service.targetUrl) {
+      debugLogger.log('info', 'step-orchestrator', 'Resolved URL template', {
+        template: service.targetUrl, resolvedUrl
+      });
+    }
+    const tab = await deps.createTab(resolvedUrl);
     const tabId = tab.id;
-    debugLogger.log('info', 'step-orchestrator', 'Tab created', { tabId, url: service.targetUrl });
+    debugLogger.log('info', 'step-orchestrator', 'Tab created', { tabId, url: resolvedUrl });
     const stepOutputs = [];
 
     try {
