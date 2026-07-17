@@ -1,4 +1,4 @@
-const { describe, it } = require('node:test');
+const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const { JSDOM } = require('jsdom');
 
@@ -358,5 +358,187 @@ describe('cleanHtmlForLLM', () => {
     const combined = result.contexts.map(c => c.context || '').join('');
     assert.ok(combined.includes('注册资本'));
     assert.ok(combined.includes('100万美元'));
+  });
+});
+
+describe('getCompressedSnapshot', () => {
+  const { getCompressedSnapshot } = require('../lib/dom-cleaner');
+
+  // Reset globals before each case — getCompressedSnapshot reads global.document.
+  beforeEach(() => {
+    delete global.location;
+  });
+
+  it('removes script/style tags', () => {
+    setupJSDOM(`<html><body>
+      <div id="main">Hello</div>
+      <script>alert('bad')</script>
+      <style>.x{color:red}</style>
+    </body></html>`);
+    const result = getCompressedSnapshot();
+    assert.ok(!result.structure.includes('alert'));
+    assert.ok(!result.structure.includes('color:red'));
+    assert.ok(result.structure.includes('id="main"'));
+    assert.ok(result.structure.includes('Hello'));
+  });
+
+  it('preserves prices fully (truncateText threshold bump)', () => {
+    setupJSDOM(`<html><body>
+      <span>$9,999,999.99</span>
+    </body></html>`);
+    const result = getCompressedSnapshot();
+    assert.ok(result.structure.includes('$9,999,999.99'));
+  });
+
+  it('truncates long prose to 60 chars', () => {
+    setupJSDOM(`<html><body>
+      <p>This is a paragraph of marketing copy that goes on for many words and exceeds sixty characters</p>
+    </body></html>`);
+    const result = getCompressedSnapshot();
+    assert.ok(result.structure.includes('This is a paragraph of marketing copy that goes on for m'));
+    assert.ok(result.structure.includes('...'));
+  });
+
+  it('limits class names to first 2 after filtering', () => {
+    setupJSDOM(`<html><body><div class="a b c d" id="box">Content</div></body></html>`);
+    const result = getCompressedSnapshot();
+    assert.ok(result.structure.includes('class="a b"'));
+    assert.ok(!result.structure.includes('class="a b c d"'));
+  });
+
+  it('NEW: drops framework class hashes from snapshot output', () => {
+    setupJSDOM(`<html><body>
+      <button class="css-1abc23 ant-btn btn-primary">Save</button>
+    </body></html>`);
+    const result = getCompressedSnapshot();
+    assert.ok(result.structure.includes('ant-btn'));
+    assert.ok(result.structure.includes('btn-primary'));
+    assert.ok(!result.structure.includes('css-1abc23'));
+  });
+
+  it('handles missing body gracefully', () => {
+    global.document = { documentElement: true, title: '' };
+    global.Node = { TEXT_NODE: 3, ELEMENT_NODE: 1 };
+    global.location = { href: 'about:blank' };
+    const result = getCompressedSnapshot();
+    assert.strictEqual(result.structure, '');
+    assert.strictEqual(result.textSummary, '');
+  });
+
+  it('inlines same-origin iframe content with data-iframe-prefix marker', () => {
+    setupJSDOM(`<html><body><iframe id="zbggframe1"></iframe></body></html>`);
+    const iframe = document.getElementById('zbggframe1');
+    const doc = iframe.contentDocument;
+    doc.open();
+    doc.write('<!DOCTYPE html><html><body><u><font>项目名称</font></u></body></html>');
+    doc.close();
+
+    const result = getCompressedSnapshot();
+    assert.ok(result.structure.includes('data-iframe-prefix="iframe#zbggframe1::"'),
+      'expected data-iframe-prefix attribute, got: ' + result.structure);
+    assert.ok(result.structure.includes('项目名称'), 'iframe text content not inlined');
+    assert.ok(!result.structure.includes('<div data-iframe'),
+      'old wrapper should be gone; got: ' + result.structure);
+  });
+
+  it('uses name-based prefix when iframe has no id', () => {
+    setupJSDOM(`<html><body><iframe name="content-frame"></iframe></body></html>`);
+    const iframe = document.querySelector('iframe[name="content-frame"]');
+    const doc = iframe.contentDocument;
+    doc.open();
+    doc.write('<!DOCTYPE html><html><body><p>frame text</p></body></html>');
+    doc.close();
+
+    const result = getCompressedSnapshot();
+    assert.ok(result.structure.includes('data-iframe-prefix="iframe[name="content-frame"]::"'),
+      'expected name-based prefix, got: ' + result.structure);
+  });
+
+  it('uses nth-of-type prefix when iframe has neither id nor name', () => {
+    setupJSDOM(`<html><body><iframe></iframe><iframe></iframe></body></html>`);
+    const iframes = document.querySelectorAll('iframe');
+    for (const fr of iframes) {
+      const d = fr.contentDocument;
+      d.open(); d.write('<!DOCTYPE html><html><body><p>x</p></body></html>'); d.close();
+    }
+    const result = getCompressedSnapshot();
+    assert.ok(result.structure.includes('data-iframe-prefix="iframe:nth-of-type(1)::"'),
+      'expected nth-of-type(1) prefix, got: ' + result.structure);
+    assert.ok(result.structure.includes('data-iframe-prefix="iframe:nth-of-type(2)::"'),
+      'expected nth-of-type(2) prefix, got: ' + result.structure);
+  });
+
+  it('does not crash on cross-origin iframes (contentDocument throws)', () => {
+    setupJSDOM(`<html><body><iframe id="cross"></iframe></body></html>`);
+    const iframe = document.getElementById('cross');
+    Object.defineProperty(iframe, 'contentDocument', {
+      get() { throw new Error('cross-origin'); }
+    });
+    const result = getCompressedSnapshot();
+    assert.doesNotThrow(() => result.structure.length);
+  });
+});
+
+describe('getElementFullHtml', () => {
+  const { getElementFullHtml } = require('../lib/dom-cleaner');
+
+  it('returns full outerHTML for matched element', () => {
+    setupJSDOM(`<html><body><div id="target" data-foo="bar"><span>Inner</span></div></body></html>`);
+    const result = getElementFullHtml('#target');
+    assert.equal(result.found, true);
+    assert.equal(result.selector, '#target');
+    assert.ok(result.outerHTML.includes('id="target"'));
+    assert.ok(result.outerHTML.includes('data-foo="bar"'));
+    assert.ok(result.outerHTML.includes('<span>Inner</span>'));
+    assert.equal(result.innerText, 'Inner');
+    assert.ok(result.attributes.some(a => a.name === 'id' && a.value === 'target'));
+    assert.ok(result.attributes.some(a => a.name === 'data-foo' && a.value === 'bar'));
+  });
+
+  it('returns found:false for missing element', () => {
+    setupJSDOM(`<html><body></body></html>`);
+    const result = getElementFullHtml('#nonexistent');
+    assert.equal(result.found, false);
+    assert.equal(result.selector, '#nonexistent');
+    assert.equal(result.outerHTML, undefined);
+  });
+
+  it('returns found:false with error for invalid CSS selector', () => {
+    setupJSDOM(`<html><body><div id="radix-:rfm:">x</div></body></html>`);
+    const result = getElementFullHtml('#radix-:rfm:');
+    assert.equal(result.found, false);
+    assert.equal(result.selector, '#radix-:rfm:');
+    assert.ok(typeof result.error === 'string' && result.error.length > 0);
+  });
+
+  it('finds element inside a specific iframe via prefixed selector', () => {
+    setupJSDOM(`<html><body><iframe id="frameA"></iframe><iframe id="frameB"></iframe></body></html>`);
+    const fillIframe = (id, html) => {
+      const d = document.getElementById(id).contentDocument;
+      d.open(); d.write('<!DOCTYPE html><html><body>' + html + '</body></html>'); d.close();
+    };
+    fillIframe('frameA', '<u><font>frame-a-value</font></u>');
+    fillIframe('frameB', '<u><font>frame-b-value</font></u>');
+    const result = getElementFullHtml('iframe#frameB::u > font');
+    assert.equal(result.found, true);
+    assert.ok(result.outerHTML.includes('frame-b-value'));
+    assert.ok(!result.outerHTML.includes('frame-a-value'));
+  });
+
+  it('returns found:false when the named iframe does not exist', () => {
+    setupJSDOM(`<html><body><iframe id="real"></iframe></body></html>`);
+    const d = document.getElementById('real').contentDocument;
+    d.open(); d.write('<!DOCTYPE html><html><body><div id="x">y</div></body></html>'); d.close();
+    const result = getElementFullHtml('iframe#missing::div');
+    assert.equal(result.found, false);
+  });
+
+  it('preserves backward compat for legacy selectors that resolve in iframes', () => {
+    setupJSDOM(`<html><body><iframe id="fr"></iframe></body></html>`);
+    const d = document.getElementById('fr').contentDocument;
+    d.open(); d.write('<!DOCTYPE html><html><body><div id="only-here">x</div></body></html>'); d.close();
+    const result = getElementFullHtml('#only-here');
+    assert.equal(result.found, true);
+    assert.ok(result.outerHTML.includes('only-here'));
   });
 });
