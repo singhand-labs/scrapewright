@@ -29,7 +29,7 @@ realFs.writeFileSync = mockWrite;
 realFs.mkdirSync = mockMkdir;
 
 // We require AFTER setting up the cache mock.
-const { install, uninstall, start, stop, restart, isInstalled } = require('../lib/service-install/linux');
+const { install, uninstall, start, stop, restart, isInstalled, readInstallSpec } = require('../lib/service-install/linux');
 
 describe('linux service-install', () => {
   beforeEach(() => {
@@ -149,6 +149,61 @@ describe('linux service-install', () => {
         assert.equal(isInstalled({ homeDir: '/home/alice' }), false);
       } finally {
         fs.existsSync = fsExists;
+      }
+    });
+  });
+
+  describe('readInstallSpec', () => {
+    it('parses node, host.js, and port from a written unit file', () => {
+      install({
+        nodePath: '/usr/bin/node',
+        hostJsPath: '/opt/scrapewright/native-host/host.js',
+        port: 8765,
+        autostart: false,
+        homeDir: '/home/alice'
+      });
+      const unitPath = '/home/alice/.config/systemd/user/scrapewright.service';
+      // install() captured content in writtenFiles via the mock; wire
+      // fs.existsSync/readFileSync to serve from that map so readInstallSpec
+      // sees the file the mocked write produced.
+      const fsExists = fs.existsSync;
+      const fsRead = fs.readFileSync;
+      fs.existsSync = (p) => p === unitPath;
+      fs.readFileSync = (p) => writtenFiles[p];
+      try {
+        const spec = readInstallSpec({ homeDir: '/home/alice' });
+        assert.equal(spec.nodePath, '/usr/bin/node');
+        assert.equal(spec.hostJsPath, '/opt/scrapewright/native-host/host.js');
+        assert.equal(spec.port, 8765);
+      } finally {
+        fs.existsSync = fsExists;
+        fs.readFileSync = fsRead;
+      }
+    });
+
+    it('returns null when no unit file exists', () => {
+      const fsExists = fs.existsSync;
+      fs.existsSync = () => false;
+      try {
+        const spec = readInstallSpec({ homeDir: '/nonexistent-home-' + Date.now() });
+        assert.equal(spec, null);
+      } finally {
+        fs.existsSync = fsExists;
+      }
+    });
+
+    it('returns null when the unit file cannot be parsed', () => {
+      const unitPath = '/home/bob/.config/systemd/user/scrapewright.service';
+      const fsExists = fs.existsSync;
+      const fsRead = fs.readFileSync;
+      fs.existsSync = (p) => p === unitPath;
+      fs.readFileSync = () => 'garbage without ExecStart';
+      try {
+        const spec = readInstallSpec({ homeDir: '/home/bob' });
+        assert.equal(spec, null);
+      } finally {
+        fs.existsSync = fsExists;
+        fs.readFileSync = fsRead;
       }
     });
   });

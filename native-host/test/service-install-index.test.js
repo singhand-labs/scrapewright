@@ -13,6 +13,10 @@ describe('service-install dispatcher', () => {
     assert.equal(typeof dispatcher.isInstalled, 'function');
   });
 
+  it('exposes readInstallSpec', () => {
+    assert.equal(typeof dispatcher.readInstallSpec, 'function');
+  });
+
   it('detects the current platform via process.platform', () => {
     const original = process.platform;
     Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });

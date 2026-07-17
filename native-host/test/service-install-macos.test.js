@@ -17,7 +17,7 @@ fs.mkdirSync = () => undefined;
 const childProc = require('child_process');
 childProc.spawnSync = mockSpawn;
 
-const { install, uninstall, start, stop, restart, isInstalled } = require('../lib/service-install/macos');
+const { install, uninstall, start, stop, restart, isInstalled, readInstallSpec } = require('../lib/service-install/macos');
 
 describe('macOS service-install', () => {
   beforeEach(() => {
@@ -116,6 +116,43 @@ describe('macOS service-install', () => {
       fs.existsSync = (p) => p === '/Users/alice/Library/LaunchAgents/com.scrapewright.host.plist';
       try {
         assert.equal(isInstalled({ homeDir: '/Users/alice' }), true);
+      } finally {
+        fs.existsSync = fsExists;
+      }
+    });
+  });
+
+  describe('readInstallSpec', () => {
+    it('parses node, host.js, and port from a written plist', () => {
+      install({
+        nodePath: '/usr/local/bin/node',
+        hostJsPath: '/Users/alice/scrapewright/native-host/host.js',
+        port: 8765,
+        homeDir: '/Users/alice',
+        autostart: false
+      });
+      const plistPath = '/Users/alice/Library/LaunchAgents/com.scrapewright.host.plist';
+      const fsExists = fs.existsSync;
+      const fsRead = fs.readFileSync;
+      fs.existsSync = (p) => p === plistPath;
+      fs.readFileSync = (p) => writtenFiles[p];
+      try {
+        const spec = readInstallSpec({ homeDir: '/Users/alice' });
+        assert.equal(spec.nodePath, '/usr/local/bin/node');
+        assert.equal(spec.hostJsPath, '/Users/alice/scrapewright/native-host/host.js');
+        assert.equal(spec.port, 8765);
+      } finally {
+        fs.existsSync = fsExists;
+        fs.readFileSync = fsRead;
+      }
+    });
+
+    it('returns null when no plist exists', () => {
+      const fsExists = fs.existsSync;
+      fs.existsSync = () => false;
+      try {
+        const spec = readInstallSpec({ homeDir: '/nonexistent-' + Date.now() });
+        assert.equal(spec, null);
       } finally {
         fs.existsSync = fsExists;
       }

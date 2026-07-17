@@ -10,7 +10,7 @@ const mockSpawn = (cmd, args, opts) => {
 const childProc = require('child_process');
 childProc.spawnSync = mockSpawn;
 
-const { install, uninstall, start, stop, restart, isInstalled, TASK_NAME } = require('../lib/service-install/windows');
+const { install, uninstall, start, stop, restart, isInstalled, readInstallSpec, TASK_NAME } = require('../lib/service-install/windows');
 
 function lastPwshCall() {
   // Return the last powershell invocation. (`.find` would return the first,
@@ -119,6 +119,50 @@ describe('Windows service-install', () => {
       childProc.spawnSync = mock;
       try {
         assert.equal(isInstalled(), false);
+      } finally {
+        childProc.spawnSync = mockSpawn;
+      }
+    });
+  });
+
+  describe('readInstallSpec', () => {
+    it('parses node, host.js, and port from the scheduled-task action', () => {
+      // Simulate PowerShell emitting: <node-exe>|"<host.js>" --port=8765
+      const mock = () => ({
+        status: 0,
+        stdout: 'C:\\Program Files\\nodejs\\node.exe|"C:\\scrapewright\\native-host\\host.js" --port=8765\r\n'
+      });
+      childProc.spawnSync = mock;
+      try {
+        const spec = readInstallSpec();
+        assert.equal(spec.nodePath, 'C:\\Program Files\\nodejs\\node.exe');
+        assert.equal(spec.hostJsPath, 'C:\\scrapewright\\native-host\\host.js');
+        assert.equal(spec.port, 8765);
+      } finally {
+        childProc.spawnSync = mockSpawn;
+      }
+    });
+
+    it('returns null when the scheduled task is missing', () => {
+      const mock = () => ({ status: 1, stdout: '' });
+      childProc.spawnSync = mock;
+      try {
+        const spec = readInstallSpec();
+        assert.equal(spec, null);
+      } finally {
+        childProc.spawnSync = mockSpawn;
+      }
+    });
+
+    it('returns null when the arguments have no --port', () => {
+      const mock = () => ({
+        status: 0,
+        stdout: 'C:\\node.exe|"C:\\host.js"\r\n'
+      });
+      childProc.spawnSync = mock;
+      try {
+        const spec = readInstallSpec();
+        assert.equal(spec, null);
       } finally {
         childProc.spawnSync = mockSpawn;
       }

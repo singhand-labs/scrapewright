@@ -58,4 +58,26 @@ function isInstalled() {
   return r.status === 0 && (r.stdout || '').includes(TASK_NAME);
 }
 
-module.exports = { install, uninstall, start, stop, restart, isInstalled, TASK_NAME };
+function readInstallSpec() {
+  // Query the scheduled task's action and parse out the Execute (node) and
+  // Arguments ("host.js" --port=N). Returns null if the task is missing or
+  // the output is unparseable.
+  const r = runPowerShell(
+    `(Get-ScheduledTask -TaskName '${TASK_NAME}' -ErrorAction SilentlyContinue).Actions | ForEach-Object { "$($_.Execute)|$($_.Arguments)" }`
+  );
+  if (r.status !== 0 || !r.stdout || !r.stdout.trim()) return null;
+  const line = r.stdout.trim().split(/\r?\n/)[0];
+  const [nodePath, argStr] = line.split('|');
+  if (!nodePath || !argStr) return null;
+  const portMatch = argStr.match(/--port=(\d+)/);
+  if (!portMatch) return null;
+  // hostJsPath is the quoted path before --port (fall back to first .js token).
+  const hostMatch = argStr.match(/"([^"]+\.js)"/) || argStr.match(/(\S+\.js)/);
+  return {
+    nodePath,
+    hostJsPath: hostMatch ? hostMatch[1] : null,
+    port: parseInt(portMatch[1], 10)
+  };
+}
+
+module.exports = { install, uninstall, start, stop, restart, isInstalled, readInstallSpec, TASK_NAME };
