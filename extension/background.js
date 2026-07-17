@@ -612,6 +612,18 @@ async function handleExecute(serviceName, input) {
         return { success: false, error: 'LOGIN_REQUIRED: Please log in and retry' };
       }
 
+      if (error.code === 'MISSING_URL_PARAM') {
+        await logExecution(service, input, null, error.message, attempt);
+        await debugLogger.persist();
+        return {
+          success: false,
+          error: error.message,
+          code: error.code,
+          paramName: error.paramName,
+          steps: []
+        };
+      }
+
       const shouldAutoFix = attempt < maxRetries &&
         error.stepId &&
         (error.message?.includes('ELEMENT_NOT_FOUND') || error.message?.includes('SCRIPT_ERROR') || error.message?.includes('SCRIPT_TIMEOUT'));

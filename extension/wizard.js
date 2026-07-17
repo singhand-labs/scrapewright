@@ -14,6 +14,7 @@ let wizardState = {
   inputSchema: { type: 'object' },
   outputSchema: { type: 'object' },
   sampleInput: {},
+  researchSampleInput: null,
   testInput: {},
   fixAttemptCount: 0,
   autoFixing: false,
@@ -251,6 +252,7 @@ async function loadEditMode() {
   wizardState.phase = 2;
 
   document.getElementById('targetUrl').value = svc.targetUrl;
+  updateUrlTemplateHint(wizardState.researchSampleInput || wizardState.sampleInput || null);
   document.getElementById('reqInputParams').value = wizardState.requirements.inputParams || '';
   document.getElementById('reqPageOps').value = wizardState.requirements.pageOps || '';
   document.getElementById('reqOutputStruct').value = wizardState.requirements.outputStruct || '';
