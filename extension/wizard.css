@@ -38,6 +38,13 @@ label { display: block; margin-top: 12px; font-weight: 600; }
 .toast.info { background: #3b82f6; }
 .toast.error { background: #ef4444; }
 .toast.success { background: #10b981; }
+.toast.dismissible { display: flex; align-items: center; gap: 16px; text-align: left; }
+.toast-message { flex: 1; }
+.toast-close {
+  background: transparent; border: none; color: white; font-size: 20px;
+  cursor: pointer; padding: 0 4px; line-height: 1; flex-shrink: 0;
+}
+.toast-close:hover { opacity: 0.7; }
 #loading {
   display: flex; flex-direction: row; align-items: center; justify-content: center;
   padding: 10px 16px; gap: 8px;
