@@ -147,3 +147,98 @@ describe('buildIframePrefix', () => {
     assert.equal(buildIframePrefix(allIframes[2]), 'iframe:nth-of-type(2)::');
   });
 });
+
+describe('cleanPageHtml', () => {
+  const { cleanPageHtml } = require('../lib/dom-cleaner');
+
+  it('removes script and style tags', () => {
+    setupJSDOM(`<html><body>
+      <div id="main">Hello</div>
+      <script>alert('bad')</script>
+      <style>.x{color:red}</style>
+    </body></html>`);
+    const cleaned = cleanPageHtml(document.documentElement.outerHTML);
+    assert.ok(!cleaned.includes('alert'));
+    assert.ok(!cleaned.includes('color:red'));
+    assert.ok(cleaned.includes('id="main"'));
+    assert.ok(cleaned.includes('Hello'));
+  });
+
+  it('removes on* event handler attributes', () => {
+    setupJSDOM(`<html><body><button onclick="evil()">Click</button></body></html>`);
+    const cleaned = cleanPageHtml(document.documentElement.outerHTML);
+    assert.ok(!cleaned.includes('onclick'));
+    assert.ok(cleaned.includes('Click'));
+  });
+
+  it('removes style attributes but keeps class', () => {
+    setupJSDOM(`<html><body><div class="keep" style="color:red">X</div></body></html>`);
+    const cleaned = cleanPageHtml(document.documentElement.outerHTML);
+    assert.ok(!cleaned.includes('style='));
+    assert.ok(cleaned.includes('class="keep"'));
+  });
+
+  it('trims attribute values longer than 200 chars', () => {
+    const longVal = 'a'.repeat(250);
+    setupJSDOM(`<html><body><div data-x="${longVal}">X</div></body></html>`);
+    const cleaned = cleanPageHtml(document.documentElement.outerHTML);
+    assert.ok(cleaned.includes('...'));
+    assert.ok(!cleaned.includes('a'.repeat(250)));
+  });
+
+  it('removes noise containers (nav, footer, aside)', () => {
+    setupJSDOM(`<html><body>
+      <main><p>content</p></main>
+      <nav><a>nav link</a></nav>
+      <footer>(c) 2026</footer>
+      <aside>sidebar</aside>
+    </body></html>`);
+    const cleaned = cleanPageHtml(document.documentElement.outerHTML);
+    assert.ok(cleaned.includes('content'));
+    assert.ok(!cleaned.includes('nav link'));
+    assert.ok(!cleaned.includes('(c) 2026'));
+    assert.ok(!cleaned.includes('sidebar'));
+  });
+
+  it('does NOT truncate long output', () => {
+    const big = '<div>' + 'x'.repeat(100000) + '</div>';
+    setupJSDOM(`<html><body>${big}</body></html>`);
+    const cleaned = cleanPageHtml(document.documentElement.outerHTML);
+    assert.ok(cleaned.length > 90000);
+    assert.ok(!cleaned.includes('[truncated]'));
+  });
+
+  it('NEW: filters framework-generated class hashes', () => {
+    setupJSDOM(`<html><body>
+      <div class="sc-abc123 _ngcontent-abc css-1xyz ant-btn btn-primary">Save</div>
+    </body></html>`);
+    const cleaned = cleanPageHtml(document.documentElement.outerHTML);
+    assert.ok(cleaned.includes('ant-btn'));
+    assert.ok(cleaned.includes('btn-primary'));
+    assert.ok(!cleaned.includes('sc-abc123'));
+    assert.ok(!cleaned.includes('_ngcontent'));
+    assert.ok(!cleaned.includes('css-1xyz'));
+  });
+
+  it('NEW: drops class attribute entirely when all classes are noise', () => {
+    setupJSDOM(`<html><body><div class="css-abc123 _ngcontent-xyz">X</div></body></html>`);
+    const cleaned = cleanPageHtml(document.documentElement.outerHTML);
+    assert.ok(!cleaned.includes('class='));
+  });
+
+  it('NEW: marks same-origin iframes with data-iframe-prefix and inlines children', () => {
+    // jsdom does not serialize an iframe's contentDocument into the parent
+    // document's outerHTML, so populate the iframe's element children instead
+    // (which jsdom does preserve through serialization). In a real browser the
+    // iframe's contentDocument is reachable directly; here we mirror the
+    // post-inline shape cleanPageHtml produces for same-origin iframes.
+    setupJSDOM(`<html><body>
+      <iframe id="zbggframe1"><div class="ewb-info-main"><u>项目名称</u></div></iframe>
+    </body></html>`);
+
+    const cleaned = cleanPageHtml(document.documentElement.outerHTML);
+    assert.ok(cleaned.includes('data-iframe-prefix="iframe#zbggframe1::"'), 'expected data-iframe-prefix attribute');
+    assert.ok(cleaned.includes('项目名称'), 'iframe children should be inlined');
+    assert.ok(!cleaned.includes('<div data-iframe'), 'old wrapper should be gone');
+  });
+});
