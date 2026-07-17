@@ -2,6 +2,7 @@ importScripts(
   'lib/service-registry.js',
   'lib/llm-client.js',
   'lib/offscreen-executor.js',
+  'lib/url-template.js',
   'lib/step-orchestrator.js',
   'lib/wizard-utils.js',
   'lib/debug-logger.js'
