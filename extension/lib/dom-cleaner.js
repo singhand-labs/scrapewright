@@ -183,8 +183,232 @@
     return result;
   }
 
-  // Export stub — extended by later tasks.
-  const api = { filterClasses, truncateText, shouldRemoveTag, buildIframePrefix, cleanPageHtml };
+  // --- extractAnnotationContext ---------------------------------------------
+  // Extract the DOM subtree around an annotated element: N ancestors up, 2
+  // siblings on each side at each level. Used when the full cleaned HTML is
+  // too big to send to the LLM.
+  const ANNOTATION_CONTEXT_RADIUS = 3;
+  const MAX_DEPTH_BELOW_TARGET = 2;
+  const SIBLING_KEEP_COUNT = 2;
+
+  function extractAnnotationContext(doc, selector, ancestorRadius) {
+    const radius = ancestorRadius === undefined ? ANNOTATION_CONTEXT_RADIUS : ancestorRadius;
+    if (!selector) return null;
+    let target;
+    try {
+      target = doc.querySelector(selector);
+    } catch (e) {
+      return null;
+    }
+    if (!target) return null;
+
+    let root = target;
+    for (let i = 0; i < radius; i++) {
+      if (root.parentElement && root.parentElement !== doc.body) {
+        root = root.parentElement;
+      } else {
+        break;
+      }
+    }
+
+    const path = [];
+    let cur = target;
+    while (cur) {
+      path.unshift(cur);
+      if (cur === root) break;
+      cur = cur.parentElement;
+    }
+    if (!path.includes(root)) return null;
+
+    function attrsFor(node, markAnnotated) {
+      let attrs = '';
+      if (node.id) attrs += ` id="${node.id}"`;
+      const filtered = filterClasses(node.className || '');
+      const cls = filtered.split(' ').filter(c => c).slice(0, 2).join(' ');
+      if (cls) attrs += ` class="${cls}"`;
+      if (markAnnotated) attrs += ' data-annotated';
+      return attrs;
+    }
+
+    function foldNonPath(node) {
+      const cc = node.children.length;
+      const tag = node.tagName.toLowerCase();
+      if (cc > 0) {
+        return `<${tag}${attrsFor(node, false)}>+${cc} children</${tag}>`;
+      }
+      const t = node.textContent.trim();
+      return t ? `<${tag}${attrsFor(node, false)}>${t}</${tag}>` : `<${tag}${attrsFor(node, false)}></${tag}>`;
+    }
+
+    function serialize(node, belowTarget, depth) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        return truncateText(node.textContent);
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return '';
+
+      const isTarget = node === target;
+      const isOnPath = path.includes(node);
+
+      if (belowTarget && depth > MAX_DEPTH_BELOW_TARGET) {
+        const dc = node.querySelectorAll('*').length;
+        const tag = node.tagName.toLowerCase();
+        if (dc > 0) return `<${tag}${attrsFor(node, false)}>+${dc} descendants</${tag}>`;
+        const t = node.textContent.trim();
+        return t ? `<${tag}${attrsFor(node, false)}>${t}</${tag}>` : `<${tag}${attrsFor(node, false)}></${tag}>`;
+      }
+
+      if (!isOnPath && !belowTarget) {
+        return foldNonPath(node);
+      }
+
+      const tag = node.tagName.toLowerCase();
+      const attrs = attrsFor(node, isTarget);
+      const children = Array.from(node.childNodes);
+
+      if (isTarget) {
+        const inner = children.map(c => serialize(c, true, depth + 1)).filter(s => s).join('');
+        return `<${tag}${attrs}>${inner}</${tag}>`;
+      }
+
+      if (isOnPath) {
+        const pathChildIdx = path.indexOf(node) + 1;
+        const pathChild = path[pathChildIdx];
+        const childIdx = children.indexOf(pathChild);
+        if (childIdx === -1) {
+          const inner = children.map(c => serialize(c, belowTarget, depth)).filter(s => s).join('');
+          return `<${tag}${attrs}>${inner}</${tag}>`;
+        }
+
+        const beforeStart = Math.max(0, childIdx - SIBLING_KEEP_COUNT);
+        const afterEnd = Math.min(children.length, childIdx + 1 + SIBLING_KEEP_COUNT);
+        const parts = [];
+        if (beforeStart > 0) parts.push(`<!-- ${beforeStart} siblings before -->`);
+        for (let i = beforeStart; i < childIdx; i++) {
+          const s = serialize(children[i], false, 0);
+          if (s) parts.push(s);
+        }
+        const pathSer = serialize(pathChild, false, 0);
+        if (pathSer) parts.push(pathSer);
+        for (let i = childIdx + 1; i < afterEnd; i++) {
+          const s = serialize(children[i], false, 0);
+          if (s) parts.push(s);
+        }
+        const skippedAfter = children.length - afterEnd;
+        if (skippedAfter > 0) parts.push(`<!-- ${skippedAfter} siblings after -->`);
+        return `<${tag}${attrs}>${parts.join('')}</${tag}>`;
+      }
+
+      const inner = children.map(c => serialize(c, true, depth + 1)).filter(s => s).join('');
+      return `<${tag}${attrs}>${inner}</${tag}>`;
+    }
+
+    return serialize(root, false, 0);
+  }
+
+  // --- compressStructure ----------------------------------------------------
+  // Depth-limited tree compression. Used when cleaned HTML > 80 KB.
+  const STRUCTURE_REMOVE_TAGS = new Set([
+    'script', 'style', 'link', 'img', 'video', 'audio', 'canvas', 'svg',
+    'noscript', 'template', 'meta', 'path', 'g', 'defs', 'use'
+  ]);
+  const STRUCTURE_MAX_DEPTH_NORMAL = 4;
+  const STRUCTURE_MAX_DEPTH_ANNOTATED = 8;
+
+  function elementContainsAny(node, selectors) {
+    if (!selectors || !selectors.length) return false;
+    if (node.matches) {
+      for (const sel of selectors) {
+        try { if (node.matches(sel)) return true; } catch (_) {}
+      }
+    }
+    if (node.querySelector) {
+      for (const sel of selectors) {
+        try { if (node.querySelector(sel)) return true; } catch (_) {}
+      }
+    }
+    return false;
+  }
+
+  function compressNode(node, depth, annotatedSelectors) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return truncateText(node.textContent);
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return '';
+
+    const tag = node.tagName.toLowerCase();
+    if (STRUCTURE_REMOVE_TAGS.has(tag)) return '';
+
+    const containsAnnotated = elementContainsAny(node, annotatedSelectors);
+
+    let attrs = '';
+    if (node.id) attrs += ` id="${node.id}"`;
+    const filtered = filterClasses(node.className || '');
+    const cls = filtered.split(' ').filter(c => c).slice(0, 1).join(' ');
+    if (cls) attrs += ` class="${cls}"`;
+    if (node.placeholder) attrs += ` placeholder="${String(node.placeholder).slice(0, 30)}"`;
+    if (containsAnnotated) attrs += ' [ANNOTATED]';
+
+    const childElementCount = node.children.length;
+    const maxDepth = containsAnnotated ? STRUCTURE_MAX_DEPTH_ANNOTATED : STRUCTURE_MAX_DEPTH_NORMAL;
+
+    if (depth >= maxDepth) {
+      if (childElementCount > 0) {
+        return `<${tag}${attrs}>+${childElementCount} children</${tag}>`;
+      }
+      const t = node.textContent.trim();
+      return t ? `<${tag}${attrs}>${truncateText(t)}</${tag}>` : `<${tag}${attrs}></${tag}>`;
+    }
+
+    const childParts = [];
+    for (const child of node.childNodes) {
+      const c = compressNode(child, depth + 1, annotatedSelectors);
+      if (c) childParts.push(c);
+    }
+    const inner = childParts.join('');
+
+    if (containsAnnotated) {
+      return `<${tag}${attrs}>${inner}</${tag}>`;
+    }
+    if (childElementCount > 0) {
+      return `<${tag}${attrs}>+${childElementCount} children</${tag}>`;
+    }
+    return `<${tag}${attrs}>${inner}</${tag}>`;
+  }
+
+  function compressStructure(doc, annotatedSelectors) {
+    const selectors = annotatedSelectors || [];
+    if (!doc || !doc.body) return '';
+    const parts = [];
+    for (const child of doc.body.childNodes) {
+      const c = compressNode(child, 0, selectors);
+      if (c) parts.push(c);
+    }
+    return parts.join('\n');
+  }
+
+  // --- cleanHtmlForLLM ------------------------------------------------------
+  const CLEAN_THRESHOLD = 80000;
+
+  function cleanHtmlForLLM(rawHtml, annotations) {
+    const cleaned = cleanPageHtml(rawHtml);
+    if (cleaned.length <= CLEAN_THRESHOLD) {
+      return { mode: 'full', html: cleaned };
+    }
+    const doc = new DOMParser().parseFromString(cleaned, 'text/html');
+    const annotList = annotations || [];
+    const selectors = annotList.map(a => a.selector).filter(Boolean);
+    const contexts = annotList.map(a => {
+      if (!a.selector) return { selector: null, context: null };
+      return { selector: a.selector, context: extractAnnotationContext(doc, a.selector) };
+    });
+    const structure = compressStructure(doc, selectors);
+    return { mode: 'compressed', contexts, structure };
+  }
+
+  const api = {
+    filterClasses, truncateText, shouldRemoveTag, buildIframePrefix,
+    cleanPageHtml, extractAnnotationContext, compressStructure, cleanHtmlForLLM,
+  };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (typeof global !== 'undefined') global.DomCleaner = api;
