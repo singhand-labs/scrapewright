@@ -11,6 +11,15 @@
 (function (global) {
   'use strict';
 
+  // IframeSelector is loaded as a content script BEFORE this file in the
+  // extension (see manifest.json). In Node tests, require it directly.
+  let IframeSelector = null;
+  if (typeof module !== 'undefined' && module.exports) {
+    try { IframeSelector = require('./iframe-selector'); } catch (_) { IframeSelector = null; }
+  } else if (typeof global !== 'undefined' && global.IframeSelector) {
+    IframeSelector = global.IframeSelector;
+  }
+
   // --- filterClasses --------------------------------------------------------
   // Drop framework-generated class tokens (Angular/Vue scoped markers,
   // emotion/styled-components hashes, pure-hash tokens). Preserve semantic
@@ -405,9 +414,142 @@
     return { mode: 'compressed', contexts, structure };
   }
 
+  // --- getCompressedSnapshot ------------------------------------------------
+  // Walk the live document.documentElement. Returns { structure, textSummary,
+  // url, title }. Same-origin iframes are inlined as <iframe data-iframe-prefix="...">
+  // with their children inside. Cross-origin iframes are omitted.
+  function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function buildAttrs(node) {
+    const parts = [];
+    if (node.id) parts.push(`id="${escapeHtml(node.id)}"`);
+    if (node.getAttribute && node.getAttribute('name')) {
+      parts.push(`name="${escapeHtml(node.getAttribute('name'))}"`);
+    }
+    if (node.getAttribute) {
+      const classAttr = node.getAttribute('class');
+      if (classAttr) {
+        const filtered = filterClasses(classAttr);
+        const classes = filtered.split(/\s+/).filter(Boolean).slice(0, 2).join(' ');
+        if (classes) parts.push(`class="${escapeHtml(classes)}"`);
+      }
+      const placeholder = node.getAttribute('placeholder');
+      if (placeholder) parts.push(`placeholder="${escapeHtml(truncateText(placeholder))}"`);
+      if (node.getAttribute('type')) parts.push(`type="${escapeHtml(node.getAttribute('type'))}"`);
+      if (node.tagName === 'A' && node.getAttribute('href')) {
+        parts.push(`href="${escapeHtml(node.getAttribute('href'))}"`);
+      }
+      if (['SCRIPT', 'IMG', 'IFRAME'].includes(node.tagName) && node.getAttribute('src')) {
+        parts.push(`src="${escapeHtml(node.getAttribute('src'))}"`);
+      }
+    }
+    return parts.length ? ' ' + parts.join(' ') : '';
+  }
+
+  function getCompressedSnapshot() {
+    if (!document || !document.documentElement || !document.body) {
+      return {
+        structure: '',
+        textSummary: '',
+        url: (typeof location !== 'undefined' && location && location.href) || '',
+        title: (document && document.title) || ''
+      };
+    }
+
+    const CONTAINER_TAGS = new Set(['div','span','p','section','article','header','footer','nav','aside','main']);
+
+    function walk(node, depth) {
+      if (depth > 20) return '';
+      if (node.nodeType === Node.TEXT_NODE) {
+        return escapeHtml(truncateText(node.textContent));
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return '';
+
+      const tag = node.tagName.toLowerCase();
+      if (shouldRemoveTag(tag)) return '';
+
+      if (tag === 'iframe') {
+        try {
+          const doc = node.contentDocument;
+          if (doc && doc.body) {
+            const parts = [];
+            for (const child of doc.body.childNodes) {
+              const compressed = walk(child, depth + 1);
+              if (compressed) parts.push(compressed);
+            }
+            const prefix = buildIframePrefix(node);
+            const attrs = buildAttrs(node) + ` data-iframe-prefix="${prefix}"`;
+            return parts.length ? `<iframe${attrs}>${parts.join('')}</iframe>` : '';
+          }
+        } catch (_) { /* cross-origin: omit */ }
+        return '';
+      }
+
+      const attrs = buildAttrs(node);
+      const parts = [];
+      for (const child of node.childNodes) {
+        const compressed = walk(child, depth + 1);
+        if (compressed) parts.push(compressed);
+      }
+      const children = parts.join('');
+
+      if (!children && CONTAINER_TAGS.has(tag)) {
+        return `<${tag}${attrs}></${tag}>`;
+      }
+      return `<${tag}${attrs}>${children}</${tag}>`;
+    }
+
+    const structure = walk(document.documentElement, 0);
+    const textSummary = (document.body && document.body.textContent ? document.body.textContent.slice(0, 3000) : '');
+    return {
+      structure,
+      textSummary,
+      url: (document.location && document.location.href) || (typeof location !== 'undefined' && location && location.href) || '',
+      title: document.title || ''
+    };
+  }
+
+  // --- getElementFullHtml ---------------------------------------------------
+  function getElementFullHtml(selector) {
+    if (!IframeSelector) {
+      return { selector, found: false, error: 'IframeSelector not available' };
+    }
+    let el;
+    try {
+      const found = IframeSelector.querySelectorDeep(document, selector);
+      el = found ? found.element : null;
+    } catch (e) {
+      return { selector, found: false, error: 'INVALID_SELECTOR: ' + (e && e.message ? e.message : String(e)) };
+    }
+    if (!el) return { selector, found: false };
+    const attributes = [];
+    for (const attr of el.attributes) {
+      attributes.push({ name: attr.name, value: attr.value });
+    }
+    return {
+      selector,
+      found: true,
+      outerHTML: el.outerHTML,
+      innerText: el.innerText || el.textContent || '',
+      attributes
+    };
+  }
+
+  function getElementsFullHtml(selectors) {
+    return selectors.map(getElementFullHtml);
+  }
+
   const api = {
     filterClasses, truncateText, shouldRemoveTag, buildIframePrefix,
     cleanPageHtml, extractAnnotationContext, compressStructure, cleanHtmlForLLM,
+    getCompressedSnapshot, getElementFullHtml, getElementsFullHtml,
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
