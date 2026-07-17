@@ -573,3 +573,26 @@ label { display: block; margin-top: 12px; font-weight: 600; }
 .btn-step-complete-annotation:hover {
   filter: brightness(0.95);
 }
+
+.url-template-hint {
+  margin-top: 6px;
+  padding: 8px 12px;
+  font-size: 13px;
+  background: #fef3c7;
+  border-left: 3px solid #f59e0b;
+  color: #92400e;
+  border-radius: 4px;
+  line-height: 1.5;
+}
+.url-template-hint.hidden {
+  display: none;
+}
+.url-template-hint code {
+  background: rgba(0, 0, 0, 0.07);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: 'Courier New', monospace;
+}
+.url-template-hint .hint-label {
+  font-weight: 600;
+}
