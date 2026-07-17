@@ -586,7 +586,7 @@ async function _completeStepAnnotationInner(stepIndex, step) {
       return;
     }
 
-    const pageInfo = cleanHtmlForLLM(captured.fullHtml, captured.annotations);
+    const pageInfo = DomCleaner.cleanHtmlForLLM(captured.fullHtml, captured.annotations);
 
     const stepContext = {
       globalDescription: wizardState.userDescription || wizardState.description || '',

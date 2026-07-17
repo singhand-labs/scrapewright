@@ -542,3 +542,45 @@ describe('getElementFullHtml', () => {
     assert.ok(result.outerHTML.includes('only-here'));
   });
 });
+
+describe('consumer migration verification', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+
+  function read(rel) {
+    return fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
+  }
+
+  it('content-script.js no longer defines getCompressedSnapshot inline', () => {
+    const src = read('content-script.js');
+    assert.doesNotMatch(src, /function\s+getCompressedSnapshot\s*\(/,
+      'inline definition should be removed; the call goes through window.DomCleaner');
+  });
+
+  it('content-script.js no longer defines getElementFullHtml inline', () => {
+    const src = read('content-script.js');
+    assert.doesNotMatch(src, /function\s+getElementFullHtml\s*\(/,
+      'inline definition should be removed');
+  });
+
+  it('content-script.js calls window.DomCleaner for snapshot operations', () => {
+    const src = read('content-script.js');
+    assert.match(src, /DomCleaner\.getCompressedSnapshot|DomCleaner\.getElementFullHtml/,
+      'expected at least one DomCleaner call site');
+  });
+
+  it('wizard.html loads lib/dom-cleaner.js (not html-cleaner.js)', () => {
+    const html = read('wizard.html');
+    assert.match(html, /src="lib\/dom-cleaner\.js"/);
+    assert.doesNotMatch(html, /src="lib\/html-cleaner\.js"/);
+  });
+
+  it('manifest.json loads lib/dom-cleaner.js before content-script.js', () => {
+    const manifest = read('manifest.json');
+    const cleanerIdx = manifest.indexOf('lib/dom-cleaner.js');
+    const csIdx = manifest.indexOf('content-script.js');
+    assert.ok(cleanerIdx > -1, 'lib/dom-cleaner.js missing from manifest');
+    assert.ok(csIdx > -1, 'content-script.js missing from manifest');
+    assert.ok(cleanerIdx < csIdx, 'dom-cleaner.js must load before content-script.js');
+  });
+});
