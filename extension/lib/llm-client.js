@@ -1,3 +1,24 @@
+const DEFAULT_MAX_RETRIES = 3;
+const DEFAULT_TIMEOUT_MS = 60_000;
+const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+class LLMError extends Error {
+  constructor(message, { retryable = false, status, cause } = {}) {
+    super(message);
+    this.name = 'LLMError';
+    this.retryable = retryable;
+    if (status !== undefined) this.status = status;
+    if (cause) this.cause = cause;
+  }
+}
+
+function defaultBackoffMs(attempt) {
+  // attempt is 0-based for the *failed* attempt; first retry waits ~1s, then
+  // ~2s, then ~4s. Capped at 8s. Jitter spreads thundering-herd retries.
+  const base = Math.min(1000 * Math.pow(2, attempt), 8000);
+  return base + Math.floor(Math.random() * 500);
+}
+
 class LLMClient {
   constructor(config) {
     this.provider = config.provider;
@@ -19,6 +40,39 @@ class LLMClient {
   }
 
   async chat(messages, options = {}) {
+    const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
+    const backoffMs = options.backoffMs ?? defaultBackoffMs;
+
+    let lastError;
+    let attempt = 0;
+    for (; attempt <= maxRetries; attempt++) {
+      try {
+        return await this._chatOnce(messages, options);
+      } catch (e) {
+        lastError = e;
+        const retryable = e.retryable === true;
+        if (!retryable || attempt === maxRetries) break;
+        const wait = backoffMs(attempt);
+        const shortErr = (e && e.message) ? e.message.split('\n')[0].slice(0, 200) : String(e);
+        console.warn(`[LLMClient] Attempt ${attempt + 1} failed (${shortErr}); retrying in ${wait}ms`);
+        await new Promise(r => setTimeout(r, wait));
+      }
+    }
+
+    // Retries exhausted (or hit a non-retryable error after some attempt).
+    // `attempt` is the 0-based index of the last try; total tries = attempt + 1.
+    if (attempt >= 1 && lastError && lastError.retryable) {
+      const wrapped = new Error(`LLM call failed after ${attempt + 1} attempts. Last error: ${lastError.message}`);
+      wrapped.name = 'LLMRetryExhausted';
+      wrapped.cause = lastError;
+      wrapped.lastError = lastError;
+      wrapped.attempts = attempt + 1;
+      throw wrapped;
+    }
+    throw lastError || new Error('LLM call failed without a captured error');
+  }
+
+  async _chatOnce(messages, options = {}) {
     const base = this.apiBaseUrl.replace(/\/$/, '');
     const url = `${base}/chat/completions`;
     const body = {
@@ -33,6 +87,10 @@ class LLMClient {
     console.log('[LLMClient] Request model:', this.model);
     console.log('[LLMClient] Request body:', JSON.stringify(body, null, 2));
 
+    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+
     let response;
     try {
       response = await fetch(url, {
@@ -41,11 +99,19 @@ class LLMClient {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${this.apiKey}`
         },
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
+        signal: controller ? controller.signal : undefined
       });
     } catch (e) {
-      console.error('[LLMClient] Network error:', e);
-      throw new Error(`Network error calling LLM API (${url}): ${e.message}`);
+      const name = e && e.name;
+      // AbortError = our timeout; network failures are also retryable.
+      const msg = name === 'AbortError'
+        ? `LLM API timed out after ${timeoutMs}ms (${url})`
+        : `Network error calling LLM API (${url}): ${e.message}`;
+      console.error('[LLMClient] Network/timeout error:', msg);
+      throw new LLMError(msg, { retryable: true, cause: e });
+    } finally {
+      if (timer) clearTimeout(timer);
     }
 
     console.log('[LLMClient] Response status:', response.status);
@@ -60,18 +126,21 @@ class LLMClient {
       } catch (e) {
         detail = (await response.text()).slice(0, 300);
       }
+      const retryable = RETRYABLE_STATUS.has(response.status);
+      const base = { retryable, status: response.status };
       if (response.status === 404) {
-        throw new Error(`LLM API endpoint not found (404). URL: ${url}. Check your Base URL and Model name. Detail: ${detail}`);
+        throw new LLMError(`LLM API endpoint not found (404). URL: ${url}. Check your Base URL and Model name. Detail: ${detail}`, base);
       }
       if (response.status === 401 || response.status === 403) {
-        throw new Error(`LLM API auth failed (${response.status}). Check your API key. Detail: ${detail}`);
+        throw new LLMError(`LLM API auth failed (${response.status}). Check your API key. Detail: ${detail}`, base);
       }
-      throw new Error(`LLM API error (${response.status}): ${detail}`);
+      throw new LLMError(`LLM API error (${response.status}): ${detail}`, base);
     }
     if (!contentType.includes('application/json')) {
       const text = await response.text();
       console.error('[LLMClient] Non-JSON response:', text.slice(0, 500));
-      throw new Error(`LLM API returned non-JSON (status ${response.status}, content-type: ${contentType}, url: ${url}). Response starts with: ${text.slice(0, 200)}`);
+      // Proxy hiccups (HTML error pages) are often transient.
+      throw new LLMError(`LLM API returned non-JSON (status ${response.status}, content-type: ${contentType}, url: ${url}). Response starts with: ${text.slice(0, 200)}`, { retryable: true, status: response.status });
     }
 
     const data = await response.json();
@@ -79,7 +148,7 @@ class LLMClient {
 
     if (!data.choices || !data.choices[0] || !data.choices[0].message) {
       console.error('[LLMClient] Unexpected response structure:', JSON.stringify(data, null, 2).slice(0, 500));
-      throw new Error(`LLM API returned unexpected format. Expected data.choices[0].message.content, got: ${JSON.stringify(data).slice(0, 200)}`);
+      throw new LLMError(`LLM API returned unexpected format. Expected data.choices[0].message.content, got: ${JSON.stringify(data).slice(0, 200)}`, { retryable: false });
     }
 
     const message = data.choices[0].message;
@@ -100,7 +169,8 @@ class LLMClient {
         : finishReason === 'content_filter'
           ? ' (finish_reason=content_filter — the response was filtered)'
           : '';
-      throw new Error(`LLM API returned empty content${hint}. Detail: ${detail}`);
+      // Empty content is often transient under load — retry before surfacing.
+      throw new LLMError(`LLM API returned empty content${hint}. Detail: ${detail}`, { retryable: true });
     }
 
     return content;
@@ -108,7 +178,8 @@ class LLMClient {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { LLMClient };
+  module.exports = { LLMClient, LLMError };
 } else if (typeof window !== 'undefined') {
   window.LLMClient = LLMClient;
+  window.LLMError = LLMError;
 }
