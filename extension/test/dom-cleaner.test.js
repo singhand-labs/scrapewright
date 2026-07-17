@@ -120,4 +120,30 @@ describe('buildIframePrefix', () => {
     assert.equal(buildIframePrefix(iframes[0]), 'iframe:nth-of-type(1)::');
     assert.equal(buildIframePrefix(iframes[1]), 'iframe:nth-of-type(2)::');
   });
+
+  it('returns empty string for null input', () => {
+    assert.equal(buildIframePrefix(null), '');
+  });
+
+  it('escapes double-quote in name attribute', () => {
+    setupJSDOM(`<html><body><iframe name='bad"name'></iframe></body></html>`);
+    const iframe = document.querySelector('iframe[name]');
+    // Whatever escaping is used, the output must be parseable by document.querySelector.
+    const prefix = buildIframePrefix(iframe);
+    const selector = prefix.replace(/::$/, '');  // strip trailing ::
+    assert.doesNotThrow(() => document.querySelector(selector));
+  });
+
+  it('nth-of-type is correct among same-parent siblings', () => {
+    setupJSDOM(`<html><body>
+      <div><iframe></iframe></div>
+      <div><iframe></iframe><iframe></iframe></div>
+    </body></html>`);
+    const allIframes = document.querySelectorAll('iframe');
+    // First iframe is the only iframe in its parent → nth-of-type(1)
+    assert.equal(buildIframePrefix(allIframes[0]), 'iframe:nth-of-type(1)::');
+    // Second and third iframes share a parent; positions 1 and 2 within that parent
+    assert.equal(buildIframePrefix(allIframes[1]), 'iframe:nth-of-type(1)::');
+    assert.equal(buildIframePrefix(allIframes[2]), 'iframe:nth-of-type(2)::');
+  });
 });

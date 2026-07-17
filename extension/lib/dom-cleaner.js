@@ -81,15 +81,25 @@
     return String(s).replace(/[^a-zA-Z0-9_-]/g, '\\$&');
   }
 
+  // Escape a CSS string literal (attribute-selector value). Inside double quotes
+  // only `"` and `\` need escaping — mirrors lib/iframe-selector.js cssEscapeString.
+  function escapeCssString(s) {
+    return String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  }
+
   function buildIframePrefix(iframe) {
+    if (!iframe) return '';
     const id = iframe.getAttribute && iframe.getAttribute('id');
     if (id) return 'iframe#' + escapeCssIdent(id) + '::';
     const name = iframe.getAttribute && iframe.getAttribute('name');
-    if (name) return 'iframe[name="' + name + '"]::';
-    // Compute nth-of-type among same-origin iframes in document order.
-    const doc = iframe.ownerDocument;
-    const all = Array.from(doc.querySelectorAll('iframe'));
-    const idx = all.indexOf(iframe) + 1;
+    if (name) return 'iframe[name="' + escapeCssString(name) + '"]::';
+    // nth-of-type is evaluated within the parent element — select among
+    // same-parent iframe siblings, not document order. Mirrors the pattern
+    // in lib/iframe-selector.js iframeElementSelector.
+    const parent = iframe.parentElement;
+    if (!parent) return 'iframe::';
+    const siblings = Array.from(parent.children).filter(el => el.tagName === 'IFRAME');
+    const idx = siblings.indexOf(iframe) + 1;
     return 'iframe:nth-of-type(' + idx + ')::';
   }
 
