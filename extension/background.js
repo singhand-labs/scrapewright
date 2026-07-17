@@ -163,24 +163,28 @@ async function startLongPolling() {
 
   debugLogger.log('info', 'background', 'Starting long-polling', { port: serverPort });
 
-  let pollSucceededOnce = false;
+  // A single transient failure shouldn't flip the badge red — but if the host
+  // is unreachable for several polls in a row, we treat it as disconnected.
+  // On the first success after failures, we flip back to 'polling'.
+  const DISCONNECT_THRESHOLD = 3;
+  let consecutiveFailures = 0;
 
   while (pollingActive) {
     try {
       const response = await fetch(`http://localhost:${serverPort}/api/v1/extension/poll`);
 
       if (!response.ok) {
-        debugLogger.log('warn', 'background', 'Poll failed', { status: response.status });
-        if (!pollSucceededOnce) {
-          // Host unreachable — we're effectively disconnected, not polling.
+        consecutiveFailures++;
+        debugLogger.log('warn', 'background', 'Poll failed', { status: response.status, consecutiveFailures });
+        if (consecutiveFailures >= DISCONNECT_THRESHOLD) {
           setNativeMode('disconnected', 'host returned HTTP ' + response.status + ' on /extension/poll');
         }
         await sleep(5000);
         continue;
       }
 
-      if (!pollSucceededOnce) {
-        pollSucceededOnce = true;
+      if (consecutiveFailures > 0) {
+        consecutiveFailures = 0;
         setNativeMode('polling');
       }
 
@@ -199,8 +203,9 @@ async function startLongPolling() {
         });
       }
     } catch (e) {
-      debugLogger.log('warn', 'background', 'Poll error, retrying in 5s', { error: e.message });
-      if (!pollSucceededOnce) {
+      consecutiveFailures++;
+      debugLogger.log('warn', 'background', 'Poll error, retrying in 5s', { error: e.message, consecutiveFailures });
+      if (consecutiveFailures >= DISCONNECT_THRESHOLD) {
         setNativeMode('disconnected', e.message || 'cannot reach host on configured port');
       }
       await sleep(5000);
