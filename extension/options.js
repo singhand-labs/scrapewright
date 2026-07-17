@@ -167,10 +167,26 @@ async function copyNativeDiagnostics() {
 function showToast(message, type = 'info', duration = 3000) {
   const el = document.getElementById('toast');
   if (!el) return;
-  el.textContent = message;
-  el.className = 'toast ' + type;
   clearTimeout(el._timer);
-  el._timer = setTimeout(() => { el.className = 'toast hidden'; }, duration);
+  el.innerHTML = '';
+  const msg = document.createElement('span');
+  msg.className = 'toast-message';
+  msg.textContent = message;
+  el.appendChild(msg);
+  // Errors stay visible until the user dismisses them; success/info auto-hide.
+  if (type === 'error') {
+    const btn = document.createElement('button');
+    btn.className = 'toast-close';
+    btn.type = 'button';
+    btn.setAttribute('aria-label', 'Close');
+    btn.textContent = '×';
+    btn.onclick = () => { clearTimeout(el._timer); el.className = 'toast hidden'; };
+    el.appendChild(btn);
+    el.className = 'toast ' + type + ' dismissible';
+  } else {
+    el.className = 'toast ' + type;
+    el._timer = setTimeout(() => { el.className = 'toast hidden'; }, duration);
+  }
 }
 
 async function loadServerPort() {
