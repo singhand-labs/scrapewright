@@ -99,6 +99,10 @@ function hideLoading() {
   if (el) el.classList.add('hidden');
 }
 
+function updateUrlTemplateHint(sampleInput) {
+  // Stub — real implementation lands in Task 5.
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   await loadEditMode();
   showPhase(wizardState.phase);
@@ -1097,7 +1101,14 @@ Return JSON with:
 - needsExploration: boolean (true if the page needs interaction to reach target content)
 - explorationScript: string (JavaScript code using $ API, or empty string if not needed)
 - sampleInput: object (example input values for exploration, e.g. { query: "What is 2+2?" })
-- description: string (brief human-readable description of what the script does)`;
+- description: string (brief human-readable description of what the script does)
+- targetUrlTemplate: string or null (see URL Template Detection below)
+
+URL Template Detection (optional). If the user's Page Operations *explicitly* describe substituting part of the URL with an input parameter (e.g., "replace 'keyword' in the URL with the input keyword" or "open URL with parameter page=N"), return a targetUrlTemplate derived from the URL by replacing the relevant substring with {{paramName}} — where paramName matches the input parameter name from the requirements. Examples:
+- URL https://facebook.com/search/top?q=keyword + user says "replace keyword with input keyword" → targetUrlTemplate: "https://facebook.com/search/top?q={{keyword}}"
+- URL https://example.com/list?page=1 + user says "go to page N" → targetUrlTemplate: "https://example.com/list?page={{pageNumber}}"
+
+Do NOT infer templates from implicit patterns like "search for keyword" or "show results for X" — only extract when the user *explicitly* describes URL rewriting. When in doubt, return null. Returning a wrong template breaks the service; returning null falls back to the safe type/click flow.`;
 
   const result = await client.chat([
     { role: 'system', content: buildSystemMessageWithGlobalContext('You are a web scraping expert. Return JSON only.') },
@@ -1394,6 +1405,16 @@ async function startResearch() {
     hideLoading();
     await continueResearch(tab.id, config.config, pageInfo, null);
     return;
+  }
+
+  if (exploration.targetUrlTemplate && exploration.targetUrlTemplate !== wizardState.targetUrl) {
+    wizardState.targetUrl = exploration.targetUrlTemplate;
+    const urlInput = document.getElementById('targetUrl');
+    if (urlInput) urlInput.value = exploration.targetUrlTemplate;
+    updateUrlTemplateHint(exploration.sampleInput);
+    console.log('Applied targetUrlTemplate from Research:', exploration.targetUrlTemplate);
+  } else {
+    updateUrlTemplateHint(exploration.sampleInput);
   }
 
   if (!exploration.needsExploration || !exploration.explorationScript) {
