@@ -41,6 +41,7 @@ class StepOrchestrator {
     debugLogger.log('info', 'step-orchestrator', 'Tab created', { tabId, url: resolvedUrl });
     const stepOutputs = [];
     const stepIterationCounts = {};
+    const enteredStepIds = new Set();
 
     try {
       await deps.waitForTabLoad(tabId);
@@ -89,12 +90,15 @@ class StepOrchestrator {
           throw new Error('STEP_NOT_FOUND');
         }
 
-        emit('STEP_START', {
-          stepId: step.id,
-          stepName: step.name,
-          stepIndex: service.steps.findIndex(s => s.id === step.id),
-          maxIterations: step.maxIterations ?? 1
-        });
+        if (!enteredStepIds.has(step.id)) {
+          enteredStepIds.add(step.id);
+          emit('STEP_START', {
+            stepId: step.id,
+            stepName: step.name,
+            stepIndex: service.steps.findIndex(s => s.id === step.id),
+            maxIterations: step.maxIterations ?? 1
+          });
+        }
 
         if (!step.script || !step.script.trim()) {
           debugLogger.log('error', 'step-orchestrator', 'Step has empty script', { stepId: step.id });
@@ -116,6 +120,11 @@ class StepOrchestrator {
             skipped: true,
             skipReason: 'MAX_ITERATIONS',
             timestamp: Date.now()
+          });
+          emit('STEP_DONE', {
+            stepId: step.id,
+            resultPreview: '(skipped: max iterations exceeded)',
+            iterations: stepIterations
           });
           currentStepId = step.onFailure || 'TERMINATE';
           continue;

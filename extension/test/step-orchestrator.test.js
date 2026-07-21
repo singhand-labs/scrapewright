@@ -530,4 +530,47 @@ describe('StepOrchestrator onEvent callback', () => {
     const iteration = events.find(e => e.type === 'STEP_ITERATION');
     assert.deepEqual(iteration.domActivity, []);
   });
+
+  it('emits STEP_START only once per step across poll retries', async () => {
+    const service = {
+      targetUrl: 'about:blank',
+      steps: [
+        { id: 's1', name: 'poll', script: 'return {done:false}', onSuccess: 's2', onFailure: 's2', maxIterations: 3 },
+        { id: 's2', name: 'next', script: 'return {done:true}', onSuccess: 'TERMINATE' }
+      ]
+    };
+    const events = [];
+    await StepOrchestrator.execute(
+      service,
+      {},
+      buildDeps({ executeScript: async () => ({ done: false }) }),
+      { onEvent: (e) => events.push(e) }
+    );
+    const startEvents = events.filter(e => e.type === 'STEP_START' && e.stepId === 's1');
+    assert.equal(startEvents.length, 1, 'STEP_START should fire only on first entry; got ' + startEvents.length);
+  });
+
+  it('emits STEP_DONE on the MAX_ITERATIONS skip path with a skipped marker', async () => {
+    // Force the orchestrator to hit the per-step maxIterations cap via
+    // stepIterations > step.maxIterations. We use a step that polls to itself
+    // (onSuccess: 's1') but the cap is 1 — so the second entry triggers the skip.
+    const service = {
+      targetUrl: 'about:blank',
+      steps: [
+        { id: 's1', name: 'capped', script: 'return {done:false}', onSuccess: 's1', maxIterations: 1, onFailure: 'TERMINATE' }
+      ]
+    };
+    const events = [];
+    // Force maxStepIterations high enough that we don't trip the global cap first
+    await StepOrchestrator.execute(
+      { ...service, config: { maxStepIterations: 10 } },
+      {},
+      buildDeps({ executeScript: async () => ({ done: false }) }),
+      { onEvent: (e) => events.push(e) }
+    ).catch(e => e);  // may throw POLL_EXHAUSTED or terminate cleanly
+    const doneEvents = events.filter(e => e.type === 'STEP_DONE' && e.stepId === 's1');
+    // Either 1 (if the skip path fires once) — assert it fires AT LEAST once with the right marker
+    const skipMarker = doneEvents.find(e => /skipped/i.test(e.resultPreview || ''));
+    assert.ok(skipMarker, 'expected at least one STEP_DONE with skipped marker; got events: ' + JSON.stringify(events.map(e => e.type)));
+  });
 });
