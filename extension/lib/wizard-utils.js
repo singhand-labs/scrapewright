@@ -523,6 +523,83 @@ function formatDomActivitySummary(activities) {
   return head.join(', ') + tail;
 }
 
+function summarizeExecutionDiagnostics(events, failingStepId) {
+  if (!Array.isArray(events) || events.length === 0) return '';
+  if (typeof failingStepId !== 'string' || failingStepId === '') return '';
+
+  const stepEvents = events.filter(e => e && e.stepId === failingStepId);
+  if (stepEvents.length === 0) {
+    return `\nRuntime diagnostics: (no events recorded for step "${failingStepId}")\n`;
+  }
+
+  const iterations = stepEvents.filter(e => e.type === 'STEP_ITERATION');
+  const failed = stepEvents.find(e => e.type === 'STEP_FAILED');
+
+  const lines = [];
+  lines.push(`Runtime diagnostics for failing step "${failingStepId}":`);
+  lines.push('');
+
+  const renderIteration = (evt) => {
+    const out = [];
+    out.push(`Iteration ${evt.iteration}:`);
+    if (Array.isArray(evt.domActivity) && evt.domActivity.length > 0) {
+      const groups = new Map();
+      for (const a of evt.domActivity) {
+        const key = `${a.method}('${a.selector}')`;
+        if (!groups.has(key)) groups.set(key, { count: 0, total: 0 });
+        const g = groups.get(key);
+        g.count++;
+        g.total += (typeof a.outcome === 'number' ? a.outcome : 0);
+      }
+      for (const [k, v] of groups) {
+        out.push(`  ${k} ×${v.count} → ${v.total}`);
+      }
+    } else {
+      out.push('  (no DOM calls)');
+    }
+    out.push(`  Returned: ${evt.resultPreview || '(no result)'}`);
+    return out.join('\n');
+  };
+
+  if (iterations.length > 5) {
+    lines.push('Iterations 1-3 (representative):');
+    for (let i = 0; i < 3; i++) lines.push(renderIteration(iterations[i]));
+    lines.push('...');
+    lines.push(`Iteration ${iterations.length} (last):`);
+    lines.push(renderIteration(iterations[iterations.length - 1]));
+  } else {
+    for (const it of iterations) lines.push(renderIteration(it));
+  }
+
+  // Total line + heuristic
+  const allListOutcomes = iterations.flatMap(e => (e.domActivity || []).filter(a => a.method === '$list').map(a => a.outcome));
+  const allLoadingTrue = iterations.flatMap(e => (e.domActivity || []).filter(a => a.method === '$exists' && /load|spin|generat/i.test(a.selector)).map(a => a.outcome));
+  lines.push('');
+  if (failed) {
+    lines.push(`Step failed: ${failed.error}`);
+  }
+  if (iterations.length > 0) {
+    lines.push(`Total: ${iterations.length} iterations, all returned ${iterations[0].resultPreview || '(empty)'}.`);
+  }
+
+  // Heuristic branch
+  lines.push('');
+  lines.push('Likely causes:');
+  if (allListOutcomes.length > 0 && allListOutcomes.every(n => n === 0)) {
+    lines.push('  - The parent list selector is wrong for this page structure');
+    lines.push('  - The content has not loaded by the time the script runs (try $wait first)');
+    lines.push('  - The page requires interaction (scroll/click) before content appears');
+  } else if (allLoadingTrue.length > 0 && allLoadingTrue.every(n => n === 1)) {
+    lines.push('  - A loading indicator is still visible; increase the $wait timeout');
+    lines.push('  - The page renders content asynchronously and the script runs too early');
+  } else {
+    lines.push('  - The script\'s ready/done check is wrong (data IS present but the script does not recognize it)');
+    lines.push('  - Review the resultPreview above against the script\'s return statement');
+  }
+
+  return '\n' + lines.join('\n') + '\n';
+}
+
 function validateSteps(steps) {
   if (!Array.isArray(steps)) return { valid: false, error: 'steps must be an array' };
   if (steps.length === 0) return { valid: false, error: 'steps cannot be empty' };
@@ -905,7 +982,7 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
@@ -916,6 +993,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.truncateSnapshotForLLM = truncateSnapshotForLLM;
   window.summarizeFixIteration = summarizeFixIteration;
   window.formatDomActivitySummary = formatDomActivitySummary;
+  window.summarizeExecutionDiagnostics = summarizeExecutionDiagnostics;
   window.getStepTemplates = getStepTemplates;
   window.applyTemplate = applyTemplate;
   window.STEP_TEMPLATES = STEP_TEMPLATES;
@@ -951,6 +1029,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.truncateSnapshotForLLM = truncateSnapshotForLLM;
   self.summarizeFixIteration = summarizeFixIteration;
   self.formatDomActivitySummary = formatDomActivitySummary;
+  self.summarizeExecutionDiagnostics = summarizeExecutionDiagnostics;
   self.appendStepWithChainLink = appendStepWithChainLink;
   self.removeStepWithRelink = removeStepWithRelink;
   self.relinkChainToArray = relinkChainToArray;

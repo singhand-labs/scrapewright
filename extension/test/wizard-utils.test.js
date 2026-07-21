@@ -1,6 +1,6 @@
 const { describe, it, test } = require('node:test');
 const assert = require('node:assert/strict');
-const { parseSchemaFields, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, buildRequirementsBlock, suggestServiceName, SCRIPT_DSL_GUIDE, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary } = require('../lib/wizard-utils');
+const { parseSchemaFields, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, buildRequirementsBlock, suggestServiceName, SCRIPT_DSL_GUIDE, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics } = require('../lib/wizard-utils');
 
 describe('parseSchemaFields', () => {
   it('returns field names with types', () => {
@@ -1085,5 +1085,63 @@ describe('formatDomActivitySummary', () => {
     const out = formatDomActivitySummary(activities);
     assert.ok(out.includes('+2 more'), 'expected +2 more suffix, got: ' + out);
     assert.ok(!out.includes('.d'), '4th group should not be shown');
+  });
+});
+
+describe('summarizeExecutionDiagnostics', () => {
+  function itEvent(type, extra = {}) {
+    return { type, ts: Date.now(), ...extra };
+  }
+
+  it('returns empty string when events array is empty', () => {
+    assert.equal(summarizeExecutionDiagnostics([], 's1'), '');
+  });
+
+  it('returns a "no events recorded" note when stepId is not present in events', () => {
+    const events = [
+      itEvent('EXECUTION_START', { totalSteps: 1 }),
+      itEvent('STEP_START', { stepId: 's2', stepName: 'other' })
+    ];
+    const out = summarizeExecutionDiagnostics(events, 's1');
+    assert.match(out, /no events recorded for step "s1"/);
+  });
+
+  it('renders all iterations verbatim when 3 or fewer iterations', () => {
+    const events = [
+      itEvent('STEP_ITERATION', { stepId: 's1', iteration: 1, maxIterations: 3, domActivity: [{ method: '$list', selector: '.post', outcome: 0, ms: 5 }], resultPreview: '{"done":false}' }),
+      itEvent('STEP_ITERATION', { stepId: 's1', iteration: 2, maxIterations: 3, domActivity: [{ method: '$list', selector: '.post', outcome: 0, ms: 5 }], resultPreview: '{"done":false}' }),
+      itEvent('STEP_ITERATION', { stepId: 's1', iteration: 3, maxIterations: 3, domActivity: [{ method: '$list', selector: '.post', outcome: 0, ms: 5 }], resultPreview: '{"done":false}' }),
+      itEvent('STEP_FAILED', { stepId: 's1', error: 'POLL_EXHAUSTED: ...', iterations: 3 })
+    ];
+    const out = summarizeExecutionDiagnostics(events, 's1');
+    assert.match(out, /Runtime diagnostics for failing step "s1"/);
+    assert.match(out, /Iteration 1:/);
+    assert.match(out, /Iteration 2:/);
+    assert.match(out, /Iteration 3:/);
+    assert.match(out, /\$list\('\.post'\) ×1 → 0/);
+    assert.match(out, /Returned: \{"done":false\}/);
+  });
+
+  it('compresses to representative 3 + last + total when more than 5 iterations', () => {
+    const events = [];
+    for (let i = 1; i <= 10; i++) {
+      events.push(itEvent('STEP_ITERATION', { stepId: 's1', iteration: i, maxIterations: 10, domActivity: [{ method: '$list', selector: '.post', outcome: 0 }], resultPreview: '{"done":false}' }));
+    }
+    events.push(itEvent('STEP_FAILED', { stepId: 's1', error: 'POLL_EXHAUSTED', iterations: 10 }));
+    const out = summarizeExecutionDiagnostics(events, 's1');
+    assert.match(out, /Iterations 1-3 \(representative\)/);
+    assert.match(out, /Iteration 10 \(last\)/);
+    assert.match(out, /Total: 10 iterations/);
+    assert.ok(!out.includes('Iteration 4:'), 'middle iterations should not appear verbatim');
+  });
+
+  it('emits "parent list selector is wrong" heuristic when all $list outcomes are 0', () => {
+    const events = [
+      itEvent('STEP_ITERATION', { stepId: 's1', iteration: 1, maxIterations: 3, domActivity: [{ method: '$list', selector: '.post', outcome: 0 }], resultPreview: '{"done":false}' }),
+      itEvent('STEP_ITERATION', { stepId: 's1', iteration: 2, maxIterations: 3, domActivity: [{ method: '$list', selector: '.post', outcome: 0 }], resultPreview: '{"done":false}' }),
+      itEvent('STEP_FAILED', { stepId: 's1', error: 'POLL_EXHAUSTED', iterations: 2 })
+    ];
+    const out = summarizeExecutionDiagnostics(events, 's1');
+    assert.match(out, /parent list selector is wrong/i);
   });
 });
