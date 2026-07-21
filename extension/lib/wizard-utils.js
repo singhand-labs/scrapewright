@@ -468,6 +468,43 @@ function truncateSnapshotForLLM(snapshot, budget = 30000) {
   return out;
 }
 
+function summarizeFixIteration({ stepId, stepName, script, annotations, userFeedback, error, result } = {}) {
+  const lines = [];
+  const safeStepId = stepId || '(unknown)';
+  const safeStepName = stepName || '(unknown)';
+  lines.push(`[Attempt — step "${safeStepId}" ("${safeStepName}")]`);
+
+  lines.push('Script tried:');
+  lines.push(typeof script === 'string' && script.length ? script : '(none)');
+
+  lines.push('Annotations:');
+  if (Array.isArray(annotations) && annotations.length > 0) {
+    for (const a of annotations) {
+      const sel = a && a.selector ? a.selector : '(no selector)';
+      const target = a && a.outputField ? a.outputField : (a && a.inputField ? a.inputField : '');
+      const purpose = a && a.purpose ? a.purpose : '';
+      const tail = [target, purpose].filter(Boolean).join(' → ');
+      lines.push(tail ? `  - ${sel} → ${tail}` : `  - ${sel}`);
+    }
+  } else {
+    lines.push('  (none)');
+  }
+
+  lines.push('User feedback: ' + (userFeedback ? userFeedback : '(none)'));
+  lines.push('Error: ' + (error ? error : '(none)'));
+  if (result === undefined || result === null) {
+    lines.push('Result: (none)');
+  } else {
+    try {
+      lines.push('Result: ' + JSON.stringify(result));
+    } catch {
+      lines.push('Result: (unserializable)');
+    }
+  }
+
+  return lines.join('\n');
+}
+
 function validateSteps(steps) {
   if (!Array.isArray(steps)) return { valid: false, error: 'steps must be an array' };
   if (steps.length === 0) return { valid: false, error: 'steps cannot be empty' };
@@ -850,7 +887,7 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
@@ -859,6 +896,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.findEmptyExtractionFields = findEmptyExtractionFields;
   window.getOutputFieldOptions = getOutputFieldOptions;
   window.truncateSnapshotForLLM = truncateSnapshotForLLM;
+  window.summarizeFixIteration = summarizeFixIteration;
   window.getStepTemplates = getStepTemplates;
   window.applyTemplate = applyTemplate;
   window.STEP_TEMPLATES = STEP_TEMPLATES;
@@ -892,6 +930,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.findEmptyExtractionFields = findEmptyExtractionFields;
   self.getOutputFieldOptions = getOutputFieldOptions;
   self.truncateSnapshotForLLM = truncateSnapshotForLLM;
+  self.summarizeFixIteration = summarizeFixIteration;
   self.appendStepWithChainLink = appendStepWithChainLink;
   self.removeStepWithRelink = removeStepWithRelink;
   self.relinkChainToArray = relinkChainToArray;
