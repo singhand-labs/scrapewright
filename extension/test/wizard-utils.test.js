@@ -1,6 +1,6 @@
 const { describe, it, test } = require('node:test');
 const assert = require('node:assert/strict');
-const { parseSchemaFields, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, buildRequirementsBlock, suggestServiceName, SCRIPT_DSL_GUIDE, truncateSnapshotForLLM } = require('../lib/wizard-utils');
+const { parseSchemaFields, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, buildRequirementsBlock, suggestServiceName, SCRIPT_DSL_GUIDE, truncateSnapshotForLLM, summarizeFixIteration } = require('../lib/wizard-utils');
 
 describe('parseSchemaFields', () => {
   it('returns field names with types', () => {
@@ -977,5 +977,81 @@ describe('truncateSnapshotForLLM', () => {
     const out = truncateSnapshotForLLM({ html: 'h'.repeat(5000) }, 2000);
     assert.equal(out.html.length, 2000);
     assert.ok(out.html.startsWith('[TRUNCATED'));
+  });
+});
+
+describe('summarizeFixIteration', () => {
+  it('includes the script in full', () => {
+    const out = summarizeFixIteration({
+      stepId: 's1', stepName: 'Extract posts',
+      script: 'const items = await $list(".post");\nreturn { posts: items.map(i => ({ title: i.textContent })) };'
+    });
+    assert.match(out, /Script tried:/);
+    assert.match(out, /const items = await \$list\("\.post"\);/);
+    assert.match(out, /return \{ posts: items\.map/);
+  });
+
+  it('includes the error message in full', () => {
+    const out = summarizeFixIteration({
+      stepId: 's1', stepName: 'X',
+      script: 'return 1;',
+      error: 'POLL_EXHAUSTED: Step "s1" exhausted after 3 attempts'
+    });
+    assert.match(out, /Error: POLL_EXHAUSTED: Step "s1" exhausted after 3 attempts/);
+  });
+
+  it('renders annotations one-per-line with intent', () => {
+    const out = summarizeFixIteration({
+      stepId: 's1', stepName: 'X',
+      script: 'return 1;',
+      annotations: [
+        { type: 'extract', selector: '.post .title', outputField: 'posts.title', purpose: 'extract into the title field of each post' },
+        { type: 'extract', selector: '.post .author', outputField: 'posts.author', purpose: 'extract into the author field of each post' }
+      ]
+    });
+    assert.match(out, /\.post \.title/);
+    assert.match(out, /\.post \.author/);
+    assert.match(out, /posts\.title/);
+    assert.match(out, /posts\.author/);
+  });
+
+  it('renders (none) for missing error/result/feedback', () => {
+    const out = summarizeFixIteration({
+      stepId: 's1', stepName: 'X',
+      script: 'return 1;'
+    });
+    assert.match(out, /User feedback:\s*\(none\)/);
+    assert.match(out, /Error:\s*\(none\)/);
+    assert.match(out, /Result:\s*\(none\)/);
+  });
+
+  it('includes userFeedback only when provided', () => {
+    const withFeedback = summarizeFixIteration({
+      stepId: 's1', stepName: 'X',
+      script: 'return 1;',
+      userFeedback: 'the page uses lazy load, wait longer'
+    });
+    assert.match(withFeedback, /the page uses lazy load, wait longer/);
+
+    const withoutFeedback = summarizeFixIteration({
+      stepId: 's1', stepName: 'X',
+      script: 'return 1;'
+    });
+    assert.doesNotMatch(withoutFeedback, /User feedback: [^(]/);
+  });
+
+  it('stays under 3KB for a typical iteration', () => {
+    const typicalScript = 'const items = await $list(".post");\n' +
+      'return { posts: items.map(item => ({ title: item.textContent, author: item.textContent })) };';
+    const out = summarizeFixIteration({
+      stepId: 'extract-posts', stepName: 'Extract posts',
+      script: typicalScript,
+      annotations: [
+        { type: 'extract', selector: '.post', outputField: 'posts.title', purpose: 'extract title' }
+      ],
+      error: 'EMPTY_EXTRACTION: required field(s) [posts.title] not found',
+      result: { done: false }
+    });
+    assert.ok(out.length < 3000, 'expected summary under 3KB, got ' + out.length);
   });
 });
