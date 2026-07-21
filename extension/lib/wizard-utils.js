@@ -439,6 +439,35 @@ function getOutputFieldOptions(outputSchema) {
   return options;
 }
 
+// Pure, non-mutating helper that caps a DOM snapshot before it goes to the LLM.
+// HTML dominates token cost so it gets the full `budget` (default 30K chars);
+// textContent and structure each get floor(budget/3). textSummary is left
+// uncapped because it's already small by construction. When a field is cut, a
+// compact [TRUNCATED] marker is prepended so the model knows to choose
+// selectors from the visible head — structure typically repeats on list pages.
+// The marker is part of the capped total (marker + body == limit), so the
+// budget is a hard ceiling on what the LLM receives.
+function truncateSnapshotForLLM(snapshot, budget = 30000) {
+  if (!snapshot || typeof snapshot !== 'object') return snapshot;
+  const out = { ...snapshot };
+  const subBudget = Math.floor(budget / 3);
+
+  const truncateField = (key, limit) => {
+    const val = out[key];
+    if (typeof val !== 'string') return;
+    if (val.length <= limit) return;
+    const marker = `[TRUNCATED original ${val.length} chars] `;
+    const keep = Math.max(0, limit - marker.length);
+    out[key] = marker + val.substring(0, keep);
+  };
+
+  truncateField('html', budget);
+  truncateField('textContent', subBudget);
+  truncateField('structure', subBudget);
+  // textSummary is left uncapped — it's already small by construction.
+  return out;
+}
+
 function validateSteps(steps) {
   if (!Array.isArray(steps)) return { valid: false, error: 'steps must be an array' };
   if (steps.length === 0) return { valid: false, error: 'steps cannot be empty' };
@@ -821,7 +850,7 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
@@ -829,6 +858,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.validateOutputAgainstSchema = validateOutputAgainstSchema;
   window.findEmptyExtractionFields = findEmptyExtractionFields;
   window.getOutputFieldOptions = getOutputFieldOptions;
+  window.truncateSnapshotForLLM = truncateSnapshotForLLM;
   window.getStepTemplates = getStepTemplates;
   window.applyTemplate = applyTemplate;
   window.STEP_TEMPLATES = STEP_TEMPLATES;
@@ -861,6 +891,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.validateOutputAgainstSchema = validateOutputAgainstSchema;
   self.findEmptyExtractionFields = findEmptyExtractionFields;
   self.getOutputFieldOptions = getOutputFieldOptions;
+  self.truncateSnapshotForLLM = truncateSnapshotForLLM;
   self.appendStepWithChainLink = appendStepWithChainLink;
   self.removeStepWithRelink = removeStepWithRelink;
   self.relinkChainToArray = relinkChainToArray;
