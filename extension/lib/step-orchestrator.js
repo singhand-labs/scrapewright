@@ -1,5 +1,5 @@
 class StepOrchestrator {
-  static async execute(service, input, deps) {
+  static async execute(service, input, deps, options = {}) {
     debugLogger.log('info', 'step-orchestrator', 'execute start', {
       targetUrl: service.targetUrl,
       stepCount: service.steps?.length,
@@ -7,6 +7,18 @@ class StepOrchestrator {
       timeoutMs: service.config?.timeoutMs ?? 30000,
       maxStepIterations: service.config?.maxStepIterations ?? 50
     });
+
+    const startTime = Date.now();
+    const emit = (type, payload = {}) => {
+      if (typeof options.onEvent !== 'function') return;
+      try {
+        options.onEvent({ type, ts: Date.now(), ...payload });
+      } catch (_) {
+        // Swallow — UI layer may not break execution.
+      }
+    };
+
+    emit('EXECUTION_START', { totalSteps: service.steps.length, targetUrl: service.targetUrl });
 
     if (!Array.isArray(service.steps) || service.steps.length === 0) {
       debugLogger.log('error', 'step-orchestrator', 'No steps defined');
@@ -28,6 +40,7 @@ class StepOrchestrator {
     const tabId = tab.id;
     debugLogger.log('info', 'step-orchestrator', 'Tab created', { tabId, url: resolvedUrl });
     const stepOutputs = [];
+    const stepIterationCounts = {};
 
     try {
       await deps.waitForTabLoad(tabId);
@@ -39,7 +52,6 @@ class StepOrchestrator {
       let currentStepId = firstStepId;
       let lastStepResult = null;
       let globalIteration = 0;
-      const stepIterationCounts = {};
       const stepResultsMap = {};
 
       // Auto-boost maxIterations for steps that are loop-back targets
@@ -76,6 +88,13 @@ class StepOrchestrator {
           debugLogger.log('error', 'step-orchestrator', 'Step not found', { currentStepId });
           throw new Error('STEP_NOT_FOUND');
         }
+
+        emit('STEP_START', {
+          stepId: step.id,
+          stepName: step.name,
+          stepIndex: service.steps.findIndex(s => s.id === step.id),
+          maxIterations: step.maxIterations ?? 1
+        });
 
         if (!step.script || !step.script.trim()) {
           debugLogger.log('error', 'step-orchestrator', 'Step has empty script', { stepId: step.id });
@@ -115,6 +134,11 @@ class StepOrchestrator {
               skipReason: 'CONDITION_FALSE',
               timestamp: Date.now()
             });
+            emit('STEP_DONE', {
+              stepId: step.id,
+              resultPreview: '(skipped: condition false)',
+              iterations: 0
+            });
             currentStepId = step.onFailure || 'TERMINATE';
             continue;
           }
@@ -129,10 +153,26 @@ class StepOrchestrator {
 
         let result;
         let snapshot = null;
+        const maxIter = step.maxIterations ?? 1;
         try {
           const enrichedInput = { ...input, _stepResults: { ...stepResultsMap }, _lastResult: lastStepResult };
+          if (typeof deps.resetDomActivity === 'function') {
+            try { await deps.resetDomActivity(tabId); } catch (_) {}
+          }
           result = await deps.executeScript(tabId, step.script, enrichedInput, timeoutMs);
-          debugLogger.log('info', 'step-orchestrator', 'Script executed', { stepId: step.id, resultType: typeof result, resultPreview: JSON.stringify(result)?.slice(0, 500) });
+          let domActivity = [];
+          if (typeof deps.getDomActivity === 'function') {
+            try { domActivity = await deps.getDomActivity(tabId) || []; } catch (_) {}
+          }
+          const resultPreview = JSON.stringify(result)?.slice(0, 500);
+          debugLogger.log('info', 'step-orchestrator', 'Script executed', { stepId: step.id, resultType: typeof result, resultPreview });
+          emit('STEP_ITERATION', {
+            stepId: step.id,
+            iteration: stepIterations,
+            maxIterations: maxIter,
+            domActivity,
+            resultPreview
+          });
         } catch (error) {
           debugLogger.log('error', 'step-orchestrator', 'Script execution failed', { stepId: step.id, error: error.message, stack: error.stack, hasSubTabSnapshot: !!error.subTabSnapshot });
           // If the failure originated inside $openTab, handleOpenTabExecute
@@ -182,7 +222,6 @@ class StepOrchestrator {
         // retry signals — its result is pure data and always follows onSuccess,
         // so a step that happens to return {done:false} as data cannot mis-route.
         let next = step.onSuccess ?? 'TERMINATE';
-        const maxIter = step.maxIterations ?? 1;
         if (result && typeof result === 'object') {
           const isFailed = result.failed === true
             || (typeof result.error === 'string' && result.error.length > 0);
@@ -230,13 +269,29 @@ class StepOrchestrator {
         }
 
         debugLogger.log('info', 'step-orchestrator', 'Next step decision', { stepId: step.id, next });
+        if (next !== step.id) {
+          emit('STEP_DONE', {
+            stepId: step.id,
+            resultPreview: JSON.stringify(result)?.slice(0, 500),
+            iterations: stepIterations
+          });
+        }
         currentStepId = next;
       }
 
       debugLogger.log('info', 'step-orchestrator', 'Execution complete', { finalResultType: typeof lastStepResult, stepCount: stepOutputs.length });
+      emit('EXECUTION_DONE', { finalResultType: typeof lastStepResult, totalElapsedMs: Date.now() - startTime });
       return { finalResult: lastStepResult, steps: stepOutputs };
     } catch (error) {
       debugLogger.log('error', 'step-orchestrator', 'Execution failed', { error: error.message, stepId: error.stepId, stack: error.stack });
+      if (error.stepId) {
+        emit('STEP_FAILED', {
+          stepId: error.stepId,
+          error: error.message,
+          iterations: stepIterationCounts[error.stepId] || 0
+        });
+      }
+      emit('EXECUTION_DONE', { finalResultType: 'error', totalElapsedMs: Date.now() - startTime });
       error.steps = stepOutputs;
       throw error;
     } finally {
