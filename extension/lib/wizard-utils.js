@@ -579,7 +579,13 @@ function summarizeExecutionDiagnostics(events, failingStepId) {
     lines.push(`Step failed: ${failed.error}`);
   }
   if (iterations.length > 0) {
-    lines.push(`Total: ${iterations.length} iterations, all returned ${iterations[0].resultPreview || '(empty)'}.`);
+    const previews = iterations.map(it => (it.resultPreview == null ? '(empty)' : it.resultPreview));
+    const allSame = previews.every(p => p === previews[0]);
+    if (allSame) {
+      lines.push(`Total: ${iterations.length} iterations, all returned ${previews[0]}.`);
+    } else {
+      lines.push(`Total: ${iterations.length} iterations with mixed results (first: ${previews[0]}; last: ${previews[previews.length - 1]}).`);
+    }
   }
 
   // Heuristic branch
