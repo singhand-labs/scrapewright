@@ -433,3 +433,101 @@ describe('StepOrchestrator', () => {
     assert.equal(openedUrl, 'https://example.com/search?q=shoes');
   });
 });
+
+describe('StepOrchestrator onEvent callback', () => {
+  function buildDeps(overrides = {}) {
+    return {
+      createTab: async () => ({ id: 1 }),
+      waitForTabLoad: async () => {},
+      waitForContentScript: async () => {},
+      executeScript: overrides.executeScript || (async () => ({ done: true })),
+      captureSnapshot: async () => ({}),
+      evaluateCondition: async () => true,
+      removeTab: async () => {},
+      resetDomActivity: overrides.resetDomActivity || (async () => {}),
+      getDomActivity: overrides.getDomActivity || (async () => []),
+      ...overrides
+    };
+  }
+
+  it('emits EXECUTION_START -> STEP_START -> STEP_ITERATION -> STEP_DONE -> EXECUTION_DONE for a single happy-path step', async () => {
+    const service = {
+      targetUrl: 'about:blank',
+      steps: [{ id: 's1', name: 'one', script: 'return {done:true}', onSuccess: 'TERMINATE' }]
+    };
+    const events = [];
+    await StepOrchestrator.execute(service, {}, buildDeps(), { onEvent: (e) => events.push(e) });
+    const types = events.map(e => e.type);
+    assert.deepEqual(types, ['EXECUTION_START', 'STEP_START', 'STEP_ITERATION', 'STEP_DONE', 'EXECUTION_DONE']);
+    assert.equal(events[0].totalSteps, 1);
+    assert.equal(events[1].stepId, 's1');
+    assert.equal(events[2].iteration, 1);
+    assert.ok(Array.isArray(events[2].domActivity));
+  });
+
+  it('omits STEP_ITERATION for a skipped (condition:false) step', async () => {
+    const service = {
+      targetUrl: 'about:blank',
+      steps: [{ id: 's1', name: 'one', script: 'return 1', condition: 'false', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }]
+    };
+    const events = [];
+    await StepOrchestrator.execute(service, {}, buildDeps({ evaluateCondition: async () => false }), { onEvent: (e) => events.push(e) });
+    const types = events.map(e => e.type);
+    assert.deepEqual(types, ['EXECUTION_START', 'STEP_START', 'STEP_DONE', 'EXECUTION_DONE']);
+    assert.match(events[2].resultPreview, /skipped/i);
+  });
+
+  it('emits STEP_FAILED when a poll step exhausts to TERMINATE', async () => {
+    const service = {
+      targetUrl: 'about:blank',
+      steps: [{ id: 's1', name: 'one', script: 'return {done:false}', onSuccess: 'TERMINATE', maxIterations: 2 }]
+    };
+    const events = [];
+    await assert.rejects(
+      () => StepOrchestrator.execute(service, {}, buildDeps({ executeScript: async () => ({ done: false }) }), { onEvent: (e) => events.push(e) }),
+      /POLL_EXHAUSTED/
+    );
+    const types = events.map(e => e.type);
+    assert.ok(types.includes('STEP_FAILED'));
+    assert.equal(types[types.length - 1], 'EXECUTION_DONE');
+  });
+
+  it('swallows exceptions thrown by onEvent without breaking execution', async () => {
+    const service = {
+      targetUrl: 'about:blank',
+      steps: [{ id: 's1', name: 'one', script: 'return {done:true}', onSuccess: 'TERMINATE' }]
+    };
+    let callCount = 0;
+    const brokenCallback = (evt) => {
+      callCount++;
+      if (evt.type === 'STEP_ITERATION') throw new Error('UI explosion');
+    };
+    const result = await StepOrchestrator.execute(service, {}, buildDeps(), { onEvent: brokenCallback });
+    assert.equal(callCount, 5);
+    assert.ok(result.finalResult);
+  });
+
+  it('behaves identically when no options argument is passed (backward compat)', async () => {
+    const service = {
+      targetUrl: 'about:blank',
+      steps: [{ id: 's1', name: 'one', script: 'return {done:true}', onSuccess: 'TERMINATE' }]
+    };
+    const result = await StepOrchestrator.execute(service, {}, buildDeps());
+    assert.ok(result.finalResult);
+    assert.equal(result.steps.length, 1);
+  });
+
+  it('produces STEP_ITERATION.domActivity === [] when deps.getDomActivity is missing', async () => {
+    const service = {
+      targetUrl: 'about:blank',
+      steps: [{ id: 's1', name: 'one', script: 'return {done:true}', onSuccess: 'TERMINATE' }]
+    };
+    const events = [];
+    const depsNoDom = buildDeps();
+    delete depsNoDom.resetDomActivity;
+    delete depsNoDom.getDomActivity;
+    await StepOrchestrator.execute(service, {}, depsNoDom, { onEvent: (e) => events.push(e) });
+    const iteration = events.find(e => e.type === 'STEP_ITERATION');
+    assert.deepEqual(iteration.domActivity, []);
+  });
+});
