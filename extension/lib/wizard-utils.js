@@ -368,6 +368,34 @@ function validateOutputAgainstSchema(finalResult, outputSchema) {
     : { ok: false, missing, code: 'REQUIRED_OUTPUT_MISSING' };
 }
 
+// Detect "schema-valid but extraction-empty" results: a required field whose
+// value is an array of objects where EVERY object has only empty values
+// ('', null, undefined, []). validateOutputAgainstSchema above passes these
+// because the array length is > 0, but the extraction clearly failed — the
+// script found list items but couldn't extract any fields from them. Without
+// this check, the wizard's testScript reports success and autoFix uses the
+// weak "improve based on feedback" prompt instead of the strong "fix failing
+// step" prompt, so the LLM keeps generating similar broken selectors.
+function findEmptyExtractionFields(data, outputSchema) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return [];
+  if (!outputSchema || !Array.isArray(outputSchema.required) || outputSchema.required.length === 0) return [];
+
+  const isEmptyValue = (v) =>
+    v === '' || v === null || v === undefined || (Array.isArray(v) && v.length === 0);
+
+  const empty = [];
+  for (const key of outputSchema.required) {
+    const v = data[key];
+    if (!Array.isArray(v) || v.length === 0) continue; // scalar or empty-array already caught by validateOutputAgainstSchema
+    // Array of objects where every object has only empty values
+    if (v.every(el => el && typeof el === 'object' && !Array.isArray(el) &&
+                     Object.values(el).every(isEmptyValue))) {
+      empty.push(key);
+    }
+  }
+  return empty;
+}
+
 function validateSteps(steps) {
   if (!Array.isArray(steps)) return { valid: false, error: 'steps must be an array' };
   if (steps.length === 0) return { valid: false, error: 'steps cannot be empty' };
@@ -750,12 +778,13 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
   window.validateInputAgainstSchema = validateInputAgainstSchema;
   window.validateOutputAgainstSchema = validateOutputAgainstSchema;
+  window.findEmptyExtractionFields = findEmptyExtractionFields;
   window.getStepTemplates = getStepTemplates;
   window.applyTemplate = applyTemplate;
   window.STEP_TEMPLATES = STEP_TEMPLATES;
@@ -786,6 +815,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.validateForExecution = validateForExecution;
   self.validateInputAgainstSchema = validateInputAgainstSchema;
   self.validateOutputAgainstSchema = validateOutputAgainstSchema;
+  self.findEmptyExtractionFields = findEmptyExtractionFields;
   self.appendStepWithChainLink = appendStepWithChainLink;
   self.removeStepWithRelink = removeStepWithRelink;
   self.relinkChainToArray = relinkChainToArray;
