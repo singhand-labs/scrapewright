@@ -506,6 +506,23 @@ function summarizeFixIteration({ stepId, stepName, script, annotations, userFeed
   return lines.join('\n');
 }
 
+function formatDomActivitySummary(activities) {
+  if (!Array.isArray(activities) || activities.length === 0) return '(no DOM calls)';
+  const groups = new Map();
+  for (const a of activities) {
+    if (!a || typeof a !== 'object') continue;
+    const key = `${a.method}(${a.selector})`;
+    if (!groups.has(key)) groups.set(key, { count: 0, total: 0 });
+    const g = groups.get(key);
+    g.count++;
+    g.total += (typeof a.outcome === 'number' ? a.outcome : 0);
+  }
+  const entries = [...groups.entries()];
+  const head = entries.slice(0, 3).map(([k, v]) => `${k} ×${v.count} → ${v.total}`);
+  const tail = entries.length > 3 ? `, +${entries.length - 3} more` : '';
+  return head.join(', ') + tail;
+}
+
 function validateSteps(steps) {
   if (!Array.isArray(steps)) return { valid: false, error: 'steps must be an array' };
   if (steps.length === 0) return { valid: false, error: 'steps cannot be empty' };
@@ -888,7 +905,7 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
@@ -898,6 +915,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.getOutputFieldOptions = getOutputFieldOptions;
   window.truncateSnapshotForLLM = truncateSnapshotForLLM;
   window.summarizeFixIteration = summarizeFixIteration;
+  window.formatDomActivitySummary = formatDomActivitySummary;
   window.getStepTemplates = getStepTemplates;
   window.applyTemplate = applyTemplate;
   window.STEP_TEMPLATES = STEP_TEMPLATES;
@@ -932,6 +950,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.getOutputFieldOptions = getOutputFieldOptions;
   self.truncateSnapshotForLLM = truncateSnapshotForLLM;
   self.summarizeFixIteration = summarizeFixIteration;
+  self.formatDomActivitySummary = formatDomActivitySummary;
   self.appendStepWithChainLink = appendStepWithChainLink;
   self.removeStepWithRelink = removeStepWithRelink;
   self.relinkChainToArray = relinkChainToArray;

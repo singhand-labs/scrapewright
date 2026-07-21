@@ -1,6 +1,6 @@
 const { describe, it, test } = require('node:test');
 const assert = require('node:assert/strict');
-const { parseSchemaFields, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, buildRequirementsBlock, suggestServiceName, SCRIPT_DSL_GUIDE, truncateSnapshotForLLM, summarizeFixIteration } = require('../lib/wizard-utils');
+const { parseSchemaFields, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, buildRequirementsBlock, suggestServiceName, SCRIPT_DSL_GUIDE, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary } = require('../lib/wizard-utils');
 
 describe('parseSchemaFields', () => {
   it('returns field names with types', () => {
@@ -1053,5 +1053,37 @@ describe('summarizeFixIteration', () => {
       result: { done: false }
     });
     assert.ok(out.length < 3000, 'expected summary under 3KB, got ' + out.length);
+  });
+});
+
+describe('formatDomActivitySummary', () => {
+  it('returns (no DOM calls) for empty or non-array input', () => {
+    assert.equal(formatDomActivitySummary([]), '(no DOM calls)');
+    assert.equal(formatDomActivitySummary(null), '(no DOM calls)');
+    assert.equal(formatDomActivitySummary(undefined), '(no DOM calls)');
+  });
+
+  it('aggregates duplicate method+selector pairs with count and outcome sum', () => {
+    const activities = [
+      { method: '$list', selector: '.post', outcome: 0, ms: 5 },
+      { method: '$list', selector: '.post', outcome: 0, ms: 5 },
+      { method: '$exists', selector: '.loading', outcome: 0, ms: 1 }
+    ];
+    const out = formatDomActivitySummary(activities);
+    assert.match(out, /\$list\(\.post\) ×2 → 0/);
+    assert.match(out, /\$exists\(\.loading\) ×1 → 0/);
+  });
+
+  it('shows first 3 groups and +N more suffix when more than 3 unique groups exist', () => {
+    const activities = [
+      { method: '$list', selector: '.a', outcome: 1 },
+      { method: '$list', selector: '.b', outcome: 2 },
+      { method: '$list', selector: '.c', outcome: 3 },
+      { method: '$list', selector: '.d', outcome: 4 },
+      { method: '$list', selector: '.e', outcome: 5 }
+    ];
+    const out = formatDomActivitySummary(activities);
+    assert.ok(out.includes('+2 more'), 'expected +2 more suffix, got: ' + out);
+    assert.ok(!out.includes('.d'), '4th group should not be shown');
   });
 });
