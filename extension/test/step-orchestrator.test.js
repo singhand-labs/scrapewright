@@ -76,9 +76,30 @@ describe('StepOrchestrator', () => {
   });
 
   it('follows onFailure when a not-ready step exhausts maxIterations (no skip entry)', async () => {
-    // Budget exhausted: the final not-ready result routes DIRECTLY to onFailure.
-    // Unlike the old SELF model, no synthetic MAX_ITERATIONS skip entry is produced
-    // (the real not-ready result is preserved for auto-fix to inspect).
+    // Budget exhausted but onFailure points to a recovery step (not TERMINATE):
+    // the recovery step runs and its result becomes finalResult. No synthetic
+    // MAX_ITERATIONS skip entry is produced — the real not-ready result is
+    // preserved for auto-fix to inspect.
+    const service = {
+      targetUrl: 'http://example.com',
+      steps: [
+        { id: 'poll', name: 'Poll', script: 'x', onSuccess: 'extract', onFailure: 'recover', maxIterations: 2 },
+        { id: 'extract', name: 'Extract', script: 'y', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' },
+        { id: 'recover', name: 'Recover', script: 'r', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }
+      ],
+      config: {}
+    };
+    const deps = makeMockDeps({ executeScript: async (tabId, script) => script === 'r' ? { ok: true } : { done: false } });
+    const result = await StepOrchestrator.execute(service, {}, deps);
+    assert.deepEqual(result.steps.map(s => s.stepId), ['poll', 'poll', 'recover']);
+    assert.ok(!result.steps.some(s => s.skipReason === 'MAX_ITERATIONS'), 'no MAX_ITERATIONS skip entry on budget exhaustion');
+  });
+
+  it('throws POLL_EXHAUSTED when a not-ready step exhausts and routes directly to TERMINATE', async () => {
+    // Without this throw, finalResult would be the not-ready value {done:false},
+    // which then fails outputSchema validation with a misleading "missing
+    // required field" error. The throw surfaces the real cause: the step
+    // exhausted without producing data.
     const service = {
       targetUrl: 'http://example.com',
       steps: [
@@ -88,9 +109,29 @@ describe('StepOrchestrator', () => {
       config: {}
     };
     const deps = makeMockDeps({ executeScript: async () => ({ done: false }) });
-    const result = await StepOrchestrator.execute(service, {}, deps);
-    assert.deepEqual(result.steps.map(s => s.stepId), ['poll', 'poll']);
-    assert.ok(!result.steps.some(s => s.skipReason === 'MAX_ITERATIONS'), 'no MAX_ITERATIONS skip entry on budget exhaustion');
+    await assert.rejects(
+      () => StepOrchestrator.execute(service, {}, deps),
+      (err) => err.code === 'POLL_EXHAUSTED' && err.stepId === 'poll' && err.message.includes('Poll') && err.message.includes('2')
+    );
+  });
+
+  it('throws POLL_EXHAUSTED when the terminal step in a chain exhausts via not-ready signals', async () => {
+    // Regression for the bc1.log case: step 2 exhausts → step 3 (terminal) also
+    // exhausts via not-ready signals → TERMINATE. The throw must fire at step 3's
+    // exhaustion, naming step 3, so the user sees the actual failing step.
+    const service = {
+      targetUrl: 'http://example.com',
+      steps: [
+        { id: 'collect', name: 'ScrollAndCollect', script: 'c', onSuccess: 'return', onFailure: 'return', maxIterations: 15 },
+        { id: 'return', name: 'ReturnResults', script: 'r', onSuccess: 'TERMINATE', onFailure: 'TERMINATE', maxIterations: 3 }
+      ],
+      config: {}
+    };
+    const deps = makeMockDeps({ executeScript: async () => ({ done: false }) });
+    await assert.rejects(
+      () => StepOrchestrator.execute(service, {}, deps),
+      (err) => err.code === 'POLL_EXHAUSTED' && err.stepId === 'return' && err.message.includes('ReturnResults')
+    );
   });
 
   it('routes to onFailure when a step returns {failed:true}', async () => {

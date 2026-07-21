@@ -207,6 +207,20 @@ class StepOrchestrator {
               // synthetic MAX_ITERATIONS skip so the real not-ready result is
               // preserved for auto-fix to inspect.
               next = step.onFailure ?? 'TERMINATE';
+              if (next === 'TERMINATE') {
+                // Polling exhausted AND routes straight to TERMINATE — throw a
+                // clear POLL_EXHAUSTED error instead of letting the not-ready
+                // value (e.g. {done:false}) flow into finalResult. Without this,
+                // outputSchema validation produces a misleading "missing required
+                // field" error that hides the real cause: the step ran out of
+                // retries without ever producing data.
+                const err = new Error(`POLL_EXHAUSTED: Step "${step.name || step.id}" exhausted after ${stepIterations} attempt(s) without producing a ready result`);
+                err.code = 'POLL_EXHAUSTED';
+                err.stepId = step.id;
+                err.steps = stepOutputs;
+                debugLogger.log('error', 'step-orchestrator', 'Poll exhausted → TERMINATE', { stepId: step.id, stepIterations });
+                throw err;
+              }
               debugLogger.log('warn', 'step-orchestrator', 'Result not ready and retry budget exhausted, following onFailure', { stepId: step.id, stepIterations, maxIter, onFailure: next });
             }
           }

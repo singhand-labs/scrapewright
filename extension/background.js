@@ -625,6 +625,26 @@ async function handleExecute(serviceName, input) {
         };
       }
 
+      if (error.code === 'POLL_EXHAUSTED') {
+        // A poll step exhausted its retry budget via not-ready signals and routed
+        // straight to TERMINATE. The script ran without throwing but never
+        // produced real data — typically broken selectors or a misconfigured
+        // not-ready/ready signal. Non-retryable: re-running the same script
+        // yields the same exhaustion. Surface the clear cause instead of
+        // falling through to outputSchema validation, which would print a
+        // misleading "missing required field" error.
+        const stepTrace = sanitizeSteps(error.steps);
+        await logExecution(service, input, null, error.message, attempt);
+        await debugLogger.persist();
+        return {
+          success: false,
+          error: error.message,
+          code: error.code,
+          stepId: error.stepId,
+          steps: stepTrace
+        };
+      }
+
       const shouldAutoFix = attempt < maxRetries &&
         error.stepId &&
         (error.message?.includes('ELEMENT_NOT_FOUND') || error.message?.includes('SCRIPT_ERROR') || error.message?.includes('SCRIPT_TIMEOUT'));
