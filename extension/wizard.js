@@ -2147,7 +2147,7 @@ On success → ${targetStep.onSuccess}
 On failure → ${targetStep.onFailure}
 
 Error: ${wizardState.lastError}
-
+${summarizeExecutionDiagnostics(wizardState.lastExecutionEvents || [], targetStepId)}
 Target URL: ${wizardState.targetUrl}
 Original requirement: ${wizardState.description}
 
