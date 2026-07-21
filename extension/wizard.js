@@ -757,6 +757,11 @@ function appendLog(message, level = 'info') {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
+function renderExecutionProgress(evt) {
+  // Stub — Task 6 replaces this with full UI rendering.
+  console.log('[progress]', evt.type, evt.stepId || '');
+}
+
 function renderExecutionTimeline(steps) {
   const container = document.getElementById('executionTimeline');
   if (!container) return;
@@ -1516,6 +1521,7 @@ async function testScript() {
   wizardState.lastError = null;
   wizardState.lastErrorStepId = null;
   wizardState.lastErrorSnapshot = null;
+  wizardState.lastExecutionEvents = [];
   wizardState.testAbortController = new AbortController();
   debugLogger.log('info', 'wizard', 'testScript start', {
     targetUrl: wizardState.targetUrl,
@@ -1563,6 +1569,15 @@ async function testScript() {
         }
         if (!ready) appendLog('Warning: content script not responding; proceeding anyway.');
       },
+      resetDomActivity: async (tabId) => {
+        await chrome.tabs.sendMessage(tabId, { type: 'RESET_DOM_ACTIVITY' }).catch(() => {});
+      },
+      getDomActivity: async (tabId) => {
+        try {
+          const r = await chrome.tabs.sendMessage(tabId, { type: 'GET_DOM_ACTIVITY' });
+          return Array.isArray(r?.activities) ? r.activities : [];
+        } catch { return []; }
+      },
       executeScript: async (tabId, script, input, timeoutMs) => {
         if (wizardState.testAbortController?.signal.aborted) {
           throw new Error('TEST_ABORTED');
@@ -1597,6 +1612,11 @@ async function testScript() {
       },
       removeTab: async (tabId) => {
         await chrome.tabs.remove(tabId).catch(() => {});
+      }
+    }, {
+      onEvent: (evt) => {
+        wizardState.lastExecutionEvents.push(evt);
+        try { renderExecutionProgress(evt); } catch (_) {}
       }
     });
 
