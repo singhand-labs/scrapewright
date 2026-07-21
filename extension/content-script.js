@@ -164,43 +164,97 @@
     });
   }
 
+  // Per-iteration DOM activity accumulator. StepOrchestrator RESETs at the start
+  // of each iteration and GETs after executeScript returns, so it can include
+  // the per-iteration selector/outcome summary in the STEP_ITERATION event.
+  // Outside the wizard testScript path this state is unused (HTTP API jobs
+  // never send RESET/GET messages).
+  let domActivityLog = [];
+  let domActivityDepth = 0;
+
+  function recordDomActivity(method, selector, outcome, ms) {
+    if (domActivityDepth > 0) return;
+    if (typeof selector !== 'string' || selector === '') return;
+    domActivityLog.push({
+      method,
+      selector,
+      outcome: typeof outcome === 'number' ? outcome : 0,
+      ms: typeof ms === 'number' ? ms : 0
+    });
+  }
+
   async function handleDomRequest(data) {
     let result, error, subTabSnapshot;
     try {
       switch (data.action) {
-        case 'querySelector':
+        case 'querySelector': {
+          const __t0 = Date.now();
           result = await domQuerySelector(data.selector);
+          recordDomActivity('$', data.selector, result ? 1 : 0, Date.now() - __t0);
           break;
-        case 'click':
+        }
+        case 'click': {
+          const __t0 = Date.now();
           result = await domClick(data.selector);
+          recordDomActivity('$click', data.selector, result ? 1 : 0, Date.now() - __t0);
           break;
-        case 'type':
+        }
+        case 'type': {
+          const __t0 = Date.now();
           result = await domType(data.selector, data.args[0]);
+          recordDomActivity('$type', data.selector, 1, Date.now() - __t0);
           break;
-        case 'extract':
+        }
+        case 'extract': {
+          const __t0 = Date.now();
           result = await domExtract(data.selector, data.args[0], data.args[1]);
+          recordDomActivity('$extract', data.selector, result ? 1 : 0, Date.now() - __t0);
           break;
-        case 'wait':
+        }
+        case 'wait': {
+          const __t0 = Date.now();
           result = await domWait(data.selector, data.args[0]);
+          recordDomActivity('$wait', data.selector, result ? 1 : 0, Date.now() - __t0);
           break;
-        case 'check':
+        }
+        case 'check': {
+          const __t0 = Date.now();
           result = await domCheck(data.selector, data.args[0]);
+          recordDomActivity(
+            '$check',
+            data.selector,
+            typeof result === 'boolean' ? (result ? 1 : 0) : 1,
+            Date.now() - __t0
+          );
           break;
+        }
         case 'openTab':
           result = await domOpenTab(data.args[0], data.args[1]);
           break;
-        case 'exists':
+        case 'exists': {
+          const __t0 = Date.now();
           result = await domExists(data.selector, data.args[0]);
+          recordDomActivity('$exists', data.selector, result ? 1 : 0, Date.now() - __t0);
           break;
-        case 'count':
+        }
+        case 'count': {
+          const __t0 = Date.now();
           result = await domCount(data.selector);
+          recordDomActivity('$count', data.selector, typeof result === 'number' ? result : 0, Date.now() - __t0);
           break;
-        case 'list':
+        }
+        case 'list': {
+          const __t0 = Date.now();
           result = domList(data.selector);
+          recordDomActivity('$list', data.selector, Array.isArray(result) ? result.length : 0, Date.now() - __t0);
           break;
-        case 'waitForStable':
+        }
+        case 'waitForStable': {
+          const __t0 = Date.now();
           result = await domWaitForStable(data.selector, data.args && data.args[0]);
+          recordDomActivity('$waitForStable', data.selector, result ? 1 : 0, Date.now() - __t0);
           break;
+        }
         default:
           error = 'Unknown DOM action: ' + data.action;
       }
@@ -596,6 +650,17 @@
         annotations: selectedAnnotations || [],
         fullHtml: snapshot.html
       });
+      return true;
+    }
+
+    if (message.type === 'RESET_DOM_ACTIVITY') {
+      domActivityLog = [];
+      sendResponse({ ok: true });
+      return true;
+    }
+
+    if (message.type === 'GET_DOM_ACTIVITY') {
+      sendResponse({ activities: domActivityLog });
       return true;
     }
 
