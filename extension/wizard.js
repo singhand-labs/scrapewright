@@ -1041,6 +1041,10 @@ async function generateStepScript(config, step, pageInfo, annotations, stepConte
 
   const annotationsText = buildAnnotationsText(annotations);
 
+  // Cap the snapshot before building the initial-generation prompt — the first
+  // attempt is the most likely to overflow because it sends the full HTML.
+  pageInfo = truncateSnapshotForLLM(pageInfo);
+
   let pageInfoBlock;
   if (pageInfo.mode === 'full') {
     pageInfoBlock = 'Full HTML (cleaned):\n' + pageInfo.html;
@@ -2025,30 +2029,17 @@ If your script does NOT use $openTab, $wait / $ / $extract will run against the 
     }
   }
 
-  // Compact mode: when a previous LLM call hit model_context_window_exceeded,
-  // shrink the snapshot before building the prompt. The HTML snapshot is the
-  // dominant token consumer (often 70KB+); capping it at 20K + a note that it
-  // was truncated lets the model focus on the most relevant top-of-page
-  // structure. History is dropped separately by the caller.
-  const HTML_BUDGET_COMPACT = 20000;
-  const TEXT_BUDGET_COMPACT = 5000;
-  const STRUCTURE_BUDGET_COMPACT = 5000;
+  // Always cap the snapshot before building the LLM prompt. This used to fire
+  // only on overflow-retry (the old compactMode block above), which meant the
+  // first attempt sent the raw ~76KB HTML and could overflow before any
+  // compaction engaged. Now every iteration starts with a 30K-capped snapshot
+  // (15K on compact retry). The [TRUNCATED] marker inside the helper carries
+  // the "structure was cut" signal in-band, so compactedNote is no longer
+  // populated (left as '' for backward-compat with the prompt templates that
+  // still interpolate it).
   let compactedNote = '';
-  if (compact && pageSnapshot) {
-    const originalHtmlLen = pageSnapshot.html?.length || 0;
-    const trunc = (s, budget) => (s && s.length > budget)
-      ? s.slice(0, budget) + '\n... [truncated to fit context budget]'
-      : s;
-    pageSnapshot = {
-      ...pageSnapshot,
-      html: trunc(pageSnapshot.html, HTML_BUDGET_COMPACT),
-      textContent: trunc(pageSnapshot.textContent, TEXT_BUDGET_COMPACT),
-      structure: trunc(pageSnapshot.structure, STRUCTURE_BUDGET_COMPACT)
-    };
-    if (originalHtmlLen > HTML_BUDGET_COMPACT) {
-      compactedNote = `\nNOTE: The page snapshot was truncated (HTML ${originalHtmlLen} → ${HTML_BUDGET_COMPACT} chars) because the previous attempt exceeded the model's context window. Use the visible portion to choose selectors; the structure repeats for typical list pages.\n`;
-    }
-  }
+  const snapshotBudget = options.compact ? 15000 : 30000;
+  pageSnapshot = truncateSnapshotForLLM(pageSnapshot, snapshotBudget);
 
   const feedbackSection = userFeedback ? '\nUser feedback: ' + userFeedback : '';
 
@@ -2176,8 +2167,16 @@ ${RETURN_FORMAT}`;
     const result = await client.chat(messages, { maxTokens: 8192 });
 
     wizardState.llmHistory.push(
-      { role: 'user', content: '[AutoFix #' + wizardState.fixAttemptCount + '] ' + prompt.substring(0, 2000) },
-      { role: 'assistant', content: result.substring(0, 2000) }
+      { role: 'user', content: summarizeFixIteration({
+        stepId: targetStep.id,
+        stepName: targetStep.name,
+        script: targetStep.script,
+        annotations: wizardState.annotations || [],
+        userFeedback: userFeedback,
+        error: wizardState.lastError || null,
+        result: wizardState.testResult || null
+      }) },
+      { role: 'assistant', content: result }
     );
     trimLlmHistory();
 
