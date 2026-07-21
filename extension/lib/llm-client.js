@@ -12,6 +12,17 @@ class LLMError extends Error {
   }
 }
 
+// Context-window overflow is deterministic: retrying the SAME prompt will fail
+// the same way. Surfaced as a distinct class so callers can react (compact the
+// prompt, drop history, etc.) instead of wasting the retry budget.
+class LLMContextOverflow extends LLMError {
+  constructor(message, detail) {
+    super(message, { retryable: false });
+    this.name = 'LLMContextOverflow';
+    if (detail) this.detail = detail;
+  }
+}
+
 function defaultBackoffMs(attempt) {
   // attempt is 0-based for the *failed* attempt; first retry waits ~1s, then
   // ~2s, then ~4s. Capped at 8s. Jitter spreads thundering-herd retries.
@@ -164,12 +175,26 @@ class LLMClient {
     if (!content || !String(content).trim()) {
       const detail = JSON.stringify({ finish_reason: finishReason, usage, model: this.model });
       console.error('[LLMClient] Empty content from LLM:', detail);
+      // GLM (and some other proxies) return HTTP 200 with finish_reason=
+      // model_context_window_exceeded and empty content when the prompt is
+      // too large. This is deterministic — retrying the same prompt just
+      // burns the retry budget. Throw a non-retryable signal so the caller
+      // can shrink the prompt and retry intelligently.
+      const isContextOverflow = finishReason === 'model_context_window_exceeded'
+        || finishReason === 'context_length_exceeded';
+      if (isContextOverflow) {
+        throw new LLMContextOverflow(
+          `LLM context window exceeded (finish_reason=${finishReason}). The prompt is too large for model ${this.model}. Compact the prompt (drop history, truncate HTML) before retrying. Detail: ${detail}`,
+          { finish_reason: finishReason, usage }
+        );
+      }
       const hint = finishReason === 'length'
         ? ' (finish_reason=length — raise maxTokens; the model could not fit a complete response in the token budget)'
         : finishReason === 'content_filter'
           ? ' (finish_reason=content_filter — the response was filtered)'
           : '';
-      // Empty content is often transient under load — retry before surfacing.
+      // Empty content with no overflow signal is often transient under load —
+      // retry before surfacing.
       throw new LLMError(`LLM API returned empty content${hint}. Detail: ${detail}`, { retryable: true });
     }
 
@@ -178,8 +203,13 @@ class LLMClient {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { LLMClient, LLMError };
+  module.exports = { LLMClient, LLMError, LLMContextOverflow };
 } else if (typeof window !== 'undefined') {
   window.LLMClient = LLMClient;
   window.LLMError = LLMError;
+  window.LLMContextOverflow = LLMContextOverflow;
+} else if (typeof self !== 'undefined') {
+  self.LLMClient = LLMClient;
+  self.LLMError = LLMError;
+  self.LLMContextOverflow = LLMContextOverflow;
 }
