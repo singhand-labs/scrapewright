@@ -1,6 +1,6 @@
 const { describe, it, test } = require('node:test');
 const assert = require('node:assert/strict');
-const { parseSchemaFields, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, buildRequirementsBlock, suggestServiceName, SCRIPT_DSL_GUIDE } = require('../lib/wizard-utils');
+const { parseSchemaFields, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, buildRequirementsBlock, suggestServiceName, SCRIPT_DSL_GUIDE, truncateSnapshotForLLM } = require('../lib/wizard-utils');
 
 describe('parseSchemaFields', () => {
   it('returns field names with types', () => {
@@ -927,5 +927,55 @@ describe('SCRIPT_DSL_GUIDE regression', () => {
 
   it('teaches empty-list early bailout', () => {
     assert.match(SCRIPT_DSL_GUIDE, /EMPTY-LIST BAILOUT/);
+  });
+});
+
+describe('truncateSnapshotForLLM', () => {
+  it('returns the snapshot unchanged when all fields are within budget', () => {
+    const snap = { html: 'a'.repeat(100), textContent: 'b'.repeat(50), structure: 'c'.repeat(50), textSummary: 'short' };
+    const out = truncateSnapshotForLLM(snap, 1000);
+    assert.equal(out.html, 'a'.repeat(100));
+    assert.equal(out.textContent, 'b'.repeat(50));
+    assert.equal(out.structure, 'c'.repeat(50));
+    assert.equal(out.textSummary, 'short');
+    assert.ok(!out.html.startsWith('[TRUNCATED'));
+  });
+
+  it('truncates html to budget chars and prepends the TRUNCATED marker', () => {
+    const big = 'x'.repeat(1000);
+    const out = truncateSnapshotForLLM({ html: big }, 100);
+    assert.equal(out.html.length, 100);
+    assert.ok(out.html.startsWith('[TRUNCATED'));
+    assert.ok(out.html.includes('original 1000 chars'));
+  });
+
+  it('allocates floor(budget/3) to textContent and structure independently', () => {
+    const out = truncateSnapshotForLLM(
+      { html: 'h'.repeat(1000), textContent: 't'.repeat(1000), structure: 's'.repeat(1000) },
+      300
+    );
+    assert.equal(out.html.length, 300);
+    assert.equal(out.textContent.length, 100);
+    assert.equal(out.structure.length, 100);
+  });
+
+  it('does not mutate the input snapshot', () => {
+    const original = { html: 'h'.repeat(500), textContent: 't'.repeat(500) };
+    const originalHtmlLen = original.html.length;
+    const originalTextLen = original.textContent.length;
+    const _out = truncateSnapshotForLLM(original, 100);
+    assert.equal(original.html.length, originalHtmlLen);
+    assert.equal(original.textContent.length, originalTextLen);
+  });
+
+  it('handles missing fields gracefully (no throw)', () => {
+    const out = truncateSnapshotForLLM({}, 1000);
+    assert.deepEqual(out, {});
+  });
+
+  it('honors a custom budget override', () => {
+    const out = truncateSnapshotForLLM({ html: 'h'.repeat(5000) }, 2000);
+    assert.equal(out.html.length, 2000);
+    assert.ok(out.html.startsWith('[TRUNCATED'));
   });
 });
