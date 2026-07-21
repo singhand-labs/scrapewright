@@ -1938,7 +1938,6 @@ async function autoFix(userFeedback = null) {
 }
 
 async function runFixIteration(userFeedback, config, options = {}) {
-  const compact = options.compact === true;
   // Deterministic topology heal first (no LLM): if a step signals polling but
   // left maxIterations unset (common when a prior LLM fix just added a wait),
   // give it a default retry budget before spending an LLM call.
