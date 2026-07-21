@@ -170,10 +170,8 @@
   // Outside the wizard testScript path this state is unused (HTTP API jobs
   // never send RESET/GET messages).
   let domActivityLog = [];
-  let domActivityDepth = 0;
 
   function recordDomActivity(method, selector, outcome, ms) {
-    if (domActivityDepth > 0) return;
     if (typeof selector !== 'string' || selector === '') return;
     domActivityLog.push({
       method,
