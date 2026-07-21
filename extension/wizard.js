@@ -771,7 +771,7 @@ function renderExecutionProgress(evt) {
       for (let i = 0; i < steps.length; i++) {
         const tr = document.createElement('tr');
         tr.dataset.stepId = steps[i].id;
-        tr.innerHTML = `<td>${i + 1}</td><td>${steps[i].name || steps[i].id}</td><td>pending</td><td>-</td><td></td>`;
+        tr.innerHTML = `<td>${i + 1}</td><td>${escapeHtml(steps[i].name || steps[i].id)}</td><td>pending</td><td>-</td><td></td>`;
         tbody.appendChild(tr);
       }
       break;
