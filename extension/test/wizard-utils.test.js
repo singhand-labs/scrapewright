@@ -810,3 +810,106 @@ describe('findEmptyExtractionFields', () => {
     assert.deepEqual(findEmptyExtractionFields([1, 2], schema), []);
   });
 });
+
+describe('getOutputFieldOptions', () => {
+  const { getOutputFieldOptions } = require('../lib/wizard-utils');
+
+  it('returns top-level scalar keys as value+label pairs', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        answer: { type: 'string' },
+        question: { type: 'string' }
+      },
+      required: ['question', 'answer']
+    };
+    assert.deepEqual(getOutputFieldOptions(schema), [
+      { value: 'answer', label: 'answer' },
+      { value: 'question', label: 'question' }
+    ]);
+  });
+
+  it('descends into array-of-objects and exposes inner fields as dotted values', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        posts: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              group: { type: 'string' },
+              username: { type: 'string' },
+              content: { type: 'string' }
+            }
+          }
+        }
+      },
+      required: ['posts']
+    };
+    const options = getOutputFieldOptions(schema);
+    assert.deepEqual(options, [
+      { value: 'posts.group', label: 'posts → group' },
+      { value: 'posts.username', label: 'posts → username' },
+      { value: 'posts.content', label: 'posts → content' }
+    ]);
+  });
+
+  it('handles a mix of scalar fields and array-of-objects', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        totalCount: { type: 'number' },
+        posts: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { title: { type: 'string' } }
+          }
+        }
+      }
+    };
+    const options = getOutputFieldOptions(schema);
+    assert.deepEqual(options, [
+      { value: 'totalCount', label: 'totalCount' },
+      { value: 'posts.title', label: 'posts → title' }
+    ]);
+  });
+
+  it('treats array-of-scalars as a plain top-level field (no descent)', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        tags: { type: 'array', items: { type: 'string' } }
+      }
+    };
+    const options = getOutputFieldOptions(schema);
+    assert.deepEqual(options, [{ value: 'tags', label: 'tags' }]);
+  });
+
+  it('returns [] for missing or malformed schema', () => {
+    assert.deepEqual(getOutputFieldOptions(null), []);
+    assert.deepEqual(getOutputFieldOptions({}), []);
+    assert.deepEqual(getOutputFieldOptions({ properties: 'not-an-object' }), []);
+  });
+});
+
+describe('buildAnnotationsText dotted outputField', () => {
+  const { buildAnnotationsText } = require('../lib/wizard-utils');
+
+  it('expands arrayName.subField into explicit per-item guidance', () => {
+    const text = buildAnnotationsText([
+      { type: 'extract', selector: '.post-group', outputField: 'posts.group' }
+    ]);
+    assert.match(text, /posts\.group/);
+    assert.match(text, /"group" field of EACH item in the "posts" array/);
+    assert.match(text, /NOT into a literal dotted key/);
+  });
+
+  it('leaves plain scalar outputField alone', () => {
+    const text = buildAnnotationsText([
+      { type: 'extract', selector: '.answer', outputField: 'answer' }
+    ]);
+    assert.match(text, /outputField: answer \(extract using the selector above into this field\)/);
+  });
+});

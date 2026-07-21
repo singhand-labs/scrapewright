@@ -144,7 +144,7 @@ CRITICAL: When an annotation has a selector AND a waitCondition, THAT selector i
 - waitCondition: appear → a poll step (maxIterations>1): return { done: await $exists(THE_ANNOTATED_SELECTOR) }. The annotated element appearing = done.
 - waitCondition: disappear → a poll step (maxIterations>1): return { done: !await $exists(THE_ANNOTATED_SELECTOR) }. The annotated element vanishing = done.
 - waitCondition: textStable → use $waitForStable(THE_ANNOTATED_SELECTOR) to confirm content stopped changing.
-- outputField: X on an extract → $extract(THE_ANNOTATED_SELECTOR) and include key X in the return object. Direct mapping; do not rename or use a different selector.
+- outputField: X on an extract → $extract(THE_ANNOTATED_SELECTOR) and include key X in the return object. Direct mapping; do not rename or use a different selector. DOTTED NOTATION: when outputField is "arrayName.subField" (e.g. "posts.group"), it means each item of the arrayName array has a subField — extract into item[subField], NOT into a literal "arrayName.subField" key. Build the array by iterating the list selector and pushing objects with the mapped sub-fields.
 - inputField: X on an input → $type(THE_ANNOTATED_SELECTOR, __input__.X).
 - purpose: toggle/submit/navigate on a click → $click(THE_ANNOTATED_SELECTOR) then VERIFY the state changed (per ROBUSTNESS RULE 3).
 - purpose: check-login → if the element is present, return { done:true, loginRequired:true } so the orchestrator can surface LOGIN_REQUIRED.`;
@@ -179,7 +179,19 @@ function buildAnnotationsText(annotations) {
     if (a.domPath) parts.push('domPath: ' + a.domPath);
     if (a.purpose) parts.push('purpose: ' + a.purpose);
     if (a.waitCondition) parts.push('waitCondition: ' + a.waitCondition + ' (USER-MARKED completion signal — use THIS selector, not a different loading indicator)');
-    if (a.outputField) parts.push('outputField: ' + a.outputField + ' (extract using the selector above into this field)');
+    if (a.outputField) {
+      // Dotted notation (arrayName.subField) means "extract into each item's
+      // subField of the arrayName array". Spell this out so the LLM does not
+      // emit a literal dotted key.
+      const dot = a.outputField.indexOf('.');
+      if (dot > 0) {
+        const arrName = a.outputField.slice(0, dot);
+        const subField = a.outputField.slice(dot + 1);
+        parts.push('outputField: ' + a.outputField + ' (extract using the selector above into the "' + subField + '" field of EACH item in the "' + arrName + '" array — NOT into a literal dotted key)');
+      } else {
+        parts.push('outputField: ' + a.outputField + ' (extract using the selector above into this field)');
+      }
+    }
     if (a.inputField) parts.push('inputField: ' + a.inputField + ' (type into the selector above using __input__.' + a.inputField + ')');
     return parts.join(', ');
   }).join('\n');
@@ -394,6 +406,31 @@ function findEmptyExtractionFields(data, outputSchema) {
     }
   }
   return empty;
+}
+
+// Enumerate the output fields a user can map an annotated selector to.
+// Scalar outputs expose their top-level keys. Array-of-objects outputs
+// (e.g. posts: [{group, username, ...}]) descend into the array item's
+// properties so the user can label a selector with a specific sub-field —
+// without this, the dropdown only shows "posts" and the user has no way to
+// indicate which sub-field each selector extracts. Dotted value (posts.group)
+// preserves the array context for downstream LLM guidance.
+function getOutputFieldOptions(outputSchema) {
+  if (!outputSchema || !outputSchema.properties || typeof outputSchema.properties !== 'object') return [];
+  const options = [];
+  const props = outputSchema.properties;
+  for (const key of Object.keys(props)) {
+    const prop = props[key];
+    if (!prop || typeof prop !== 'object') continue;
+    if (prop.type === 'array' && prop.items && prop.items.type === 'object' && prop.items.properties) {
+      for (const innerKey of Object.keys(prop.items.properties)) {
+        options.push({ value: `${key}.${innerKey}`, label: `${key} → ${innerKey}` });
+      }
+    } else {
+      options.push({ value: key, label: key });
+    }
+  }
+  return options;
 }
 
 function validateSteps(steps) {
@@ -778,13 +815,14 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
   window.validateInputAgainstSchema = validateInputAgainstSchema;
   window.validateOutputAgainstSchema = validateOutputAgainstSchema;
   window.findEmptyExtractionFields = findEmptyExtractionFields;
+  window.getOutputFieldOptions = getOutputFieldOptions;
   window.getStepTemplates = getStepTemplates;
   window.applyTemplate = applyTemplate;
   window.STEP_TEMPLATES = STEP_TEMPLATES;
@@ -816,6 +854,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.validateInputAgainstSchema = validateInputAgainstSchema;
   self.validateOutputAgainstSchema = validateOutputAgainstSchema;
   self.findEmptyExtractionFields = findEmptyExtractionFields;
+  self.getOutputFieldOptions = getOutputFieldOptions;
   self.appendStepWithChainLink = appendStepWithChainLink;
   self.removeStepWithRelink = removeStepWithRelink;
   self.relinkChainToArray = relinkChainToArray;
