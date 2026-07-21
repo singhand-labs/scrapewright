@@ -86,6 +86,13 @@
 
     <div id="phase4" class="step hidden">
       <h2>Phase 4: Execute Test (step by step)</h2>
+      <div id="executionProgress" class="hidden">
+        <h4>Execution progress</h4>
+        <table>
+          <thead><tr><th>#</th><th>Step</th><th>Status</th><th>Iter</th><th>Last result</th></tr></thead>
+          <tbody id="executionProgressBody"></tbody>
+        </table>
+      </div>
       <div id="executionTimeline"></div>
       <div id="executionLog"></div>
       <button id="btnPhase4Back">Back</button>

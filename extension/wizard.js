@@ -758,8 +758,61 @@ function appendLog(message, level = 'info') {
 }
 
 function renderExecutionProgress(evt) {
-  // Stub — Task 6 replaces this with full UI rendering.
-  console.log('[progress]', evt.type, evt.stepId || '');
+  if (!evt || !evt.type) return;
+  const container = document.getElementById('executionProgress');
+  const tbody = document.getElementById('executionProgressBody');
+  if (!container || !tbody) return;
+
+  switch (evt.type) {
+    case 'EXECUTION_START': {
+      container.classList.remove('hidden');
+      tbody.innerHTML = '';
+      const steps = wizardState.steps || [];
+      for (let i = 0; i < steps.length; i++) {
+        const tr = document.createElement('tr');
+        tr.dataset.stepId = steps[i].id;
+        tr.innerHTML = `<td>${i + 1}</td><td>${steps[i].name || steps[i].id}</td><td>pending</td><td>-</td><td></td>`;
+        tbody.appendChild(tr);
+      }
+      break;
+    }
+    case 'STEP_START': {
+      const tr = tbody.querySelector(`tr[data-step-id="${evt.stepId}"]`);
+      if (!tr) return;
+      const maxIter = evt.maxIterations ?? 1;
+      tr.children[2].textContent = 'running';
+      tr.children[3].textContent = `0/${maxIter}`;
+      break;
+    }
+    case 'STEP_ITERATION': {
+      const tr = tbody.querySelector(`tr[data-step-id="${evt.stepId}"]`);
+      if (!tr) return;
+      const maxIter = evt.maxIterations ?? 1;
+      tr.children[3].textContent = `${evt.iteration}/${maxIter}`;
+      tr.children[4].textContent = formatDomActivitySummary(evt.domActivity);
+      break;
+    }
+    case 'STEP_DONE': {
+      const tr = tbody.querySelector(`tr[data-step-id="${evt.stepId}"]`);
+      if (!tr) return;
+      tr.children[2].textContent = evt.resultPreview && /skipped/i.test(evt.resultPreview) ? 'skipped' : 'done';
+      tr.children[3].textContent = String(evt.iterations ?? 0);
+      tr.children[4].textContent = evt.resultPreview || '';
+      break;
+    }
+    case 'STEP_FAILED': {
+      const tr = tbody.querySelector(`tr[data-step-id="${evt.stepId}"]`);
+      if (!tr) return;
+      tr.children[2].textContent = 'failed';
+      tr.style.backgroundColor = '#fee';
+      tr.children[4].textContent = evt.error || '(no error message)';
+      break;
+    }
+    case 'EXECUTION_DONE': {
+      // Container stays visible for post-mortem review.
+      break;
+    }
+  }
 }
 
 function renderExecutionTimeline(steps) {
