@@ -483,7 +483,8 @@ function summarizeFixIteration({ stepId, stepName, script, annotations, userFeed
       const sel = a && a.selector ? a.selector : '(no selector)';
       const target = a && a.outputField ? a.outputField : (a && a.inputField ? a.inputField : '');
       const purpose = a && a.purpose ? a.purpose : '';
-      const tail = [target, purpose].filter(Boolean).join(' → ');
+      const waitCondition = a && a.waitCondition ? a.waitCondition : '';
+      const tail = [target, purpose, waitCondition].filter(Boolean).join(' → ');
       lines.push(tail ? `  - ${sel} → ${tail}` : `  - ${sel}`);
     }
   } else {
