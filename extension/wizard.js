@@ -1852,18 +1852,57 @@ async function autoFix(userFeedback = null) {
 
   const prevAutoFixing = wizardState.autoFixing;
   wizardState.autoFixing = true;
+  // Sticky: once the LLM signals context-window overflow, every subsequent
+  // iteration in this autoFix run uses the compact prompt (truncated HTML).
+  // Without this, attempt N+1 would re-send the full-sized prompt and hit the
+  // same overflow — compacting once should apply to the rest of the run.
+  let compactMode = false;
   try {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       if (wizardState.testAborted) break;
       let success = false;
       let fatal = false;
       try {
-        success = await runFixIteration(userFeedback, config);
+        success = await runFixIteration(userFeedback, config, { compact: compactMode });
       } catch (err) {
-        // Fatal: LLM call failed, parse error, network. No point retrying.
-        console.error('Auto-fix iteration threw:', err);
-        appendLog('Auto-fix error: ' + err.message, 'error');
-        fatal = true;
+        if (err.name === 'LLMContextOverflow') {
+          if (!compactMode) {
+            // First overflow on this run: drop the accumulated conversation
+            // history (it's stale anyway — prior failed scripts don't help)
+            // and retry THIS iteration with a compacted snapshot. The client
+            // has already given up retrying the same prompt internally, so
+            // this is our one chance to recover with a smaller payload.
+            appendLog('Context window exceeded — retrying with compacted prompt (history dropped, HTML truncated to 20K)...', 'warn');
+            wizardState.llmHistory = [];
+            compactMode = true;
+            try {
+              success = await runFixIteration(userFeedback, config, { compact: true });
+            } catch (err2) {
+              if (err2.name === 'LLMContextOverflow') {
+                const msg = 'Page is too large for the model\'s context window even after truncation. Narrow the requirement, annotate elements manually, or switch to a model with a larger context window.';
+                appendLog(msg, 'error');
+                showToast(msg, 'error');
+              } else {
+                console.error('Auto-fix iteration threw after compact retry:', err2);
+                appendLog('Auto-fix error after compact retry: ' + err2.message, 'error');
+              }
+              fatal = true;
+            }
+          } else {
+            // Already in compact mode and STILL overflowed — the page itself
+            // exceeds the model's limit. No amount of further truncation will
+            // help; surface a clear message and stop.
+            const msg = 'Page is too large for the model\'s context window even after truncation. Narrow the requirement, annotate elements manually, or switch to a model with a larger context window.';
+            appendLog(msg, 'error');
+            showToast(msg, 'error');
+            fatal = true;
+          }
+        } else {
+          // Fatal: LLM call failed, parse error, network. No point retrying.
+          console.error('Auto-fix iteration threw:', err);
+          appendLog('Auto-fix error: ' + err.message, 'error');
+          fatal = true;
+        }
       }
       if (success) return;
       if (fatal) break;
@@ -1892,7 +1931,8 @@ async function autoFix(userFeedback = null) {
   }
 }
 
-async function runFixIteration(userFeedback, config) {
+async function runFixIteration(userFeedback, config, options = {}) {
+  const compact = options.compact === true;
   // Deterministic topology heal first (no LLM): if a step signals polling but
   // left maxIterations unset (common when a prior LLM fix just added a wait),
   // give it a default retry budget before spending an LLM call.
@@ -1983,6 +2023,31 @@ If your script does NOT use $openTab, $wait / $ / $extract will run against the 
     }
   }
 
+  // Compact mode: when a previous LLM call hit model_context_window_exceeded,
+  // shrink the snapshot before building the prompt. The HTML snapshot is the
+  // dominant token consumer (often 70KB+); capping it at 20K + a note that it
+  // was truncated lets the model focus on the most relevant top-of-page
+  // structure. History is dropped separately by the caller.
+  const HTML_BUDGET_COMPACT = 20000;
+  const TEXT_BUDGET_COMPACT = 5000;
+  const STRUCTURE_BUDGET_COMPACT = 5000;
+  let compactedNote = '';
+  if (compact && pageSnapshot) {
+    const originalHtmlLen = pageSnapshot.html?.length || 0;
+    const trunc = (s, budget) => (s && s.length > budget)
+      ? s.slice(0, budget) + '\n... [truncated to fit context budget]'
+      : s;
+    pageSnapshot = {
+      ...pageSnapshot,
+      html: trunc(pageSnapshot.html, HTML_BUDGET_COMPACT),
+      textContent: trunc(pageSnapshot.textContent, TEXT_BUDGET_COMPACT),
+      structure: trunc(pageSnapshot.structure, STRUCTURE_BUDGET_COMPACT)
+    };
+    if (originalHtmlLen > HTML_BUDGET_COMPACT) {
+      compactedNote = `\nNOTE: The page snapshot was truncated (HTML ${originalHtmlLen} → ${HTML_BUDGET_COMPACT} chars) because the previous attempt exceeded the model's context window. Use the visible portion to choose selectors; the structure repeats for typical list pages.\n`;
+    }
+  }
+
   const feedbackSection = userFeedback ? '\nUser feedback: ' + userFeedback : '';
 
   // Per-step timeout guidance is injected via buildTimeoutGuidance(DEPLOY_TIMEOUT_MS) in the prompts below.
@@ -2009,6 +2074,7 @@ If your script does NOT use $openTab, $wait / $ / $extract will run against the 
     prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${SCRIPT_DSL_GUIDE}
 
 The following step failed. Fix it — primarily its script, but you MAY also adjust THIS step's onSuccess / onFailure / maxIterations if the runtime shows the step flow itself is wrong (the steps were generated before seeing this page state, so the topology can be a best guess). Do NOT add or remove steps; only edit this step's own fields.
+${compactedNote}
 
 Step ID: ${targetStepId}
 Step name: ${targetStep.name}
@@ -2057,6 +2123,7 @@ ${RETURN_FORMAT}`;
     prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${SCRIPT_DSL_GUIDE}
 
 The test passed but the user is not satisfied with the extraction results. Improve the step script based on their feedback.
+${compactedNote}
 
 Step ID: ${targetStepId}
 Step name: ${targetStep.name}

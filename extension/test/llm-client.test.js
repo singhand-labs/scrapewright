@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 
 // llm-client.js attaches LLMClient to window when present; under Node it falls
 // back to module.exports. Load it in a Node module shape.
-const { LLMClient, LLMError } = require('../lib/llm-client');
+const { LLMClient, LLMError, LLMContextOverflow } = require('../lib/llm-client');
 
 function mockResponse({ status = 200, body = {}, contentType = 'application/json' }) {
   return {
@@ -115,6 +115,101 @@ describe('LLMClient.chat empty-content handling', () => {
     const client = makeClient();
     const content = await client.chat([{ role: 'user', content: 'hi' }]);
     assert.equal(content, '{"ok":true}');
+  });
+});
+
+describe('LLMClient.chat context-window overflow', () => {
+  let consoleStub;
+  const originalConsoleLog = console.log;
+  const originalConsoleError = console.error;
+  const originalConsoleWarn = console.warn;
+
+  beforeEach(() => {
+    consoleStub = [];
+    console.log = (...args) => consoleStub.push(['log', ...args]);
+    console.error = (...args) => consoleStub.push(['error', ...args]);
+    console.warn = (...args) => consoleStub.push(['warn', ...args]);
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    console.log = originalConsoleLog;
+    console.error = originalConsoleError;
+    console.warn = originalConsoleWarn;
+  });
+
+  function makeClient() {
+    return new LLMClient({
+      provider: 'glm',
+      model: 'glm-5.1',
+      apiKey: 'test-key',
+      apiBaseUrl: 'http://test.local/v1'
+    });
+  }
+
+  function overflowBody(finishReason = 'model_context_window_exceeded') {
+    return {
+      choices: [{ message: { role: 'assistant', content: '' }, finish_reason: finishReason }],
+      usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+    };
+  }
+
+  it('throws LLMContextOverflow on model_context_window_exceeded', async () => {
+    global.fetch = async () => mockResponse({ body: overflowBody() });
+
+    const client = makeClient();
+    await assert.rejects(
+      () => client.chat([{ role: 'user', content: 'x'.repeat(200000) }], { maxRetries: 3, backoffMs: () => 1 }),
+      (err) => {
+        assert.equal(err.name, 'LLMContextOverflow', 'should be LLMContextOverflow, got: ' + err.name);
+        assert.equal(err.retryable, false, 'overflow must be non-retryable');
+        assert.match(err.message, /context window/i, 'message should mention context window');
+        return true;
+      }
+    );
+  });
+
+  it('does NOT retry on context overflow (single fetch call)', async () => {
+    let calls = 0;
+    global.fetch = async () => {
+      calls++;
+      return mockResponse({ body: overflowBody() });
+    };
+
+    const client = makeClient();
+    await assert.rejects(
+      () => client.chat([{ role: 'user', content: 'big' }], { maxRetries: 3, backoffMs: () => 1 }),
+      (err) => err.name === 'LLMContextOverflow'
+    );
+    assert.equal(calls, 1, 'should not retry overflow — got ' + calls + ' fetch calls');
+  });
+
+  it('also treats context_length_exceeded (OpenAI spelling) as overflow', async () => {
+    global.fetch = async () => mockResponse({ body: overflowBody('context_length_exceeded') });
+
+    const client = makeClient();
+    await assert.rejects(
+      () => client.chat([{ role: 'user', content: 'big' }], { maxRetries: 3, backoffMs: () => 1 }),
+      (err) => {
+        assert.equal(err.name, 'LLMContextOverflow');
+        return true;
+      }
+    );
+  });
+
+  it('attaches detail with finish_reason and usage on overflow', async () => {
+    global.fetch = async () => mockResponse({ body: overflowBody() });
+
+    const client = makeClient();
+    await assert.rejects(
+      () => client.chat([{ role: 'user', content: 'big' }], { maxRetries: 0 }),
+      (err) => {
+        assert.ok(err.detail, 'detail should be attached');
+        assert.equal(err.detail.finish_reason, 'model_context_window_exceeded');
+        assert.ok(err.detail.usage, 'usage should be in detail');
+        return true;
+      }
+    );
   });
 });
 
