@@ -1144,4 +1144,39 @@ describe('summarizeExecutionDiagnostics', () => {
     const out = summarizeExecutionDiagnostics(events, 's1');
     assert.match(out, /parent list selector is wrong/i);
   });
+
+  it('emits loading-indicator heuristic when all $exists on loading selector return 1', () => {
+    const events = [
+      itEvent('STEP_ITERATION', { stepId: 's1', iteration: 1, maxIterations: 3, domActivity: [{ method: '$exists', selector: '.cosmo-loading-spinner', outcome: 1 }], resultPreview: '{"done":false}' }),
+      itEvent('STEP_ITERATION', { stepId: 's1', iteration: 2, maxIterations: 3, domActivity: [{ method: '$exists', selector: '.cosmo-loading-spinner', outcome: 1 }], resultPreview: '{"done":false}' }),
+      itEvent('STEP_FAILED', { stepId: 's1', error: 'POLL_EXHAUSTED', iterations: 2 })
+    ];
+    const out = summarizeExecutionDiagnostics(events, 's1');
+    assert.match(out, /loading indicator is still visible/i);
+    assert.ok(!out.includes('parent list selector is wrong'), 'should NOT trigger branch 1');
+  });
+
+  it('emits ready-check heuristic fallback when list is non-empty and no loading selector', () => {
+    const events = [
+      itEvent('STEP_ITERATION', { stepId: 's1', iteration: 1, maxIterations: 3, domActivity: [{ method: '$list', selector: '.post', outcome: 5 }], resultPreview: '{"done":false}' }),
+      itEvent('STEP_ITERATION', { stepId: 's1', iteration: 2, maxIterations: 3, domActivity: [{ method: '$list', selector: '.post', outcome: 5 }], resultPreview: '{"done":false}' }),
+      itEvent('STEP_FAILED', { stepId: 's1', error: 'POLL_EXHAUSTED', iterations: 2 })
+    ];
+    const out = summarizeExecutionDiagnostics(events, 's1');
+    assert.match(out, /ready\/done check is wrong/i);
+    assert.ok(!out.includes('parent list selector is wrong'), 'should NOT trigger branch 1');
+    assert.ok(!out.includes('loading indicator'), 'should NOT trigger branch 2');
+  });
+
+  it('reports mixed results when iterations have divergent previews', () => {
+    const events = [
+      itEvent('STEP_ITERATION', { stepId: 's1', iteration: 1, maxIterations: 3, domActivity: [{ method: '$list', selector: '.post', outcome: 0 }], resultPreview: '{"done":false}' }),
+      itEvent('STEP_ITERATION', { stepId: 's1', iteration: 2, maxIterations: 3, domActivity: [{ method: '$list', selector: '.post', outcome: 0 }], resultPreview: '{"error":"timeout"}' }),
+      itEvent('STEP_FAILED', { stepId: 's1', error: 'POLL_EXHAUSTED', iterations: 2 })
+    ];
+    const out = summarizeExecutionDiagnostics(events, 's1');
+    assert.match(out, /Total: 2 iterations with mixed results/);
+    assert.match(out, /first:.*"done":false/);
+    assert.match(out, /last:.*"error":"timeout"/);
+  });
 });
