@@ -1,6 +1,6 @@
 const { describe, it, test } = require('node:test');
 const assert = require('node:assert/strict');
-const { parseSchemaFields, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, buildRequirementsBlock, suggestServiceName } = require('../lib/wizard-utils');
+const { parseSchemaFields, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, buildRequirementsBlock, suggestServiceName, SCRIPT_DSL_GUIDE } = require('../lib/wizard-utils');
 
 describe('parseSchemaFields', () => {
   it('returns field names with types', () => {
@@ -911,5 +911,21 @@ describe('buildAnnotationsText dotted outputField', () => {
       { type: 'extract', selector: '.answer', outputField: 'answer' }
     ]);
     assert.match(text, /outputField: answer \(extract using the selector above into this field\)/);
+  });
+});
+
+describe('SCRIPT_DSL_GUIDE regression', () => {
+  it('warns about the :nth-of-type(N) trap on compound selectors', () => {
+    assert.ok(typeof SCRIPT_DSL_GUIDE === 'string');
+    assert.match(SCRIPT_DSL_GUIDE, /:nth-of-type\(N\)/);
+    assert.match(SCRIPT_DSL_GUIDE, /CSS TRAP/i);
+  });
+
+  it('teaches parallel-array list extraction', () => {
+    assert.match(SCRIPT_DSL_GUIDE, /LIST EXTRACTION/);
+  });
+
+  it('teaches empty-list early bailout', () => {
+    assert.match(SCRIPT_DSL_GUIDE, /EMPTY-LIST BAILOUT/);
   });
 });
