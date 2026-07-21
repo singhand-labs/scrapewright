@@ -771,3 +771,42 @@ describe('suggestServiceName', () => {
     assert.equal(suggestServiceName(undefined), '');
   });
 });
+
+describe('findEmptyExtractionFields', () => {
+  const { findEmptyExtractionFields } = require('../lib/wizard-utils');
+  const schema = { required: ['posts'] };
+
+  it('flags an array of fully-empty objects', () => {
+    const data = { posts: [{ 小组: '', 用户名: '', 内容: '', 插图url: [] }] };
+    const empty = findEmptyExtractionFields(data, schema);
+    assert.deepEqual(empty, ['posts']);
+  });
+
+  it('does not flag when at least one object has a non-empty value', () => {
+    const data = { posts: [{ 小组: '', 用户名: '', 内容: 'hello' }] };
+    const empty = findEmptyExtractionFields(data, schema);
+    assert.deepEqual(empty, []);
+  });
+
+  it('does not flag scalar fields that are non-empty', () => {
+    const data = { keyword: 'shoes' };
+    const empty = findEmptyExtractionFields(data, { required: ['keyword'] });
+    assert.deepEqual(empty, []);
+  });
+
+  it('does not flag arrays of primitives with values', () => {
+    const data = { tags: ['a', 'b'] };
+    const empty = findEmptyExtractionFields(data, { required: ['tags'] });
+    assert.deepEqual(empty, []);
+  });
+
+  it('returns [] when outputSchema is missing/empty', () => {
+    assert.deepEqual(findEmptyExtractionFields({ posts: [] }, null), []);
+    assert.deepEqual(findEmptyExtractionFields({ posts: [] }, { required: [] }), []);
+  });
+
+  it('returns [] when data is not an object', () => {
+    assert.deepEqual(findEmptyExtractionFields(null, schema), []);
+    assert.deepEqual(findEmptyExtractionFields([1, 2], schema), []);
+  });
+});

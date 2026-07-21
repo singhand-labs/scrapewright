@@ -1626,6 +1626,28 @@ async function testScript() {
       const tr = document.getElementById('testResults');
       if (tr) tr.textContent += '\n\nOUTPUT SCHEMA MISMATCH:\n  result fields: [' + gotKeys.join(', ') + ']\n  required:     [' + wantKeys.join(', ') + ']\n  missing:      [' + oc.missing.join(', ') + ']\nThe extraction step must return the EXACT field names declared in outputSchema.';
     } else {
+      // Deeper check: schema passes, but extraction may still be empty.
+      // Detect required fields that are arrays-of-objects where every object
+      // has only empty values — the script found list items but extracted
+      // nothing (typical when the LLM used :nth-of-type(N) on list items,
+      // which matches any Nth div sibling, not the Nth article). Throw so
+      // the catch block below sets lastError/lastErrorStepId and autoFix
+      // uses the STRONG "fix failing step" prompt instead of the weak
+      // "improve based on feedback" prompt. Without this, the LLM keeps
+      // generating similar broken selectors even when the user points at
+      // the problem in feedback — the weak prompt framing doesn't convey
+      // urgency.
+      const emptyFields = findEmptyExtractionFields(finalData, wizardState.outputSchema);
+      if (emptyFields.length > 0) {
+        const lastStepEntry = result.steps[result.steps.length - 1];
+        const extractionStepId = lastStepEntry?.stepId || (wizardState.steps[wizardState.steps.length - 1] && wizardState.steps[wizardState.steps.length - 1].id);
+        const err = new Error('EMPTY_EXTRACTION: required field(s) [' + emptyFields.join(', ') + '] are present but every extracted item has only empty values. The script found list items but the field selectors are wrong.');
+        err.stepId = extractionStepId;
+        err.snapshot = lastStepEntry?.snapshot || null;
+        err.emptyFields = emptyFields;
+        debugLogger.log('warn', 'wizard', 'Empty extraction detected — treating as failure', { emptyFields, extractionStepId });
+        throw err;
+      }
       updatePhaseUI('success');
     }
     debugLogger.log('info', 'wizard', 'testScript success', { finalResult: result.finalResult });
@@ -1851,6 +1873,18 @@ async function autoFix(userFeedback = null) {
     }
     if (!userFeedback) {
       appendLog('Auto-fix gave up after ' + MAX_ATTEMPTS + ' attempts. Add a hint below and click Auto-Fix.', 'warn');
+      // Explicit annotation suggestion when extraction keeps coming back empty
+      // and the failing step has no annotations. The LLM has failed to find
+      // working selectors on its own; the user can short-circuit by manually
+      // picking the elements.
+      const isEmptyExtraction = /EMPTY_EXTRACTION/i.test(wizardState.lastError || '');
+      const failingStep = wizardState.steps.find(s => s.id === wizardState.lastErrorStepId);
+      const hasNoAnnotations = !failingStep?.annotations || failingStep.annotations.length === 0;
+      if (isEmptyExtraction && failingStep && hasNoAnnotations) {
+        const msg = 'Extraction keeps returning empty data. Click "Start Annotating" on step "' + failingStep.name + '" to manually select the elements — the LLM will use your picks directly.';
+        appendLog(msg, 'warn');
+        showToast(msg, 'warn', 12000);
+      }
     }
     updatePhaseUI('failure');
   } finally {
