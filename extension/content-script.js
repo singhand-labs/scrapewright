@@ -557,7 +557,12 @@
     if (message.type === 'START_ANNOTATION') {
       annotationSchemas = {
         inputSchema: message.inputSchema || {},
-        outputSchema: message.outputSchema || {}
+        outputSchema: message.outputSchema || {},
+        // Precomputed by the wizard page (which has wizard-utils.js loaded).
+        // Array of {value, label} including nested array-of-objects fields
+        // (e.g. {value:'posts.group', label:'posts → group'}) so the user
+        // can map a selector to a specific sub-field of each list item.
+        outputFieldOptions: Array.isArray(message.outputFieldOptions) ? message.outputFieldOptions : null
       };
       startAnnotationMode();
       sendResponse({ ack: true });
@@ -941,10 +946,16 @@
           menu.appendChild(buildSelect('cc-wait', 'Wait condition', WAIT_CONDITIONS, '— Select —'));
         }
         if (type === 'extract') {
-          const outProps = Object.keys(annotationSchemas.outputSchema?.properties || {});
-          if (outProps.length) {
+          // Prefer the precomputed options from the wizard (handles array-of
+          // -objects outputs by descending into items.properties, e.g. posts →
+          // posts.group, posts.username). Fall back to top-level keys for
+          // older wizards that don't send outputFieldOptions.
+          const outOptions = Array.isArray(annotationSchemas.outputFieldOptions) && annotationSchemas.outputFieldOptions.length
+            ? annotationSchemas.outputFieldOptions
+            : Object.keys(annotationSchemas.outputSchema?.properties || {}).map(k => ({ value: k, label: k }));
+          if (outOptions.length) {
             menu.appendChild(buildSelect('cc-output', 'Output field',
-              outProps.map(k => ({ value: k, label: k })), '— Select —'));
+              outOptions, '— Select —'));
           } else {
             const note = document.createElement('div');
             note.style.cssText = 'font-size:11px; color:#9ca3af; margin:4px 0;';

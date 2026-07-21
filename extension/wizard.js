@@ -569,7 +569,8 @@ async function startStepAnnotation(stepIndex) {
     await sendMessageWithRetry(tabId, {
       type: 'START_ANNOTATION',
       inputSchema: wizardState.inputSchema,
-      outputSchema: wizardState.outputSchema
+      outputSchema: wizardState.outputSchema,
+      outputFieldOptions: getOutputFieldOptions(wizardState.outputSchema)
     });
     showToast('Annotation mode on. Click elements, then click Finish Annotation when done.', 'info');
   } catch (e) {
@@ -579,7 +580,8 @@ async function startStepAnnotation(stepIndex) {
       await sendMessageWithRetry(tabId, {
         type: 'START_ANNOTATION',
         inputSchema: wizardState.inputSchema,
-        outputSchema: wizardState.outputSchema
+        outputSchema: wizardState.outputSchema,
+        outputFieldOptions: getOutputFieldOptions(wizardState.outputSchema)
       });
       showToast('Annotation mode on (after reload).', 'info');
     } catch (e2) {
