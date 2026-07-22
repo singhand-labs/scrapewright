@@ -62,11 +62,27 @@ describe('extractListRecords', () => {
   it('throws when fieldMap is empty', () => {
     assert.throws(() => extractListRecords([{}], {}), /non-empty object/);
   });
+
+  it('re-throws invalid sub-selector with the field name in the message', () => {
+    document.body.innerHTML = `<div class="post"><span class="author">Alice</span></div>`;
+    const containers = Array.from(document.querySelectorAll('.post'));
+    assert.throws(
+      () => extractListRecords(containers, { author: '<<<invalid>>>' }),
+      /field "author"/
+    );
+  });
 });
 
 describe('clickInListItems', () => {
   beforeEach(() => {
     setupDOM('<!DOCTYPE html><html><body></body></html>');
+  });
+
+  it('returns {clicked:0, errors:[]} for empty containers (NOT a throw)', () => {
+    const r = clickInListItems([], '.expand', () => {}, 0);
+    assert.equal(r.clicked, 0);
+    assert.deepEqual(r.errors, []);
+    assert.equal(r.delayMs, 0);
   });
 
   it('clicks subSel in every container', () => {
