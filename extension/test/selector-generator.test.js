@@ -48,6 +48,14 @@ describe('buildSegment', () => {
     assert.equal(buildSegment(el), 'h3');
   });
 
+  it('skips base36 Facebook-style classes (xjp7ctv, xjbqb8w)', () => {
+    // Real Facebook classes use base36 hashes, not hex — this was a regression that
+    // caused selectors to bloat with auto-gen classes and break LCP-based pattern derivation.
+    const el = document.createElement('a');
+    el.className = 'xjp7ctv xjbqb8w xpdmqnj xyri2b';
+    assert.equal(buildSegment(el), 'a');
+  });
+
   it('keeps semantic className (no auto-gen pattern)', () => {
     const el = document.createElement('div');
     el.className = 'post-card featured';
