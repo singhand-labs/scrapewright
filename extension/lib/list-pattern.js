@@ -164,7 +164,7 @@ function deriveListPattern(annotations) {
   const list = Array.isArray(annotations) ? annotations : [];
   const result = { patterns: [], clickInList: [], annotationCount: list.length };
 
-  // Step 1: group by outputField dotted prefix
+  // Step 1: group extract annotations by outputField dotted prefix
   const groups = new Map();
   for (const a of list) {
     const of = a.outputField || '';
@@ -175,7 +175,7 @@ function deriveListPattern(annotations) {
     groups.get(arr).push(a);
   }
 
-  // Step 2-6 per group
+  // Step 2-6 per group — compute containers and fieldMaps first.
   for (const [arr, annos] of groups) {
     // Only proceed if we have at least one extract annotation with a selector
     const withSel = annos.filter(a => a.selector && (a.type === 'extract' || a.outputField));
@@ -212,16 +212,39 @@ function deriveListPattern(annotations) {
     if (Object.keys(fieldMap).length) {
       result.patterns.push({ container: containerStr, fieldMap, outputArray: arr });
     }
+  }
 
-    // Classify expand clicks within this group
-    const expandClicks = annos.filter(a => a.type === 'click' && a.purpose === 'expand' && a.selector);
-    if (expandClicks.length) {
-      // Compute suffix of the FIRST expand click (assume same shape across items)
-      const firstSegs = parseSelectorSegments(expandClicks[0].selector);
-      const suffix = normalizeSuffix(firstSegs.slice(prefixLen)).join(' ');
+  // Step 7: classify expand clicks by matching their selector against a derived
+  // container. Click annotations don't carry an outputField, so we associate
+  // each with the first pattern whose container segments form a positional-stripped
+  // prefix of the click's selector.
+  const expandClicks = list.filter(a => a.type === 'click' && a.purpose === 'expand' && a.selector);
+  for (const click of expandClicks) {
+    const clickSegs = parseSelectorSegments(click.selector);
+    // Find the pattern whose container is a prefix of the click's selector
+    // (after positional stripping on both sides).
+    let matched = null;
+    let prefixLen = 0;
+    for (const p of result.patterns) {
+      const containerSegs = parseSelectorSegments(p.container);
+      if (containerSegs.length > clickSegs.length) continue;
+      let isPrefix = true;
+      for (let i = 0; i < containerSegs.length; i++) {
+        const a = stripPositional(containerSegs[i]);
+        const b = stripPositional(clickSegs[i]);
+        if (a !== b) { isPrefix = false; break; }
+      }
+      if (isPrefix) {
+        matched = p;
+        prefixLen = containerSegs.length;
+        break;
+      }
+    }
+    if (matched) {
+      const suffix = normalizeSuffix(clickSegs.slice(prefixLen)).join(' ');
       if (suffix) {
         result.clickInList.push({
-          container: containerStr,
+          container: matched.container,
           subSelector: suffix,
           delayMs: 500,
           intent: 'expand each item before extracting content',
@@ -233,4 +256,8 @@ function deriveListPattern(annotations) {
   return result;
 }
 
-module.exports = { parseSelectorSegments, deriveListPattern };
+const api = { parseSelectorSegments, deriveListPattern };
+
+if (typeof module !== 'undefined' && module.exports) module.exports = api;
+if (typeof window !== 'undefined') window.ListPattern = api;
+if (typeof self !== 'undefined') self.ListPattern = api;
