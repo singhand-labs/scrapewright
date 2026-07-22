@@ -606,6 +606,81 @@ function summarizeExecutionDiagnostics(events, failingStepId) {
   return '\n' + lines.join('\n') + '\n';
 }
 
+// Score how brittle a single CSS selector is. Higher score = more brittle.
+// Used by the wizard deploy hook to warn the user when an annotation is
+// unlikely to generalize across list items. Pure function, no exceptions.
+//
+// Detection rules:
+//   +35 per :nth-of-type occurrence (positional, does not generalize)
+//   +25 if chain has >12 segments; +15 if >8 (depends on fixed DOM structure)
+//   +20 if selector contains auto-generated React/Facebook className
+//   +10 if selector has no stable anchor anywhere ([role], [aria-*], [data-*], id)
+//   +5  per bare structural segment (tag>tag with no attributes between)
+function scoreAnnotationBrittleness(selector) {
+  let score = 0;
+  const reasons = [];
+
+  if (!selector || typeof selector !== 'string') {
+    return { score: 0, reasons };
+  }
+
+  // 1. Positional :nth-of-type
+  const nthMatches = selector.match(/:nth-of-type\(\d+\)/g) || [];
+  if (nthMatches.length > 0) {
+    score += 35 * nthMatches.length;
+    reasons.push(`Positional :nth-of-type ×${nthMatches.length} — does not generalize across siblings`);
+  }
+
+  // 2. Chain depth
+  const segments = selector.split('>').map(s => s.trim()).filter(Boolean);
+  if (segments.length > 12) {
+    score += 25;
+    reasons.push(`Very long chain (${segments.length} segments) — depends on fixed DOM structure`);
+  } else if (segments.length > 8) {
+    score += 15;
+    reasons.push(`Long chain (${segments.length} segments)`);
+  }
+
+  // 3. Auto-generated className (React/Facebook hash)
+  if (/\.x[0-9a-f]+\b/i.test(selector) || /\._[a-z0-9]+\b/i.test(selector)) {
+    score += 20;
+    reasons.push('Auto-generated className (likely unstable across page loads)');
+  }
+
+  // 4. No stable anchor anywhere (skipped when positional :nth-of-type is
+  //    present — that IS an anchor, just a brittle one, already penalized above)
+  const hasStableAnchor = /(\[role=|\[aria-|\[data-|#\w)/.test(selector);
+  if (!hasStableAnchor && segments.length > 1 && nthMatches.length === 0) {
+    score += 10;
+    reasons.push('No stable anchor attribute ([role], [aria-*], [data-*], id)');
+  }
+
+  // 5. Bare structural segments (tag > tag with no attributes in between)
+  const bareStructural = (selector.match(/>\s*[a-z]+\s*>/g) || []).length;
+  if (bareStructural > 0) {
+    score += 5 * bareStructural;
+    if (bareStructural >= 2) {
+      reasons.push(`Anonymous structural ×${bareStructural}`);
+    }
+  }
+
+  return { score, reasons };
+}
+
+// Score a chain of selectors — the worst link determines the chain's
+// brittleness. A chain is only as stable as its weakest segment.
+function scoreAnnotationChain(selectors) {
+  if (!Array.isArray(selectors) || selectors.length === 0) {
+    return { score: 0, reasons: [] };
+  }
+  let worst = { score: 0, reasons: [] };
+  for (const s of selectors) {
+    const r = scoreAnnotationBrittleness(s);
+    if (r.score > worst.score) worst = r;
+  }
+  return worst;
+}
+
 function validateSteps(steps) {
   if (!Array.isArray(steps)) return { valid: false, error: 'steps must be an array' };
   if (steps.length === 0) return { valid: false, error: 'steps cannot be empty' };
@@ -988,7 +1063,7 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;

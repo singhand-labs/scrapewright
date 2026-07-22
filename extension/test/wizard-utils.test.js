@@ -1,6 +1,6 @@
 const { describe, it, test } = require('node:test');
 const assert = require('node:assert/strict');
-const { parseSchemaFields, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, buildRequirementsBlock, suggestServiceName, SCRIPT_DSL_GUIDE, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics } = require('../lib/wizard-utils');
+const { parseSchemaFields, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, buildRequirementsBlock, suggestServiceName, SCRIPT_DSL_GUIDE, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, scoreAnnotationBrittleness, scoreAnnotationChain } = require('../lib/wizard-utils');
 
 describe('parseSchemaFields', () => {
   it('returns field names with types', () => {
@@ -1178,5 +1178,106 @@ describe('summarizeExecutionDiagnostics', () => {
     assert.match(out, /Total: 2 iterations with mixed results/);
     assert.match(out, /first:.*"done":false/);
     assert.match(out, /last:.*"error":"timeout"/);
+  });
+});
+
+describe('scoreAnnotationBrittleness', () => {
+  it('scores #id as 0 (perfectly stable)', () => {
+    const r = scoreAnnotationBrittleness('#main-feed');
+    assert.equal(r.score, 0);
+    assert.deepEqual(r.reasons, []);
+  });
+
+  it('scores div[role="article"] as 0', () => {
+    const r = scoreAnnotationBrittleness('div[role="article"]');
+    assert.equal(r.score, 0);
+  });
+
+  it('scores stacked stable attrs as 0', () => {
+    const r = scoreAnnotationBrittleness('div[role="article"][aria-posinset="2"]');
+    assert.equal(r.score, 0);
+  });
+
+  it('scores single :nth-of-type as 35', () => {
+    const r = scoreAnnotationBrittleness('div:nth-of-type(3)');
+    assert.equal(r.score, 35);
+    assert.ok(r.reasons.some(x => /nth-of-type/.test(x)));
+  });
+
+  it('scores double :nth-of-type as 70', () => {
+    const r = scoreAnnotationBrittleness('div:nth-of-type(2) > span:nth-of-type(1)');
+    assert.equal(r.score, 70);
+    assert.ok(r.reasons.some(x => /×2/.test(x)));
+  });
+
+  it('penalizes auto-generated className (x-prefix hash)', () => {
+    const r = scoreAnnotationBrittleness('div.x9f619.x1n2onr6');
+    assert.ok(r.score >= 20, `expected score >= 20, got ${r.score}`);
+    assert.ok(r.reasons.some(x => /Auto-generated/.test(x)));
+  });
+
+  it('penalizes long chains (8+ segments)', () => {
+    const sel = 'div > div > div > div > div > div > div > div > span';
+    const r = scoreAnnotationBrittleness(sel);
+    assert.ok(r.score >= 15, `expected score >= 15, got ${r.score}`);
+    assert.ok(r.reasons.some(x => /chain/i.test(x)));
+  });
+
+  it('penalizes very long chains (12+ segments) more', () => {
+    const sel = 'div > div > div > div > div > div > div > div > div > div > div > div > span';
+    const r = scoreAnnotationBrittleness(sel);
+    assert.ok(r.score >= 25, `expected score >= 25, got ${r.score}`);
+    assert.ok(r.reasons.some(x => /Very long chain/.test(x)));
+  });
+
+  it('penalizes chain with no stable anchor', () => {
+    const r = scoreAnnotationBrittleness('div > span > a');
+    assert.ok(r.score >= 10, `expected score >= 10, got ${r.score}`);
+    assert.ok(r.reasons.some(x => /No stable anchor/.test(x)));
+  });
+
+  it('penalizes anonymous structural segments (bare tag between >)', () => {
+    const r = scoreAnnotationBrittleness('ul > li > div > span > a');
+    const bareStructural = (r.reasons.join(' ').match(/Anonymous structural ×(\d+)/) || [])[1];
+    assert.ok(bareStructural && Number(bareStructural) >= 2, 'expected >= 2 anonymous structural');
+  });
+
+  it('returns score 0 for empty string', () => {
+    assert.deepEqual(scoreAnnotationBrittleness(''), { score: 0, reasons: [] });
+  });
+
+  it('returns score 0 for null', () => {
+    assert.deepEqual(scoreAnnotationBrittleness(null), { score: 0, reasons: [] });
+  });
+
+  it('returns score 0 for non-string', () => {
+    assert.deepEqual(scoreAnnotationBrittleness(undefined), { score: 0, reasons: [] });
+    assert.deepEqual(scoreAnnotationBrittleness(123), { score: 0, reasons: [] });
+  });
+});
+
+describe('scoreAnnotationChain', () => {
+  it('returns the worst (highest-score) segment', () => {
+    const selectors = ['div[role="article"]', 'div:nth-of-type(2)'];
+    const r = scoreAnnotationChain(selectors);
+    assert.equal(r.score, 35);
+  });
+
+  it('returns 0 when all selectors are stable', () => {
+    const selectors = ['#id1', '#id2', 'div[role="article"]'];
+    const r = scoreAnnotationChain(selectors);
+    assert.equal(r.score, 0);
+  });
+
+  it('returns 0 for empty array', () => {
+    assert.deepEqual(scoreAnnotationChain([]), { score: 0, reasons: [] });
+  });
+
+  it('returns 0 for null', () => {
+    assert.deepEqual(scoreAnnotationChain(null), { score: 0, reasons: [] });
+  });
+
+  it('returns 0 for non-array', () => {
+    assert.deepEqual(scoreAnnotationChain('not an array'), { score: 0, reasons: [] });
   });
 });
