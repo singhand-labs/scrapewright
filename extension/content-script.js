@@ -253,6 +253,18 @@
           recordDomActivity('$waitForStable', data.selector, result ? 1 : 0, Date.now() - __t0);
           break;
         }
+        case 'extractList': {
+          const __t0 = Date.now();
+          result = domExtractList(data.selector, data.args && data.args[0], data.args && data.args[1]);
+          recordDomActivity('$extractList', data.selector, Array.isArray(result) ? result.length : 0, Date.now() - __t0);
+          break;
+        }
+        case 'clickInList': {
+          const __t0 = Date.now();
+          result = await domClickInList(data.selector, data.args && data.args[0], data.args && data.args[1]);
+          recordDomActivity('$clickInList', data.selector, result && typeof result.clicked === 'number' ? result.clicked : 0, Date.now() - __t0);
+          break;
+        }
         default:
           error = 'Unknown DOM action: ' + data.action;
       }
@@ -534,6 +546,63 @@
     }
     sendDebugLog('info', 'content-script', 'domList result', { selector: sel, count: results.length });
     return results;
+  }
+
+  function domExtractList(containerSel, fieldMap, opts) {
+    if (!containerSel || typeof containerSel !== 'string') {
+      throw new Error('$extractList containerSel must be a non-empty string');
+    }
+    let containers;
+    try {
+      containers = querySelectorAllDeep(containerSel);
+    } catch (err) {
+      throw new Error('$extractList container selector invalid: ' + (err.message || err));
+    }
+    sendDebugLog('info', 'content-script', 'domExtractList resolved containers', {
+      selector: containerSel,
+      count: containers.length,
+      fields: Object.keys(fieldMap || {})
+    });
+    return ListExtractOps.extractListRecords(containers, fieldMap, opts || {});
+  }
+
+  async function domClickInList(containerSel, subSel, opts) {
+    if (!containerSel || typeof containerSel !== 'string') {
+      throw new Error('$clickInList containerSel must be a non-empty string');
+    }
+    if (!subSel || typeof subSel !== 'string') {
+      throw new Error('$clickInList subSel must be a non-empty string');
+    }
+    let containers;
+    try {
+      containers = querySelectorAllDeep(containerSel);
+    } catch (err) {
+      throw new Error('$clickInList container selector invalid: ' + (err.message || err));
+    }
+    sendDebugLog('info', 'content-script', 'domClickInList resolved containers', {
+      selector: containerSel,
+      count: containers.length,
+      subSelector: subSel
+    });
+    const delayMs = (opts && typeof opts.delayMs === 'number') ? opts.delayMs : 500;
+    const result = ListExtractOps.clickInListItems(
+      containers,
+      subSel,
+      (el) => { el.click(); },
+      delayMs
+    );
+    // The pure helper is synchronous; per-click spacing is approximated by a single
+    // post-batch sleep. For long lists requiring strict per-click timing, split across
+    // orchestrator iterations (see DSL guide's EXPAND-THEN-EXTRACT block).
+    if (delayMs > 0 && result.clicked > 1) {
+      await new Promise(r => setTimeout(r, Math.min(delayMs, 500)));
+    }
+    sendDebugLog('info', 'content-script', 'domClickInList done', {
+      selector: containerSel,
+      clicked: result.clicked,
+      errors: result.errors.length
+    });
+    return { clicked: result.clicked, errors: result.errors };
   }
 
   const openTabPending = new Map();
