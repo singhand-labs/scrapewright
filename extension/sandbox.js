@@ -42,6 +42,8 @@
   window.$list = (sel) => sendDomRequest('list', sel);
 window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opts || {}]);
   window.$openTab = (url, fn) => sendDomRequest('openTab', null, [url, fn ? fn.toString() : '']);
+  window.$extractList = (containerSel, fieldMap, opts) => sendDomRequest('extractList', containerSel, [fieldMap, opts || {}]);
+  window.$clickInList = (containerSel, subSel, opts) => sendDomRequest('clickInList', containerSel, [subSel, opts || {}]);
 
   window.addEventListener('message', (e) => {
     if (e.data.type === 'DOM_RESPONSE') {
