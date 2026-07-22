@@ -5,247 +5,194 @@
 // The output is fed to buildAnnotationsText so the LLM sees a generalized
 // pattern ABOVE the raw per-annotation lines.
 
-const AUTO_CLASS_RE = /^(x[09a-f]+|_[a-z0-9]+|html-)/i;
-
-// Regex matches a single CSS compound selector segment, supporting:
-//   tag, .class, #id, [attr], [attr=val], [attr^=val], :nth-of-type(N), :nth-child(N), ::iframe-prefix
-// Splits on descendant combinator ' ' and child combinator ' > '.
-const COMPOUND_RE = /(?:iframe[^:]*::)?(?:[.#]?[a-zA-Z][\w-]*(?:\[[^\]]+\]|:[a-zA-Z-]+(?:\([^)]*\))?|\.[\w-]+|# [\w-]+)*)/g;
-
+// Split a selector into segments on descendant/child combinators, preserving
+// whether each join was a child combinator ('>') so emit can rebuild it.
+// Bracket-aware so attribute values with spaces aren't split.
 function splitOnCombinators(sel) {
-  // Replace child combinator ' > ' with a placeholder, split on whitespace, restore.
-  // This avoids splitting inside [attr="... with spaces ..."].
   const tokens = [];
   let depth = 0;
   let current = '';
+  let pendingChild = false; // a '>' that joins the previous -> next segment
   for (let i = 0; i < sel.length; i++) {
     const c = sel[i];
     if (c === '[') depth++;
     else if (c === ']') depth = Math.max(0, depth - 1);
     if (depth === 0 && c === ' ') {
-      if (current.length) tokens.push(current);
-      current = '';
+      if (current.length) {
+        tokens.push({ seg: current, childCombinator: pendingChild });
+        current = '';
+        pendingChild = false;
+      }
+    } else if (depth === 0 && c === '>') {
+      // Standalone child combinator — marks the NEXT segment.
+      if (current.length) {
+        tokens.push({ seg: current, childCombinator: pendingChild });
+        current = '';
+      }
+      pendingChild = true;
     } else {
       current += c;
     }
   }
-  if (current.length) tokens.push(current);
-  // Strip child combinator '>' tokens (now standalone) and attach semantics — we keep
-  // them as explicit markers so the caller can distinguish 'a b' from 'a > b' if needed.
-  return tokens.map(t => (t === '>' ? '>' : t.replace(/^>\s*/, '').replace(/\s*>$/, '')));
+  if (current.length) tokens.push({ seg: current, childCombinator: pendingChild });
+  return tokens;
 }
 
+// Public: return plain-string segments (API contract — tests rely on this).
 function parseSelectorSegments(selector) {
   if (!selector || typeof selector !== 'string') return [];
-  return splitOnCombinators(selector).filter(t => t && t !== '>');
+  return splitOnCombinators(selector).filter(t => t.seg).map(t => t.seg);
+}
+
+// Internal: return [{ seg, childCombinator }] so joinSegments can rebuild '>' .
+function parseSegmentsRich(selector) {
+  if (!selector || typeof selector !== 'string') return [];
+  return splitOnCombinators(selector).filter(t => t.seg);
 }
 
 function stripPositional(seg) {
-  // Remove :nth-of-type(N) and :nth-child(N) from a segment.
   return seg.replace(/:nth-(?:of-type|child)\(\d+\)/g, '');
 }
 
-function escapeRegex(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+// Heuristic for auto-generated class names (Facebook x-prefixed, CSS-modules
+// underscore/html-prefixed). Treated as non-identifying for conflict detection
+// because they vary across page builds.
+const AUTO_CLASS_RE = /^(x[09a-f]+|_[a-z0-9]+|html-)/i;
 
-// Parse a segment into structured pieces for comparison.
-//   { iframePrefix, tag, classes:[], id, attrs:[{name,val,raw}], positionals:[] }
-function parseSegment(seg) {
-  const out = { iframePrefix: '', tag: '', classes: [], id: '', attrs: [], positionals: [] };
-  let rest = seg;
-  // iframe prefix is anything before '::' that starts with 'iframe'.
-  const dd = rest.indexOf('::');
-  if (dd >= 0 && rest.slice(0, dd).startsWith('iframe')) {
-    out.iframePrefix = rest.slice(0, dd + 2); // include trailing '::'
-    rest = rest.slice(dd + 2);
-  }
-  const tagMatch = rest.match(/^([a-zA-Z][\w-]*)/);
-  if (tagMatch) {
-    out.tag = tagMatch[1];
-    rest = rest.slice(tagMatch[1].length);
-  }
-  const re = /(\.[\w-]+)|(#[\w-]+)|(\[[^\]]+\])|(:[a-zA-Z-]+(?:\([^)]*\))?)/g;
-  let m;
-  while ((m = re.exec(rest)) !== null) {
-    if (m[1]) out.classes.push(m[1].slice(1));
-    else if (m[2]) out.id = m[2].slice(1);
-    else if (m[3]) {
-      const inner = m[3].slice(1, -1);
-      const opMatch = inner.match(/^([\w-]+)\s*([~^$*|]?=)\s*(.*)$/);
-      if (opMatch) {
-        out.attrs.push({ name: opMatch[1], val: opMatch[3], raw: m[3] });
-      } else {
-        out.attrs.push({ name: inner, val: null, raw: m[3] });
-      }
-    } else if (m[4]) {
-      out.positionals.push(m[4]);
-    }
-  }
-  return out;
-}
-
-function hasIdentifyingFeature(parsed) {
-  // After stripping positionals, does the segment have anything that distinguishes
-  // an element? Bare tag with no class/id/attr is too generic.
-  return Boolean(
-    parsed.tag && (parsed.classes.length || parsed.id || parsed.attrs.length)
+// Stable signature for conflict detection: segment with positionals stripped
+// AND auto-generated classes removed. Two suffixes that differ only in
+// positional/auto classes are compatible; any other difference (tag, role,
+// aria-label, non-auto class) is a real conflict per spec rule 4.
+function stableSignature(seg) {
+  let s = stripPositional(seg);
+  s = s.replace(/\.([a-zA-Z0-9_-]+)/g, (full, name) =>
+    AUTO_CLASS_RE.test(name) ? '' : full
   );
+  return s;
 }
 
-// Compute the longest common prefix across segment arrays.
-// Returns [{ seg: <emitted CSS string> }] — positionals stripped, attrs common across all.
-function lcpOf(segmentsArrays) {
-  if (!segmentsArrays.length) return [];
-  const minLen = Math.min(...segmentsArrays.map(a => a.length));
+// Spec-literal LCP: strip positionals in-place, walk segment-by-segment,
+// stop at first divergence, cap at minLen - 1 so the suffix is non-empty.
+function lcpOf(arrays) {
+  if (!arrays.length) return [];
+  const minLen = Math.min(...arrays.map(a => a.length));
+  if (minLen === 0) return [];
+  const maxLen = Math.max(0, minLen - 1);
   const prefix = [];
-  for (let i = 0; i < minLen; i++) {
-    const parsed = segmentsArrays.map(a => parseSegment(a[i]));
-    // iframe prefix must match literally across all, else stop.
-    const iframe0 = parsed[0].iframePrefix;
-    if (!parsed.every(p => p.iframePrefix === iframe0)) break;
-    // tag must match across all.
-    const tag0 = parsed[0].tag;
-    if (!parsed.every(p => p.tag === tag0)) break;
-    // classes: keep those present in ALL (treat as set intersection on values).
-    const classes0 = parsed[0].classes;
-    const commonClasses = classes0.filter(c => parsed.every(p => p.classes.includes(c)));
-    // id: keep if all share the same id.
-    const id0 = parsed[0].id;
-    const commonId = parsed.every(p => p.id === id0) ? id0 : '';
-    // attrs: keep those with same name AND value across all.
-    const attrs0 = parsed[0].attrs;
-    const commonAttrs = attrs0.filter(a0 =>
-      parsed.every(p => p.attrs.some(a => a.name === a0.name && a.val === a0.val))
-    );
-
-    // Build the emitted segment.
-    const emitted = { iframePrefix: iframe0, tag: tag0, classes: commonClasses, id: commonId, attrs: commonAttrs };
-    if (!hasIdentifyingFeature(emitted)) break;
-    prefix.push({ seg: emitSegment(emitted), _parsed: emitted });
+  for (let i = 0; i < maxLen; i++) {
+    const stripped = arrays.map(a => stripPositional(a[i].seg));
+    if (stripped.every(s => s === stripped[0])) {
+      prefix.push({
+        seg: stripped[0],
+        childCombinator: arrays.every(a => a[i].childCombinator),
+      });
+    } else {
+      break;
+    }
   }
   return prefix;
 }
 
-function emitSegment(p) {
-  let s = p.iframePrefix + p.tag;
-  for (const c of p.classes) s += '.' + c;
-  if (p.id) s += '#' + p.id;
-  for (const a of p.attrs) {
-    if (a.val === null) s += '[' + a.name + ']';
-    else s += '[' + a.name + '=' + a.val + ']';
-  }
-  return s;
-}
-
-// Normalize a suffix segment list: strip positionals, drop leading segments
-// that were per-item-indexed (had a positional before stripping) and become
-// bare tags. A bare tag WITHOUT a positional origin (e.g. 'a', 'span') is a
-// legitimate field selector and must be kept.
-function normalizeSuffix(segments) {
-  const out = [];
-  let droppingLeading = true;
-  for (const seg of segments) {
-    const hadPositional = /:nth-(?:of-type|child)\(\d+\)/.test(seg);
-    const stripped = stripPositional(seg);
-    const parsed = parseSegment(stripped);
-    const isBareTag = parsed.tag && !parsed.classes.length && !parsed.id && !parsed.attrs.length;
-    if (droppingLeading && hadPositional && isBareTag) {
-      // Drop leading per-item-indexed wrappers (e.g. 'div:nth-of-type(2)' -> 'div').
-      continue;
-    }
-    droppingLeading = false;
-    out.push(stripped);
+function joinSegments(segs) {
+  if (!segs.length) return '';
+  let out = segs[0].seg;
+  for (let i = 1; i < segs.length; i++) {
+    out += segs[i].childCombinator ? ' > ' : ' ';
+    out += segs[i].seg;
   }
   return out;
+}
+
+// Strip positionals from a suffix segment list, preserving combinator flags.
+// Returns [{ seg, childCombinator }] ready for joinSegments.
+function stripSuffixPositionals(segs) {
+  return segs.map(s => ({ seg: stripPositional(s.seg), childCombinator: s.childCombinator }));
 }
 
 function deriveListPattern(annotations) {
   const list = Array.isArray(annotations) ? annotations : [];
   const result = { patterns: [], clickInList: [], annotationCount: list.length };
 
-  // Step 1: group extract annotations by outputField dotted prefix
+  // Step 1: group extract annotations by outputField dotted prefix.
   const groups = new Map();
   for (const a of list) {
     const of = a.outputField || '';
     const dot = of.indexOf('.');
-    if (dot <= 0) continue; // _flat, skip
+    if (dot <= 0) continue; // flat field — skip
     const arr = of.slice(0, dot);
     if (!groups.has(arr)) groups.set(arr, []);
     groups.get(arr).push(a);
   }
 
-  // Step 2-6 per group — compute containers and fieldMaps first.
+  // Steps 2-6 per group.
   for (const [arr, annos] of groups) {
-    // Only proceed if we have at least one extract annotation with a selector
     const withSel = annos.filter(a => a.selector && (a.type === 'extract' || a.outputField));
     if (!withSel.length) continue;
 
-    const segArrays = withSel.map(a => parseSelectorSegments(a.selector));
-    let prefix = lcpOf(segArrays);
-    // Cap LCP at minLen - 1 so suffix is non-empty.
-    const minLen = Math.min(...segArrays.map(a => a.length));
-    if (prefix.length >= minLen) prefix = prefix.slice(0, Math.max(0, minLen - 1));
+    const segArrays = withSel.map(a => parseSegmentsRich(a.selector));
+    const prefix = lcpOf(segArrays);
     if (!prefix.length) continue; // no common ancestor
     if (prefix.length > 8) continue; // too deep — likely wrong, emit nothing
 
-    const containerStr = prefix.map(p => p.seg).join(' ');
+    const containerStr = joinSegments(prefix);
     const prefixLen = prefix.length;
 
-    // Derive fieldMap: for each annotation, compute suffix (segments after LCP),
-    // then group by outputField sub-name.
+    // Derive fieldMap. Per spec rule 4: if two annotations for the same
+    // sub-name have suffixes that differ in STABLE segments, drop the field.
     const fieldMap = {};
     for (const a of withSel) {
       const sub = (a.outputField.split('.')[1] || '').trim();
       if (!sub) continue;
-      const segs = parseSelectorSegments(a.selector);
-      const suffix = normalizeSuffix(segs.slice(prefixLen));
+      const segs = parseSegmentsRich(a.selector);
+      const suffix = stripSuffixPositionals(segs.slice(prefixLen));
       if (!suffix.length) continue;
-      const suffixStr = suffix.join(' ');
+      const suffixStr = joinSegments(suffix);
+      const sig = suffix.map(s => stableSignature(s.seg)).join(' ');
       if (!(sub in fieldMap)) {
-        fieldMap[sub] = suffixStr;
-      } else if (fieldMap[sub] !== suffixStr) {
-        // Conflict — keep first-seen; rare in practice.
+        fieldMap[sub] = { suffix: suffixStr, sig };
+      } else if (fieldMap[sub] !== null) {
+        if (fieldMap[sub].sig !== sig) {
+          delete fieldMap[sub]; // conflict — drop per spec rule 4
+          fieldMap[sub] = null; // tombstone so subsequent encounters also drop
+        }
       }
     }
 
-    if (Object.keys(fieldMap).length) {
-      result.patterns.push({ container: containerStr, fieldMap, outputArray: arr });
+    // Drop tombstones; only emit if at least one field survived.
+    const cleanFieldMap = {};
+    for (const [k, v] of Object.entries(fieldMap)) {
+      if (v) cleanFieldMap[k] = v.suffix;
+    }
+    if (Object.keys(cleanFieldMap).length) {
+      result.patterns.push({ container: containerStr, fieldMap: cleanFieldMap, outputArray: arr });
     }
   }
 
   // Step 7: classify expand clicks by matching their selector against a derived
-  // container. Click annotations don't carry an outputField, so we associate
-  // each with the first pattern whose container segments form a positional-stripped
-  // prefix of the click's selector.
+  // container (positional-stripped prefix match).
   const expandClicks = list.filter(a => a.type === 'click' && a.purpose === 'expand' && a.selector);
   for (const click of expandClicks) {
-    const clickSegs = parseSelectorSegments(click.selector);
-    // Find the pattern whose container is a prefix of the click's selector
-    // (after positional stripping on both sides).
+    const clickSegs = parseSegmentsRich(click.selector);
     let matched = null;
     let prefixLen = 0;
     for (const p of result.patterns) {
-      const containerSegs = parseSelectorSegments(p.container);
+      const containerSegs = parseSegmentsRich(p.container);
       if (containerSegs.length > clickSegs.length) continue;
       let isPrefix = true;
       for (let i = 0; i < containerSegs.length; i++) {
-        const a = stripPositional(containerSegs[i]);
-        const b = stripPositional(clickSegs[i]);
+        const a = stripPositional(containerSegs[i].seg);
+        const b = stripPositional(clickSegs[i].seg);
         if (a !== b) { isPrefix = false; break; }
       }
-      if (isPrefix) {
-        matched = p;
-        prefixLen = containerSegs.length;
-        break;
-      }
+      if (isPrefix) { matched = p; prefixLen = containerSegs.length; break; }
     }
     if (matched) {
-      const suffix = normalizeSuffix(clickSegs.slice(prefixLen)).join(' ');
-      if (suffix) {
+      const suffix = stripSuffixPositionals(clickSegs.slice(prefixLen));
+      const suffixStr = joinSegments(suffix);
+      if (suffixStr) {
         result.clickInList.push({
           container: matched.container,
-          subSelector: suffix,
+          subSelector: suffixStr,
           delayMs: 500,
           intent: 'expand each item before extracting content',
         });
