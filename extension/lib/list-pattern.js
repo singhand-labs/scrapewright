@@ -57,7 +57,10 @@ function stripPositional(seg) {
 // Heuristic for auto-generated class names (Facebook x-prefixed, CSS-modules
 // underscore/html-prefixed). Treated as non-identifying for conflict detection
 // because they vary across page builds.
-const AUTO_CLASS_RE = /^(x[09a-f]+|_[a-z0-9]+|html-)/i;
+// Facebook class hashes are base36 (lowercase letters + digits), not hex —
+// real examples include xjp7ctv, xjbqb8w, xpdmqnj, xyri2b. Match `x` followed
+// by 4+ alphanumeric chars so the base36 hashes are stripped correctly.
+const AUTO_CLASS_RE = /^(x[0-9a-z]{4,}|_[a-z0-9]+|html-)/i;
 
 // Stable signature for conflict detection: segment with positionals stripped
 // AND auto-generated classes removed. Two suffixes that differ only in
@@ -139,15 +142,23 @@ function deriveListPattern(annotations) {
 
     // Derive fieldMap. Per spec rule 4: if two annotations for the same
     // sub-name have suffixes that differ in STABLE segments, drop the field.
+    // Auto-generated classes (Facebook x-hashes, CSS-modules) are stripped
+    // from BOTH the conflict signature and the emitted suffix, since they are
+    // unstable across page loads and must not appear in the generated
+    // $extractList template.
     const fieldMap = {};
     for (const a of withSel) {
-      const sub = (a.outputField.split('.')[1] || '').trim();
+      const sub = a.outputField.slice(a.outputField.indexOf('.') + 1).trim();
       if (!sub) continue;
       const segs = parseSegmentsRich(a.selector);
       const suffix = stripSuffixPositionals(segs.slice(prefixLen));
       if (!suffix.length) continue;
-      const suffixStr = joinSegments(suffix);
-      const sig = suffix.map(s => stableSignature(s.seg)).join(' ');
+      const stableSuffix = suffix.map(s => ({
+        seg: stableSignature(s.seg),
+        childCombinator: s.childCombinator,
+      }));
+      const suffixStr = joinSegments(stableSuffix);
+      const sig = stableSuffix.map(s => s.seg).join(' ');
       if (!(sub in fieldMap)) {
         fieldMap[sub] = { suffix: suffixStr, sig };
       } else if (fieldMap[sub] !== null) {

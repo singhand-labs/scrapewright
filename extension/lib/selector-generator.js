@@ -24,10 +24,13 @@ const STABLE_ATTRS = [
 // Auto-generated className patterns from React/Facebook/CSS-in-JS libs.
 // These hashes change between page loads and must NOT be encoded into
 // annotation selectors. Matched case-insensitively.
-//   x9f619, x1n2onr6  → React Facebook hash (x + hex)
-//   _a58j              → Facebook legacy (_ + alnum)
-//   html-h3            → FB internal semantic prefix (unstable across releases)
-const AUTO_CLASS_RE = /^(x[0-9a-f]+|_[a-z0-9]+|html-)/i;
+//   x9f619, xjp7ctv, xjbqb8w  → React Facebook hash (x + 4+ base36 chars)
+//   _a58j                     → Facebook legacy (_ + alnum)
+//   html-h3                   → FB internal semantic prefix (unstable across releases)
+// Facebook class hashes are base36 (letters + digits), not hex; matching hex
+// only would miss real classes like xjp7ctv and cause them to be encoded as
+// stable identifiers in annotation selectors.
+const AUTO_CLASS_RE = /^(x[0-9a-z]{4,}|_[a-z0-9]+|html-)/i;
 
 function escapeAttrValue(v) {
   if (typeof CSS !== 'undefined' && CSS && typeof CSS.escape === 'function') {
