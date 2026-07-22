@@ -666,15 +666,27 @@ async function _completeStepAnnotationInner(stepIndex, step) {
         : captured.annotations;
       step.entryUrl = newEntryUrl;
 
-      // Selector fidelity check: verify the generated script actually uses
-      // the annotated selectors verbatim (catches LLM rewriting/simplifying).
-      const fidCheck = checkSelectorFidelity(result.script, step.annotations);
-      if (!fidCheck.ok) {
-        const details = fidCheck.mismatches.map(m =>
-          `${m.type} → ${m.outputField || m.waitCondition || m.selector.slice(0, 40)}: ${m.suggestion}`
-        ).join('\n');
-        showToast('⚠ Selector mismatch: LLM may have rewritten annotated selectors. Check the script.\n' + details, 'warn', 10000);
-        debugLogger.log('warn', 'wizard', 'Selector fidelity check failed', { mismatches: fidCheck.mismatches });
+      // Brittleness check: warn the user when the annotation itself is
+      // fragile (positional nth-of-type chain, no stable anchor, etc.).
+      // Previously this was a verbatim-substring check that punished the LLM
+      // for dropping brittle selectors — counterproductive. The LLM was doing
+      // the right thing. Now we surface the root cause: the annotation.
+      const annotationSelectors = (step.annotations || [])
+        .map(a => a && a.selector)
+        .filter(s => typeof s === 'string' && s.length > 0);
+      const brittleness = scoreAnnotationChain(annotationSelectors);
+      if (brittleness.score >= 50) {
+        const reason = brittleness.reasons[0] || 'annotation may not generalize';
+        showToast(
+          `⚠ Brittle annotation (score ${brittleness.score}): ${reason}. Extraction may not generalize to other list items.`,
+          'warn',
+          10000
+        );
+        debugLogger.log('warn', 'wizard', 'Brittle annotation detected', {
+          score: brittleness.score,
+          reasons: brittleness.reasons,
+          selectors: annotationSelectors,
+        });
       }
 
       renderStepList();
