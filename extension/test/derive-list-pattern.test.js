@@ -68,3 +68,62 @@ describe('deriveListPattern grouping + LCP', () => {
     assert.equal(r.patterns[0].container, 'div[role="article"]');
   });
 });
+
+describe('deriveListPattern edge cases', () => {
+  it('returns empty patterns for no annotations', () => {
+    const r = deriveListPattern([]);
+    assert.deepEqual(r.patterns, []);
+    assert.deepEqual(r.clickInList, []);
+    assert.equal(r.annotationCount, 0);
+  });
+
+  it('derives pattern from single annotation per field (no cross-item comparison)', () => {
+    const annos = [
+      { type: 'extract', outputField: 'posts.title', selector: 'div.post h2' },
+      { type: 'extract', outputField: 'posts.body', selector: 'div.post p.body' },
+    ];
+    const r = deriveListPattern(annos);
+    assert.equal(r.patterns.length, 1);
+    assert.equal(r.patterns[0].container, 'div.post');
+    assert.equal(r.patterns[0].fieldMap.title, 'h2');
+    assert.equal(r.patterns[0].fieldMap.body, 'p.body');
+  });
+
+  it('strips iframe prefix before LCP, re-attaches on emit', () => {
+    const annos = [
+      { type: 'extract', outputField: 'posts.x', selector: 'iframe#f1::div[role="article"]:nth-of-type(1) a' },
+      { type: 'extract', outputField: 'posts.x', selector: 'iframe#f1::div[role="article"]:nth-of-type(2) a' },
+    ];
+    const r = deriveListPattern(annos);
+    assert.equal(r.patterns.length, 1);
+    assert.ok(r.patterns[0].container.startsWith('iframe#f1::'));
+    assert.ok(r.patterns[0].container.includes('div[role="article"]'));
+  });
+
+  it('derives expand click from purpose:expand annotations', () => {
+    const annos = [
+      { type: 'extract', outputField: 'posts.x', selector: 'div[role="article"] a' },
+      { type: 'click', purpose: 'expand', selector: 'div[role="article"]:nth-of-type(1) button.expand' },
+    ];
+    const r = deriveListPattern(annos);
+    assert.equal(r.clickInList.length, 1);
+    assert.equal(r.clickInList[0].container, 'div[role="article"]');
+    assert.equal(r.clickInList[0].subSelector, 'button.expand');
+    assert.equal(r.clickInList[0].delayMs, 500);
+  });
+
+  it('bugx.log fixture: derives div[role="article"] container from 4 annotations', () => {
+    const annos = [
+      { type: 'extract', outputField: 'posts.author', selector: 'div[role="article"]:nth-of-type(1) div:nth-of-type(2) a[role="link"] span' },
+      { type: 'extract', outputField: 'posts.content', selector: 'div[role="article"]:nth-of-type(1) div:nth-of-type(3) div[dir="auto"]' },
+      { type: 'extract', outputField: 'posts.author', selector: 'div[role="article"]:nth-of-type(2) div:nth-of-type(2) a[role="link"] span' },
+      { type: 'extract', outputField: 'posts.content', selector: 'div[role="article"]:nth-of-type(2) div:nth-of-type(3) div[dir="auto"]' },
+    ];
+    const r = deriveListPattern(annos);
+    assert.equal(r.patterns.length, 1);
+    assert.equal(r.patterns[0].container, 'div[role="article"]');
+    assert.equal(r.patterns[0].outputArray, 'posts');
+    assert.ok(r.patterns[0].fieldMap.author, 'author field present');
+    assert.ok(r.patterns[0].fieldMap.content, 'content field present');
+  });
+});
