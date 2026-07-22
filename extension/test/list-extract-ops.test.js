@@ -63,3 +63,63 @@ describe('extractListRecords', () => {
     assert.throws(() => extractListRecords([{}], {}), /non-empty object/);
   });
 });
+
+describe('clickInListItems', () => {
+  beforeEach(() => {
+    setupDOM('<!DOCTYPE html><html><body></body></html>');
+  });
+
+  it('clicks subSel in every container', () => {
+    document.body.innerHTML = `
+      <div class="post"><button class="expand">+</button></div>
+      <div class="post"><button class="expand">+</button></div>
+    `;
+    const containers = Array.from(document.querySelectorAll('.post'));
+    const clicked = [];
+    const r = clickInListItems(containers, '.expand', (el) => clicked.push(el.textContent), 0);
+    assert.equal(r.clicked, 2);
+    assert.equal(r.errors.length, 0);
+    assert.equal(clicked.length, 2);
+  });
+
+  it('returns partial errors when subSel missing in some containers', () => {
+    document.body.innerHTML = `
+      <div class="post"><button class="expand">+</button></div>
+      <div class="post"></div>
+    `;
+    const containers = Array.from(document.querySelectorAll('.post'));
+    const r = clickInListItems(containers, '.expand', () => {}, 0);
+    assert.equal(r.clicked, 1);
+    assert.equal(r.errors.length, 1);
+    assert.equal(r.errors[0].index, 1);
+    assert.match(r.errors[0].reason, /not found/);
+  });
+
+  it('clamps delayMs to [0, 5000]', () => {
+    document.body.innerHTML = `<div><button>x</button></div>`;
+    const containers = [document.querySelector('div')];
+    const r1 = clickInListItems(containers, 'button', () => {}, -100);
+    const r2 = clickInListItems(containers, 'button', () => {}, 99999);
+    assert.equal(r1.delayMs, 0);
+    assert.equal(r2.delayMs, 5000);
+  });
+
+  it('defaults delayMs to 500 when not provided', () => {
+    document.body.innerHTML = `<div><button>x</button></div>`;
+    const containers = [document.querySelector('div')];
+    const r = clickInListItems(containers, 'button', () => {});
+    assert.equal(r.delayMs, 500);
+  });
+
+  it('records exception in clickFn as error, continues', () => {
+    document.body.innerHTML = `
+      <div><button>a</button></div>
+      <div><button>b</button></div>
+    `;
+    const containers = Array.from(document.querySelectorAll('div'));
+    const r = clickInListItems(containers, 'button', () => { throw new Error('boom'); }, 0);
+    assert.equal(r.clicked, 0);
+    assert.equal(r.errors.length, 2);
+    assert.match(r.errors[0].reason, /boom/);
+  });
+});
