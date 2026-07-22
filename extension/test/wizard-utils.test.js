@@ -1,6 +1,6 @@
 const { describe, it, test } = require('node:test');
 const assert = require('node:assert/strict');
-const { parseSchemaFields, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, buildRequirementsBlock, suggestServiceName, SCRIPT_DSL_GUIDE, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, scoreAnnotationBrittleness, scoreAnnotationChain } = require('../lib/wizard-utils');
+const { parseSchemaFields, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, buildRequirementsBlock, suggestServiceName, SCRIPT_DSL_GUIDE, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, scoreAnnotationBrittleness, scoreAnnotationChain, checkSelectorFidelity } = require('../lib/wizard-utils');
 
 describe('parseSchemaFields', () => {
   it('returns field names with types', () => {
@@ -1279,5 +1279,26 @@ describe('scoreAnnotationChain', () => {
 
   it('returns 0 for non-array', () => {
     assert.deepEqual(scoreAnnotationChain('not an array'), { score: 0, reasons: [] });
+  });
+});
+
+describe('checkSelectorFidelity (deprecated)', () => {
+  it('always returns ok:true with empty mismatches', () => {
+    const script = 'return $("div").text();';
+    const annotations = [{ selector: 'span.foo', type: 'value', outputField: 'x' }];
+    const r = checkSelectorFidelity(script, annotations);
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.mismatches, []);
+  });
+
+  it('returns ok:true even when selector is absent from script', () => {
+    const r = checkSelectorFidelity('return 1;', [{ selector: 'div:nth-of-type(3)' }]);
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.mismatches, []);
+  });
+
+  it('does not throw on null inputs', () => {
+    assert.doesNotThrow(() => checkSelectorFidelity(null, null));
+    assert.doesNotThrow(() => checkSelectorFidelity(undefined, undefined));
   });
 });
