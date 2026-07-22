@@ -62,10 +62,10 @@ describe('deriveListPattern grouping + LCP', () => {
       { type: 'extract', outputField: 'posts.author', selector: 'div[role="article"][data-testid="B"] a' },
     ];
     const r = deriveListPattern(annos);
-    // LCP includes div[role="article"] (stable across both); data-testid differs so stripped.
-    // We still get a pattern, but the container is just div[role="article"].
-    assert.equal(r.patterns.length, 1);
-    assert.equal(r.patterns[0].container, 'div[role="article"]');
+    // Spec-literal LCP: the first segment differs in a stable attr (data-testid
+    // value), so LCP is empty and no pattern is emitted. Falls back to per-
+    // annotation lines downstream.
+    assert.equal(r.patterns.length, 0);
   });
 });
 
@@ -112,18 +112,27 @@ describe('deriveListPattern edge cases', () => {
     assert.equal(r.clickInList[0].delayMs, 500);
   });
 
-  it('bugx.log fixture: derives div[role="article"] container from 4 annotations', () => {
+  it('bugx.log fixture: derives shared #mount_0_0_QS container from real annotations', () => {
     const annos = [
-      { type: 'extract', outputField: 'posts.author', selector: 'div[role="article"]:nth-of-type(1) div:nth-of-type(2) a[role="link"] span' },
-      { type: 'extract', outputField: 'posts.content', selector: 'div[role="article"]:nth-of-type(1) div:nth-of-type(3) div[dir="auto"]' },
-      { type: 'extract', outputField: 'posts.author', selector: 'div[role="article"]:nth-of-type(2) div:nth-of-type(2) a[role="link"] span' },
-      { type: 'extract', outputField: 'posts.content', selector: 'div[role="article"]:nth-of-type(2) div:nth-of-type(3) div[dir="auto"]' },
+      { type: 'extract', outputField: 'posts.author', selector: '#mount_0_0_QS > div > div > div > div > div > div.x9f619.xjp7ctv > a[role="link"].xjbqb8w.xstzfhl.xt0psk2' },
+      { type: 'extract', outputField: 'posts.content', selector: '#mount_0_0_QS > div > div > div > div > div > div[data-visualcompletion-rendering-role="story_message"].xyri2b > div.xpdmqnj' },
+      { type: 'extract', outputField: 'posts.likes', selector: '#mount_0_0_QS > div > div > div > div > div > div[aria-label="赞"].xjbqb8w.xjqpnuy.xqeqjp1:nth-of-type(1)' },
+      { type: 'extract', outputField: 'posts.comments', selector: '#mount_0_0_QS > div > div > div > div > div > div[role="button"][aria-label="发表评论"].xjbqb8w.xjqpnuy.xqeqjp1' },
     ];
     const r = deriveListPattern(annos);
-    assert.equal(r.patterns.length, 1);
-    assert.equal(r.patterns[0].container, 'div[role="article"]');
+    assert.equal(r.patterns.length, 1, 'emits a pattern');
     assert.equal(r.patterns[0].outputArray, 'posts');
+    // The container is the LCP of all 4 selectors — 6 bare divs after #mount_0_0_QS.
+    // (The LCP stops at the 7th segment because the four diverge: x9f619 vs story-rendering vs aria-label variants.)
+    assert.equal(
+      r.patterns[0].container,
+      '#mount_0_0_QS > div > div > div > div > div',
+      'LCP is the longest shared prefix'
+    );
+    // Field map should include all 4 fields with their post-LCP suffixes
     assert.ok(r.patterns[0].fieldMap.author, 'author field present');
     assert.ok(r.patterns[0].fieldMap.content, 'content field present');
+    assert.ok(r.patterns[0].fieldMap.likes, 'likes field present');
+    assert.ok(r.patterns[0].fieldMap.comments, 'comments field present');
   });
 });
