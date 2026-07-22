@@ -68,9 +68,62 @@ function buildSegment(el) {
   return parts.join('');
 }
 
-// Placeholder — implemented in Task 2.
 function generateSelector(el, ownerDoc) {
-  return 'body';
+  if (!el || !el.tagName) return 'body';
+
+  const doc = ownerDoc || (typeof document !== 'undefined' ? document : null);
+  if (!doc) return 'body';
+
+  const ownerBody = doc.body || doc.documentElement;
+  if (!ownerBody) return el.tagName.toLowerCase();
+
+  const path = [];
+  let current = el;
+  let uniqueFound = false;
+
+  while (current && current !== ownerBody && current.tagName) {
+    const segment = buildSegment(current);
+    if (!segment) break;
+    path.unshift(segment);
+
+    // Early-stop: partial path now matches at most one element.
+    const partial = path.join(' > ');
+    let matches = null;
+    try {
+      matches = doc.querySelectorAll(partial);
+    } catch (e) {
+      // Invalid selector — should not happen given our construction,
+      // but never throw. Bail with what we have.
+      break;
+    }
+    if (matches.length <= 1) {
+      uniqueFound = true;
+      break;
+    }
+
+    current = current.parentNode;
+  }
+
+  // If we walked to body without uniqueness, the clicked element has siblings
+  // sharing the same stable attrs (e.g. 10 <div role="article"> siblings).
+  // Append :nth-of-type(N) to the LEAF segment to disambiguate.
+  // Leaf is the LAST segment in path (the clicked element itself), not the
+  // topmost — the topmost is shared by all siblings.
+  if (!uniqueFound && path.length > 0) {
+    const leaf = el;
+    const parent = leaf.parentNode;
+    if (parent) {
+      const siblings = Array.from(parent.children || []);
+      const sameTag = siblings.filter(s => s.tagName === leaf.tagName);
+      if (sameTag.length > 1) {
+        const idx = sameTag.indexOf(leaf) + 1;
+        const lastIdx = path.length - 1;
+        path[lastIdx] = path[lastIdx] + `:nth-of-type(${idx})`;
+      }
+    }
+  }
+
+  return path.length > 0 ? path.join(' > ') : el.tagName.toLowerCase();
 }
 
 const api = { generateSelector, buildSegment, STABLE_ATTRS, AUTO_CLASS_RE };
