@@ -203,31 +203,17 @@ function buildAnnotationsText(annotations) {
   }).join('\n');
 }
 
-// Post-generation check: verify that the LLM-generated script actually uses the
-// annotated selectors verbatim. Returns { ok, mismatches: [{annotated, found}] }.
-// "Uses" = the annotated selector string appears as a substring of the script.
-// This catches the #1 failure mode: LLM rewriting/simplifying a selector that
-// then doesn't match the page DOM.
+// DEPRECATED — kept as a no-op for backward compatibility with older tests.
+//
+// Previously this performed a verbatim-substring check that punished the LLM
+// for not using annotated selectors verbatim. That was counterproductive:
+// when the annotation itself was brittle (long nth-of-type chain), the LLM
+// was doing the RIGHT thing by dropping it in favor of a stable selector
+// like div[role="article"]. The new approach is scoreAnnotationChain,
+// which warns the USER when the annotation is fragile instead of accusing
+// the LLM. See wizard.js deploy hook for the new call site.
 function checkSelectorFidelity(script, annotations) {
-  if (!script || !annotations || !annotations.length) return { ok: true, mismatches: [] };
-  const mismatches = [];
-  for (const a of annotations) {
-    if (!a.selector) continue;
-    // Normalize: strip whitespace/newlines from both for comparison
-    const norm = s => (s || '').replace(/\s+/g, '').replace(/\\n/g, '');
-    const annotatedNorm = norm(a.selector);
-    const scriptNorm = norm(script);
-    if (annotatedNorm.length > 10 && !scriptNorm.includes(annotatedNorm)) {
-      mismatches.push({
-        selector: a.selector,
-        type: a.type,
-        outputField: a.outputField,
-        waitCondition: a.waitCondition,
-        suggestion: 'The script does not contain this annotated selector. The LLM may have rewritten/simplified it, which typically breaks the selector. Use the verbatim annotated selector.'
-      });
-    }
-  }
-  return { ok: mismatches.length === 0, mismatches };
+  return { ok: true, mismatches: [] };
 }
 
 function parseSchemaFields(schema) {
