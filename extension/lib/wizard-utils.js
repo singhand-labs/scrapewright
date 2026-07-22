@@ -190,12 +190,39 @@ const WAIT_CONDITIONS = [
   { value: 'attributeChange', label: 'Attribute Changes' }
 ];
 
-// Build the annotations block fed to the LLM. Emits intent fields only when
-// present so legacy annotations (without intent) produce identical output.
-// Each annotation with a selector gets a verbatim-use directive so the LLM
-// does not rewrite/simplify it.
+// Build the annotations block fed to the LLM. When the annotations describe a
+// repeating list (multiple entries sharing a dotted outputField like
+// "posts.author"), we first derive generalized $extractList / $clickInList
+// templates from the shared selector prefix and emit those ABOVE the raw
+// per-annotation lines. The LLM is instructed to copy the derived templates
+// verbatim — this is the Spec 4 fix for the "flat-zip 18 lines" failure mode
+// where the model emits one record per annotation instead of a loop.
+// The per-annotation lines always remain (as a fallback / source of truth).
 function buildAnnotationsText(annotations) {
-  return (annotations || []).map((a, i) => {
+  const list = annotations || [];
+  const pattern = (typeof deriveListPattern === 'function') ? deriveListPattern(list) : null;
+  const blocks = [];
+
+  if (pattern && pattern.patterns && pattern.patterns.length) {
+    blocks.push('LIST EXTRACTION PATTERN (derived from ' + pattern.annotationCount + ' annotations — copy these verbatim):');
+    for (const p of pattern.patterns) {
+      const fields = '{ ' + Object.entries(p.fieldMap)
+        .map(([k, v]) => {
+          if (typeof v === 'string') return `${k}: '${v}'`;
+          const attrPart = v.attr ? `, attr: '${v.attr}'` : '';
+          return `${k}: { selector: '${v.selector}'${attrPart} }`;
+        })
+        .join(', ') + ' }';
+      blocks.push(`  $extractList('${p.container}', ${fields})  // produces array of records for output field "${p.outputArray}"`);
+    }
+    for (const c of pattern.clickInList) {
+      blocks.push(`  $clickInList('${c.container}', '${c.subSelector}', { delayMs: ${c.delayMs || 500} })  // ${c.intent}`);
+    }
+    blocks.push('');
+    blocks.push('Per-annotation details (the templates above were derived from these — use them as the source of truth when in doubt):');
+  }
+
+  blocks.push(...list.map((a, i) => {
     const tag = `ANNOTATION[${i}]`;
     const parts = ['- ' + tag + ' type: ' + a.type];
     if (a.text) parts.push('text: "' + a.text + '"');
@@ -204,9 +231,6 @@ function buildAnnotationsText(annotations) {
     if (a.purpose) parts.push('purpose: ' + a.purpose);
     if (a.waitCondition) parts.push('waitCondition: ' + a.waitCondition + ' (USER-MARKED completion signal — use THIS selector, not a different loading indicator)');
     if (a.outputField) {
-      // Dotted notation (arrayName.subField) means "extract into each item's
-      // subField of the arrayName array". Spell this out so the LLM does not
-      // emit a literal dotted key.
       const dot = a.outputField.indexOf('.');
       if (dot > 0) {
         const arrName = a.outputField.slice(0, dot);
@@ -218,7 +242,8 @@ function buildAnnotationsText(annotations) {
     }
     if (a.inputField) parts.push('inputField: ' + a.inputField + ' (type into the selector above using __input__.' + a.inputField + ')');
     return parts.join(', ');
-  }).join('\n');
+  }));
+  return blocks.join('\n');
 }
 
 // DEPRECATED — kept as a no-op for backward compatibility with older tests.
