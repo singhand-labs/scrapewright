@@ -219,3 +219,12 @@ const api = { parseSelectorSegments, deriveListPattern };
 if (typeof module !== 'undefined' && module.exports) module.exports = api;
 if (typeof window !== 'undefined') window.ListPattern = api;
 if (typeof self !== 'undefined') self.ListPattern = api;
+// In Node, top-level function declarations are module-scoped, not global.
+// wizard-utils.js references deriveListPattern as a free variable (browser
+// globals pattern), so expose it on `global` for parity. The typeof guard in
+// buildAnnotationsText handles the legacy/non-loaded case where this never ran.
+if (typeof global !== 'undefined') {
+  global.deriveListPattern = deriveListPattern;
+  global.parseSelectorSegments = parseSelectorSegments;
+  global.ListPattern = api;
+}
