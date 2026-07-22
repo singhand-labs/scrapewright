@@ -1284,69 +1284,25 @@
   }
 
   function generateSelector(el) {
-    // If the element lives inside one or more same-origin iframes, prefix the
-    // selector with `iframe<css>::...` for each iframe in the chain. Without
-    // this prefix, querySelectorDeep would fall back to "search every iframe"
-    // which is non-deterministic when multiple iframes have similar content
-    // (e.g. the 5 iframe tabs on government bidding pages).
-    const iframeChain = IframeSelectorLib ? IframeSelectorLib.buildIframeChain(el, document) : [];
-    const ownerDoc = el.ownerDocument || document;
-    const ownerBody = ownerDoc.body || ownerDoc.documentElement;
-    let inner;
-    if (el.id) {
-      inner = `#${el.id}`;
-    } else {
-      const path = [];
-      let current = el;
-      while (current && current !== ownerBody) {
-        let selector = current.tagName.toLowerCase();
-        if (current.className) {
-          const classes = classStr(current).split(' ').filter(c => c).slice(0, 2);
-          if (classes.length) selector += '.' + classes.join('.');
-        }
-        const siblings = Array.from(current.parentNode?.children || []);
-        const sameTag = siblings.filter(s => s.tagName === current.tagName);
-        if (sameTag.length > 1) {
-          const index = sameTag.indexOf(current) + 1;
-          selector += `:nth-of-type(${index})`;
-        }
-        path.unshift(selector);
-        current = current.parentNode;
-      }
-      inner = path.join(' > ');
-    }
+    // Delegate to lib/selector-generator.js. The full algorithm — stable
+    // attribute preference, early-stop, leaf-only nth-of-type fallback —
+    // lives there. content-script wraps it to prepend the iframe chain
+    // (the lib module is iframe-agnostic; iframe context is added here
+    // because that's where IframeSelectorLib lives).
+    const inner = (typeof SelectorGenerator !== 'undefined' && SelectorGenerator)
+      ? SelectorGenerator.generateSelector(el, el.ownerDocument || document)
+      : (el && el.tagName ? el.tagName.toLowerCase() : 'body');
+    if (!el || typeof IframeSelectorLib === 'undefined' || !IframeSelectorLib) return inner;
+    const iframeChain = IframeSelectorLib.buildIframeChain(el, document);
     if (iframeChain.length === 0) return inner;
     return IframeSelectorLib.formatIframeSelector(iframeChain, inner);
   }
 
   function getDomPath(el) {
-    const iframeChain = IframeSelectorLib ? IframeSelectorLib.buildIframeChain(el, document) : [];
-    const ownerDoc = el.ownerDocument || document;
-    const ownerBody = ownerDoc.body || ownerDoc.documentElement;
-    const parts = [];
-    let current = el;
-    while (current && current !== ownerBody && current.parentElement) {
-      let seg = current.tagName.toLowerCase();
-      if (current.id) {
-        seg += '#' + current.id;
-        parts.unshift(seg);
-        break;
-      }
-      if (current.className) {
-        const cls = classStr(current).split(' ').filter(c => c).slice(0, 2).join('.');
-        if (cls) seg += '.' + cls;
-      }
-      const siblings = Array.from(current.parentElement.children || []);
-      const sameTag = siblings.filter(s => s.tagName === current.tagName);
-      if (sameTag.length > 1) {
-        seg += ':nth-of-type(' + (sameTag.indexOf(current) + 1) + ')';
-      }
-      parts.unshift(seg);
-      current = current.parentElement;
-    }
-    const inner = parts.join(' > ');
-    if (iframeChain.length === 0) return inner;
-    return IframeSelectorLib.formatIframeSelector(iframeChain, inner);
+    // Unified with generateSelector — previously a duplicate implementation
+    // that drifted from the main one. Both annotation.selector and
+    // annotation.domPath now contain the same stable selector string.
+    return generateSelector(el);
   }
 
   // ===== DOM Snapshot =====

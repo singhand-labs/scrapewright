@@ -20,7 +20,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["lib/iframe-selector.js", "lib/dom-cleaner.js", "content-script.js"],
+      "js": ["lib/iframe-selector.js", "lib/dom-cleaner.js", "lib/selector-generator.js", "content-script.js"],
       "run_at": "document_idle"
     }
   ],
