@@ -1000,6 +1000,37 @@ const STEP_TEMPLATES = [
     ]
   },
   {
+    id: 'expand-then-extract-list',
+    name: 'Expand + Extract List',
+    description: 'Click an expander (展开/see-more) inside each list item, then extract structured fields. Use when the full content of each item requires a click to reveal.',
+    steps: [
+      {
+        id: '1',
+        name: 'Wait for list',
+        script: `return { done: await $exists('div[role="article"]', 5000) };`,
+        onSuccess: '2',
+        onFailure: 'TERMINATE',
+        maxIterations: 10
+      },
+      {
+        id: '2',
+        name: 'Expand each item',
+        script: `const r = await $clickInList('div[role="article"]', 'div[role="button"]:has(> span)', { delayMs: 500 });\nif (r.errors.length) return { done: false };\nreturn { done: true, expanded: r.clicked };`,
+        onSuccess: '3',
+        onFailure: '3',
+        maxIterations: 3
+      },
+      {
+        id: '3',
+        name: 'Extract fields',
+        script: `const posts = await $extractList('div[role="article"]', { content: 'div[dir="auto"]' });\nif (!posts.length) return { done: false };\nreturn { posts };`,
+        onSuccess: 'TERMINATE',
+        onFailure: 'TERMINATE',
+        maxIterations: 3
+      }
+    ]
+  },
+  {
     id: 'pagination',
     name: 'Pagination Loop',
     description: 'Extract items and click next page until no more pages',
