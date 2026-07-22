@@ -134,7 +134,9 @@ EXPAND-THEN-EXTRACT (e.g. clicking 展开 / "see more" in each post before extra
 When the user wants full content that requires clicking an expander inside EACH list item, split it across two steps:
 
   Step 2 (expand, maxIterations>1):
-    const r = await $clickInList('div[role="article"]', 'div[role="button"]:has(> span:text("展开"))', { delayMs: 600 });
+    // "展开" text can't be matched in pure CSS — locate the expander by structural cues
+    // (role=button wrapping a span) and trust the click is idempotent if already expanded.
+    const r = await $clickInList('div[role="article"]', 'div[role="button"]:has(> span)', { delayMs: 600 });
     if (r.errors.length) return { done: false };   // retry once — transient layout races
     return { done: true, expanded: r.clicked };
 
