@@ -16,11 +16,13 @@ AVAILABLE API FUNCTIONS:
 - $openTab(url, functionBody): Open new tab at the given URL, wait for page load, then execute the function body (a string of JavaScript statements) in the new tab context. Returns whatever the function body returns. Use to scrape detail pages. Example: await $openTab(href, \`const title = await $extract('h1'); return { title };\`)
 - $count(selector): Count elements matching selector (main document + same-origin iframes). Returns number. Do NOT use with :nth-child() to iterate — use $list() instead.
 - $list(selector): Get ALL matching elements across main document + same-origin iframes. Returns array of { tagName, id, className, textContent, value, href, src, checked, disabled }. Use this for iterating multiple elements. Same data-object limitation as $().
+- $extractList(containerSel, fieldMap, opts?): Extract a list of records in ONE call. fieldMap is { subField: subSelector | { selector, attr? } }; each sub-selector is evaluated INSIDE each container element. Returns an array of objects in container order. Prefers this over $list-per-field for multi-field lists (avoids field-misalignment when fields are missing on some items). Throws 'empty list' if no container matches; set opts.allowEmpty=true to return [] instead.
+- $clickInList(containerSel, subSel, opts?): Click subSel INSIDE each container element. Default opts.delayMs=500 (waits between clicks for expand/animations to settle). Returns { clicked: N, errors: [...] }. Use for "click 展开 in every post before extracting full content" — see EXPAND PATTERN below.
 - $waitForStable(selector, opts?): Poll the element's textContent (or opts.attr) every opts.interval ms (default 1500); return true after opts.stableChecks (default 2) consecutive unchanged + non-empty samples; false after opts.maxMs (default 20000). Prefer this for streaming-content completion (AI answers, live feeds) instead of guessing fragile loading-class selectors.
 
 CSS TRAP — Do NOT use :nth-of-type(N) on a compound selector. 'div[role=\'article\']:nth-of-type(5)' matches the 5th sibling *of that element type* (any 5th <div>), not the 5th matching div[role='article']. To get the Nth match, use $list and index into the returned array: const items = await $list('div[role="article"]'); const fifth = items[4]; If you need all items in a list, iterate the array — never emit per-index selectors. (Exception: if an ANNOTATION gives you a selector that already contains :nth-of-type, copy it verbatim per the SELECTOR FIDELITY RULE below — this trap applies only to selectors you compose yourself.)
 
-LIST EXTRACTION — When extracting multiple fields from a collection of list items, call $list ONCE PER FIELD with a selector scoped inside the item container, then zip the results. Example: const titles = await $list('.post .title'); const authors = await $list('.post .author'); return titles.map((t, i) => ({ title: t.textContent, author: authors[i]?.textContent })); Do NOT call $list for every (field, item-index) pair — 10 posts × 8 fields = 80 sequential queries that are slow AND that fail as a batch when the parent list is empty.
+LIST EXTRACTION — When extracting multiple fields from a collection of list items, PREFER $extractList(containerSel, fieldMap). It runs ONE container query + per-item sub-queries and returns aligned records: $extractList('div[role="article"]', { author: 'a strong', content: '[data-ad-comet-preview="message"]', link: { selector: 'a[href]', attr: 'href' } }). Fall back to $list ONCE PER FIELD only for single-field extraction. NEVER zip independent $list arrays — if one field is missing on some items, the zip silently shifts every later field.
 
 EMPTY-LIST BAILOUT — If the parent list query returns 0 items, DO NOT proceed with field queries. Return { done: false } immediately (if the step has a retry budget) or { failed: true, error: 'no items found for selector X' }. Without this rule, a step runs 8+ sequential DOM round-trips that all return empty, burning the step time budget and hiding the real failure behind a generic not-done signal.
 
@@ -126,6 +128,21 @@ AI CHAT / STREAMING RESPONSE (wait for content to finish generating):
 
   IMPORTANT: Always use $exists() for polling - NEVER use $() in a loop. Use at least 3s delay between checks: await new Promise(r => setTimeout(r, 3000))
 
+
+EXPAND-THEN-EXTRACT (e.g. clicking 展开 / "see more" in each post before extracting full content):
+
+When the user wants full content that requires clicking an expander inside EACH list item, split it across two steps:
+
+  Step 2 (expand, maxIterations>1):
+    const r = await $clickInList('div[role="article"]', 'div[role="button"]:has(> span:text("展开"))', { delayMs: 600 });
+    if (r.errors.length) return { done: false };   // retry once — transient layout races
+    return { done: true, expanded: r.clicked };
+
+  Step 3 (extract):
+    return { posts: await $extractList('div[role="article"]', { content: '[data-ad-comet-preview="message"]', author: 'a strong' }) };
+
+Why two steps: $clickInList's default 500ms delay × N posts can exceed the single-step 30s timeout for long lists; a poll-style Step 2 (return { done: false } on partial errors) lets the orchestrator retry safely. If the list is short (N<10) and total click time stays well under the step timeout, a single step combining $clickInList + $extractList is acceptable.
+
 ROBUSTNESS RULES (MANDATORY — these prevent the most common silent failures):
 
 1. TIME BUDGET: Every step has a HARD execution timeout (config.timeoutMs, default 30s). A step that runs longer is killed with SCRIPT_TIMEOUT and FAILS. NEVER write a single in-script loop that could exceed the timeout. For long waits, set maxIterations>1 and return { done: false } — each retry iteration is itself bounded by the same timeout and the orchestrator re-invokes the step. Keep each iteration's total sleep+poll well under the timeout.
@@ -153,7 +170,8 @@ CRITICAL: When an annotation has a selector AND a waitCondition, THAT selector i
 - outputField: X on an extract → $extract(THE_ANNOTATED_SELECTOR) and include key X in the return object. Direct mapping; do not rename or use a different selector. DOTTED NOTATION: when outputField is "arrayName.subField" (e.g. "posts.group"), it means each item of the arrayName array has a subField — extract into item[subField], NOT into a literal "arrayName.subField" key. Build the array by iterating the list selector and pushing objects with the mapped sub-fields.
 - inputField: X on an input → $type(THE_ANNOTATED_SELECTOR, __input__.X).
 - purpose: toggle/submit/navigate on a click → $click(THE_ANNOTATED_SELECTOR) then VERIFY the state changed (per ROBUSTNESS RULE 3).
-- purpose: check-login → if the element is present, return { done:true, loginRequired:true } so the orchestrator can surface LOGIN_REQUIRED.`;
+- purpose: check-login → if the element is present, return { done:true, loginRequired:true } so the orchestrator can surface LOGIN_REQUIRED.
+- purpose: expand on a click inside a list → the user wants EVERY list item's expander clicked. Use $clickInList(containerSel, THE_ANNOTATED_SELECTOR) — NOT a single $click. If the user annotated the SAME expand selector in MULTIPLE list items (common case), the derived $clickInList call template above the annotations block already encodes the container; copy it verbatim.`;
 
 const ANNOTATION_PURPOSES = [
   { value: 'submit', label: 'Submit' },
