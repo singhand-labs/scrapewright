@@ -135,4 +135,29 @@ describe('deriveListPattern edge cases', () => {
     assert.ok(r.patterns[0].fieldMap.likes, 'likes field present');
     assert.ok(r.patterns[0].fieldMap.comments, 'comments field present');
   });
+
+  it('does not drop a field when annotations differ only in auto-generated classes', () => {
+    const annos = [
+      { type: 'extract', outputField: 'posts.author', selector: 'div[role="article"] > a.xjp7ctv' },
+      { type: 'extract', outputField: 'posts.author', selector: 'div[role="article"] > a.xjbqb8w' },
+    ];
+    const r = deriveListPattern(annos);
+    assert.equal(r.patterns.length, 1);
+    assert.equal(r.patterns[0].container, 'div[role="article"]');
+    // xjp7ctv and xjbqb8w are auto-generated Facebook classes; both stripped to 'a'
+    assert.equal(r.patterns[0].fieldMap.author, 'a');
+  });
+
+  it('preserves 3-level dotted outputField keys (posts.author.name)', () => {
+    const annos = [
+      { type: 'extract', outputField: 'posts.author.name', selector: 'div a.name' },
+      { type: 'extract', outputField: 'posts.author.handle', selector: 'div span.handle' },
+      { type: 'extract', outputField: 'posts.body.text', selector: 'div p' },
+    ];
+    const r = deriveListPattern(annos);
+    assert.equal(r.patterns.length, 1);
+    assert.ok(r.patterns[0].fieldMap['author.name'], 'author.name key preserved');
+    assert.ok(r.patterns[0].fieldMap['author.handle'], 'author.handle key preserved');
+    assert.ok(r.patterns[0].fieldMap['body.text'], 'body.text key preserved');
+  });
 });
