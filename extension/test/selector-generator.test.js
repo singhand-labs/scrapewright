@@ -79,3 +79,91 @@ describe('buildSegment', () => {
     assert.ok(result.includes('she said'), 'should contain the value');
   });
 });
+
+const { generateSelector } = require('../lib/selector-generator');
+
+describe('generateSelector', () => {
+  it('returns "body" for null input', () => {
+    assert.equal(generateSelector(null, document), 'body');
+  });
+
+  it('returns "body" for detached element with no ownerDoc', () => {
+    setupDOM('<!DOCTYPE html><html><body><div id="x"></div></body></html>');
+    const el = document.createElement('span');
+    assert.equal(generateSelector(el, document), 'span');
+  });
+
+  it('returns "#id" when element has an id', () => {
+    setupDOM('<!DOCTYPE html><html><body><div id="main"></div></body></html>');
+    const el = document.getElementById('main');
+    assert.equal(generateSelector(el, document), '#main');
+  });
+
+  it('returns short stable selector when role uniquely identifies', () => {
+    setupDOM(
+      '<!DOCTYPE html><html><body>' +
+      '<main><div role="article"></div></main>' +
+      '</body></html>'
+    );
+    const el = document.querySelector('div[role="article"]');
+    assert.equal(generateSelector(el, document), 'div[role="article"]');
+  });
+
+  it('appends leaf :nth-of-type when siblings share stable attrs', () => {
+    setupDOM(
+      '<!DOCTYPE html><html><body>' +
+      '<div role="article"></div>' +
+      '<div role="article"></div>' +
+      '<div role="article"></div>' +
+      '</body></html>'
+    );
+    // Click on the 3rd article. Siblings share identical stable attrs
+    // (role="article"), so the only way to disambiguate is positional
+    // :nth-of-type on the leaf.
+    const articles = document.querySelectorAll('div[role="article"]');
+    const target = articles[2];
+    const sel = generateSelector(target, document);
+    assert.ok(sel.includes('nth-of-type(3)'), `expected nth-of-type(3) in "${sel}"`);
+    assert.ok(sel.includes('role="article"'), `expected role attr in "${sel}"`);
+    // Should NOT contain a long chain of nth-of-type segments.
+    const nthCount = (sel.match(/:nth-of-type/g) || []).length;
+    assert.equal(nthCount, 1, `expected exactly 1 nth-of-type, got ${nthCount} in "${sel}"`);
+  });
+
+  it('walks up to find uniqueness when leaf is ambiguous', () => {
+    setupDOM(
+      '<!DOCTYPE html><html><body>' +
+      '<section id="posts"><div role="row"></div><div role="row"></div></section>' +
+      '<section id="comments"><div role="row"></div></section>' +
+      '</body></html>'
+    );
+    // First row in #posts — ambiguous at leaf, but section#posts disambiguates.
+    const target = document.querySelectorAll('#posts div[role="row"]')[0];
+    const sel = generateSelector(target, document);
+    assert.ok(sel.includes('#posts'), `expected #posts in "${sel}"`);
+    assert.ok(sel.includes('role="row"'), `expected role=row in "${sel}"`);
+  });
+
+  it('produces no chain for top-level unique element', () => {
+    setupDOM(
+      '<!DOCTYPE html><html><body>' +
+      '<button aria-label="Like"></button>' +
+      '</body></html>'
+    );
+    const el = document.querySelector('button[aria-label]');
+    const sel = generateSelector(el, document);
+    assert.equal(sel, 'button[aria-label="Like"]');
+  });
+
+  it('does not emit auto-generated className in the chain', () => {
+    setupDOM(
+      '<!DOCTYPE html><html><body>' +
+      '<div class="x9f619 x1n2onr6"><span class="xeuugli">hi</span></div>' +
+      '</body></html>'
+    );
+    const el = document.querySelector('span');
+    const sel = generateSelector(el, document);
+    assert.ok(!/\.x[0-9a-f]+/i.test(sel), `should not contain auto-gen class in "${sel}"`);
+    assert.ok(sel.startsWith('span'), `should start with tag in "${sel}"`);
+  });
+});
