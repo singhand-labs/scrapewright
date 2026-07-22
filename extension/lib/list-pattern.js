@@ -180,8 +180,13 @@ function deriveListPattern(annotations) {
   }
 
   // Step 7: classify expand clicks by matching their selector against a derived
-  // container (positional-stripped prefix match).
+  // container (positional-stripped prefix match). Multiple click annotations on
+  // different items (e.g. nth-of-type(1) and nth-of-type(2)) of the SAME button
+  // collapse into ONE $clickInList template — that's the whole point of deriving
+  // a generalized pattern. Dedup by container|subSelector so buildAnnotationsText
+  // emits a single call instead of N copies.
   const expandClicks = list.filter(a => a.type === 'click' && a.purpose === 'expand' && a.selector);
+  const seenClick = new Set();
   for (const click of expandClicks) {
     const clickSegs = parseSegmentsRich(click.selector);
     let matched = null;
@@ -201,6 +206,9 @@ function deriveListPattern(annotations) {
       const suffix = stripSuffixPositionals(clickSegs.slice(prefixLen));
       const suffixStr = joinSegments(suffix);
       if (suffixStr) {
+        const dedupKey = matched.container + '|' + suffixStr;
+        if (seenClick.has(dedupKey)) continue;
+        seenClick.add(dedupKey);
         result.clickInList.push({
           container: matched.container,
           subSelector: suffixStr,
