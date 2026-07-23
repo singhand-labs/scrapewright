@@ -955,6 +955,16 @@ describe('SCRIPT_DSL_GUIDE regression', () => {
   it('teaches empty-list early bailout', () => {
     assert.match(SCRIPT_DSL_GUIDE, /EMPTY-LIST BAILOUT/);
   });
+
+  it('calls out the template-literal :nth-of-type(${i+1}) loop anti-pattern', () => {
+    // bugx.log showed the LLM writing `div[role="article"]:nth-of-type(${i+1})`
+    // inside a for-loop to iterate list items — every extract failed because
+    // :nth-of-type resolves among same-tag siblings, not compound-selector
+    // matches. The CSS TRAP warning wasn't specific enough to prevent this.
+    assert.match(SCRIPT_DSL_GUIDE, /ANTI-PATTERN/);
+    assert.match(SCRIPT_DSL_GUIDE, /:nth-of-type\(\$\{i\+1\}\)/);
+    assert.match(SCRIPT_DSL_GUIDE, /\$extractList/);
+  });
 });
 
 describe('truncateSnapshotForLLM', () => {

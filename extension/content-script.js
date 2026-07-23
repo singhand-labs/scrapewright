@@ -6,7 +6,31 @@
   // identifier reference does NOT resolve to a `window` property — it must be
   // captured lexically. Without this alias, `$extractList` / `$clickInList`
   // throw "ListExtractOps is not defined" at call time.
-  const ListExtractOps = (typeof window !== 'undefined' ? window : self).ListExtractOps;
+  //
+  // Lookup is LAZY: the alias is resolved at call time, not at IIFE init. This
+  // survives cases where window.ListExtractOps isn't set when content-script.js
+  // first evaluates (e.g., the extension was reloaded but an older
+  // list-extract-ops.js is still injected in an existing tab, or some future
+  // load-order change defers the attachment). The eager capture in commit
+  // 361d3ae still left `Cannot read properties of undefined` in bugx.log
+  // because the alias captured undefined and was frozen that way for the tab's
+  // lifetime. Lazy lookup always reads the current value.
+  function getListExtractOps() {
+    const g = typeof window !== 'undefined' ? window : self;
+    return g && g.ListExtractOps;
+  }
+
+  // Diagnostic: log load state once at IIFE init. Confirms whether reload picked
+  // up the fix. Absent log on a Facebook tab means the OLD content-script.js is
+  // still running there — user must refresh the tab.
+  try {
+    const ops = getListExtractOps();
+    if (ops) {
+      console.log('[content-script] ListExtractOps available at init', { keys: Object.keys(ops).sort() });
+    } else {
+      console.warn('[content-script] ListExtractOps NOT available at init — $extractList/$clickInList will fail. Reload the extension and refresh the tab.');
+    }
+  } catch (e) { /* diagnostic must never break execution */ }
 
   let isAnnotationMode = false;
   let selectedAnnotations = [];
@@ -570,7 +594,11 @@
       count: containers.length,
       fields: Object.keys(fieldMap || {})
     });
-    return ListExtractOps.extractListRecords(containers, fieldMap, opts || {});
+    const ops = getListExtractOps();
+    if (!ops) {
+      throw new Error('$extractList runtime missing: lib/list-extract-ops.js did not attach window.ListExtractOps. Reload the extension and refresh the target tab.');
+    }
+    return ops.extractListRecords(containers, fieldMap, opts || {});
   }
 
   async function domClickInList(containerSel, subSel, opts) {
@@ -592,7 +620,11 @@
       subSelector: subSel
     });
     const delayMs = (opts && typeof opts.delayMs === 'number') ? opts.delayMs : 500;
-    const result = ListExtractOps.clickInListItems(
+    const ops = getListExtractOps();
+    if (!ops) {
+      throw new Error('$clickInList runtime missing: lib/list-extract-ops.js did not attach window.ListExtractOps. Reload the extension and refresh the target tab.');
+    }
+    const result = ops.clickInListItems(
       containers,
       subSel,
       (el) => { el.click(); },
