@@ -32,6 +32,15 @@ const STABLE_ATTRS = [
 // stable identifiers in annotation selectors.
 const AUTO_CLASS_RE = /^(x[0-9a-z]{4,}|_[a-z0-9]+|html-)/i;
 
+// Auto-generated id patterns. ids matching these are unstable across page
+// loads and must NOT be used as uniqueness anchors — walking past them is
+// required to reach a stable semantic anchor (role, aria-label, etc.).
+//   mount_0_0_UD, mount_0_0_0G  → Facebook React root mount (random suffix per load)
+//   react-aria-:r3:             → React Aria useId pattern (random per render)
+//   headlessui-...              → Headless UI library (random per render)
+//   r_<n>_<n>                   → Generic auto-id (Framer, etc.)
+const AUTO_ID_RE = /^(mount_|react-aria[-_:]|headlessui-|r_[0-9]+_|^[Rr]_[a-z0-9]+:)/i;
+
 function escapeAttrValue(v) {
   if (typeof CSS !== 'undefined' && CSS && typeof CSS.escape === 'function') {
     return CSS.escape(v);
@@ -44,8 +53,13 @@ function escapeAttrValue(v) {
 function buildSegment(el) {
   if (!el || !el.tagName) return '';
 
-  // id wins outright — unique by spec.
-  if (el.id) {
+  // id wins outright — unique by spec. BUT only if it's a stable id.
+  // Auto-generated ids (Facebook's mount_0_0_<random>, React Aria's
+  // react-aria-:r3:, Headless UI's headlessui-...) change per page load
+  // and would silently break annotation selectors across reloads
+  // (observed in bugx.log: 4 wizard runs each produced a different
+  // mount_0_0_<suffix> at the top of every annotation path).
+  if (el.id && !AUTO_ID_RE.test(el.id)) {
     return '#' + escapeAttrValue(el.id);
   }
 
@@ -129,7 +143,7 @@ function generateSelector(el, ownerDoc) {
   return path.length > 0 ? path.join(' > ') : el.tagName.toLowerCase();
 }
 
-const api = { generateSelector, buildSegment, STABLE_ATTRS, AUTO_CLASS_RE };
+const api = { generateSelector, buildSegment, STABLE_ATTRS, AUTO_CLASS_RE, AUTO_ID_RE };
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = api;
