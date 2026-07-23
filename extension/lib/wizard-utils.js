@@ -732,6 +732,105 @@ function scoreAttemptResult(result, outputSchema) {
   }
 }
 
+// Pure classifier: given autoFix state, decide if the loop should break with a
+// human-intervention message. Returns { type, severity, message, uiAction } or null.
+// Every type requires MULTIPLE signals (false-positive defense). Never throws.
+function classifyIntervention(ctx) {
+  try {
+    if (!ctx || typeof ctx !== 'object') return null;
+    const error = (typeof ctx.error === 'string' ? ctx.error : '') || '';
+    const lastError = (typeof ctx.lastError === 'string' ? ctx.lastError : '') || '';
+    const annotations = Array.isArray(ctx.annotations) ? ctx.annotations : [];
+    const attemptCount = Number.isFinite(ctx.attemptCount) ? ctx.attemptCount : 0;
+    const dismissed = ctx.dismissed instanceof Set ? ctx.dismissed : new Set();
+    const snapshotAgeMs = Number.isFinite(ctx.snapshotAgeMs) ? ctx.snapshotAgeMs : 0;
+    const outputSchema = ctx.outputSchema && typeof ctx.outputSchema === 'object' ? ctx.outputSchema : null;
+    const result = ctx.result && typeof ctx.result === 'object' ? ctx.result : null;
+
+    const scoreResult = outputSchema ? scoreAttemptResult(result, outputSchema) : { score: 0, isData: false };
+    const candidates = [];
+
+    // needs_annotation: extraction empty + step has no annotations
+    if (scoreResult.score === 0 && annotations.length === 0 && /EXTRACTION|EMPTY/i.test(error)) {
+      candidates.push({
+        type: 'needs_annotation',
+        severity: 'warn',
+        uiAction: 'annotate_step',
+        _priority: 20,
+        message: "Extraction returns empty. Click 'Start Annotating' on the failing step to manually select elements."
+      });
+    }
+
+    // needs_annotation_relax: annotations exist but selectors are brittle.
+    // Two triggers, different timing:
+    //  - hasPositional (:nth-of-type/:nth-child) is a static brittleness signal; fire immediately.
+    //  - listEmpty alone is weak (could be LLM's first attempt); defer until attempt 2.
+    if (scoreResult.score === 0 && annotations.length > 0) {
+      const hasPositional = annotations.some(a => typeof a?.selector === 'string' && /:nth-of-type|:nth-child/.test(a.selector));
+      const listEmpty = (scoreResult.breakdown?.listItemCount ?? 0) === 0;
+      if (hasPositional || (listEmpty && attemptCount >= 2)) {
+        candidates.push({
+          type: 'needs_annotation_relax',
+          severity: 'warn',
+          uiAction: 'annotate_step',
+          _priority: 30,
+          message: "Your annotation selectors don't match any element on the live page. Re-annotate or broaden the selector."
+        });
+      }
+    }
+
+    // needs_login: explicit LOGIN_REQUIRED marker
+    if (/LOGIN_REQUIRED/i.test(error) || /LOGIN_REQUIRED/i.test(lastError)) {
+      candidates.push({
+        type: 'needs_login',
+        severity: 'error',
+        uiAction: 'open_tab',
+        _priority: 100,
+        message: 'This page requires login. Log in manually in the target tab, then retry.'
+      });
+    }
+
+    // rate_limited: 429 detected in error/lastError
+    if (/429/.test(error) || /429/.test(lastError) || /LLMRetryExhausted/.test(error) && /429/.test(lastError)) {
+      candidates.push({
+        type: 'rate_limited',
+        severity: 'error',
+        uiAction: 'open_settings',
+        _priority: 90,
+        message: 'LLM provider rate-limited. Wait, switch API key, or try later.'
+      });
+    }
+
+    // page_state_stale: attempt>=2 + repeated same error + snapshot older than 60s
+    if (attemptCount >= 2 && error && error === lastError && snapshotAgeMs > 60000) {
+      candidates.push({
+        type: 'page_state_stale',
+        severity: 'warn',
+        uiAction: 'refresh_tab',
+        _priority: 50,
+        message: 'Page state may have changed since the test started. Refresh the target tab manually, then retry.'
+      });
+    }
+
+    // Filter dismissed, pick highest severity (error > warn > info), ties by priority rank
+    // (higher rank = more fundamental root cause; page_state_stale beats annotation issues).
+    const severityRank = { error: 3, warn: 2, info: 1 };
+    const surviving = candidates.filter(c => !dismissed.has(c.type));
+    if (surviving.length === 0) return null;
+    surviving.sort((a, b) => {
+      const sevDiff = (severityRank[b.severity] || 0) - (severityRank[a.severity] || 0);
+      if (sevDiff !== 0) return sevDiff;
+      return (b._priority ?? 0) - (a._priority ?? 0);
+    });
+    const winner = surviving[0];
+    delete winner._priority;
+    return winner;
+  } catch (e) {
+    try { (typeof debugLogger !== 'undefined' && debugLogger.log('warn', 'wizard-utils', 'classifyIntervention failed', { error: e.message })); } catch {}
+    return null;
+  }
+}
+
 // Score how brittle a single CSS selector is. Higher score = more brittle.
 // Used by the wizard deploy hook to warn the user when an annotation is
 // unlikely to generalize across list items. Pure function, no exceptions.
@@ -1220,7 +1319,7 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, scoreAttemptResult, classifyIntervention, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
@@ -1233,6 +1332,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.formatDomActivitySummary = formatDomActivitySummary;
   window.summarizeExecutionDiagnostics = summarizeExecutionDiagnostics;
   window.scoreAttemptResult = scoreAttemptResult;
+  window.classifyIntervention = classifyIntervention;
   window.getStepTemplates = getStepTemplates;
   window.applyTemplate = applyTemplate;
   window.STEP_TEMPLATES = STEP_TEMPLATES;
@@ -1270,6 +1370,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.formatDomActivitySummary = formatDomActivitySummary;
   self.summarizeExecutionDiagnostics = summarizeExecutionDiagnostics;
   self.scoreAttemptResult = scoreAttemptResult;
+  self.classifyIntervention = classifyIntervention;
   self.appendStepWithChainLink = appendStepWithChainLink;
   self.removeStepWithRelink = removeStepWithRelink;
   self.relinkChainToArray = relinkChainToArray;
