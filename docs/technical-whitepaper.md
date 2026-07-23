@@ -451,19 +451,56 @@ OpenAI 兼容接口客户端，支持多个提供商：
 
 ### AutoFix 自动修复
 
-脚本执行失败时自动触发：
+脚本执行失败时自动触发，或在阶段 5 由用户带可选提示手动触发。两层函数：`autoFix(userFeedback)` 是编排器；`runFixIteration(userFeedback, config, options)` 执行实际的 LLM 调用与脚本替换。
 
 ```
-StepOrchestrator 抛出错误（含 stepId、snapshot）
-  → tryAutoFixStep(service, stepId, error)
-    → 捕获当前页面 DOM 快照（压缩模式）
-    → 构建修复提示词（DSL 指南 + 错误 + 快照 + 原脚本 + 标注）
-    → LLM 生成修复后的脚本
-    → 替换失败步骤的 script 字段
-    → 保存服务 → 重试执行
+testScript 失败
+  → autoFix(userFeedback = null)  // 或从阶段 5 按钮调用 autoFix(feedback)
+    → MAX_ATTEMPTS = userFeedback ? 1 : 3   // 静默重试 vs 带提示的一次性修复
+    → 重置 wizardState.bestAttempt + dismissedInterventions
+    → for attempt in 1..MAX_ATTEMPTS:
+        → runFixIteration(...)                       // 构建提示词、调用 LLM、替换步骤脚本
+          遇到 LLMContextOverflow → 用精简快照重试一次
+        → 用 outputSchema 对当前 testResult.finalResult 评分
+        → 若得分 > bestAttempt.score：更新 bestAttempt（含脚本与流程字段）
+        → 若 !success：classifyIntervention(...) → 命中则展示横幅并 break
+    → 循环退出后：若 bestAttempt.score > currentScore，调用 restoreBestAttempt(bestAttempt)
 ```
 
-**限制：** 最多重试 `maxRetries` 次（默认 2 次）。仅对 `ELEMENT_NOT_FOUND` 和 `SCRIPT_ERROR` 类型错误触发。
+**评分（`scoreAttemptResult`）** 是纯函数，返回 `{ score, breakdown, isData }`：
+
+```
+score = requiredCoverage * 100 + listItemCount * 10 + avgFieldsPerItem * 5
+```
+
+必填覆盖率为 `outputSchema.required` 中非空字段的比例；列表项数为第一个"对象数组"字段的长度；字段平均填充率为每条记录对内部 schema 的填充程度。保留原始浮点（不取整）以减少平局。`isData: false` 用于短路：对格式错误或非对象结果不更新最佳尝试。
+
+**干预分类器（`classifyIntervention`）** 是纯函数，返回 `{ type, severity, message, uiAction }` 或 null。共 5 种类型，每条规则都由多个信号共同触发以避免误报：
+
+| 类型 | 触发条件 | uiAction |
+|------|---------|----------|
+| `needs_annotation`（需标注） | 得分=0 + 无标注 + 抽取类错误 | `annotate_step` |
+| `needs_annotation_relax`（需放宽标注） | 得分=0 + 已有标注 +（选择器含 `:nth-of-type`/`:nth-child` 或 第 2 次起列表仍为空） | `annotate_step` |
+| `needs_login`（需登录） | error 或 lastError 中含 `LOGIN_REQUIRED` | `open_tab` |
+| `rate_limited`（被限流） | error 或 lastError 中含 `429` | `open_settings` |
+| `page_state_stale`（页面过期） | 第 2 次起 + 同一错误重复 + 快照超过 60 秒 | `refresh_tab` |
+
+候选先按用户已忽略集合过滤，再按内部优先级排序（登录 > 限流 > 过期 > 放宽 > 标注），最可操作的干预获胜。
+
+**回退恢复（`planRestoreBestAttempt`）** 是纯规划函数。输入最佳尝试记录 + 当前 steps + llmHistory，返回步骤补丁（script/onSuccess/onFailure/maxIterations）以及按最佳尝试的 `[Attempt — step "<id>" ("<name>")]` 标记截断后的 llmHistory。运行时包装 `restoreBestAttempt(best)` 负责把补丁应用到 `wizardState.steps`、同步步骤编辑器里的 textarea（以免 confirmDeploy 的 syncStepsFromEditor 覆盖恢复结果），并更新 `#currentScript` 预览。
+
+#### ACK/NACK 协议
+
+当带用户反馈调用时，`runFixIteration` 会通过 `buildFeedbackSection(feedback, attemptNum, totalAttempts, llmHistory)` 在提示词的第 1 节（SCRIPT_DSL_GUIDE 之前）插入一个反馈块。该块要求 LLM 在写任何脚本之前先精确输出以下二者之一：
+
+```
+// ACK: <用自己的话复述这条提示>
+// NACK: <为什么无法应用，给出具体理由>
+```
+
+`cleanLLMResponse` 会剥离开头的协议行（通过 debugLogger 记录以便观测），让下游的代码围栏 / JSON 抽取逻辑能在干净脚本上运行。若同一条提示在 `llmHistory` 中已被 NACK 过两次，反馈块会追加升级提醒："你的页面模型可能错了"。
+
+**限制：** 最多 `MAX_ATTEMPTS` 次（静默 3 次，或带用户反馈 1 次）。仅对 `ELEMENT_NOT_FOUND` 和 `SCRIPT_ERROR` 类型错误触发；`LOGIN_REQUIRED` 立即失败。
 
 ## 6. HTTP API 详解
 

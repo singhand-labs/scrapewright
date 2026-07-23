@@ -452,19 +452,56 @@ User describes the need
 
 ### AutoFix
 
-Triggered automatically when a script execution fails:
+Triggered automatically when a script execution fails, or manually from Phase 5 with optional user feedback. Two function tiers: `autoFix(userFeedback)` is the orchestrator; `runFixIteration(userFeedback, config, options)` does the actual LLM call + script replacement.
 
 ```
-StepOrchestrator throws an error (with stepId, snapshot)
-  → tryAutoFixStep(service, stepId, error)
-    → capture the current page's DOM snapshot (compressed mode)
-    → build the repair prompt (DSL guide + error + snapshot + original script + annotations)
-    → LLM produces a repaired script
-    → replace the failing step's `script` field
-    → save the service → retry execution
+testScript failure
+  → autoFix(userFeedback = null)  // or autoFix(feedback) from Phase 5 button
+    → MAX_ATTEMPTS = userFeedback ? 1 : 3   // silent retries vs one-shot with hint
+    → reset wizardState.bestAttempt + dismissedInterventions
+    → for attempt in 1..MAX_ATTEMPTS:
+        → runFixIteration(...)                       // builds prompt, calls LLM, replaces step script
+          on LLMContextOverflow → retry once with compacted snapshot
+        → score the resulting testResult.finalResult against outputSchema
+        → if score > bestAttempt.score: update bestAttempt (script + flow fields)
+        → if !success: classifyIntervention(...) → on hit, show banner + break
+    → on loop exit: if bestAttempt.score > currentScore, restoreBestAttempt(bestAttempt)
 ```
 
-**Limit:** at most `maxRetries` retries (default 2). Triggered only for `ELEMENT_NOT_FOUND` and `SCRIPT_ERROR` error types.
+**Scoring (`scoreAttemptResult`)** is a pure helper that returns `{ score, breakdown, isData }`:
+
+```
+score = requiredCoverage * 100 + listItemCount * 10 + avgFieldsPerItem * 5
+```
+
+Required coverage is the fraction of `outputSchema.required` fields that are non-empty; list-item count is the length of the first array-of-objects field; average fields per item is how completely each list item fills its declared inner schema. The raw float is preserved (not rounded) so ties are rare. `isData: false` short-circuits best-attempt tracking for malformed/non-object results.
+
+**Intervention classifier (`classifyIntervention`)** is a pure helper that returns `{ type, severity, message, uiAction }` or null. Five types, each gated by multiple signals to avoid false positives:
+
+| Type | Trigger | uiAction |
+|------|---------|----------|
+| `needs_annotation` | score=0 + no annotations + extraction error | `annotate_step` |
+| `needs_annotation_relax` | score=0 + annotations exist + (selector has `:nth-of-type`/`:nth-child` OR list empty at attempt ≥ 2) | `annotate_step` |
+| `needs_login` | `LOGIN_REQUIRED` in error or lastError | `open_tab` |
+| `rate_limited` | `429` in error or lastError | `open_settings` |
+| `page_state_stale` | attempt ≥ 2 + repeated same error + snapshot older than 60s | `refresh_tab` |
+
+Candidates are filtered by the user's dismissed set, then ranked by an internal priority (login > rate-limit > stale > relax > annotation) so the most actionable intervention wins.
+
+**Restore on regression (`planRestoreBestAttempt`)** is a pure planning helper. Given the best-attempt record + current steps + llmHistory, it returns the step patch (script/onSuccess/onFailure/maxIterations) plus a truncated llmHistory cut at the boundary of the best attempt's `[Attempt — step "<id>" ("<name>")]` marker. The runtime wrapper `restoreBestAttempt(best)` applies the patch to `wizardState.steps`, syncs the step-editor textareas (so confirmDeploy's syncStepsFromEditor doesn't overwrite the restore), and updates the `#currentScript` preview.
+
+#### ACK/NACK protocol
+
+When user feedback is supplied, `runFixIteration` prepends a `buildFeedbackSection(feedback, attemptNum, totalAttempts, llmHistory)` block as Section 1 of the prompt — before the SCRIPT_DSL_GUIDE. The block instructs the LLM to emit exactly one of:
+
+```
+// ACK: <paraphrase the hint in your own words>
+// NACK: <why you cannot apply it, with specifics>
+```
+
+…before writing any script. `cleanLLMResponse` strips this leading protocol line (logging it via debugLogger for observability) so the downstream code-fence / JSON extraction runs on the clean script body. If the same hint has been NACKed twice in `llmHistory`, the block appends an escalation note telling the model its page model may be wrong.
+
+**Limit:** at most `MAX_ATTEMPTS` (3 silent, or 1 with user feedback). Triggered only for `ELEMENT_NOT_FOUND` and `SCRIPT_ERROR` error types; `LOGIN_REQUIRED` fails fast.
 
 ## 6. HTTP API Reference
 

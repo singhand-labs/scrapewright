@@ -151,6 +151,21 @@ On the Options page click **+ New Service** to enter the AI wizard (5 phases):
 | **Phase 4: Execute Test (step by step)** | Watch the live step-by-step execution log (open page → load → each step → success/failure). |
 | **Phase 5: Results** | Review test results. On failure, choose **Auto-Fix** (AI self-repair) or **Deploy Anyway** (deploy despite the error). |
 
+#### Auto-Fix loop dynamics
+
+When **Auto-Fix** runs (either automatically after a test failure or manually with a user hint), the loop now behaves as follows:
+
+- **Best-of-N retention** — every iteration is scored against the output schema (required-field coverage × list density × per-item field fill). If a later iteration regresses, the wizard silently restores the highest-scoring script instead of committing the degraded one. No user action required.
+- **User-feedback ACK protocol** — when you provide a hint, it appears as Section 1 of the LLM prompt with an explicit ACK/NACK requirement. The model must output `// ACK: <paraphrased hint>` or `// NACK: <reason>` before writing code. If the model NACKs the same hint twice, the prompt escalates with a "you may be wrong" note.
+- **Intervention banners** — instead of silently exhausting retries, the wizard surfaces specific "I need human help" conditions as a banner above the results:
+  - **Needs annotation** — extraction returns empty and the failing step has no annotations. Action: *Go to annotation*.
+  - **Needs annotation relax** — annotations exist but their selectors match nothing on the live page (often caused by positional `:nth-of-type` paths that don't generalize). Action: *Go to annotation*.
+  - **Needs login** — the page redirected to a login flow. Action: *Open target tab*.
+  - **Rate limited** — the LLM provider returned 429. Action: *Open settings*.
+  - **Page state stale** — the same error has persisted across multiple attempts and the captured snapshot is over 60 seconds old. Action: *Refresh tab*.
+
+  Each banner has an **Ignore and continue** button to dismiss the intervention and let autoFix keep trying.
+
 ### 5. Manage Services
 
 In the **Services** section of the Options page:
