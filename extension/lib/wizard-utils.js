@@ -449,10 +449,25 @@ function findEmptyExtractionFields(data, outputSchema) {
   const isEmptyValue = (v) =>
     v === '' || v === null || v === undefined || (Array.isArray(v) && v.length === 0);
 
+  // A property is "array-of-objects" if the schema declares type:'array' with
+  // object items. For these fields, an empty array means the script ran but
+  // extracted zero records — a clear extraction failure (the page has items,
+  // the selectors missed them). For scalar-array fields (string[]), an empty
+  // array can legitimately mean "the page had no matching items", so we leave
+  // those for validateOutputAgainstSchema to surface as a missing-field.
+  const isArrayOfObjects = (key) => {
+    const prop = outputSchema.properties && outputSchema.properties[key];
+    return !!(prop && prop.type === 'array' && prop.items && prop.items.type === 'object');
+  };
+
   const empty = [];
   for (const key of outputSchema.required) {
     const v = data[key];
-    if (!Array.isArray(v) || v.length === 0) continue; // scalar or empty-array already caught by validateOutputAgainstSchema
+    if (isArrayOfObjects(key) && Array.isArray(v) && v.length === 0) {
+      empty.push(key);
+      continue;
+    }
+    if (!Array.isArray(v) || v.length === 0) continue; // scalar or empty scalar-array: leave to validateOutputAgainstSchema
     // Array of objects where every object has only empty values
     if (v.every(el => el && typeof el === 'object' && !Array.isArray(el) &&
                      Object.values(el).every(isEmptyValue))) {
