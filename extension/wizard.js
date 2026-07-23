@@ -1708,7 +1708,10 @@ async function testScript() {
     // "Could not capture snapshot for auto-fix: Receiving end does not exist."
     const lastStep = result.steps[result.steps.length - 1];
     if (lastStep?.snapshot) {
-      wizardState.lastErrorSnapshot = lastStep.snapshot;
+      // Stamp capturedAt so Spec 5 classifyIntervention can compute snapshotAgeMs
+      // for the page_state_stale rule. Snapshot itself is shared with other
+      // consumers, so we spread-clone rather than mutate.
+      wizardState.lastErrorSnapshot = { ...lastStep.snapshot, capturedAt: Date.now() };
     }
 
     // WS4.2: required-output check against outputSchema (catches "success:true with empty answer").
@@ -1750,7 +1753,7 @@ async function testScript() {
   } catch (e) {
     wizardState.lastError = e.message;
     wizardState.lastErrorStepId = e.stepId || null;
-    wizardState.lastErrorSnapshot = e.snapshot || null;
+    wizardState.lastErrorSnapshot = e.snapshot ? { ...e.snapshot, capturedAt: Date.now() } : null;
     // Preserve partial step results so autoFix can recover context that
     // isn't in the failure snapshot — most importantly the detail URL from
     // a prior $openTab-returning step. Without this, autoFix's
