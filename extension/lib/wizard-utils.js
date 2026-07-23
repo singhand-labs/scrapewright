@@ -637,6 +637,97 @@ function summarizeExecutionDiagnostics(events, failingStepId) {
   return '\n' + lines.join('\n') + '\n';
 }
 
+// Pure scoring function for autoFix best-of-N comparison.
+// Returns { score, breakdown, isData }:
+//   score = requiredCoverage * 100 + listItemCount * 10 + avgFieldsPerItem * 5
+//   isData = false when result is not a non-null object OR no schema → skip best-attempt tracking
+// Never throws — malformed input returns { score: 0, isData: false, breakdown: {} }.
+function scoreAttemptResult(result, outputSchema) {
+  try {
+    if (!result || typeof result !== 'object' || Array.isArray(result)) {
+      return { score: 0, isData: false, breakdown: {} };
+    }
+    if (!outputSchema || typeof outputSchema !== 'object') {
+      return { score: 0, isData: false, breakdown: {} };
+    }
+
+    // Cycle guard: a circular result would cause unbounded recursion in
+    // isEmptyValue and is meaningless for scoring. Detect via WeakSet walk.
+    const hasCycle = (root) => {
+      const seen = new WeakSet();
+      const visit = (v) => {
+        if (!v || typeof v !== 'object') return false;
+        if (seen.has(v)) return true;
+        seen.add(v);
+        for (const k of Object.keys(v)) {
+          if (visit(v[k])) return true;
+        }
+        return false;
+      };
+      return visit(root);
+    };
+    if (hasCycle(result)) {
+      return { score: 0, isData: false, breakdown: {} };
+    }
+
+    const required = Array.isArray(outputSchema.required) ? outputSchema.required : [];
+    const props = outputSchema.properties && typeof outputSchema.properties === 'object' ? outputSchema.properties : {};
+
+    const isEmptyValue = (v) =>
+      v === '' || v === null || v === undefined ||
+      (Array.isArray(v) && v.length === 0) ||
+      (v && typeof v === 'object' && !Array.isArray(v) && Object.values(v).every(isEmptyValue));
+
+    // requiredCoverage: fraction of required fields that are non-empty
+    let requiredCoverage = 0;
+    if (required.length > 0) {
+      const satisfied = required.filter(key => !isEmptyValue(result[key])).length;
+      requiredCoverage = satisfied / required.length;
+    }
+
+    // Find first array-of-objects field for list metrics
+    let arrayKey = null;
+    for (const key of Object.keys(result)) {
+      const prop = props[key];
+      if (Array.isArray(result[key]) && prop && prop.type === 'array') {
+        arrayKey = key;
+        break;
+      }
+    }
+
+    let listItemCount = 0;
+    let avgFieldsPerItem = 0;
+    if (arrayKey) {
+      const arr = result[arrayKey];
+      listItemCount = arr.length;
+      const itemProp = props[arrayKey] && props[arrayKey].items;
+      const innerKeys = (itemProp && itemProp.properties && typeof itemProp.properties === 'object')
+        ? Object.keys(itemProp.properties)
+        : [];
+      if (arr.length > 0 && innerKeys.length > 0) {
+        const ratios = arr
+          .filter(item => item && typeof item === 'object' && !Array.isArray(item))
+          .map(item => innerKeys.filter(k => !isEmptyValue(item[k])).length / innerKeys.length);
+        avgFieldsPerItem = ratios.length > 0
+          ? ratios.reduce((a, b) => a + b, 0) / ratios.length
+          : 0;
+      }
+    }
+
+    const score = requiredCoverage * 100 + listItemCount * 10 + avgFieldsPerItem * 5;
+    return {
+      score,
+      isData: true,
+      breakdown: { requiredCoverage, listItemCount, avgFieldsPerItem }
+    };
+  } catch (e) {
+    // Circular reference or unexpected shape — degrade silently.
+    // debugLogger may not be available in all environments; guard the log.
+    try { (typeof debugLogger !== 'undefined' && debugLogger.log('warn', 'wizard-utils', 'scoreAttemptResult failed', { error: e.message })); } catch {}
+    return { score: 0, isData: false, breakdown: {} };
+  }
+}
+
 // Score how brittle a single CSS selector is. Higher score = more brittle.
 // Used by the wizard deploy hook to warn the user when an annotation is
 // unlikely to generalize across list items. Pure function, no exceptions.
@@ -1125,7 +1216,7 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
@@ -1137,6 +1228,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.summarizeFixIteration = summarizeFixIteration;
   window.formatDomActivitySummary = formatDomActivitySummary;
   window.summarizeExecutionDiagnostics = summarizeExecutionDiagnostics;
+  window.scoreAttemptResult = scoreAttemptResult;
   window.getStepTemplates = getStepTemplates;
   window.applyTemplate = applyTemplate;
   window.STEP_TEMPLATES = STEP_TEMPLATES;
@@ -1173,6 +1265,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.summarizeFixIteration = summarizeFixIteration;
   self.formatDomActivitySummary = formatDomActivitySummary;
   self.summarizeExecutionDiagnostics = summarizeExecutionDiagnostics;
+  self.scoreAttemptResult = scoreAttemptResult;
   self.appendStepWithChainLink = appendStepWithChainLink;
   self.removeStepWithRelink = removeStepWithRelink;
   self.relinkChainToArray = relinkChainToArray;
