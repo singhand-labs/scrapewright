@@ -890,6 +890,60 @@ function buildFeedbackSection(feedback, attemptNum, totalAttempts, llmHistory) {
   return lines.join('\n');
 }
 
+// Pure planning helper: decide what to patch + how to truncate llmHistory when
+// restoring the best attempt. Returns null if the target step no longer exists.
+// wizard.js applies the returned plan (mutates wizardState + syncs DOM).
+function planRestoreBestAttempt(bestAttempt, currentSteps, currentLlmHistory) {
+  try {
+    if (!bestAttempt || typeof bestAttempt !== 'object') return null;
+    if (!Array.isArray(currentSteps)) return null;
+    const step = currentSteps.find(s => s && s.id === bestAttempt.stepId);
+    if (!step) return null;
+
+    const stepPatch = {
+      script: bestAttempt.script,
+      onSuccess: bestAttempt.onSuccess,
+      onFailure: bestAttempt.onFailure,
+      maxIterations: bestAttempt.maxIterations
+    };
+
+    // Truncate llmHistory at the boundary of the best attempt's user-message marker.
+    // summarizeFixIteration emits "[Attempt — step \"<id>\" (\"<name>\")]" as the first line.
+    const marker = `[Attempt — step "${bestAttempt.stepId}"`;
+    const history = Array.isArray(currentLlmHistory) ? currentLlmHistory : [];
+
+    // Find the attemptNum-th user message whose content includes the marker (1-indexed).
+    // We keep that user message + the assistant reply that follows it.
+    let seen = 0;
+    let boundaryIdx = -1;
+    for (let i = 0; i < history.length; i++) {
+      const m = history[i];
+      if (m && m.role === 'user' && typeof m.content === 'string' && m.content.includes(marker)) {
+        seen++;
+        if (seen === bestAttempt.attemptNum) {
+          boundaryIdx = i;
+          break;
+        }
+      }
+    }
+    let truncatedHistory = history;
+    if (boundaryIdx >= 0) {
+      // Keep user msg at boundaryIdx + the following assistant reply (if any)
+      truncatedHistory = history.slice(0, Math.min(boundaryIdx + 2, history.length));
+    }
+
+    return {
+      stepId: bestAttempt.stepId,
+      stepPatch,
+      truncatedHistory,
+      logMessage: `Restored attempt #${bestAttempt.attemptNum} (scored ${bestAttempt.score}) — higher than last attempt.`
+    };
+  } catch (e) {
+    try { (typeof debugLogger !== 'undefined' && debugLogger.log('warn', 'wizard-utils', 'planRestoreBestAttempt failed', { error: e.message })); } catch {}
+    return null;
+  }
+}
+
 // Score how brittle a single CSS selector is. Higher score = more brittle.
 // Used by the wizard deploy hook to warn the user when an annotation is
 // unlikely to generalize across list items. Pure function, no exceptions.
@@ -1378,7 +1432,7 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, planRestoreBestAttempt, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
@@ -1393,6 +1447,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.scoreAttemptResult = scoreAttemptResult;
   window.classifyIntervention = classifyIntervention;
   window.buildFeedbackSection = buildFeedbackSection;
+  window.planRestoreBestAttempt = planRestoreBestAttempt;
   window.getStepTemplates = getStepTemplates;
   window.applyTemplate = applyTemplate;
   window.STEP_TEMPLATES = STEP_TEMPLATES;
@@ -1432,6 +1487,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.scoreAttemptResult = scoreAttemptResult;
   self.classifyIntervention = classifyIntervention;
   self.buildFeedbackSection = buildFeedbackSection;
+  self.planRestoreBestAttempt = planRestoreBestAttempt;
   self.appendStepWithChainLink = appendStepWithChainLink;
   self.removeStepWithRelink = removeStepWithRelink;
   self.relinkChainToArray = relinkChainToArray;
