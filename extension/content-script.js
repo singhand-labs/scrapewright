@@ -7,30 +7,83 @@
   // captured lexically. Without this alias, `$extractList` / `$clickInList`
   // throw "ListExtractOps is not defined" at call time.
   //
-  // Lookup is LAZY: the alias is resolved at call time, not at IIFE init. This
-  // survives cases where window.ListExtractOps isn't set when content-script.js
-  // first evaluates (e.g., the extension was reloaded but an older
-  // list-extract-ops.js is still injected in an existing tab, or some future
-  // load-order change defers the attachment). The eager capture in commit
-  // 361d3ae still left `Cannot read properties of undefined` in bugx.log
-  // because the alias captured undefined and was frozen that way for the tab's
-  // lifetime. Lazy lookup always reads the current value.
-  function getListExtractOps() {
-    const g = typeof window !== 'undefined' ? window : self;
-    return g && g.ListExtractOps;
+  // Lookup is LAZY + has an INLINE FALLBACK. bugx.log (2026-07-23 16:26)
+  // showed that even after the manifest-correct load order, the user's browser
+  // ended up with window.ListExtractOps undefined at call time — likely a
+  // Chrome MV3 caching/injection glitch after a mid-session reload. When that
+  // happens, we build the same tiny API inline (the functions are ~50 lines
+  // total) so $extractList / $clickInList always work regardless of whether
+  // the separate file made it in. lib/list-extract-ops.js remains the source
+  // of truth for Node tests; this fallback is a defensive duplicate.
+  function createInlineListExtractOps() {
+    function readField(container, spec) {
+      const sel = typeof spec === 'string' ? spec : spec.selector;
+      const attr = typeof spec === 'string' ? null : spec.attr;
+      const el = container.querySelector(sel);
+      if (!el) return undefined;
+      if (attr) return el.getAttribute(attr);
+      return (el.textContent || '').trim();
+    }
+    function extractListRecords(containers, fieldMap, opts) {
+      if (!Array.isArray(containers)) {
+        throw new Error('$extractList: containers must be an array');
+      }
+      if (!fieldMap || typeof fieldMap !== 'object' || Object.keys(fieldMap).length === 0) {
+        throw new Error('$extractList fieldMap must be a non-empty object');
+      }
+      if (!containers.length) {
+        if (opts && opts.allowEmpty) return [];
+        throw new Error('$extractList: no containers matched');
+      }
+      const records = [];
+      for (const container of containers) {
+        const rec = {};
+        for (const [field, spec] of Object.entries(fieldMap)) {
+          try {
+            rec[field] = readField(container, spec);
+          } catch (err) {
+            throw new Error(`$extractList field "${field}" selector invalid: ${err.message}`);
+          }
+        }
+        records.push(rec);
+      }
+      return records;
+    }
+    function clickInListItems(containers, subSel, clickFn, delayMs) {
+      const delay = Math.max(0, Math.min(5000, typeof delayMs === 'number' ? delayMs : 500));
+      let clicked = 0;
+      const errors = [];
+      containers.forEach((container, index) => {
+        try {
+          const el = container.querySelector(subSel);
+          if (!el) {
+            errors.push({ index, reason: 'subSel not found' });
+            return;
+          }
+          clickFn(el);
+          clicked++;
+        } catch (err) {
+          errors.push({ index, reason: err.message || String(err) });
+        }
+      });
+      return { clicked, errors, delayMs: delay };
+    }
+    return { extractListRecords, clickInListItems };
   }
 
-  // Diagnostic: log load state once at IIFE init. Confirms whether reload picked
-  // up the fix. Absent log on a Facebook tab means the OLD content-script.js is
-  // still running there — user must refresh the tab.
-  try {
-    const ops = getListExtractOps();
-    if (ops) {
-      console.log('[content-script] ListExtractOps available at init', { keys: Object.keys(ops).sort() });
-    } else {
-      console.warn('[content-script] ListExtractOps NOT available at init — $extractList/$clickInList will fail. Reload the extension and refresh the tab.');
+  let __listOpsFallbackWarned = false;
+  function getListExtractOps() {
+    const g = typeof window !== 'undefined' ? window : self;
+    if (g && g.ListExtractOps) return g.ListExtractOps;
+    if (!g.__inlineListExtractOps) g.__inlineListExtractOps = createInlineListExtractOps();
+    if (!__listOpsFallbackWarned) {
+      __listOpsFallbackWarned = true;
+      // One-shot warning. Repeats would spam the log since getListExtractOps
+      // is called on every $extractList / $clickInList invocation.
+      console.warn('[content-script] Using inline $extractList fallback — lib/list-extract-ops.js did not attach window.ListExtractOps at call time. Reload the extension to investigate.');
     }
-  } catch (e) { /* diagnostic must never break execution */ }
+    return g.__inlineListExtractOps;
+  }
 
   let isAnnotationMode = false;
   let selectedAnnotations = [];

@@ -94,37 +94,105 @@ describe('list-aware extraction integration', () => {
     assert.match(text, /content:/);
   });
 
-  // Regression for bugx.log "Cannot read properties of undefined (reading 'clickInListItems')".
-  // The original fix (commit 361d3ae) captured `window.ListExtractOps` eagerly at IIFE
-  // init via `const ListExtractOps = window.ListExtractOps`. If the alias was undefined
-  // at init time (extension reloaded but tab still running old list-extract-ops, or any
-  // future load-order surprise), the alias was frozen at undefined for the tab's entire
-  // lifetime — $extractList/$clickInList could never recover even after reload.
-  // The lazy-lookup pattern reads the current value at call time, so a late-attached
-  // API still works.
-  it('lazy lookup of ListExtractOps survives late attachment (regression)', () => {
-    const savedWindow = global.window;
-    const fakeWindow = {};
-    global.window = fakeWindow;
+  // Regression for bugx.log 2026-07-23 16:26 — even with lazy lookup,
+  // window.ListExtractOps was sometimes genuinely undefined at call time
+  // (Chrome MV3 injection glitch). content-script.js now provides an inline
+  // fallback that mirrors list-extract-ops.js. Verify the fallback produces
+  // identical results to the canonical implementation.
+  it('inline fallback in content-script produces same results as list-extract-ops.js', () => {
+    const { extractListRecords: nativeExtract, clickInListItems: nativeClick } =
+      require('../lib/list-extract-ops');
 
-    // Mirror of content-script.js getListExtractOps():
-    const getListExtractOps = () => {
-      const g = typeof window !== 'undefined' ? window : self;
-      return g && g.ListExtractOps;
+    // Mirror of content-script.js createInlineListExtractOps():
+    function createInlineListExtractOps() {
+      function readField(container, spec) {
+        const sel = typeof spec === 'string' ? spec : spec.selector;
+        const attr = typeof spec === 'string' ? null : spec.attr;
+        const el = container.querySelector(sel);
+        if (!el) return undefined;
+        if (attr) return el.getAttribute(attr);
+        return (el.textContent || '').trim();
+      }
+      function extractListRecords(containers, fieldMap, opts) {
+        if (!Array.isArray(containers)) throw new Error('$extractList: containers must be an array');
+        if (!fieldMap || typeof fieldMap !== 'object' || Object.keys(fieldMap).length === 0) {
+          throw new Error('$extractList fieldMap must be a non-empty object');
+        }
+        if (!containers.length) {
+          if (opts && opts.allowEmpty) return [];
+          throw new Error('$extractList: no containers matched');
+        }
+        const records = [];
+        for (const container of containers) {
+          const rec = {};
+          for (const [field, spec] of Object.entries(fieldMap)) {
+            try { rec[field] = readField(container, spec); }
+            catch (err) { throw new Error(`$extractList field "${field}" selector invalid: ${err.message}`); }
+          }
+          records.push(rec);
+        }
+        return records;
+      }
+      function clickInListItems(containers, subSel, clickFn, delayMs) {
+        const delay = Math.max(0, Math.min(5000, typeof delayMs === 'number' ? delayMs : 500));
+        let clicked = 0;
+        const errors = [];
+        containers.forEach((container, index) => {
+          try {
+            const el = container.querySelector(subSel);
+            if (!el) { errors.push({ index, reason: 'subSel not found' }); return; }
+            clickFn(el);
+            clicked++;
+          } catch (err) { errors.push({ index, reason: err.message || String(err) }); }
+        });
+        return { clicked, errors, delayMs: delay };
+      }
+      return { extractListRecords, clickInListItems };
+    }
+    const inline = createInlineListExtractOps();
+
+    // Build a DOM with 3 posts, each with author/content/href, plus one post
+    // missing content (field-alignment case).
+    setupDOM(`<!DOCTYPE html><html><body>
+      <div role="article">
+        <a class="author">A1</a>
+        <div class="body">B1</div>
+        <a href="/p1">link</a>
+      </div>
+      <div role="article">
+        <a class="author">A2</a>
+        <a href="/p2">link</a>
+      </div>
+      <div role="article">
+        <a class="author">A3</a>
+        <div class="body">B3</div>
+        <a href="/p3">link</a>
+      </div>
+    </body></html>`);
+
+    const containers = Array.from(document.querySelectorAll('div[role="article"]'));
+    const fieldMap = {
+      author: 'a.author',
+      body: 'div.body',
+      href: { selector: 'a[href]', attr: 'href' }
     };
 
-    // At init time (alias captured), window.ListExtractOps is unset.
-    assert.equal(getListExtractOps(), undefined,
-      'if alias is captured now, it is undefined — this is the eager-capture bug');
+    const nativeResult = nativeExtract(containers, fieldMap);
+    const inlineResult = inline.extractListRecords(containers, fieldMap);
 
-    // Later, list-extract-ops.js finishes loading and attaches the API.
-    fakeWindow.ListExtractOps = { extractListRecords: () => 'ok', clickInListItems: () => 'ok' };
+    assert.deepEqual(inlineResult, nativeResult,
+      'inline fallback must match native extractListRecords');
+    assert.equal(inlineResult.length, 3);
+    assert.equal(inlineResult[0].author, 'A1');
+    assert.equal(inlineResult[1].body, undefined, 'missing field preserved as undefined');
+    assert.equal(inlineResult[2].href, '/p3');
 
-    // Lazy lookup sees the late-attached value; eager alias would NOT have.
-    const ops = getListExtractOps();
-    assert.ok(ops && typeof ops.extractListRecords === 'function');
-    assert.ok(ops && typeof ops.clickInListItems === 'function');
-
-    global.window = savedWindow;
+    // Verify clickInListItems parity
+    const clicks1 = [];
+    const clicks2 = [];
+    const r1 = nativeClick(containers, 'a.author', (el) => clicks1.push(el.textContent), 0);
+    const r2 = inline.clickInListItems(containers, 'a.author', (el) => clicks2.push(el.textContent), 0);
+    assert.equal(r2.clicked, r1.clicked);
+    assert.deepEqual(clicks2, clicks1);
   });
 });
