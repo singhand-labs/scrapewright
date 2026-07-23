@@ -232,15 +232,23 @@ async function loadLlmConfig() {
   document.getElementById('model').value = config.model || '';
   document.getElementById('apiKey').value = config.apiKey || '';
   document.getElementById('apiBaseUrl').value = config.apiBaseUrl || '';
+  // timeoutMs is stored in ms; the UI is in seconds. Blank → default (120).
+  const timeoutSeconds = config.timeoutMs ? Math.round(config.timeoutMs / 1000) : '';
+  document.getElementById('llmTimeout').value = timeoutSeconds;
 }
 
 async function saveLlmConfig() {
+  const rawTimeout = parseInt(document.getElementById('llmTimeout').value, 10);
+  const timeoutSeconds = Number.isFinite(rawTimeout) && rawTimeout >= 10 && rawTimeout <= 600
+    ? rawTimeout
+    : 120;
   const config = {
     provider: document.getElementById('provider').value,
     model: document.getElementById('model').value,
     apiKey: document.getElementById('apiKey').value,
     apiBaseUrl: document.getElementById('apiBaseUrl').value || undefined,
-    temperature: 0.1
+    temperature: 0.1,
+    timeoutMs: timeoutSeconds * 1000
   };
   await chrome.runtime.sendMessage({ type: 'SAVE_LLM_CONFIG', config });
   showToast('Saved', 'success');

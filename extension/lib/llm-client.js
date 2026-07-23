@@ -1,5 +1,5 @@
 const DEFAULT_MAX_RETRIES = 3;
-const DEFAULT_TIMEOUT_MS = 60_000;
+const DEFAULT_TIMEOUT_MS = 120_000;
 const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 
 class LLMError extends Error {
@@ -37,6 +37,10 @@ class LLMClient {
     this.apiKey = config.apiKey;
     this.apiBaseUrl = config.apiBaseUrl || this.getDefaultBaseUrl();
     this.temperature = config.temperature ?? 0.1;
+    // Per-config timeout (ms). Falls back to DEFAULT_TIMEOUT_MS at use site
+    // when undefined/invalid so legacy configs without this field still work.
+    const configured = Number(config.timeoutMs);
+    this.timeoutMs = Number.isFinite(configured) && configured > 0 ? configured : undefined;
   }
 
   getDefaultBaseUrl() {
@@ -98,7 +102,7 @@ class LLMClient {
     console.log('[LLMClient] Request model:', this.model);
     console.log('[LLMClient] Request body:', JSON.stringify(body, null, 2));
 
-    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const timeoutMs = options.timeoutMs ?? this.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
 
