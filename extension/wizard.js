@@ -2107,6 +2107,7 @@ async function autoFix(userFeedback = null) {
 }
 
 async function runFixIteration(userFeedback, config, options = {}) {
+  const attemptNum = Number.isFinite(options.attemptNum) ? options.attemptNum : 1;
   // Deterministic topology heal first (no LLM): if a step signals polling but
   // left maxIterations unset (common when a prior LLM fix just added a wait),
   // give it a default retry budget before spending an LLM call.
@@ -2209,8 +2210,6 @@ If your script does NOT use $openTab, $wait / $ / $extract will run against the 
   const snapshotBudget = options.compact ? 15000 : 30000;
   pageSnapshot = truncateSnapshotForLLM(pageSnapshot, snapshotBudget);
 
-  const feedbackSection = userFeedback ? '\nUser feedback: ' + userFeedback : '';
-
   // Per-step timeout guidance is injected via buildTimeoutGuidance(DEPLOY_TIMEOUT_MS) in the prompts below.
 
   // Build full step workflow context so LLM understands the pipeline
@@ -2232,7 +2231,7 @@ If your script does NOT use $openTab, $wait / $ / $extract will run against the 
 
   let prompt;
   if (isFailureFix) {
-    prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${SCRIPT_DSL_GUIDE}
+    prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${buildFeedbackSection(userFeedback, attemptNum, 3, wizardState.llmHistory)}${SCRIPT_DSL_GUIDE}
 
 The following step failed. Fix it — primarily its script, but you MAY also adjust THIS step's onSuccess / onFailure / maxIterations if the runtime shows the step flow itself is wrong (the steps were generated before seeing this page state, so the topology can be a best guess). Do NOT add or remove steps; only edit this step's own fields.
 ${compactedNote}
@@ -2262,7 +2261,6 @@ Page compressed structure:
 ${pageSnapshot.structure || ''}
 
 Annotations: ${JSON.stringify(wizardState.annotations)}
-${feedbackSection}
 
 IMPORTANT SELECTOR RULES:
 - Look at the ACTUAL HTML above — use the EXACT class names, IDs, and attributes you see there. Do NOT guess or invent generic selectors.
@@ -2281,7 +2279,7 @@ ${RETURN_FORMAT}`;
       ? JSON.stringify(wizardState.testResult, null, 2)
       : '(no output)';
 
-    prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${SCRIPT_DSL_GUIDE}
+    prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${buildFeedbackSection(userFeedback, attemptNum, 1, wizardState.llmHistory)}${SCRIPT_DSL_GUIDE}
 
 The test passed but the user is not satisfied with the extraction results. Improve the step script based on their feedback.
 ${compactedNote}
@@ -2312,7 +2310,6 @@ Page compressed structure:
 ${pageSnapshot.structure || ''}
 
 Annotations: ${JSON.stringify(wizardState.annotations)}
-${feedbackSection}
 
 IMPORTANT SELECTOR RULES:
 - Look at the ACTUAL HTML above — use the EXACT class names, IDs, and attributes you see there. Do NOT guess or invent generic selectors.
