@@ -944,6 +944,34 @@ function planRestoreBestAttempt(bestAttempt, currentSteps, currentLlmHistory) {
   }
 }
 
+// Pure: returns an HTML string for the intervention banner. Wizard.js injects it
+// into #phase5 and attaches event listeners via data-action attributes.
+function renderInterventionBanner(classification) {
+  if (!classification || typeof classification !== 'object') return '';
+  const severity = classification.severity === 'error' ? 'error'
+                 : classification.severity === 'warn' ? 'warn' : 'info';
+  const msg = String(classification.message || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const action = String(classification.uiAction || '');
+  const actionLabel = ({
+    annotate_step: 'Go to annotation',
+    open_tab: 'Open target tab',
+    open_settings: 'Open settings',
+    refresh_tab: 'Refresh tab'
+  })[action] || 'Take action';
+  const actionBtn = action
+    ? `<button class="intervention-action btn-primary" data-action="${action}">${actionLabel}</button>`
+    : '';
+  return `
+<div class="intervention-banner intervention-${severity}" role="alert">
+  <span class="intervention-icon">${severity === 'error' ? '✕' : '⚠'}</span>
+  <span class="intervention-message">${msg}</span>
+  <div class="intervention-buttons">
+    ${actionBtn}
+    <button class="intervention-dismiss btn-secondary" data-action="dismiss">Ignore and continue</button>
+  </div>
+</div>`.trim();
+}
+
 // Score how brittle a single CSS selector is. Higher score = more brittle.
 // Used by the wizard deploy hook to warn the user when an annotation is
 // unlikely to generalize across list items. Pure function, no exceptions.
@@ -1432,7 +1460,7 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, planRestoreBestAttempt, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
@@ -1448,6 +1476,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.classifyIntervention = classifyIntervention;
   window.buildFeedbackSection = buildFeedbackSection;
   window.planRestoreBestAttempt = planRestoreBestAttempt;
+  window.renderInterventionBanner = renderInterventionBanner;
   window.getStepTemplates = getStepTemplates;
   window.applyTemplate = applyTemplate;
   window.STEP_TEMPLATES = STEP_TEMPLATES;
@@ -1488,6 +1517,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.classifyIntervention = classifyIntervention;
   self.buildFeedbackSection = buildFeedbackSection;
   self.planRestoreBestAttempt = planRestoreBestAttempt;
+  self.renderInterventionBanner = renderInterventionBanner;
   self.appendStepWithChainLink = appendStepWithChainLink;
   self.removeStepWithRelink = removeStepWithRelink;
   self.relinkChainToArray = relinkChainToArray;
