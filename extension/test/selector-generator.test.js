@@ -174,4 +174,61 @@ describe('generateSelector', () => {
     assert.ok(!/\.x[0-9a-f]+/i.test(sel), `should not contain auto-gen class in "${sel}"`);
     assert.ok(sel.startsWith('span'), `should start with tag in "${sel}"`);
   });
+
+  // Regression: bugx.log showed annotation selectors like
+  //   #mount_0_0_UD > div > div > div > div > div > div ... > a[role="link"]
+  // across 4 wizard runs with mount IDs UD, 0G, ey — each a different random
+  // suffix. Facebook's React mount point id changes per page load, so any
+  // selector anchored on it breaks across reloads and doesn't match sibling
+  // list items. The generator must walk PAST random ids to find a stable
+  // semantic anchor.
+  it('does not anchor on Facebook-style mount_0_0_<suffix> random ids', () => {
+    setupDOM(
+      '<!DOCTYPE html><html><body>' +
+      '<div id="mount_0_0_UD">' +
+        '<div><div><div>' +
+          '<div role="article"><h3><a role="link">Name</a></h3></div>' +
+          '<div role="article"><h3><a role="link">Other</a></h3></div>' +
+        '</div></div></div>' +
+      '</div>' +
+      '</body></html>'
+    );
+    // Click the first <a role="link">. Two siblings share [role="link"], so
+    // the generator walks up. It must NOT stop at #mount_0_0_UD — that id
+    // is random per page load. Expected: anchor on div[role="article"].
+    const el = document.querySelectorAll('a[role="link"]')[0];
+    const sel = generateSelector(el, document);
+    assert.ok(!/mount_0_0/i.test(sel), `should not anchor on mount_0_0 id, got "${sel}"`);
+    assert.ok(sel.includes('role="link"'), `should keep role=link on leaf, got "${sel}"`);
+  });
+
+  it('does not anchor on react-aria or headlessui random ids', () => {
+    setupDOM(
+      '<!DOCTYPE html><html><body>' +
+      '<div id="react-aria-:r3:">' +
+        '<button aria-label="Like">Like</button>' +
+        '<button aria-label="Like">Other</button>' +
+      '</div>' +
+      '</body></html>'
+    );
+    // Two buttons share aria-label="Like", so generator walks up. Must not
+    // stop at react-aria id.
+    const el = document.querySelectorAll('button[aria-label="Like"]')[0];
+    const sel = generateSelector(el, document);
+    assert.ok(!/react-aria/i.test(sel), `should not anchor on react-aria id, got "${sel}"`);
+  });
+
+  it('still anchors on semantic (hyphen-separated) ids when leaf is ambiguous', () => {
+    setupDOM(
+      '<!DOCTYPE html><html><body>' +
+      '<div id="post-list"><span class="title">Hello</span><span class="title">World</span></div>' +
+      '<div id="comment-list"><span class="title">Other</span></div>' +
+      '</body></html>'
+    );
+    // Multiple span.title across containers — generator must walk up to
+    // disambiguate. Semantic id #post-list is fine to anchor on.
+    const el = document.querySelectorAll('#post-list span.title')[0];
+    const sel = generateSelector(el, document);
+    assert.ok(sel.includes('#post-list'), `should anchor on semantic id, got "${sel}"`);
+  });
 });
