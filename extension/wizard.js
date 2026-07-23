@@ -2023,7 +2023,11 @@ async function autoFix(userFeedback = null) {
   // userFeedback null → up to 3 silent retries before giving up and asking
   // the user for a hint. Triggered automatically by testScript on failure.
   const MAX_ATTEMPTS = userFeedback ? 1 : 3;
-  if (!userFeedback) wizardState.fixAttemptCount = 0;
+  if (!userFeedback) {
+    wizardState.fixAttemptCount = 0;
+    wizardState.bestAttempt = null;
+    wizardState.dismissedInterventions = null;
+  }
 
   const prevAutoFixing = wizardState.autoFixing;
   wizardState.autoFixing = true;
@@ -2038,7 +2042,7 @@ async function autoFix(userFeedback = null) {
       let success = false;
       let fatal = false;
       try {
-        success = await runFixIteration(userFeedback, config, { compact: compactMode });
+        success = await runFixIteration(userFeedback, config, { compact: compactMode, attemptNum: attempt, totalAttempts: MAX_ATTEMPTS });
       } catch (err) {
         if (err.name === 'LLMContextOverflow') {
           if (!compactMode) {
@@ -2051,7 +2055,7 @@ async function autoFix(userFeedback = null) {
             wizardState.llmHistory = [];
             compactMode = true;
             try {
-              success = await runFixIteration(userFeedback, config, { compact: true });
+              success = await runFixIteration(userFeedback, config, { compact: true, attemptNum: attempt, totalAttempts: MAX_ATTEMPTS });
             } catch (err2) {
               if (err2.name === 'LLMContextOverflow') {
                 const msg = 'Page is too large for the model\'s context window even after truncation. Narrow the requirement, annotate elements manually, or switch to a model with a larger context window.';
@@ -2079,6 +2083,51 @@ async function autoFix(userFeedback = null) {
           fatal = true;
         }
       }
+      // === Spec 5: score this attempt, track best, check intervention ===
+      const finalResult = wizardState.testResult && wizardState.testResult.finalResult !== undefined
+        ? wizardState.testResult.finalResult
+        : null;
+      const scoreResult = scoreAttemptResult(finalResult, wizardState.outputSchema);
+      if (scoreResult.isData && wizardState.lastErrorStepId) {
+        const targetStep = wizardState.steps.find(s => s.id === wizardState.lastErrorStepId);
+        if (targetStep) {
+          if (!wizardState.bestAttempt || scoreResult.score > wizardState.bestAttempt.score) {
+            wizardState.bestAttempt = {
+              stepId: targetStep.id,
+              script: targetStep.script,
+              onSuccess: targetStep.onSuccess,
+              onFailure: targetStep.onFailure,
+              maxIterations: targetStep.maxIterations,
+              score: scoreResult.score,
+              attemptNum: attempt,
+              breakdown: scoreResult.breakdown
+            };
+          }
+        }
+      }
+      // Classifier (only on failure — if success, we return below before reaching here anyway)
+      if (!success) {
+        const snapshotAgeMs = wizardState.lastErrorSnapshot && wizardState.lastErrorSnapshot.capturedAt
+          ? (Date.now() - wizardState.lastErrorSnapshot.capturedAt)
+          : 0;
+        const failingStep = wizardState.steps.find(s => s.id === wizardState.lastErrorStepId);
+        const intervention = classifyIntervention({
+          error: wizardState.lastError,
+          result: finalResult,
+          outputSchema: wizardState.outputSchema,
+          annotations: (failingStep && failingStep.annotations) || [],
+          attemptCount: attempt,
+          lastError: wizardState.lastError,
+          dismissed: wizardState.dismissedInterventions,
+          snapshotAgeMs
+        });
+        if (intervention) {
+          showInterventionBanner(intervention, failingStep);
+          break;
+        }
+      }
+      // === End Spec 5 additions ===
+
       if (success) return;
       if (fatal) break;
       if (attempt < MAX_ATTEMPTS) {
@@ -2100,6 +2149,18 @@ async function autoFix(userFeedback = null) {
         showToast(msg, 'warn', 12000);
       }
     }
+    // === Spec 5: restore best attempt if the last iteration regressed ===
+    if (wizardState.bestAttempt && wizardState.bestAttempt.score > 0) {
+      const finalResult = wizardState.testResult && wizardState.testResult.finalResult !== undefined
+        ? wizardState.testResult.finalResult
+        : null;
+      const currentScore = scoreAttemptResult(finalResult, wizardState.outputSchema).score;
+      if (wizardState.bestAttempt.score > currentScore) {
+        restoreBestAttempt(wizardState.bestAttempt);
+      }
+    }
+    // === End Spec 5 ===
+
     updatePhaseUI('failure');
   } finally {
     wizardState.autoFixing = prevAutoFixing;
@@ -2108,6 +2169,7 @@ async function autoFix(userFeedback = null) {
 
 async function runFixIteration(userFeedback, config, options = {}) {
   const attemptNum = Number.isFinite(options.attemptNum) ? options.attemptNum : 1;
+  const totalAttempts = Number.isFinite(options.totalAttempts) ? options.totalAttempts : (userFeedback ? 1 : 3);
   // Deterministic topology heal first (no LLM): if a step signals polling but
   // left maxIterations unset (common when a prior LLM fix just added a wait),
   // give it a default retry budget before spending an LLM call.
@@ -2231,7 +2293,7 @@ If your script does NOT use $openTab, $wait / $ / $extract will run against the 
 
   let prompt;
   if (isFailureFix) {
-    prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${buildFeedbackSection(userFeedback, attemptNum, 3, wizardState.llmHistory)}${SCRIPT_DSL_GUIDE}
+    prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${buildFeedbackSection(userFeedback, attemptNum, totalAttempts, wizardState.llmHistory)}${SCRIPT_DSL_GUIDE}
 
 The following step failed. Fix it — primarily its script, but you MAY also adjust THIS step's onSuccess / onFailure / maxIterations if the runtime shows the step flow itself is wrong (the steps were generated before seeing this page state, so the topology can be a best guess). Do NOT add or remove steps; only edit this step's own fields.
 ${compactedNote}
@@ -2279,7 +2341,7 @@ ${RETURN_FORMAT}`;
       ? JSON.stringify(wizardState.testResult, null, 2)
       : '(no output)';
 
-    prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${buildFeedbackSection(userFeedback, attemptNum, 1, wizardState.llmHistory)}${SCRIPT_DSL_GUIDE}
+    prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${buildFeedbackSection(userFeedback, attemptNum, totalAttempts, wizardState.llmHistory)}${SCRIPT_DSL_GUIDE}
 
 The test passed but the user is not satisfied with the extraction results. Improve the step script based on their feedback.
 ${compactedNote}
