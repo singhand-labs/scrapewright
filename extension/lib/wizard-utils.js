@@ -640,6 +640,8 @@ function summarizeExecutionDiagnostics(events, failingStepId) {
 // Pure scoring function for autoFix best-of-N comparison.
 // Returns { score, breakdown, isData }:
 //   score = requiredCoverage * 100 + listItemCount * 10 + avgFieldsPerItem * 5
+//     (raw float, NOT rounded — preserves partial-fill signal e.g. 1/3 inner fields
+//     scores measurably lower than 2/3, which a rounded integer would erase)
 //   isData = false when result is not a non-null object OR no schema → skip best-attempt tracking
 // Never throws — malformed input returns { score: 0, isData: false, breakdown: {} }.
 function scoreAttemptResult(result, outputSchema) {
@@ -651,8 +653,10 @@ function scoreAttemptResult(result, outputSchema) {
       return { score: 0, isData: false, breakdown: {} };
     }
 
-    // Cycle guard: a circular result would cause unbounded recursion in
-    // isEmptyValue and is meaningless for scoring. Detect via WeakSet walk.
+    // Cycle preflight: a circular result would cause unbounded recursion inside
+    // isEmptyValue's Object.values(v).every(isEmptyValue) call. The outer try/catch
+    // would eventually swallow the stack overflow, but the WeakSet walk short-circuits
+    // before that and returns the documented safe shape explicitly.
     const hasCycle = (root) => {
       const seen = new WeakSet();
       const visit = (v) => {

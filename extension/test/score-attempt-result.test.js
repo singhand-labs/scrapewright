@@ -15,7 +15,7 @@ describe('scoreAttemptResult', () => {
     assert.equal(r.isData, false);
   });
 
-  it('scores full list extraction at 135 (1 required array + 3 inner fields)', () => {
+  it('scores full list extraction at 125 (1 required array + 3 inner fields)', () => {
     const schema = {
       required: ['posts'],
       properties: { posts: { type: 'array', items: { type: 'object', properties: {
