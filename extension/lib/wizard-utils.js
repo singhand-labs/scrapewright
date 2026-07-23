@@ -831,6 +831,48 @@ function classifyIntervention(ctx) {
   }
 }
 
+// Build the Section 1 prompt block for user feedback. Empty when no feedback.
+// Includes ACK/NACK protocol requiring the LLM to acknowledge or refuse the hint
+// before writing script. When llmHistory shows 2+ prior NACKs of the same hint,
+// appends a "you may be wrong" note.
+function buildFeedbackSection(feedback, attemptNum, totalAttempts, llmHistory) {
+  if (typeof feedback !== 'string' || !feedback.trim()) return '';
+  const safe = (attemptNum && totalAttempts)
+    ? `(attempt ${attemptNum}/${totalAttempts} — ACK REQUIRED)`
+    : '(ACK REQUIRED)';
+  // Escape ${} and backticks so the verbatim hint doesn't break the surrounding template literal
+  const escaped = feedback.replace(/[`]/g, "'").replace(/\$\{/g, '\\${');
+  const lines = [
+    `=== USER FEEDBACK ${safe} ===`,
+    escaped,
+    '',
+    'Before writing the script, output ONE of these lines:',
+    '  // ACK: <paraphrase the hint in your own words>',
+    '  // NACK: <why you cannot apply it, with specifics>',
+    '',
+    'If you NACK a hint that the user explicitly gave, you are probably wrong.',
+    '=== END USER FEEDBACK ==='
+  ];
+
+  // Count prior NACKs of this same feedback in llmHistory
+  if (Array.isArray(llmHistory) && llmHistory.length >= 2) {
+    const feedbackHash = escaped.slice(0, 40);
+    let nackCount = 0;
+    for (let i = 1; i < llmHistory.length; i += 2) {
+      const prevAssistant = llmHistory[i] && typeof llmHistory[i].content === 'string' ? llmHistory[i].content : '';
+      const prevUser = llmHistory[i - 1] && typeof llmHistory[i - 1].content === 'string' ? llmHistory[i - 1].content : '';
+      if (prevUser.includes(feedbackHash) && /^\s*\/\/\s*NACK:/i.test(prevAssistant)) {
+        nackCount++;
+      }
+    }
+    if (nackCount >= 2) {
+      lines.push('');
+      lines.push(`Note: you have NACKed this hint ${nackCount} times. Consider that the hint may be correct and your model of the page may be wrong.`);
+    }
+  }
+  return lines.join('\n');
+}
+
 // Score how brittle a single CSS selector is. Higher score = more brittle.
 // Used by the wizard deploy hook to warn the user when an annotation is
 // unlikely to generalize across list items. Pure function, no exceptions.
@@ -1319,7 +1361,7 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, scoreAttemptResult, classifyIntervention, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
@@ -1333,6 +1375,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.summarizeExecutionDiagnostics = summarizeExecutionDiagnostics;
   window.scoreAttemptResult = scoreAttemptResult;
   window.classifyIntervention = classifyIntervention;
+  window.buildFeedbackSection = buildFeedbackSection;
   window.getStepTemplates = getStepTemplates;
   window.applyTemplate = applyTemplate;
   window.STEP_TEMPLATES = STEP_TEMPLATES;
@@ -1371,6 +1414,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.summarizeExecutionDiagnostics = summarizeExecutionDiagnostics;
   self.scoreAttemptResult = scoreAttemptResult;
   self.classifyIntervention = classifyIntervention;
+  self.buildFeedbackSection = buildFeedbackSection;
   self.appendStepWithChainLink = appendStepWithChainLink;
   self.removeStepWithRelink = removeStepWithRelink;
   self.relinkChainToArray = relinkChainToArray;
