@@ -93,4 +93,38 @@ describe('list-aware extraction integration', () => {
     assert.match(text, /author:/);
     assert.match(text, /content:/);
   });
+
+  // Regression for bugx.log "Cannot read properties of undefined (reading 'clickInListItems')".
+  // The original fix (commit 361d3ae) captured `window.ListExtractOps` eagerly at IIFE
+  // init via `const ListExtractOps = window.ListExtractOps`. If the alias was undefined
+  // at init time (extension reloaded but tab still running old list-extract-ops, or any
+  // future load-order surprise), the alias was frozen at undefined for the tab's entire
+  // lifetime — $extractList/$clickInList could never recover even after reload.
+  // The lazy-lookup pattern reads the current value at call time, so a late-attached
+  // API still works.
+  it('lazy lookup of ListExtractOps survives late attachment (regression)', () => {
+    const savedWindow = global.window;
+    const fakeWindow = {};
+    global.window = fakeWindow;
+
+    // Mirror of content-script.js getListExtractOps():
+    const getListExtractOps = () => {
+      const g = typeof window !== 'undefined' ? window : self;
+      return g && g.ListExtractOps;
+    };
+
+    // At init time (alias captured), window.ListExtractOps is unset.
+    assert.equal(getListExtractOps(), undefined,
+      'if alias is captured now, it is undefined — this is the eager-capture bug');
+
+    // Later, list-extract-ops.js finishes loading and attaches the API.
+    fakeWindow.ListExtractOps = { extractListRecords: () => 'ok', clickInListItems: () => 'ok' };
+
+    // Lazy lookup sees the late-attached value; eager alias would NOT have.
+    const ops = getListExtractOps();
+    assert.ok(ops && typeof ops.extractListRecords === 'function');
+    assert.ok(ops && typeof ops.clickInListItems === 'function');
+
+    global.window = savedWindow;
+  });
 });

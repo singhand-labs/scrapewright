@@ -22,7 +22,22 @@ AVAILABLE API FUNCTIONS:
 
 CSS TRAP — Do NOT use :nth-of-type(N) on a compound selector. 'div[role=\'article\']:nth-of-type(5)' matches the 5th sibling *of that element type* (any 5th <div>), not the 5th matching div[role='article']. To get the Nth match, use $list and index into the returned array: const items = await $list('div[role="article"]'); const fifth = items[4]; If you need all items in a list, iterate the array — never emit per-index selectors. (Exception: if an ANNOTATION gives you a selector that already contains :nth-of-type, copy it verbatim per the SELECTOR FIDELITY RULE below — this trap applies only to selectors you compose yourself.)
 
-LIST EXTRACTION — When extracting multiple fields from a collection of list items, PREFER $extractList(containerSel, fieldMap). It runs ONE container query + per-item sub-queries and returns aligned records: $extractList('div[role="article"]', { author: 'a strong', content: '[data-ad-comet-preview="message"]', link: { selector: 'a[href]', attr: 'href' } }). Fall back to $list ONCE PER FIELD only for single-field extraction. NEVER zip independent $list arrays — if one field is missing on some items, the zip silently shifts every later field.
+ANTI-PATTERN — Do NOT build selectors with template-literal indices in a loop. The following pattern is ALWAYS WRONG and fails on real DOMs (Facebook, Twitter, React apps) because :nth-of-type is resolved among SIBLINGS OF THE SAME TAG, not among prior compound-selector matches:
+  // WRONG — every one of these fails or matches the wrong element:
+  for (let i = 0; i < n; i++) {
+    const author = await $extract(\`div[role="article"]:nth-of-type(\${i+1}) h3 a[role="link"]\`, null, 3000);
+  }
+Each failed $extract also burns its full timeoutMs (3s × items × fields = 30s+ of step budget wasted), which then triggers SCRIPT_TIMEOUT / POLL_EXHAUSTED. If you catch yourself writing \`:nth-of-type(\${i+1})\` or \`:nth-child(\${i+1})\` inside a loop, STOP — you want $extractList or $list instead.
+
+LIST EXTRACTION — When extracting multiple fields from a collection of list items, PREFER $extractList(containerSel, fieldMap). It runs ONE container query + per-item sub-queries and returns aligned records. This is the canonical pattern for blog rolls, search results, feed posts, product grids, comment threads — anywhere you have N sibling containers each with the same inner fields.
+  // CORRECT — one call, all fields aligned, no per-index selectors:
+  const posts = await $extractList('div[role="article"]', {
+    author:  'div[data-ad-rendering-role="profile_name"] h3 a[role="link"]',
+    content: 'div[data-ad-rendering-role="story_message"] > div',
+    href:    { selector: 'a[href]', attr: 'href' }
+  }, { allowEmpty: true });
+  return { posts };
+Fall back to $list ONCE PER FIELD only for single-field extraction. NEVER zip independent $list arrays — if one field is missing on some items, the zip silently shifts every later field.
 
 EMPTY-LIST BAILOUT — If the parent list query returns 0 items, DO NOT proceed with field queries. Return { done: false } immediately (if the step has a retry budget) or { failed: true, error: 'no items found for selector X' }. Without this rule, a step runs 8+ sequential DOM round-trips that all return empty, burning the step time budget and hiding the real failure behind a generic not-done signal.
 
