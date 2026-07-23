@@ -1,6 +1,13 @@
 (function() {
   'use strict';
 
+  // lib/list-extract-ops.js (loaded as an earlier content script) attaches its
+  // API as `window.ListExtractOps`. Inside this strict-mode IIFE, a free
+  // identifier reference does NOT resolve to a `window` property — it must be
+  // captured lexically. Without this alias, `$extractList` / `$clickInList`
+  // throw "ListExtractOps is not defined" at call time.
+  const ListExtractOps = (typeof window !== 'undefined' ? window : self).ListExtractOps;
+
   let isAnnotationMode = false;
   let selectedAnnotations = [];
   let annotationSchemas = { inputSchema: {}, outputSchema: {} };
