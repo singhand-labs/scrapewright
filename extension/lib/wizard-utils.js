@@ -302,6 +302,22 @@ function validateTestInput(inputStr, schemaStr, testInputStr) {
 }
 
 function cleanLLMResponse(raw) {
+  // === Spec 5: strip leading ACK/NACK protocol line (if present) ===
+  if (typeof raw === 'string') {
+    const match = raw.match(/^\s*\/\/\s*(ACK|NACK):\s*([^\n]*)\n?/);
+    if (match) {
+      const kind = match[1];           // 'ACK' | 'NACK'
+      const ackText = match[2] || '';  // paraphrase/reason
+      try {
+        if (typeof debugLogger !== 'undefined') {
+          debugLogger.log('info', 'wizard', 'LLM ACK/NACK', { kind, text: ackText });
+        }
+      } catch {}
+      raw = raw.slice(match[0].length);
+    }
+  }
+  // === End Spec 5 ===
+
   let text = raw.trim();
   if (!text) return text;
 
@@ -318,7 +334,8 @@ function cleanLLMResponse(raw) {
 
   // No code fences — check if the entire response looks like JSON or code
   if (text.startsWith('{') || text.startsWith('[') || text.startsWith('//') ||
-      text.startsWith('const ') || text.startsWith('let ') || text.startsWith('async ') || text.startsWith('await ')) {
+      text.startsWith('const ') || text.startsWith('let ') || text.startsWith('return ') ||
+      text.startsWith('async ') || text.startsWith('await ')) {
     return text;
   }
 
