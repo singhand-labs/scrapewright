@@ -1986,19 +1986,15 @@ function showInterventionBanner(classification, failingStep) {
         banner.remove();
         appendLog(`Dismissed ${classification.type} intervention — continuing autoFix.`, 'info');
       } else if (action === 'annotate_step') {
-        if (typeof goToPhase === 'function') goToPhase(3);  // phase 3 hosts annotation UI
+        goToPhase(3);  // phase 3 hosts annotation UI
       } else if (action === 'open_settings') {
         const openSettingsBtn = document.getElementById('openSettings');
         if (openSettingsBtn) openSettingsBtn.click();
       } else if (action === 'open_tab') {
-        if (typeof chrome !== 'undefined' && chrome.tabs) {
-          chrome.tabs.create({ url: wizardState.targetUrl, active: true });
-        }
+        chrome.tabs.create({ url: wizardState.targetUrl, active: true });
       } else if (action === 'refresh_tab') {
         const targetTabId = wizardState.lastTargetTabId;
-        if (targetTabId && typeof chrome !== 'undefined' && chrome.tabs) {
-          chrome.tabs.reload(targetTabId);
-        }
+        if (targetTabId) chrome.tabs.reload(targetTabId);
       }
     });
     appendLog(classification.message, classification.severity);
