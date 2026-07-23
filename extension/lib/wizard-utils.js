@@ -29,6 +29,16 @@ ANTI-PATTERN — Do NOT build selectors with template-literal indices in a loop.
   }
 Each failed $extract also burns its full timeoutMs (3s × items × fields = 30s+ of step budget wasted), which then triggers SCRIPT_TIMEOUT / POLL_EXHAUSTED. If you catch yourself writing \`:nth-of-type(\${i+1})\` or \`:nth-child(\${i+1})\` inside a loop, STOP — you want $extractList or $list instead.
 
+ANTI-PATTERN (global $extract inside a $list loop) — $extract, $click, $, $wait and all other DOM APIs query the WHOLE DOCUMENT, not the "current" list element. They take a selector string, not a container element. So iterating $list and calling $extract per item with the SAME selector produces N identical copies of the FIRST match in the document:
+  // WRONG — every iteration extracts the same first-match author; the resulting
+  // posts array is N duplicates of the first post:
+  const items = await $list('div[role="article"]');
+  for (const item of items) {
+    const author = await $extract('div[data-ad-rendering-role="profile_name"] h3 a[role="link"]');
+    // ← item is ignored; $extract queries the whole document every time
+  }
+$extract has no per-container overload. For per-container field reads, use $extractList(containerSel, fieldMap) — each sub-selector is evaluated INSIDE each container element, so the fields stay aligned per item. There is no correct "iterate $list + $extract per item" pattern.
+
 LIST EXTRACTION — When extracting multiple fields from a collection of list items, PREFER $extractList(containerSel, fieldMap). It runs ONE container query + per-item sub-queries and returns aligned records. This is the canonical pattern for blog rolls, search results, feed posts, product grids, comment threads — anywhere you have N sibling containers each with the same inner fields.
   // CORRECT — one call, all fields aligned, no per-index selectors:
   const posts = await $extractList('div[role="article"]', {

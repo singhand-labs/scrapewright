@@ -965,6 +965,17 @@ describe('SCRIPT_DSL_GUIDE regression', () => {
     assert.match(SCRIPT_DSL_GUIDE, /:nth-of-type\(\$\{i\+1\}\)/);
     assert.match(SCRIPT_DSL_GUIDE, /\$extractList/);
   });
+
+  it('calls out the global-$extract-inside-$list-loop anti-pattern', () => {
+    // bugx.log 2026-07-23 16:37 showed the LLM falling back to a $list + $extract
+    // loop when $extractList was unavailable. Every iteration extracted the
+    // FIRST MATCH in the whole document (not the per-item element), producing
+    // 3 identical copies of the first post. $extract has no per-container
+    // overload — the DSL must steer the LLM toward $extractList explicitly.
+    assert.match(SCRIPT_DSL_GUIDE, /global \$extract inside a \$list loop/);
+    assert.match(SCRIPT_DSL_GUIDE, /\$extract has no per-container overload/);
+    assert.match(SCRIPT_DSL_GUIDE, /query the WHOLE DOCUMENT, not/);
+  });
 });
 
 describe('truncateSnapshotForLLM', () => {
