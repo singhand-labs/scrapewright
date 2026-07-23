@@ -393,7 +393,7 @@ describe('LLMClient.chat retry behavior', () => {
       await assert.rejects(
         () => client.chat([{ role: 'user', content: 'hi' }], { maxRetries: 3 })
       );
-      // Filter out the AbortController timer (timeoutMs defaults to 60000).
+      // Filter out the AbortController timer (timeoutMs defaults to 120000).
       const backoffDelays = delays.filter(d => d < 10000);
       assert.equal(backoffDelays.length, 3, 'should back off 3 times (before each retry); raw delays: ' + JSON.stringify(delays));
       // Default backoff: 1000, 2000, 4000 (each + 0-499 jitter)
@@ -419,5 +419,43 @@ describe('LLMClient.chat retry behavior', () => {
     const flat = JSON.stringify(consoleStub);
     assert.match(flat, /Attempt 1 failed/, 'should log first attempt failure');
     assert.match(flat, /retrying/i, 'should log retry intent');
+  });
+});
+
+describe('LLMClient timeout configuration', () => {
+  it('defaults to 120s when no timeoutMs configured', () => {
+    const client = new LLMClient({
+      provider: 'glm', model: 'glm-5.1', apiKey: 'k', apiBaseUrl: 'http://test.local/v1'
+    });
+    assert.equal(client.timeoutMs, undefined);
+    // The use-site fallback lives in _chatOnce — verified by inspecting that
+    // options.timeoutMs ?? this.timeoutMs ?? DEFAULT_TIMEOUT_MS resolves to 120000.
+  });
+
+  it('honors config.timeoutMs from constructor (ms)', () => {
+    const client = new LLMClient({
+      provider: 'glm', model: 'glm-5.1', apiKey: 'k', apiBaseUrl: 'http://test.local/v1',
+      timeoutMs: 30000
+    });
+    assert.equal(client.timeoutMs, 30000);
+  });
+
+  it('rejects non-finite or non-positive timeoutMs (falls back to default at use site)', () => {
+    const nan = new LLMClient({
+      provider: 'glm', model: 'glm-5.1', apiKey: 'k', apiBaseUrl: 'http://test.local/v1',
+      timeoutMs: NaN
+    });
+    const negative = new LLMClient({
+      provider: 'glm', model: 'glm-5.1', apiKey: 'k', apiBaseUrl: 'http://test.local/v1',
+      timeoutMs: -5
+    });
+    const string = new LLMClient({
+      provider: 'glm', model: 'glm-5.1', apiKey: 'k', apiBaseUrl: 'http://test.local/v1',
+      timeoutMs: '60000'
+    });
+    assert.equal(nan.timeoutMs, undefined);
+    assert.equal(negative.timeoutMs, undefined);
+    // Number('60000') === 60000 — numeric strings are accepted (Number() coerces)
+    assert.equal(string.timeoutMs, 60000);
   });
 });

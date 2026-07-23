@@ -81,6 +81,8 @@
       <input type="text" id="model" placeholder="Model name (e.g. kimi-for-coding)" />
       <input type="password" id="apiKey" placeholder="API Key" />
       <input type="text" id="apiBaseUrl" placeholder="Base URL (optional)" />
+      <input type="number" id="llmTimeout" placeholder="Request timeout in seconds (default 120)" min="10" max="600" step="5" />
+      <p class="hint">Per-request timeout for LLM calls. Blank = 120s. Increase if your model is slow; lower for faster failure.</p>
       <button id="saveLlm">Save LLM Config</button>
 
       <h3>Server Configuration</h3>
