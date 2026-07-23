@@ -2026,6 +2026,10 @@ async function autoFix(userFeedback = null) {
   // userFeedback null → up to 3 silent retries before giving up and asking
   // the user for a hint. Triggered automatically by testScript on failure.
   const MAX_ATTEMPTS = userFeedback ? 1 : 3;
+  // Always clear any stale intervention banner from a prior autoFix run —
+  // testScript's reset only fires on a fresh test, but btnAutoFix can invoke
+  // autoFix() directly while a previous banner is still on screen.
+  clearInterventionBanner();
   if (!userFeedback) {
     wizardState.fixAttemptCount = 0;
     wizardState.bestAttempt = null;
