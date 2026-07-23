@@ -28,7 +28,9 @@ let wizardState = {
   llmHistory: [],
   stepAnnotationTabs: {},
   testAbortController: null,
-  testAborted: false
+  testAborted: false,
+  bestAttempt: null,              // Spec 5: tracks highest-scoring attempt for restore-on-regression
+  dismissedInterventions: null    // Spec 5: Set<string> of intervention types dismissed this run
 };
 
 function buildSystemMessageWithGlobalContext(baseSystemContent) {
@@ -1588,6 +1590,9 @@ async function testScript() {
   wizardState.lastErrorSnapshot = null;
   wizardState.lastExecutionEvents = [];
   wizardState.testAbortController = new AbortController();
+  wizardState.bestAttempt = null;
+  wizardState.dismissedInterventions = null;
+  clearInterventionBanner();
   debugLogger.log('info', 'wizard', 'testScript start', {
     targetUrl: wizardState.targetUrl,
     stepCount: wizardState.steps?.length,
@@ -1926,6 +1931,89 @@ function findHrefInObject(obj, depth = 0) {
     }
   }
   return null;
+}
+
+// Spec 5: restore the highest-scoring attempt when the last iteration regressed.
+// Applies the plan from planRestoreBestAttempt (pure) to wizardState + DOM.
+function restoreBestAttempt(best) {
+  const plan = planRestoreBestAttempt(best, wizardState.steps, wizardState.llmHistory);
+  if (!plan) return;
+  const targetStep = wizardState.steps.find(s => s.id === plan.stepId);
+  if (!targetStep) return;
+  Object.assign(targetStep, plan.stepPatch);
+  wizardState.llmHistory = plan.truncatedHistory;
+  // Sync step editor textarea so confirmDeploy's syncStepsFromEditor keeps the restore
+  const detail = document.querySelector(`.step-detail[data-step-id="${plan.stepId}"]`);
+  if (detail) {
+    const ta = detail.querySelector('.step-script-input');
+    if (ta) ta.value = targetStep.script;
+    const s = detail.querySelector('.step-success-input'); if (s) s.value = targetStep.onSuccess || 'TERMINATE';
+    const f = detail.querySelector('.step-failure-input'); if (f) f.value = targetStep.onFailure || 'TERMINATE';
+    const m = detail.querySelector('.step-maxiter-input'); if (m) m.value = targetStep.maxIterations || 1;
+  }
+  const currentScriptEl = document.getElementById('currentScript');
+  if (currentScriptEl) currentScriptEl.textContent = targetStep.script;
+  appendLog(plan.logMessage, 'info');
+}
+
+// Spec 5: render the intervention banner in #phase5 and wire button actions.
+function showInterventionBanner(classification, failingStep) {
+  try {
+    const phase5 = document.getElementById('phase5');
+    if (!phase5) {
+      appendLog(classification.message, classification.severity);
+      if (typeof showToast === 'function') showToast(classification.message, classification.severity);
+      return;
+    }
+    // Remove any existing banner first
+    const existing = phase5.querySelector('.intervention-banner');
+    if (existing) existing.remove();
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = renderInterventionBanner(classification);
+    const banner = wrapper.firstElementChild;
+    if (!banner) {
+      appendLog(classification.message, classification.severity);
+      return;
+    }
+    phase5.prepend(banner);
+    banner.addEventListener('click', (ev) => {
+      const btn = ev.target.closest('button[data-action]');
+      if (!btn) return;
+      const action = btn.dataset.action;
+      if (action === 'dismiss') {
+        if (!wizardState.dismissedInterventions) wizardState.dismissedInterventions = new Set();
+        wizardState.dismissedInterventions.add(classification.type);
+        banner.remove();
+        appendLog(`Dismissed ${classification.type} intervention — continuing autoFix.`, 'info');
+      } else if (action === 'annotate_step') {
+        if (typeof goToPhase === 'function') goToPhase(3);  // phase 3 hosts annotation UI
+      } else if (action === 'open_settings') {
+        const openSettingsBtn = document.getElementById('openSettings');
+        if (openSettingsBtn) openSettingsBtn.click();
+      } else if (action === 'open_tab') {
+        if (typeof chrome !== 'undefined' && chrome.tabs) {
+          chrome.tabs.create({ url: wizardState.targetUrl, active: true });
+        }
+      } else if (action === 'refresh_tab') {
+        const targetTabId = wizardState.lastTargetTabId;
+        if (targetTabId && typeof chrome !== 'undefined' && chrome.tabs) {
+          chrome.tabs.reload(targetTabId);
+        }
+      }
+    });
+    appendLog(classification.message, classification.severity);
+  } catch (e) {
+    appendLog(classification.message, classification.severity);
+    if (typeof debugLogger !== 'undefined') {
+      debugLogger.log('warn', 'wizard', 'showInterventionBanner failed', { error: e.message });
+    }
+  }
+}
+
+function clearInterventionBanner() {
+  const phase5 = document.getElementById('phase5');
+  if (!phase5) return;
+  phase5.querySelectorAll('.intervention-banner').forEach(el => el.remove());
 }
 
 async function autoFix(userFeedback = null) {
