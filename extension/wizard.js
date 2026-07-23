@@ -1398,12 +1398,15 @@ async function continueResearch(tabId, config, pageInfo, postPageInfo) {
         });
         detailUrl = results?.[0]?.result;
       }
-      // Fallback: try regex on pageInfo.structure
-      if (!detailUrl) {
-        const hrefMatch = pageInfo.structure?.match(/href="([^"]*(?:noticeDetails|detail)[^"]*)"/i) ||
-                          pageInfo.structure?.match(/href="([^"]+)"/);
-        if (hrefMatch) detailUrl = hrefMatch[1];
-      }
+      // No fallback: previously we ran /href="([^"]+)"/ on pageInfo.structure
+      // to grab "any href" as detailUrl. On most pages the first href in the
+      // compressed structure is the homepage nav link, so the wizard opened
+      // the homepage, captured its snapshot as the "detail page", and the
+      // LLM generated selectors for the WRONG page (observed in bugx.log:
+      // detailUrl='https://www.facebook.com/' for a search-results task). If
+      // the link selector didn't resolve a real href, there is no reliable
+      // detail URL — pass null and let generateStepsWithSelectors proceed
+      // without a detail snapshot.
       if (detailUrl) {
         if (!detailUrl.startsWith('http')) {
           detailUrl = new URL(detailUrl, pageInfo.url).href;
@@ -1716,6 +1719,23 @@ async function testScript() {
 
     // WS4.2: required-output check against outputSchema (catches "success:true with empty answer").
     const finalData = result.finalResult?.data || result.finalResult;
+    // Empty-extraction check runs FIRST and throws on failure, so the LLM
+    // gets the strong "fix failing step" prompt via autoFix. We previously
+    // let {posts: []} route through validateOutputAgainstSchema's missing-field
+    // informational branch — which only updated the UI without throwing, so
+    // autoFix never fired and the LLM learned to bypass empty-extraction
+    // detection by returning empty arrays (observed in bugx.log).
+    const emptyFields = findEmptyExtractionFields(finalData, wizardState.outputSchema);
+    if (emptyFields.length > 0) {
+      const lastStepEntry = result.steps[result.steps.length - 1];
+      const extractionStepId = lastStepEntry?.stepId || (wizardState.steps[wizardState.steps.length - 1] && wizardState.steps[wizardState.steps.length - 1].id);
+      const err = new Error('EMPTY_EXTRACTION: required field(s) [' + emptyFields.join(', ') + '] are present but every extracted item has only empty values, or no items were extracted at all. The script found list items but the field selectors are wrong.');
+      err.stepId = extractionStepId;
+      err.snapshot = lastStepEntry?.snapshot || null;
+      err.emptyFields = emptyFields;
+      debugLogger.log('warn', 'wizard', 'Empty extraction detected — treating as failure', { emptyFields, extractionStepId });
+      throw err;
+    }
     const oc = validateOutputAgainstSchema(finalData, wizardState.outputSchema);
     if (!oc.ok) {
       updatePhaseUI('empty-result');
@@ -1725,28 +1745,6 @@ async function testScript() {
       const tr = document.getElementById('testResults');
       if (tr) tr.textContent += '\n\nOUTPUT SCHEMA MISMATCH:\n  result fields: [' + gotKeys.join(', ') + ']\n  required:     [' + wantKeys.join(', ') + ']\n  missing:      [' + oc.missing.join(', ') + ']\nThe extraction step must return the EXACT field names declared in outputSchema.';
     } else {
-      // Deeper check: schema passes, but extraction may still be empty.
-      // Detect required fields that are arrays-of-objects where every object
-      // has only empty values — the script found list items but extracted
-      // nothing (typical when the LLM used :nth-of-type(N) on list items,
-      // which matches any Nth div sibling, not the Nth article). Throw so
-      // the catch block below sets lastError/lastErrorStepId and autoFix
-      // uses the STRONG "fix failing step" prompt instead of the weak
-      // "improve based on feedback" prompt. Without this, the LLM keeps
-      // generating similar broken selectors even when the user points at
-      // the problem in feedback — the weak prompt framing doesn't convey
-      // urgency.
-      const emptyFields = findEmptyExtractionFields(finalData, wizardState.outputSchema);
-      if (emptyFields.length > 0) {
-        const lastStepEntry = result.steps[result.steps.length - 1];
-        const extractionStepId = lastStepEntry?.stepId || (wizardState.steps[wizardState.steps.length - 1] && wizardState.steps[wizardState.steps.length - 1].id);
-        const err = new Error('EMPTY_EXTRACTION: required field(s) [' + emptyFields.join(', ') + '] are present but every extracted item has only empty values. The script found list items but the field selectors are wrong.');
-        err.stepId = extractionStepId;
-        err.snapshot = lastStepEntry?.snapshot || null;
-        err.emptyFields = emptyFields;
-        debugLogger.log('warn', 'wizard', 'Empty extraction detected — treating as failure', { emptyFields, extractionStepId });
-        throw err;
-      }
       updatePhaseUI('success');
     }
     debugLogger.log('info', 'wizard', 'testScript success', { finalResult: result.finalResult });

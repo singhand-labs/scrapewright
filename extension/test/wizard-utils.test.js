@@ -809,6 +809,33 @@ describe('findEmptyExtractionFields', () => {
     assert.deepEqual(findEmptyExtractionFields(null, schema), []);
     assert.deepEqual(findEmptyExtractionFields([1, 2], schema), []);
   });
+
+  // Regression: bugx.log showed testScript reporting "success" on {posts: []}
+  // because findEmptyExtractionFields treated empty arrays as already-caught
+  // by validateOutputAgainstSchema. But wizard.js's !oc.ok branch only updates
+  // the UI without throwing — autoFix never fires. The LLM learns to bypass
+  // empty-extraction detection by returning empty arrays. For required
+  // array-of-objects fields (declared in outputSchema.properties), an empty
+  // array means extraction FAILED, not "no data on the page".
+  it('flags an empty array for a required array-of-objects field', () => {
+    const schemaWithArrayProps = {
+      required: ['posts'],
+      properties: {
+        posts: { type: 'array', items: { type: 'object', properties: { author: { type: 'string' } } } }
+      }
+    };
+    const empty = findEmptyExtractionFields({ posts: [] }, schemaWithArrayProps);
+    assert.deepEqual(empty, ['posts']);
+  });
+
+  it('does not flag an empty array for a scalar array field (legitimate zero results)', () => {
+    const schemaScalarArray = {
+      required: ['tags'],
+      properties: { tags: { type: 'array', items: { type: 'string' } } }
+    };
+    const empty = findEmptyExtractionFields({ tags: [] }, schemaScalarArray);
+    assert.deepEqual(empty, []);
+  });
 });
 
 describe('getOutputFieldOptions', () => {
