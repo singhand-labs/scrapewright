@@ -790,8 +790,8 @@ function classifyIntervention(ctx) {
       });
     }
 
-    // rate_limited: 429 detected in error/lastError
-    if (/429/.test(error) || /429/.test(lastError) || /LLMRetryExhausted/.test(error) && /429/.test(lastError)) {
+    // rate_limited: 429 in either error or lastError
+    if (/429/.test(error) || /429/.test(lastError)) {
       candidates.push({
         type: 'rate_limited',
         severity: 'error',
