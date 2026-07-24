@@ -80,9 +80,49 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
     }
   });
 
+  // Scripts run inside this sandboxed iframe, NOT the target page. Any attempt
+  // to navigate (window.location.href = ..., location.replace(...), etc.) destroys
+  // the sandbox and silently breaks every subsequent operation. Catch it here and
+  // return a clear error so the LLM learns — otherwise the failure looks like an
+  // arbitrary 60s SCRIPT_TIMEOUT (see bugx.log 2026-07-24 root-cause analysis).
+  const NAVIGATION_PATTERNS = [
+    /\bwindow\s*\.\s*location\s*\.\s*href\s*=/,            // window.location.href = X
+    /\bwindow\s*\.\s*location\s*\.\s*replace\s*\(/,        // window.location.replace(...)
+    /\bwindow\s*\.\s*location\s*\.\s*assign\s*\(/,         // window.location.assign(...)
+    /\bwindow\s*\.\s*location\s*=[^=]/,                    // window.location = X
+    /\blocation\s*\.\s*href\s*=/,                          // location.href = X
+    /\blocation\s*\.\s*replace\s*\(/,                      // location.replace(...)
+    /\blocation\s*\.\s*assign\s*\(/                       // location.assign(...)
+    // Note: bare `location = X` is intentionally NOT matched — it false-positives
+    // on legitimate `const location = ...` declarations. The `window.location = X`
+    // pattern above catches the navigation form; raw `location = X` (without
+    // `window.`) is virtually never generated for navigation.
+  ];
+  function detectForbiddenNavigation(script) {
+    if (typeof script !== 'string' || !script) return null;
+    for (const p of NAVIGATION_PATTERNS) {
+      const m = script.match(p);
+      if (m) return m[0];
+    }
+    return null;
+  }
+
   async function executeInSandbox(scriptCode, input) {
     try {
       sendDebugLog('info', 'sandbox', 'Creating Function and executing script', { scriptLength: scriptCode?.length });
+      const navMatch = detectForbiddenNavigation(scriptCode);
+      if (navMatch) {
+        const err = new Error(
+          'FORBIDDEN_NAVIGATION: script contains "' + navMatch + '". ' +
+          'Scripts run inside a sandboxed iframe — assigning window.location.* destroys the sandbox and ' +
+          'breaks all subsequent operations. The target page URL is set by the service config ' +
+          '(with {{placeholders}} resolved before page load); the script only does post-load operations. ' +
+          'Remove all window.location.* / location.replace() / location.assign() usage.'
+        );
+        sendDebugLog('error', 'sandbox', 'Forbidden navigation detected — refusing to execute', { match: navMatch, scriptPreview: (scriptCode || '').slice(0, 500) });
+        parent.postMessage({ type: 'EXECUTE_RESULT', error: err.message }, '*');
+        return;
+      }
       const fn = new Function('__input__', '__stepResults__', '__lastResult__', `return ${scriptCode};`);
       const result = await fn(input, input._stepResults || {}, input._lastResult || null);
       sendDebugLog('info', 'sandbox', 'Script completed', { resultType: typeof result, resultPreview: JSON.stringify(result)?.slice(0, 500) });
