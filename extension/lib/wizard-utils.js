@@ -374,6 +374,92 @@ function cleanLLMResponse(raw) {
   return text;
 }
 
+// Walk a string char-by-char and strip C-style comments (// line and
+// /* block */) that appear OUTSIDE JSON string values. Used by parseJsonLenient
+// to tolerate LLM-generated JSON that mixes in JS comments.
+//
+// Why char-walk instead of regex: regex can't tell whether `//` is inside a
+// string (e.g. `"script": "// hello"`) without tracking string state, and
+// naively stripping all `//...` corrupts embedded script values.
+function stripJSComments(text) {
+  if (typeof text !== 'string' || !text) return text;
+  let out = '';
+  let i = 0;
+  let inString = false;
+  while (i < text.length) {
+    const c = text[i];
+    const next = text[i + 1];
+    if (inString) {
+      out += c;
+      if (c === '\\' && next !== undefined) {
+        out += next;
+        i += 2;
+        continue;
+      }
+      if (c === '"') inString = false;
+      i += 1;
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      out += c;
+      i += 1;
+      continue;
+    }
+    if (c === '/' && next === '/') {
+      const nl = text.indexOf('\n', i + 2);
+      i = nl === -1 ? text.length : nl + 1;
+      continue;
+    }
+    if (c === '/' && next === '*') {
+      const end = text.indexOf('*/', i + 2);
+      i = end === -1 ? text.length : end + 2;
+      continue;
+    }
+    out += c;
+    i += 1;
+  }
+  return out;
+}
+
+// Lenient JSON parser for LLM output. Tries strict JSON.parse first; on
+// failure, applies a small set of safe repairs (strip JS comments outside
+// strings, drop trailing commas) and re-tries. Returns {ok, value, error,
+// repairs} so callers can log what was repaired.
+//
+// What this does NOT fix: single-quoted strings, unquoted keys, unescaped
+// control chars inside string values. Those need a real tokenizer and are
+// risky to fix with regex heuristics — if the LLM emits those, the caller
+// should see the failure and report the exact position (see parseLLMJson in
+// wizard.js which logs the position context).
+function parseJsonLenient(text) {
+  if (typeof text !== 'string' || !text) {
+    return { ok: false, error: 'empty input', repairs: [] };
+  }
+  try {
+    return { ok: true, value: JSON.parse(text), repairs: [] };
+  } catch (_) {}
+  const repairs = [];
+  let s = text;
+  const stripped = stripJSComments(s);
+  if (stripped !== s) {
+    repairs.push('strip-comments');
+    s = stripped;
+  }
+  // Remove commas that directly precede a closing } or ] (with optional whitespace).
+  // Safe because no valid JSON has `,}` or `,]` — those are always malformed.
+  const trailingFixed = s.replace(/,(\s*[}\]])/g, '$1');
+  if (trailingFixed !== s) {
+    repairs.push('remove-trailing-commas');
+    s = trailingFixed;
+  }
+  try {
+    return { ok: true, value: JSON.parse(s), repairs };
+  } catch (e) {
+    return { ok: false, error: e.message, repairs, repairedPreview: s.slice(0, 500) };
+  }
+}
+
 function buildResearchPrompt(url, description, html, text) {
   return `I need to create a web scraping script for this page.\n\nURL: ${url}\nRequirements: ${description}\n\nPage HTML (truncated):\n${html}\n\nPage text:\n${text}\n\nPlease analyze the page and return a JSON object with:\n- findings: string describing what you found\n- needsAnnotation: boolean, true if you need user to identify specific elements\n- draftScript: string with JavaScript code using $, $click, $type, $extract, $wait, $check, $openTab APIs\n- inputSchema: JSON Schema object describing the script's input parameters\n- outputSchema: JSON Schema object describing the script's output structure\n- sampleInput: a JSON object with example values matching inputSchema`;
 }
@@ -1501,7 +1587,7 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;

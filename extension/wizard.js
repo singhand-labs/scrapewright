@@ -38,6 +38,71 @@ function buildSystemMessageWithGlobalContext(baseSystemContent) {
   return appendGlobalContextBlock(baseSystemContent, desc);
 }
 
+// Parse LLM JSON output with lenient fallback. Tries strict JSON.parse first,
+// then parseJsonLenient (strips JS comments, removes trailing commas). On
+// failure, logs position context and saves the full output to
+// chrome.storage.local so future failures are diagnosable.
+//
+// bugx.log 2026-07-24 02:47:40 showed the wizard aborting because
+// generateStepsWithSelectors emitted 8206 chars of JSON that JSON.parse
+// rejected at position 7108 ("Expected property name or '}'"). The previous
+// log captured only the first 500 chars, making the exact bad char a guess.
+// This wrapper fixes both: parseJsonLenient handles the most common LLM
+// malformations, and the failure path captures the exact byte that broke.
+function parseLLMJson(cleaned, contextLabel, rawResult) {
+  const res = parseJsonLenient(cleaned);
+  if (res.ok) {
+    if (res.repairs.length) {
+      debugLogger.log('info', 'wizard', 'LLM JSON parsed with repairs', {
+        context: contextLabel, repairs: res.repairs, length: cleaned.length
+      });
+    }
+    return res.value;
+  }
+  // Failure — extract the exact bad position from the error message and log
+  // 100 chars of context on either side so the next iteration is informed.
+  const posMatch = (res.error || '').match(/at position (\d+)/);
+  const pos = posMatch ? parseInt(posMatch[1], 10) : null;
+  let positionContext = null;
+  if (pos != null) {
+    const start = Math.max(0, pos - 100);
+    const end = Math.min(cleaned.length, pos + 100);
+    positionContext = {
+      position: pos,
+      char: cleaned[pos],
+      charCode: cleaned.charCodeAt(pos),
+      before: cleaned.slice(start, pos),
+      after: cleaned.slice(pos + 1, end)
+    };
+  }
+  debugLogger.log('error', 'wizard', 'LLM JSON parse failed (lenient)', {
+    context: contextLabel,
+    error: res.error,
+    repairsAttempted: res.repairs,
+    cleanedLength: cleaned.length,
+    positionContext,
+    cleanedPreview: cleaned.slice(0, 500)
+  });
+  // Persist the FULL failed output for offline analysis (log only stores 500 chars).
+  try {
+    chrome.storage.local.get(['llmParseFailures'], (data) => {
+      const failures = data.llmParseFailures || [];
+      failures.unshift({
+        context: contextLabel,
+        cleaned,
+        error: res.error,
+        repairs: res.repairs,
+        timestamp: Date.now()
+      });
+      while (failures.length > 5) failures.pop();
+      chrome.storage.local.set({ llmParseFailures: failures });
+    });
+  } catch (e) { /* storage unavailable in some contexts */ }
+  const err = new Error(`${contextLabel} returned malformed JSON: ${res.error}`);
+  err.rawLLMOutput = cleaned.slice(0, 500);
+  throw err;
+}
+
 function trimLlmHistory() {
   if (wizardState.llmHistory.length > 6) {
     wizardState.llmHistory = wizardState.llmHistory.slice(-6);
@@ -914,14 +979,8 @@ Return JSON with:
   const cleaned = cleanLLMResponse(result);
   let parsed;
   try {
-    parsed = JSON.parse(cleaned);
+    parsed = parseLLMJson(cleaned, 'getCandidateSelectors', result);
   } catch (e) {
-    debugLogger.log('error', 'wizard', 'getCandidateSelectors JSON.parse failed', {
-      error: e.message,
-      cleanedPreview: cleaned.slice(0, 500),
-      cleanedLength: cleaned.length,
-      rawPreview: (result || '').slice(0, 500)
-    });
     const err = new Error('getCandidateSelectors returned malformed JSON: ' + e.message);
     err.rawLLMOutput = cleaned.slice(0, 500);
     throw err;
@@ -955,14 +1014,8 @@ Return JSON with:
   const cleaned = cleanLLMResponse(result);
   let parsed;
   try {
-    parsed = JSON.parse(cleaned);
+    parsed = parseLLMJson(cleaned, 'confirmSelectorsWithFullHtml', result);
   } catch (e) {
-    debugLogger.log('error', 'wizard', 'confirmSelectorsWithFullHtml JSON.parse failed', {
-      error: e.message,
-      cleanedPreview: cleaned.slice(0, 500),
-      cleanedLength: cleaned.length,
-      rawPreview: (result || '').slice(0, 500)
-    });
     const err = new Error('confirmSelectorsWithFullHtml returned malformed JSON: ' + e.message);
     err.rawLLMOutput = cleaned.slice(0, 500);
     throw err;
@@ -1079,14 +1132,9 @@ Sample detail page URL (use as entryUrl for detail-page steps): ${detailPageInfo
   const cleaned = cleanLLMResponse(result);
   let parsed;
   try {
-    parsed = JSON.parse(cleaned);
+    parsed = parseLLMJson(cleaned, 'generateStepsWithSelectors', result);
   } catch (e) {
-    debugLogger.log('error', 'wizard', 'generateStepsWithSelectors JSON.parse failed', {
-      error: e.message,
-      cleanedPreview: cleaned.slice(0, 500),
-      cleanedLength: cleaned.length,
-      rawPreview: (result || '').slice(0, 500)
-    });
+    debugLogger.log('error', 'wizard', 'Step generation (generateStepsWithSelectors) failed', { error: e.message, stack: e.stack, rawLLMOutput: cleaned.slice(0, 500) });
     const err = new Error('generateStepsWithSelectors returned malformed JSON: ' + e.message);
     err.rawLLMOutput = cleaned.slice(0, 500);
     throw err;
@@ -1182,7 +1230,7 @@ Only generate this step's script. Do not modify other steps.`;
   const cleaned = cleanLLMResponse(result);
   let parsed;
   try {
-    parsed = JSON.parse(cleaned);
+    parsed = parseLLMJson(cleaned, 'generateStepScript', result);
   } catch (e) {
     const err = new Error('LLM returned malformed JSON: ' + e.message);
     err.rawLLMOutput = cleaned.slice(0, 500);
@@ -1233,7 +1281,7 @@ Do NOT infer templates from implicit patterns like "search for keyword" or "show
     { role: 'user', content: prompt }
   ], { jsonMode: true });
 
-  return JSON.parse(cleanLLMResponse(result));
+  return parseLLMJson(cleanLLMResponse(result), 'generateExplorationScript', result);
 }
 
 async function explorePageInteraction(tabId, script, sampleInput) {
