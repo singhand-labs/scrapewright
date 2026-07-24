@@ -168,19 +168,31 @@ class StepOrchestrator {
           if (typeof deps.resetDomActivity === 'function') {
             try { await deps.resetDomActivity(tabId); } catch (_) {}
           }
-          result = await deps.executeScript(tabId, step.script, enrichedInput, timeoutMs);
+          const execResult = await deps.executeScript(tabId, step.script, enrichedInput, timeoutMs);
+          // Backward compat: legacy executors resolve with the raw result.
+          // New executors resolve with { result, selectorDiagnostics }.
+          // Detect the envelope by checking for the 'result' key — no
+          // existing fake in the test suite returns an object with a
+          // 'result' key, so the shim stays unambiguous.
+          const selectorDiagnostics = (execResult && typeof execResult === 'object' && Array.isArray(execResult.selectorDiagnostics))
+            ? execResult.selectorDiagnostics
+            : [];
+          result = (execResult && typeof execResult === 'object' && 'result' in execResult)
+            ? execResult.result
+            : execResult;
           let domActivity = [];
           if (typeof deps.getDomActivity === 'function') {
             try { domActivity = await deps.getDomActivity(tabId) || []; } catch (_) {}
           }
           const resultPreview = JSON.stringify(result)?.slice(0, 500);
-          debugLogger.log('info', 'step-orchestrator', 'Script executed', { stepId: step.id, resultType: typeof result, resultPreview });
+          debugLogger.log('info', 'step-orchestrator', 'Script executed', { stepId: step.id, resultType: typeof result, resultPreview, selectorDiagnosticCount: selectorDiagnostics.length });
           emit('STEP_ITERATION', {
             stepId: step.id,
             iteration: stepIterations,
             maxIterations: maxIter,
             domActivity,
-            resultPreview
+            resultPreview,
+            selectorDiagnostics
           });
         } catch (error) {
           debugLogger.log('error', 'step-orchestrator', 'Script execution failed', { stepId: step.id, error: error.message, stack: error.stack, hasSubTabSnapshot: !!error.subTabSnapshot });

@@ -58,7 +58,11 @@ class OffscreenExecutor {
             if (message.subTabSnapshot) err.subTabSnapshot = message.subTabSnapshot;
             reject(err);
           } else {
-            resolve(message.result);
+            // Resolve with an envelope so step-orchestrator can read
+            // selectorDiagnostics captured inside the sandbox. Legacy
+            // callers that only need the result go through a compat shim
+            // at the orchestrator site.
+            resolve({ result: message.result, selectorDiagnostics: message.selectorDiagnostics || [] });
           }
         }
       };
