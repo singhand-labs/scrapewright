@@ -976,6 +976,20 @@ describe('SCRIPT_DSL_GUIDE regression', () => {
     assert.match(SCRIPT_DSL_GUIDE, /\$extract has no per-container overload/);
     assert.match(SCRIPT_DSL_GUIDE, /query the WHOLE DOCUMENT, not/);
   });
+
+  it('forbids window.location manipulation (CRITICAL RULE 4)', () => {
+    // bugx.log 2026-07-24 root cause: LLM-generated exploration script did
+    // `window.location.href = searchUrl` — which navigates the SANDBOX iframe,
+    // not the target tab. The sandbox is destroyed; every subsequent EXECUTE
+    // message is silently dropped; all scripts time out at 60s. The DSL guide
+    // must teach the LLM that navigation is forbidden AND that the URL template
+    // already handles "open the target page".
+    assert.match(SCRIPT_DSL_GUIDE, /NEVER NAVIGATE/);
+    assert.match(SCRIPT_DSL_GUIDE, /window\.location\.href/);
+    assert.match(SCRIPT_DSL_GUIDE, /location\.replace\(\)/);
+    assert.match(SCRIPT_DSL_GUIDE, /FORBIDDEN_NAVIGATION/);
+    assert.match(SCRIPT_DSL_GUIDE, /the SANDBOX/);
+  });
 });
 
 describe('truncateSnapshotForLLM', () => {
