@@ -9,6 +9,11 @@
   let domRequestId = 0;
   const pendingDomRequests = new Map();
 
+  // Module-scope accumulator for per-call selector diagnostics stripped from
+  // DOM_RESPONSEs. Reset to [] after each execution so diagnostics don't leak
+  // between calls (selector diagnostics — spec 2026-07-24 Task 3).
+  let __selectorDiagnostics__ = [];
+
   function sendDebugLog(level, component, message, data) {
     try {
       parent.postMessage({ type: 'DEBUG_LOG', level, component, message, data }, '*');
@@ -64,6 +69,13 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
         if (e.data.subTabSnapshot) err.subTabSnapshot = e.data.subTabSnapshot;
         pending.reject(err);
       } else {
+        // Strip _diagnostics before resolving so the user-facing $ API value
+        // stays unchanged (script promise resolves with e.data.result only).
+        // Truthy check (not '_diagnostics' in e.data) because content-script
+        // sends _diagnostics: undefined for non-target actions like $click.
+        if (e.data._diagnostics) {
+          __selectorDiagnostics__.push(e.data._diagnostics);
+        }
         pending.resolve(e.data.result);
       }
     } else if (e.data.type === 'EXECUTE') {
@@ -133,8 +145,12 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
       }
       const fn = new Function('__input__', '__stepResults__', '__lastResult__', `return ${scriptCode};`);
       const result = await fn(input, input._stepResults || {}, input._lastResult || null);
-      sendDebugLog('info', 'sandbox', 'Script completed', { resultType: typeof result, resultPreview: JSON.stringify(result)?.slice(0, 500) });
-      parent.postMessage({ type: 'EXECUTE_RESULT', result }, '*');
+      // Snapshot + reset the per-execution diagnostics accumulator. Diagnostics
+      // only ride on the success path — error responses stay unchanged.
+      const selectorDiagnostics = __selectorDiagnostics__;
+      __selectorDiagnostics__ = [];
+      sendDebugLog('info', 'sandbox', 'Script completed', { resultType: typeof result, resultPreview: JSON.stringify(result)?.slice(0, 500), selectorDiagnosticCount: selectorDiagnostics.length });
+      parent.postMessage({ type: 'EXECUTE_RESULT', result, selectorDiagnostics }, '*');
     } catch (error) {
       sendDebugLog('error', 'sandbox', 'Script execution error', { error: error.message, stack: error.stack, scriptPreview: scriptCode?.slice(0, 2000), hasSubTabSnapshot: !!error.subTabSnapshot });
       parent.postMessage({ type: 'EXECUTE_RESULT', error: error.message || String(error), subTabSnapshot: error.subTabSnapshot || undefined }, '*');
