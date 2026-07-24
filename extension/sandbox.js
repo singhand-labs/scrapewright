@@ -128,6 +128,10 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
   }
 
   async function executeInSandbox(scriptCode, input) {
+    // Reset before each execution — covers residue from prior failed runs
+    // (the catch path does not reset, so without this a later successful
+    // run would snapshot the previous run's diagnostics along with its own).
+    __selectorDiagnostics__ = [];
     try {
       sendDebugLog('info', 'sandbox', 'Creating Function and executing script', { scriptLength: scriptCode?.length });
       const navMatch = detectForbiddenNavigation(scriptCode);
