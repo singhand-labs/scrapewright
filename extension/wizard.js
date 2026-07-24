@@ -1108,12 +1108,12 @@ Return JSON with:
 - sampleInput: JSON object with example values
 
 JSON ESCAPING (CRITICAL — failures here abort the wizard):
-The `script` field is a JSON string. Any `"` character INSIDE the JS code must be escaped as `\"`. This applies even when the `"` is inside a JS single-quoted string — JSON does not care that JS treats `'...'` as a string.
+The "script" field is a JSON string. Any " character INSIDE the JS code must be escaped as \". This applies even when the " is inside a JS single-quoted string — JSON does not care that JS treats '...' as a string.
 CORRECT (note the backslashes before each inner "):
 "script": "const c = await $count('div[role=\\\"article\\\"]'); return { done: c > 0 };"
 WRONG (bare " inside the value — JSON.parse terminates the string at the first one):
 "script": "const c = await $count('div[role=\"article\"]');"
-Tip: when a CSS attribute value is a bare word (no spaces), prefer the unquoted form to sidestep the issue entirely — `[role=article]` instead of `[role="article"]`.
+Tip: when a CSS attribute value is a bare word (no spaces), prefer the unquoted form to sidestep the issue entirely — [role=article] instead of [role="article"].
 
 Use "TERMINATE" to end. Do NOT use "SELF" (no longer supported). For loops/waits, set maxIterations>1 and return { done: false } to retry the same step.
 
