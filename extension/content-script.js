@@ -204,14 +204,15 @@
         while (sandboxReadyCallbacks.length) sandboxReadyCallbacks.shift()();
       } else if (e.data.type === 'DOM_REQUEST') {
         sendDebugLog('info', 'content-script', 'DOM_REQUEST from sandbox', { action: e.data.action, selector: e.data.selector });
-        handleDomRequest(e.data).then(({ result, error, subTabSnapshot }) => {
+        handleDomRequest(e.data).then(({ result, error, subTabSnapshot, _diagnostics }) => {
           sendDebugLog(error ? 'error' : 'info', 'content-script', 'DOM_RESPONSE to sandbox', { action: e.data.action, selector: e.data.selector, error, resultType: typeof result, hasSubTabSnapshot: !!subTabSnapshot });
           sandboxIframe.contentWindow.postMessage({
             type: 'DOM_RESPONSE',
             id: e.data.id,
             result,
             error,
-            subTabSnapshot
+            subTabSnapshot,
+            _diagnostics
           }, '*');
         });
       } else if (e.data.type === 'EXECUTE_RESULT') {
@@ -266,7 +267,7 @@
   }
 
   async function handleDomRequest(data) {
-    let result, error, subTabSnapshot;
+    let result, error, subTabSnapshot, _diagnostics;
     try {
       switch (data.action) {
         case 'querySelector': {
@@ -289,7 +290,9 @@
         }
         case 'extract': {
           const __t0 = Date.now();
-          result = await domExtract(data.selector, data.args[0], data.args[1]);
+          const __r = await domExtract(data.selector, data.args[0], data.args[1]);
+          result = __r.result;
+          _diagnostics = __r._diagnostics;
           recordDomActivity('$extract', data.selector, result ? 1 : 0, Date.now() - __t0);
           break;
         }
@@ -321,13 +324,17 @@
         }
         case 'count': {
           const __t0 = Date.now();
-          result = await domCount(data.selector);
+          const __r = domCount(data.selector);
+          result = __r.result;
+          _diagnostics = __r._diagnostics;
           recordDomActivity('$count', data.selector, typeof result === 'number' ? result : 0, Date.now() - __t0);
           break;
         }
         case 'list': {
           const __t0 = Date.now();
-          result = domList(data.selector);
+          const __r = domList(data.selector);
+          result = __r.result;
+          _diagnostics = __r._diagnostics;
           recordDomActivity('$list', data.selector, Array.isArray(result) ? result.length : 0, Date.now() - __t0);
           break;
         }
@@ -339,7 +346,9 @@
         }
         case 'extractList': {
           const __t0 = Date.now();
-          result = domExtractList(data.selector, data.args && data.args[0], data.args && data.args[1]);
+          const __r = domExtractList(data.selector, data.args && data.args[0], data.args && data.args[1]);
+          result = __r.result;
+          _diagnostics = __r._diagnostics;
           recordDomActivity('$extractList', data.selector, Array.isArray(result) ? result.length : 0, Date.now() - __t0);
           break;
         }
@@ -374,7 +383,7 @@
       error = e.message || String(e);
       if (e.subTabSnapshot) subTabSnapshot = e.subTabSnapshot;
     }
-    return { result, error, subTabSnapshot };
+    return { result, error, subTabSnapshot, _diagnostics };
   }
 
   // ===== Deep DOM Search (main doc + same-origin iframes) =====
@@ -547,8 +556,13 @@
     if (!found) throw new Error('ELEMENT_NOT_FOUND: ' + sel);
     const el = found.element;
     const result = attr ? el.getAttribute(attr) : el.textContent.trim();
+    const matchedEls = [el];
+    const ops = getListExtractOps();
+    const _diagnostics = ops && ops.computeSimpleSelectorDiagnostics
+      ? ops.computeSimpleSelectorDiagnostics(matchedEls, sel, 'extract')
+      : { api: 'extract', selector: sel, matchCount: result != null ? 1 : 0, sampleTexts: [], sampleHrefs: [] };
     sendDebugLog('info', 'content-script', 'domExtract result', { selector: sel, attr, resultPreview: result?.slice(0, 200), resultLength: result?.length });
-    return result;
+    return { result, _diagnostics };
   }
 
   async function domWait(sel, ms) {
@@ -628,26 +642,37 @@
   }
 
   function domCount(sel) {
-    let count;
+    let els;
     try {
-      count = querySelectorAllDeep(sel).length;
+      els = querySelectorAllDeep(sel);
     } catch (err) {
       sendDebugLog('error', 'content-script', 'domCount invalid selector', { selector: sel, error: err.message });
-      count = 0;
+      els = [];
     }
+    const count = els.length;
+    const ops = getListExtractOps();
+    const _diagnostics = ops && ops.computeSimpleSelectorDiagnostics
+      ? ops.computeSimpleSelectorDiagnostics(els, sel, 'count')
+      : { api: 'count', selector: sel, matchCount: count, sampleTexts: [], sampleHrefs: [] };
     sendDebugLog('info', 'content-script', 'domCount result', { selector: sel, count });
-    return count;
+    return { result: count, _diagnostics };
   }
 
   function domList(sel) {
     const results = [];
+    let els = [];
     try {
-      querySelectorAllDeep(sel).forEach(el => results.push(elToData(el)));
+      els = querySelectorAllDeep(sel);
+      els.forEach(el => results.push(elToData(el)));
     } catch (err) {
       sendDebugLog('error', 'content-script', 'domList invalid selector', { selector: sel, error: err.message });
     }
+    const ops = getListExtractOps();
+    const _diagnostics = ops && ops.computeSimpleSelectorDiagnostics
+      ? ops.computeSimpleSelectorDiagnostics(els, sel, 'list')
+      : { api: 'list', selector: sel, matchCount: els.length, sampleTexts: [], sampleHrefs: [] };
     sendDebugLog('info', 'content-script', 'domList result', { selector: sel, count: results.length });
-    return results;
+    return { result: results, _diagnostics };
   }
 
   function domExtractList(containerSel, fieldMap, opts) {
@@ -669,7 +694,11 @@
     if (!ops) {
       throw new Error('$extractList runtime missing: lib/list-extract-ops.js did not attach window.ListExtractOps. Reload the extension and refresh the target tab.');
     }
-    return ops.extractListRecords(containers, fieldMap, opts || {});
+    const records = ops.extractListRecords(containers, fieldMap, opts || {});
+    const _diagnostics = ops && ops.computeExtractListDiagnostics
+      ? ops.computeExtractListDiagnostics(containers, fieldMap, containerSel)
+      : { api: 'extractList', containerSelector: containerSel, matchCount: containers.length, perField: {} };
+    return { result: records, _diagnostics };
   }
 
   async function domClickInList(containerSel, subSel, opts) {
@@ -873,7 +902,7 @@
       // In the offscreen path, this is the only place we learn our tabId.
       if (message.tabId) currentSenderTabId = message.tabId;
       sendDebugLog('info', 'content-script', 'DOM_REQUEST from offscreen', { action: message.action, selector: message.selector, tabId: message.tabId });
-      handleDomRequest(message).then(({ result, error, subTabSnapshot }) => {
+      handleDomRequest(message).then(({ result, error, subTabSnapshot, _diagnostics }) => {
         sendDebugLog(error ? 'error' : 'info', 'content-script', 'DOM_RESPONSE to offscreen', { action: message.action, selector: message.selector, error, resultType: typeof result, hasSubTabSnapshot: !!subTabSnapshot });
         chrome.runtime.sendMessage({
           type: 'DOM_RESPONSE',
@@ -881,6 +910,7 @@
           result,
           error,
           subTabSnapshot,
+          _diagnostics,
           _fromOffscreen: true
         });
       });
