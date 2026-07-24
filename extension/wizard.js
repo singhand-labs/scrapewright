@@ -353,14 +353,14 @@ function updatePhaseUI(state) {
     testStatus.className = 'success';
     btnPhase5Deploy.classList.remove('hidden');
     btnAutoFix.classList.remove('hidden');
-    feedbackInput.placeholder = 'Results not what you expected? Describe what to change...';
+    feedbackInput.placeholder = 'Point out the problem with the extracted data — e.g. "publishTime is missing", "only 3 posts extracted", "images should have multiple URLs"';
   } else if (state === 'empty-result') {
     testStatus.textContent = 'Test passed but extracted data is empty — extraction may not be working correctly.';
     testStatus.className = 'fixing';
     btnRetryTest.classList.remove('hidden');
     btnAutoFix.classList.remove('hidden');
     btnDeployAnyway.classList.remove('hidden');
-    feedbackInput.placeholder = 'Describe what data you expected and how to fix the extraction...';
+    feedbackInput.placeholder = 'Point out the problem — e.g. "expected ~20 posts but got 0", "the list selector is wrong", "the page needs more scroll time"';
     debugLogger.log('warn', 'wizard', 'Empty result detected, showing fix controls');
   } else if (state === 'failure') {
     const stepInfo = wizardState.lastErrorStepId ? ' (step: ' + wizardState.lastErrorStepId + ')' : '';
@@ -371,7 +371,7 @@ function updatePhaseUI(state) {
     btnRetryTest.classList.remove('hidden');
     btnAutoFix.classList.remove('hidden');
     btnDeployAnyway.classList.remove('hidden');
-    feedbackInput.placeholder = 'Describe what\'s wrong or how to fix it...';
+    feedbackInput.placeholder = 'Point out the problem — e.g. "the selector timed out", "wrong element is being clicked", "the URL pattern changed"';
   } else if (state === 'fixing') {
     testStatus.textContent = 'Fixing step (attempt #' + (wizardState.fixAttemptCount + 1) + ')...';
     testStatus.className = 'fixing';
@@ -2231,29 +2231,35 @@ async function runFixIteration(userFeedback, config, options = {}) {
     appendLog('Set default retry budget (maxIterations) on poll step(s): ' + fixHeal.changed.map(c => c.id).join(', '), 'info');
   }
 
-  // Determine which step to fix: failed step, or last step (extraction) on success-with-feedback
-  let targetStepId = wizardState.lastErrorStepId;
-  if (!targetStepId) {
-    // Success state — default to the last step (typically extraction)
-    if (wizardState.steps.length === 0) {
-      showToast('No steps to fix', 'error');
-      return false;
-    }
-    targetStepId = wizardState.steps[wizardState.steps.length - 1].id;
+  // Determine which step to fix.
+  // - Error path (lastErrorStepId set): target that specific failing step.
+  //   Used as the FAILING marker in the prompt and as the soft-fallback when
+  //   the LLM omits stepId.
+  // - User-feedback path (lastErrorStepId null): NO default target. The
+  //   previous "default to last step" heuristic was wrong because user-
+  //   observed extraction bugs usually live in an upstream step, not the
+  //   finalizer (bugx.log 2026-07-24). Pass null and let resolveAutoFixTargets
+  //   require an explicit stepId on every patch.
+  const targetStepId = wizardState.lastErrorStepId || null;
+  if (!targetStepId && wizardState.steps.length === 0) {
+    showToast('No steps to fix', 'error');
+    return false;
   }
 
-  const targetStep = wizardState.steps.find(s => s.id === targetStepId);
-  if (!targetStep) {
+  const targetStep = targetStepId ? wizardState.steps.find(s => s.id === targetStepId) : null;
+  if (targetStepId && !targetStep) {
     showToast('Step not found: ' + targetStepId, 'error');
     return false;
   }
 
   const isFailureFix = !!wizardState.lastErrorStepId;
   updatePhaseUI('fixing');
-  showLoading((isFailureFix ? 'Fixing' : 'Improving') + ' step "' + targetStep.name + '"...');
+  showLoading(isFailureFix
+    ? 'Fixing step "' + targetStep.name + '"...'
+    : 'Analyzing your feedback and locating the root-cause step(s)...');
   debugLogger.log('info', 'wizard', 'autoFix target selected', {
-    targetStepId,
-    targetStepName: targetStep.name,
+    targetStepId: targetStepId || null,
+    targetStepName: targetStep ? targetStep.name : null,
     isFailureFix,
     allSteps: wizardState.steps.map(s => ({ id: s.id, name: s.name, scriptLength: (s.script || '').length })),
     userFeedback: userFeedback ? userFeedback.slice(0, 500) : null
@@ -2281,8 +2287,11 @@ async function runFixIteration(userFeedback, config, options = {}) {
   // handed the search/list page HTML and keeps inventing selectors for
   // elements that don't exist there.
   const detailUrl = findSampleDetailUrl(wizardState.testResult);
+  // Any step might be the one that needs the detail page (user-feedback path
+  // has no single targetStep), so scan the whole workflow.
+  const anyStepUsesOpenTab = wizardState.steps.some(s => s.script && s.script.includes('$openTab'));
   const shouldCaptureDetail = detailUrl && (
-    targetStep.script?.includes('$openTab') ||
+    anyStepUsesOpenTab ||
     detailUrl !== wizardState.targetUrl
   );
   let detailPageHint = '';
@@ -2311,7 +2320,7 @@ If your script does NOT use $openTab, $wait / $ / $extract will run against the 
           url: detailUrl,
           htmlLength: pageSnapshot.html?.length,
           structureLength: pageSnapshot.structure?.length,
-          stepUsesOpenTab: targetStep.script?.includes('$openTab') || false
+          anyStepUsesOpenTab
         });
       }
       await chrome.tabs.remove(detailTab.id).catch(() => {});
@@ -2357,9 +2366,9 @@ If your script does NOT use $openTab, $wait / $ / $extract will run against the 
     Include only the flow fields you are changing; "script" is always required. The new flow must keep the chain valid (every target id exists, no orphan steps, never use "SELF"). Do NOT add or remove steps.
 
 REDIRECTING THE FIX (important when user reports extraction-quality issues):
-- The step marked "<<< FIXING" below is a HEURISTIC guess (the last step on the user-feedback path, or the failing step on the error path). The actual root cause frequently lives in an EARLIER step.
-- If your analysis of the user's feedback + the step scripts shows the root cause is in a different step, set "stepId" to that step's id. Your patch will be applied there instead.
-- Example: user says "only 3 posts extracted". The marked step is "5. finalize" which only enriches posts already extracted. The real bug is in "4. extract_posts" whose container selector is too narrow. Return {"stepId":"4", "script":"<fixed step-4 script>"}.
+- The step marked "<<< FAILING" below is the step that raised the runtime error. The actual root cause frequently lives in an EARLIER step whose output flowed into the failing step.
+- If your analysis of the error + the step scripts shows the root cause is in a different step, set "stepId" to that step's id. Your patch will be applied there instead.
+- Example: step 5 fails with "publishTime is undefined" because it reads __stepResults__['4'].posts[0].publishTime — but step 4 never extracted publishTime in the first place. The fix belongs in step 4, not step 5. Return {"stepId":"4", "script":"<fixed step-4 script>"}.
 - If the marked step IS the right one to fix, omit "stepId" (or set it to the marked step's id).`;
 
   // Multi-patch format for user-feedback path. bugx.log 2026-07-24 07:04:16:
@@ -2368,7 +2377,9 @@ REDIRECTING THE FIX (important when user reports extraction-quality issues):
   // prompt anchored it on step 5's script and (b) only single-step patches
   // were allowed. The new format requires the LLM to identify every root-cause
   // step explicitly and return a patch per step — no implicit target, no
-  // "re-extract in the finalizer" band-aid.
+  // "re-extract in the finalizer" band-aid. The 2026-07-24 follow-up removed
+  // the last-step default entirely (targetStepId=null on this path), so every
+  // patch MUST carry an explicit stepId.
   const RETURN_FORMAT_FEEDBACK = `RETURN FORMAT — your fix may touch MULTIPLE steps. Always return JSON:
   {
     "analysis": "<one or two sentences: which step has which root cause>",
@@ -2378,8 +2389,9 @@ REDIRECTING THE FIX (important when user reports extraction-quality issues):
     ]
   }
 Rules (READ ALL):
+- This is NOT a runtime error. The service ran successfully and produced output — the user looked at the output and is reporting data-quality problems they observed. There is no exception, no stack trace. Investigate the step scripts to find which extraction logic produced the wrong data.
+- There is NO default target step. You MUST pick "stepId" on every patch from the "Step N (name)" headers in FULL STEP WORKFLOW. A patch without "stepId" will be rejected.
 - Include a patch for EVERY step whose script currently contains a root cause. A partial fix leaves the test failing on the un-patched step and burns the user-feedback iteration (only ONE iteration runs per feedback submit).
-- "stepId" is REQUIRED on every patch — there is no implicit target. Pick the id from the "Step N (name)" headers in FULL STEP WORKFLOW.
 - Each "script" REPLACES that step's script entirely — do not emit diffs.
 - If a step's flow also needs to change, add "onSuccess"/"onFailure"/"maxIterations" to that patch. Do NOT add or remove steps. The chain must stay valid.
 - Single-step fix is fine: return one-element "patches".
@@ -2450,10 +2462,15 @@ ${RETURN_FORMAT}`;
 
     prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${buildFeedbackSection(userFeedback, attemptNum, totalAttempts, wizardState.llmHistory)}${SCRIPT_DSL_GUIDE}
 
-The test passed but the user reported these problems with the output:
+CONTEXT — read carefully:
+- This is NOT a runtime error. The service ran successfully and produced output — no exception, no stack trace.
+- The user looked at the output and is reporting DATA-QUALITY problems they observed (e.g. a field is missing, only N items extracted, image URLs are incomplete, an extracted value is wrong).
+- Your job is to figure out WHICH step's extraction logic produced the wrong data and fix it at the source. The bug may be in ANY step — there is no default target step.
+
+User's observation feedback:
 ${userFeedback}
 
-Your job: identify EVERY step in the workflow below whose script contains a root cause for the reported problems, and return a fix for each. Do NOT anchor on any particular step — the bug may be in any of them. Typical patterns:
+Identify EVERY step in the workflow below whose script contains a root cause for the reported problems, and return a fix for each. Do NOT anchor on any particular step — the bug may be in any of them. Typical patterns:
 - "field X is missing/wrong" → find the step whose $extractList / $extract call reads field X (usually the EXTRACT step, not the finalizer). Fix it there.
 - "only N items extracted" → the scroll/paginate step (under-loaded) OR the extract step (container selector too narrow).
 - "field X has wrong value" → the step that extracts that field — its selector matches the wrong element.
@@ -2499,9 +2516,9 @@ ${RETURN_FORMAT_FEEDBACK}`;
 
     wizardState.llmHistory.push(
       { role: 'user', content: summarizeFixIteration({
-        stepId: targetStep.id,
-        stepName: targetStep.name,
-        script: targetStep.script,
+        stepId: targetStep ? targetStep.id : null,
+        stepName: targetStep ? targetStep.name : '(user feedback — no single target step)',
+        script: targetStep ? targetStep.script : '',
         annotations: wizardState.annotations || [],
         userFeedback: userFeedback,
         error: wizardState.lastError || null,
@@ -2513,7 +2530,7 @@ ${RETURN_FORMAT_FEEDBACK}`;
 
     const cleaned = cleanLLMResponse(result);
     if (!cleaned || !cleaned.trim()) {
-      appendLog((isFailureFix ? 'Auto-fix' : 'AI improve') + ' returned empty script for step "' + targetStep.name + '", keeping original.', 'warn');
+      appendLog((isFailureFix ? 'Auto-fix' : 'AI improve') + ' returned empty script' + (targetStep ? ' for step "' + targetStep.name + '"' : '') + ', keeping original.', 'warn');
       return false;
     }
     // Parse the LLM response into a list of patches. Three formats are accepted:
@@ -2582,7 +2599,7 @@ ${RETURN_FORMAT_FEEDBACK}`;
         debugLogger.log('info', 'wizard', 'autoFix redirected to LLM-chosen step', {
           fromStepId: targetStepId, toStepId: r.step.id, toStepName: r.step.name
         });
-        logParts.push('"' + r.step.name + '" [redirected from "' + targetStep.name + '"]');
+        logParts.push('"' + r.step.name + '" [redirected from "' + (targetStep ? targetStep.name : targetStepId) + '"]');
       } else if (r.fallbackReason) {
         logParts.push('"' + r.step.name + '" [' + r.fallbackReason + ']');
       } else {
@@ -2621,8 +2638,9 @@ ${RETURN_FORMAT_FEEDBACK}`;
     wizardState.fixAttemptCount++;
     // currentScript shows the heuristic target's script if it was patched;
     // otherwise the last patched step's script. Keeps the UI consistent with
-    // what the user was looking at when they clicked Auto-Fix.
-    const showStep = patchedById.has(targetStepId)
+    // what the user was looking at when they clicked Auto-Fix. On the user-
+    // feedback path (targetStepId null), just show the last patched step.
+    const showStep = (targetStepId && patchedById.has(targetStepId))
       ? wizardState.steps.find(s => s.id === targetStepId)
       : target.resolved[target.resolved.length - 1].step;
     document.getElementById('currentScript').textContent = showStep.script;

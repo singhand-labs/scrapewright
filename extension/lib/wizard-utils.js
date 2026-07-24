@@ -733,6 +733,14 @@ function resolveAutoFixTarget(obj, targetStepId, allSteps) {
 // used when a patch omits stepId (legacy single-target shape) AND when the
 // whole `patches` array is empty (caller decides whether that's an error).
 //
+// `targetStepId` may be `null` (user-feedback path as of 2026-07-24 — the
+// previous "default to last step" heuristic was wrong because user-observed
+// extraction bugs usually live in an upstream step, not the finalizer). When
+// targetStepId is null:
+//   - Patches WITHOUT stepId are HARD errors (no implicit target).
+//   - Patches WITH a valid stepId resolve normally; `redirected` is `false`
+//     and `redirectedFrom` is `null` (there was nothing to redirect from).
+//
 // Returns: {resolved: [{step, patch, redirected}], errors: [string]}.
 // - resolved: patches ready to apply, in the order they should be applied
 //   (we apply by stepId, so order doesn't matter, but we preserve LLM order
@@ -744,13 +752,21 @@ function resolveAutoFixTargets(patches, targetStepId, allSteps) {
   if (!Array.isArray(patches)) {
     return { errors: ['patches must be an array'] };
   }
-  const fallbackStep = allSteps.find(s => s.id === targetStepId);
-  if (!fallbackStep) {
+  const fallbackStep = targetStepId ? allSteps.find(s => s.id === targetStepId) : null;
+  if (targetStepId && !fallbackStep) {
     return { errors: ['target step not found: ' + targetStepId] };
   }
   const resolved = [];
   const errors = [];
   const seenStepIds = new Set();
+  const claim = (step) => {
+    if (seenStepIds.has(step.id)) {
+      errors.push(`duplicate patch for step "${step.id}"`);
+      return false;
+    }
+    seenStepIds.add(step.id);
+    return true;
+  };
   for (let i = 0; i < patches.length; i++) {
     const p = patches[i];
     if (!p || typeof p !== 'object') {
@@ -764,40 +780,50 @@ function resolveAutoFixTargets(patches, targetStepId, allSteps) {
     const requestedId = (typeof p.stepId === 'string' && p.stepId.trim())
       ? p.stepId.trim()
       : null;
-    // No stepId → apply to heuristic fallback (legacy single-target shape).
-    // Same stepId as fallback → also fine, no redirect.
-    if (!requestedId || requestedId === targetStepId) {
-      if (seenStepIds.has(fallbackStep.id)) {
-        errors.push(`duplicate patch for step "${fallbackStep.id}"`);
+
+    // No stepId on this patch — needs a fallback target.
+    if (!requestedId) {
+      if (!fallbackStep) {
+        errors.push(`patch[${i}] is missing "stepId" — pick a step id from FULL STEP WORKFLOW`);
         continue;
       }
-      seenStepIds.add(fallbackStep.id);
+      if (!claim(fallbackStep)) continue;
       resolved.push({ step: fallbackStep, patch: p, redirected: false });
       continue;
     }
+
+    // LLM explicitly picked the heuristic target — no redirect.
+    if (targetStepId && requestedId === targetStepId) {
+      if (!claim(fallbackStep)) continue;
+      resolved.push({ step: fallbackStep, patch: p, redirected: false });
+      continue;
+    }
+
+    // LLM picked a different step — look it up.
     const redirect = allSteps.find(s => s.id === requestedId);
     if (!redirect) {
-      // Soft fallback — record reason but don't abort. The other patches
-      // may still be valid and useful.
-      if (seenStepIds.has(fallbackStep.id)) {
-        errors.push(`duplicate patch for step "${fallbackStep.id}" (patch[${i}] requested unknown stepId "${requestedId}")`);
-        continue;
+      // Unknown stepId — soft-fallback when we have a heuristic target,
+      // hard-error when we don't (user-feedback path demands an explicit id).
+      if (fallbackStep) {
+        if (!claim(fallbackStep)) continue;
+        resolved.push({
+          step: fallbackStep,
+          patch: p,
+          redirected: false,
+          fallbackReason: `patch[${i}] requested unknown stepId "${requestedId}", falling back to targetStepId "${targetStepId}"`
+        });
+      } else {
+        errors.push(`patch[${i}] requested unknown stepId "${requestedId}"`);
       }
-      seenStepIds.add(fallbackStep.id);
-      resolved.push({
-        step: fallbackStep,
-        patch: p,
-        redirected: false,
-        fallbackReason: `patch[${i}] requested unknown stepId "${requestedId}", falling back to targetStepId "${targetStepId}"`
-      });
       continue;
     }
-    if (seenStepIds.has(redirect.id)) {
-      errors.push(`duplicate patch for step "${redirect.id}"`);
-      continue;
-    }
-    seenStepIds.add(redirect.id);
-    resolved.push({ step: redirect, patch: p, redirected: true, redirectedFrom: targetStepId });
+    if (!claim(redirect)) continue;
+    resolved.push({
+      step: redirect,
+      patch: p,
+      redirected: !!targetStepId,
+      redirectedFrom: targetStepId || null
+    });
   }
   return { resolved, errors };
 }

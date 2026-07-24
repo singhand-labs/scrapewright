@@ -155,4 +155,69 @@ describe('resolveAutoFixTargets (multi-patch)', () => {
     assert.equal(res.errors.length, 0);
     assert.equal(res.resolved.length, 0);
   });
+
+  // bugx.log 2026-07-24 follow-up: the user-feedback path used to default
+  // targetStepId to the LAST step (the finalizer). That was structurally
+  // wrong because user-observed extraction bugs usually live upstream
+  // (e.g. step 4 extract_posts, not step 5 finalize). The wizard now passes
+  // targetStepId=null on the feedback path — these tests pin the contract.
+
+  describe('null targetStepId (user-feedback path)', () => {
+    it('rejects a patch without stepId — no implicit target', () => {
+      const res = resolveAutoFixTargets([{ script: 'return 1;' }], null, STEPS);
+      assert.ok(res.errors.length >= 1);
+      assert.match(res.errors[0], /stepId/i);
+      assert.equal(res.resolved.length, 0);
+    });
+
+    it('accepts a patch with a valid stepId', () => {
+      const res = resolveAutoFixTargets([{ stepId: '4', script: 'return 1;' }], null, STEPS);
+      assert.equal(res.errors.length, 0);
+      assert.equal(res.resolved.length, 1);
+      assert.equal(res.resolved[0].step.id, '4');
+    });
+
+    it('sets redirected=false and redirectedFrom=null (no heuristic to redirect from)', () => {
+      const res = resolveAutoFixTargets([{ stepId: '4', script: 'return 1;' }], null, STEPS);
+      assert.equal(res.resolved[0].redirected, false);
+      assert.equal(res.resolved[0].redirectedFrom, null);
+    });
+
+    it('accepts multi-step patches across unrelated steps', () => {
+      const res = resolveAutoFixTargets([
+        { stepId: '2', script: 'await $scrollToBottom();' },
+        { stepId: '4', script: 'return {posts: await $extractList(...)};' }
+      ], null, STEPS);
+      assert.equal(res.errors.length, 0);
+      assert.deepEqual(res.resolved.map(r => r.step.id), ['2', '4']);
+    });
+
+    it('hard-errors on unknown stepId (no soft fallback when target is null)', () => {
+      const res = resolveAutoFixTargets([{ stepId: '99', script: 'return 1;' }], null, STEPS);
+      assert.ok(res.errors.length >= 1);
+      assert.match(res.errors[0], /99/);
+      assert.equal(res.resolved.length, 0);
+    });
+
+    it('rejects duplicate stepIds', () => {
+      const res = resolveAutoFixTargets([
+        { stepId: '4', script: 'return 1;' },
+        { stepId: '4', script: 'return 2;' }
+      ], null, STEPS);
+      assert.ok(res.errors.length >= 1);
+      assert.match(res.errors[0], /duplicate/i);
+      assert.equal(res.resolved.length, 1);
+    });
+
+    it('mixes valid and missing-stepId patches: only the valid one resolves, missing one errors', () => {
+      const res = resolveAutoFixTargets([
+        { stepId: '4', script: 'return 1;' },
+        { script: 'return 2;' }           // missing stepId — hard error
+      ], null, STEPS);
+      assert.ok(res.errors.length >= 1);
+      assert.match(res.errors[0], /stepId/i);
+      assert.equal(res.resolved.length, 1);
+      assert.equal(res.resolved[0].step.id, '4');
+    });
+  });
 });
