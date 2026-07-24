@@ -539,6 +539,88 @@ function resolveAutoFixTarget(obj, targetStepId, allSteps) {
   return { step: redirect, redirected: true, redirectedFrom: targetStepId };
 }
 
+// Multi-step variant. bugx.log 2026-07-24 07:04:16 showed the single-target
+// design still failed user-feedback fixes: the LLM kept patching step 5
+// ("extract_images_per_post") instead of step 4 (where publishTime's broken
+// selector lived) — even with the redirect option, glm-5.1 chose to
+// re-extract inside step 5 rather than redirect. The architectural fix is to
+// let the LLM return MULTIPLE patches in one iteration so it can fix every
+// root-cause step at once.
+//
+// Input: `patches` is an array of {stepId, script, ...edgeFields}. Each patch
+// must reference a real step id. `targetStepId` is the heuristic fallback —
+// used when a patch omits stepId (legacy single-target shape) AND when the
+// whole `patches` array is empty (caller decides whether that's an error).
+//
+// Returns: {resolved: [{step, patch, redirected}], errors: [string]}.
+// - resolved: patches ready to apply, in the order they should be applied
+//   (we apply by stepId, so order doesn't matter, but we preserve LLM order
+//   for log readability)
+// - errors: hard errors that should abort the whole iteration. Soft issues
+//   (unknown stepId → fall back to targetStepId) are recorded per-resolved
+//   as `redirected: false, fallbackReason: '...'` and NOT promoted to errors.
+function resolveAutoFixTargets(patches, targetStepId, allSteps) {
+  if (!Array.isArray(patches)) {
+    return { errors: ['patches must be an array'] };
+  }
+  const fallbackStep = allSteps.find(s => s.id === targetStepId);
+  if (!fallbackStep) {
+    return { errors: ['target step not found: ' + targetStepId] };
+  }
+  const resolved = [];
+  const errors = [];
+  const seenStepIds = new Set();
+  for (let i = 0; i < patches.length; i++) {
+    const p = patches[i];
+    if (!p || typeof p !== 'object') {
+      errors.push(`patch[${i}] is not an object`);
+      continue;
+    }
+    if (typeof p.script !== 'string' || !p.script.trim()) {
+      errors.push(`patch[${i}].script is missing or empty`);
+      continue;
+    }
+    const requestedId = (typeof p.stepId === 'string' && p.stepId.trim())
+      ? p.stepId.trim()
+      : null;
+    // No stepId → apply to heuristic fallback (legacy single-target shape).
+    // Same stepId as fallback → also fine, no redirect.
+    if (!requestedId || requestedId === targetStepId) {
+      if (seenStepIds.has(fallbackStep.id)) {
+        errors.push(`duplicate patch for step "${fallbackStep.id}"`);
+        continue;
+      }
+      seenStepIds.add(fallbackStep.id);
+      resolved.push({ step: fallbackStep, patch: p, redirected: false });
+      continue;
+    }
+    const redirect = allSteps.find(s => s.id === requestedId);
+    if (!redirect) {
+      // Soft fallback — record reason but don't abort. The other patches
+      // may still be valid and useful.
+      if (seenStepIds.has(fallbackStep.id)) {
+        errors.push(`duplicate patch for step "${fallbackStep.id}" (patch[${i}] requested unknown stepId "${requestedId}")`);
+        continue;
+      }
+      seenStepIds.add(fallbackStep.id);
+      resolved.push({
+        step: fallbackStep,
+        patch: p,
+        redirected: false,
+        fallbackReason: `patch[${i}] requested unknown stepId "${requestedId}", falling back to targetStepId "${targetStepId}"`
+      });
+      continue;
+    }
+    if (seenStepIds.has(redirect.id)) {
+      errors.push(`duplicate patch for step "${redirect.id}"`);
+      continue;
+    }
+    seenStepIds.add(redirect.id);
+    resolved.push({ step: redirect, patch: p, redirected: true, redirectedFrom: targetStepId });
+  }
+  return { resolved, errors };
+}
+
 function buildResearchPrompt(url, description, html, text) {
   return `I need to create a web scraping script for this page.\n\nURL: ${url}\nRequirements: ${description}\n\nPage HTML (truncated):\n${html}\n\nPage text:\n${text}\n\nPlease analyze the page and return a JSON object with:\n- findings: string describing what you found\n- needsAnnotation: boolean, true if you need user to identify specific elements\n- draftScript: string with JavaScript code using $, $click, $type, $extract, $wait, $check, $openTab APIs\n- inputSchema: JSON Schema object describing the script's input parameters\n- outputSchema: JSON Schema object describing the script's output structure\n- sampleInput: a JSON object with example values matching inputSchema`;
 }
@@ -1666,7 +1748,7 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
