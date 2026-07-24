@@ -459,15 +459,191 @@ function stripJSComments(text) {
   return out;
 }
 
+// Walk a JSON-ish string char-by-char and repair the LLM mistakes that most
+// often produce "Expected property name or '}'" / "Unexpected token" errors:
+//
+//   - Bare (unquoted) keys:            { id: "1" }            → { "id": "1" }
+//   - Single-quoted strings:           { 'a': 'b' }           → { "a": "b" }
+//   - Missing commas between members:  { "a":1 "b":2 }        → { "a":1,"b":2 }
+//   - Leading commas:                  { ,"a":1 } / [,1]      → { "a":1 } / [1]
+//   - Double commas:                   [1,,2]                 → [1,2]
+//
+// Why char-walk instead of regex: every one of these repairs is unsafe inside
+// a JSON string value (a script may legitimately contain `{'a':1}` as text),
+// so we must track string state. The walker also tracks an object/array
+// context stack so bare identifiers are only treated as keys inside objects,
+// and a last-token category so comma insertion fires only between values.
+//
+// What this does NOT fix: truncated input, unescaped control chars inside
+// string values, JS template literals, multi-line string values. Those need a
+// full tokenizer; if the LLM emits them, the caller sees the failure and
+// reports position context (see parseLLMJson in wizard.js).
+function repairCommonJsonMistakes(text) {
+  if (typeof text !== 'string' || !text) return text;
+  const isIdentStart = (c) => /[a-zA-Z_$]/.test(c);
+  const isIdentPart = (c) => /[a-zA-Z0-9_$]/.test(c);
+  const isWhitespace = (c) => /\s/.test(c);
+  // Categories of "last emitted token" relevant to comma insertion.
+  // Value-terminators are the only ones that may need a comma before the next value.
+  const VALUE_ENDS = new Set(['string', 'number', 'ident', 'close-brace', 'close-bracket']);
+
+  let out = '';
+  let i = 0;
+  let inString = false;
+  let escape = false;
+  let stack = []; // 'object' | 'array'
+  let lastCat = 'none';
+
+  const inObject = () => stack[stack.length - 1] === 'object';
+  const needsComma = () => stack.length > 0 && VALUE_ENDS.has(lastCat);
+
+  while (i < text.length) {
+    const c = text[i];
+
+    // Inside a double-quoted string: copy verbatim, track escapes.
+    if (inString) {
+      out += c;
+      if (escape) { escape = false; i++; continue; }
+      if (c === '\\') { escape = true; i++; continue; }
+      if (c === '"') { inString = false; lastCat = 'string'; }
+      i++;
+      continue;
+    }
+
+    if (isWhitespace(c)) { out += c; i++; continue; }
+
+    // Double-quoted string start.
+    if (c === '"') {
+      if (needsComma()) out += ',';
+      inString = true;
+      out += c;
+      i++;
+      continue;
+    }
+
+    // Single-quoted string → convert to double-quoted.
+    // Walk to the matching closing single quote (respecting \' escapes),
+    // unescape \' → ', escape any literal " inside.
+    if (c === "'") {
+      if (needsComma()) out += ',';
+      let j = i + 1;
+      let inner = '';
+      let esc = false;
+      while (j < text.length) {
+        const cj = text[j];
+        if (esc) {
+          if (cj === "'") inner += "'";
+          else if (cj === '"') inner += '\\"';
+          else inner += '\\' + cj;
+          esc = false; j++;
+          continue;
+        }
+        if (cj === '\\') { esc = true; j++; continue; }
+        if (cj === "'") break;
+        if (cj === '"') inner += '\\"';
+        else inner += cj;
+        j++;
+      }
+      out += '"' + inner + '"';
+      lastCat = 'string';
+      i = j + 1;
+      continue;
+    }
+
+    // Identifier (covers bare keys AND literal values true/false/null/Infinity/etc.)
+    if (isIdentStart(c)) {
+      let j = i;
+      let ident = '';
+      while (j < text.length && isIdentPart(text[j])) { ident += text[j]; j++; }
+      let k = j;
+      while (k < text.length && isWhitespace(text[k])) k++;
+
+      // Bare-key: inside an object, identifier immediately followed by `:`.
+      // Allow this regardless of lastCat — if the LLM also forgot the comma
+      // before this key, we repair both mistakes at once (needsComma handles
+      // the comma, the wrap handles the quotes).
+      if (inObject() && text[k] === ':') {
+        if (needsComma()) out += ',';
+        out += '"' + ident + '":';
+        lastCat = 'colon';
+        i = k + 1;
+        continue;
+      }
+
+      // Otherwise it's a value-position identifier (true/false/null/etc.) —
+      // emit as-is, with comma insertion if we just finished another value.
+      if (needsComma()) out += ',';
+      out += ident;
+      lastCat = 'ident';
+      i = j;
+      continue;
+    }
+
+    // Number literal (including leading - and exponent/sign chars).
+    if (/[0-9\-]/.test(c)) {
+      if (needsComma()) out += ',';
+      let j = i;
+      if (text[j] === '-') j++;
+      while (j < text.length && /[0-9eE+\-.]/.test(text[j])) j++;
+      out += text.slice(i, j);
+      lastCat = 'number';
+      i = j;
+      continue;
+    }
+
+    // Structural characters.
+    if (c === '{' || c === '[') {
+      if (needsComma()) out += ',';
+      out += c;
+      stack.push(c === '{' ? 'object' : 'array');
+      lastCat = c === '{' ? 'open-brace' : 'open-bracket';
+      i++;
+      continue;
+    }
+    if (c === '}' || c === ']') {
+      out += c;
+      if (stack.length) stack.pop();
+      lastCat = c === '}' ? 'close-brace' : 'close-bracket';
+      i++;
+      continue;
+    }
+    if (c === ':') {
+      out += c;
+      lastCat = 'colon';
+      i++;
+      continue;
+    }
+    if (c === ',') {
+      // Leading commas ({, / [,) and double/trailing commas (,, / ,} / ,]) are
+      // never valid — drop them.
+      if (lastCat === 'open-brace' || lastCat === 'open-bracket' || lastCat === 'comma' || lastCat === 'none') {
+        i++;
+        continue;
+      }
+      out += c;
+      lastCat = 'comma';
+      i++;
+      continue;
+    }
+
+    // Any other char (rare): copy through, treat as opaque value.
+    out += c;
+    lastCat = 'value';
+    i++;
+  }
+  return out;
+}
+
 // Lenient JSON parser for LLM output. Tries strict JSON.parse first; on
 // failure, applies a small set of safe repairs (strip JS comments outside
-// strings, drop trailing commas) and re-tries. Returns {ok, value, error,
-// repairs} so callers can log what was repaired.
+// strings, repair bare keys / single-quotes / missing commas, drop trailing
+// commas) and re-tries. Returns {ok, value, error, repairs} so callers can
+// log what was repaired.
 //
-// What this does NOT fix: single-quoted strings, unquoted keys, unescaped
-// control chars inside string values. Those need a real tokenizer and are
-// risky to fix with regex heuristics — if the LLM emits those, the caller
-// should see the failure and report the exact position (see parseLLMJson in
+// What this does NOT fix: truncated input, unescaped control chars inside
+// string values, JS template literals. Those need a real tokenizer and are
+// risky to fix with heuristics — if the LLM emits those, the caller should
+// see the failure and report the exact position (see parseLLMJson in
 // wizard.js which logs the position context).
 function parseJsonLenient(text) {
   if (typeof text !== 'string' || !text) {
@@ -482,6 +658,11 @@ function parseJsonLenient(text) {
   if (stripped !== s) {
     repairs.push('strip-comments');
     s = stripped;
+  }
+  const commonFixed = repairCommonJsonMistakes(s);
+  if (commonFixed !== s) {
+    repairs.push('repair-common-mistakes');
+    s = commonFixed;
   }
   // Remove commas that directly precede a closing } or ] (with optional whitespace).
   // Safe because no valid JSON has `,}` or `,]` — those are always malformed.
