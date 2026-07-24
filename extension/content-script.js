@@ -349,6 +349,24 @@
           recordDomActivity('$clickInList', data.selector, result && typeof result.clicked === 'number' ? result.clicked : 0, Date.now() - __t0);
           break;
         }
+        case 'scrollBy': {
+          const __t0 = Date.now();
+          result = await domScrollBy(data.selector, data.args && data.args[0]);
+          recordDomActivity('$scrollBy', data.selector, result && result.scrolled ? 1 : 0, Date.now() - __t0);
+          break;
+        }
+        case 'scrollToBottom': {
+          const __t0 = Date.now();
+          result = await domScrollToBottom(data.selector);
+          recordDomActivity('$scrollToBottom', data.selector, result && result.scrolled ? 1 : 0, Date.now() - __t0);
+          break;
+        }
+        case 'scrollIntoView': {
+          const __t0 = Date.now();
+          result = await domScrollIntoView(data.selector);
+          recordDomActivity('$scrollIntoView', data.selector, result && result.found ? 1 : 0, Date.now() - __t0);
+          break;
+        }
         default:
           error = 'Unknown DOM action: ' + data.action;
       }
@@ -695,6 +713,75 @@
       errors: result.errors.length
     });
     return { clicked: result.clicked, errors: result.errors };
+  }
+
+  // ===== Scroll APIs =====
+  // Scroll the TARGET page (window or matched element), not the sandbox iframe.
+  // All three return { scrolled, prevY, newY } (or { found } for scrollIntoView)
+  // so step scripts can terminate loops when the position stops changing — the
+  // canonical "loaded everything" signal for infinite-feed pages (Facebook,
+  // Twitter, LinkedIn). Without these, step scripts emitted dead
+  // `if (scrollable) { /* nothing */ }` blocks and declared the feed exhausted
+  // after the first batch (bugx.log 2026-07-24).
+  function resolveScrollTarget(sel) {
+    if (!sel) return null;
+    const found = querySelectorDeep(sel);
+    if (!found) {
+      throw new Error('ELEMENT_NOT_FOUND: ' + sel + ' (scroll target)');
+    }
+    return found.element;
+  }
+
+  async function domScrollBy(sel, deltaY) {
+    const target = resolveScrollTarget(sel);
+    const root = target || document.scrollingElement || document.documentElement;
+    const prevY = root.scrollTop || 0;
+    const delta = typeof deltaY === 'number' && isFinite(deltaY) ? Math.trunc(deltaY) : 0;
+    if (delta === 0) {
+      return { scrolled: false, prevY, newY: prevY };
+    }
+    root.scrollBy ? root.scrollBy(0, delta) : (root.scrollTop = prevY + delta);
+    sendDebugLog('info', 'content-script', 'domScrollBy', {
+      selector: sel || '(window)',
+      deltaY: delta,
+      prevY,
+      newY: root.scrollTop || 0
+    });
+    return { scrolled: (root.scrollTop || 0) !== prevY, prevY, newY: root.scrollTop || 0 };
+  }
+
+  async function domScrollToBottom(sel) {
+    const target = resolveScrollTarget(sel);
+    const root = target || document.scrollingElement || document.documentElement;
+    const prevY = root.scrollTop || 0;
+    // scrollHeight is the canonical "bottom" signal. For window-like roots,
+    // document.scrollingElement covers the viewport scroll; for inner elements
+    // (overflow:auto/scroll containers), the same property is element-relative.
+    const bottom = root.scrollHeight || 0;
+    root.scrollTo ? root.scrollTo(0, bottom) : (root.scrollTop = bottom);
+    sendDebugLog('info', 'content-script', 'domScrollToBottom', {
+      selector: sel || '(window)',
+      prevY,
+      targetBottom: bottom,
+      newY: root.scrollTop || 0
+    });
+    return { scrolled: (root.scrollTop || 0) !== prevY, prevY, newY: root.scrollTop || 0 };
+  }
+
+  async function domScrollIntoView(sel) {
+    if (!sel) throw new Error('$scrollIntoView requires a selector');
+    const found = querySelectorDeep(sel);
+    if (!found) throw new Error('ELEMENT_NOT_FOUND: ' + sel);
+    const el = found.element;
+    if (typeof el.scrollIntoView === 'function') {
+      // behavior:'instant' avoids the smooth-scroll animation so subsequent
+      // $extract calls land on the final layout. Older browsers ignore the
+      // options arg and fall back to the default (block:'start' equivalent).
+      try { el.scrollIntoView({ block: 'start', behavior: 'instant' }); }
+      catch { el.scrollIntoView(); }
+    }
+    sendDebugLog('info', 'content-script', 'domScrollIntoView', { selector: sel });
+    return { found: true };
   }
 
   const openTabPending = new Map();

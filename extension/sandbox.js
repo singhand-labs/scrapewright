@@ -44,6 +44,14 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
   window.$openTab = (url, fn) => sendDomRequest('openTab', null, [url, fn ? fn.toString() : '']);
   window.$extractList = (containerSel, fieldMap, opts) => sendDomRequest('extractList', containerSel, [fieldMap, opts || {}]);
   window.$clickInList = (containerSel, subSel, opts) => sendDomRequest('clickInList', containerSel, [subSel, opts || {}]);
+  // Scroll DSL — see SCROLLING section in SCRIPT_DSL_GUIDE. Scrolls the target
+  // tab (window or a matched scrollable element), NOT the sandbox iframe.
+  // Returns { scrolled, prevY, newY } so loops can terminate when the position
+  // stops changing (content exhausted). bugx.log 2026-07-24: step 2 had dead
+  // `if (scrollable) { /* empty */ }` code because no scroll API existed.
+  window.$scrollBy = (deltaY, selector) => sendDomRequest('scrollBy', selector || null, [deltaY]);
+  window.$scrollToBottom = (selector) => sendDomRequest('scrollToBottom', selector || null);
+  window.$scrollIntoView = (selector) => sendDomRequest('scrollIntoView', selector);
 
   window.addEventListener('message', (e) => {
     if (e.data.type === 'DOM_RESPONSE') {

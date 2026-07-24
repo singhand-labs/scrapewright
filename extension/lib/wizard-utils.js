@@ -20,6 +20,9 @@ AVAILABLE API FUNCTIONS:
 - $extractList(containerSel, fieldMap, opts?): Extract a list of records in ONE call. fieldMap is { subField: subSelector | { selector, attr? } }; each sub-selector is evaluated INSIDE each container element. Returns an array of objects in container order. Prefers this over $list-per-field for multi-field lists (avoids field-misalignment when fields are missing on some items). Throws 'empty list' if no container matches; set opts.allowEmpty=true to return [] instead.
 - $clickInList(containerSel, subSel, opts?): Click subSel INSIDE each container element. Default opts.delayMs=500 (waits between clicks for expand/animations to settle). Returns { clicked: N, errors: [...] }. Use for "click 展开 in every post before extracting full content" — see EXPAND PATTERN below.
 - $waitForStable(selector, opts?): Poll the element's textContent (or opts.attr) every opts.interval ms (default 1500); return true after opts.stableChecks (default 2) consecutive unchanged + non-empty samples; false after opts.maxMs (default 20000). Prefer this for streaming-content completion (AI answers, live feeds) instead of guessing fragile loading-class selectors.
+- $scrollBy(deltaY, selector?): Scroll the window (or element matching selector) by deltaY pixels. Returns { scrolled, prevY, newY }. Use for infinite feeds / load-more pages.
+- $scrollToBottom(selector?): Scroll window (or element) to its bottom. Returns { scrolled, prevY, newY }. scrolled:false means the position did not change — the feed is exhausted. See SCROLLING below for the poll-load pattern.
+- $scrollIntoView(selector): Scroll element to the top of the viewport. Returns { found: true }. Use to reveal "See more" / "Load more" buttons before clicking them.
 
 CSS TRAP — Do NOT use :nth-of-type(N) on a compound selector. 'div[role=\'article\']:nth-of-type(5)' matches the 5th sibling *of that element type* (any 5th <div>), not the 5th matching div[role='article']. To get the Nth match, use $list and index into the returned array: const items = await $list('div[role="article"]'); const fifth = items[4]; If you need all items in a list, iterate the array — never emit per-index selectors. (Exception: if an ANNOTATION gives you a selector that already contains :nth-of-type, copy it verbatim per the SELECTOR FIDELITY RULE below — this trap applies only to selectors you compose yourself.)
 
@@ -178,6 +181,32 @@ When the user wants full content that requires clicking an expander inside EACH 
     return { posts: await $extractList('div[role="article"]', { content: '[data-ad-comet-preview="message"]', author: 'a strong' }) };
 
 Why two steps: $clickInList's default 500ms delay × N posts can exceed the single-step 30s timeout for long lists; a poll-style Step 2 (return { done: false } on partial errors) lets the orchestrator retry safely. If the list is short (N<10) and total click time stays well under the step timeout, a single step combining $clickInList + $extractList is acceptable.
+
+SCROLLING (infinite feeds / load-more pages — Facebook, Twitter, LinkedIn, comment threads):
+Three scroll APIs are available. All three scroll the TARGET PAGE (window or a matched scrollable element), never the sandbox. Use them to load more posts before $extractList runs.
+- $scrollBy(deltaY, selector?): Scroll window (or element matching selector) by deltaY pixels. Returns { scrolled: bool, prevY, newY }.
+- $scrollToBottom(selector?): Scroll window (or element) to its bottom. Returns { scrolled: bool, prevY, newY }.
+- $scrollIntoView(selector): Scroll a specific element to the top of the viewport. Returns { found: true }. Use to reveal a "See more" / "Load more" button before clicking it.
+
+POLL-LOAD PATTERN (the canonical "scroll until exhausted" loop):
+A scroll-to-load step is a poll step: maxIterations>1, onSuccess = the extraction step, onFailure = TERMINATE. Each iteration scrolls once, waits for new content to render, and returns { done: false } until the scroll position STOPS CHANGING (meaning the feed is exhausted).
+  // Step 2 (scroll_and_load_posts, maxIterations: 20, onSuccess: '3', onFailure: 'TERMINATE'):
+  const r = await $scrollToBottom();           // or $scrollBy(window.innerHeight * 2)
+  await new Promise(resolve => setTimeout(resolve, 1500));  // let new posts render
+  const postCount = await $count('div[role="article"]');
+  if (!r.scrolled && postCount >= 10) return { done: true, postCount };   // feed exhausted AND we have enough
+  return { done: false, postCount };                                      // retry — more posts may load
+
+CRITICAL: "position did not change" (r.scrolled === false) is the only reliable exhausted-feed signal. Do NOT guess that the feed is exhausted from a post count alone — infinite feeds often stop scrolling mid-page when the user is idle, then resume on the next scroll. Only declare done when BOTH (a) r.scrolled === false for the latest scroll AND (b) you have at least the user-requested number of posts (or a small number of consecutive unchanged scrolls — track via __lastResult__).
+  // Stricter variant — require N consecutive no-progress scrolls before done:
+  const r = await $scrollToBottom();
+  await new Promise(resolve => setTimeout(resolve, 1500));
+  const stalled = (__lastResult__ && __lastResult__.stalled || 0) + (r.scrolled ? 0 : 1);
+  const postCount = await $count('div[role="article"]');
+  if (stalled >= 3 && postCount > 0) return { done: true, postCount, exhausted: true };
+  return { done: false, postCount, stalled };
+
+SCROLL CONTAINER (not the window): some sites scroll an inner element (overflow:auto/scroll), not the document. If $count returns 0 after $scrollToBottom() with no selector, find the scrollable container in the snapshot and pass its selector: await $scrollToBottom('div[data-scrollable-container]'). A quick heuristic: the element with the largest scrollHeight that is NOT document.body is usually the feed's scroll root.
 
 ROBUSTNESS RULES (MANDATORY — these prevent the most common silent failures):
 
