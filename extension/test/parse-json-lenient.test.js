@@ -267,4 +267,131 @@ describe('parseJsonLenient', () => {
       assert.ok(res.repairs !== undefined, 'repairs array is present for diagnosis');
     });
   });
+
+  // bugx.log 2026-07-24 (later incident): generateStepsWithSelectors emitted
+  // JSON that failed at position 6671 with "Expected property name or '}'".
+  // Root cause: LLM routinely writes JS selectors like
+  //   $count('div[role="article"]')
+  // inside the `script` field, leaving the inner `"` unescaped. JSON.parse
+  // terminates the value at the first such `"`; the walker then misparses
+  // the remainder (the LLM's intended identifier ends up where a property
+  // name should go). The fix: for values of code-bearing keys (script,
+  // functionBody, expression, code, condition), use a depth-aware reader
+  // that escapes any `"` inside JS-bracket contexts ([{()]) and only treats
+  // `"` as the JSON terminator when depth is 0 AND the next non-whitespace
+  // char is a JSON structural separator (, } ] or EOF).
+  describe('code-bearing key handling (unescaped " in script values)', () => {
+    it('escapes unescaped " inside script value (CSS attribute selector)', () => {
+      // The bugx.log scenario: $count('div[role="article"]') emitted verbatim.
+      const input = `{"id":"1","script":"const c = await $count('div[role="article"]'); return { done: c > 0 };"}`;
+      const res = parseJsonLenient(input);
+      assert.equal(res.ok, true);
+      assert.equal(res.value.id, '1');
+      // The parsed script must contain the JS selector with the inner quotes intact.
+      assert.equal(res.value.script, "const c = await $count('div[role=\"article\"]'); return { done: c > 0 };");
+      assert.ok(res.repairs.includes('repair-common-mistakes'));
+    });
+
+    it('does not double-escape already-escaped " inside script value', () => {
+      // LLM properly escaped the inner quotes — the repair pass must preserve
+      // them as-is, not turn \" into \\" (which would change the parsed value).
+      const input = `{"id":"1","script":"x = \\"hi\\"; return { done: true };"}`;
+      const res = parseJsonLenient(input);
+      assert.equal(res.ok, true);
+      assert.equal(res.value.script, 'x = "hi"; return { done: true };');
+    });
+
+    it('preserves already-escaped backslash + quote (\\") verbatim', () => {
+      // Input has `\"` (one backslash + one quote, valid JSON escape for `"`).
+      // Output must have the same `\"` — not `\\"` (which would decode to `\` + `"`).
+      const input = `{"script":"x = 'he said \\"hi\\"'"}`;
+      const res = parseJsonLenient(input);
+      assert.equal(res.ok, true);
+      assert.equal(res.value.script, 'x = \'he said "hi"\'');
+    });
+
+    it('handles bare-key script field with unescaped inner "', () => {
+      // LLM occasionally emits bare keys (no quotes around `script`).
+      const input = `{id:"1",script:"x = get('a"b'); return { done: true };"}`;
+      const res = parseJsonLenient(input);
+      assert.equal(res.ok, true);
+      assert.equal(res.value.script, "x = get('a\"b'); return { done: true };");
+    });
+
+    it('handles multiple unescaped " scattered through the script', () => {
+      const input = `{"id":"1","script":"a = getX('role="admin"'); b = getY('aria="true"'); return { done: a || b };"}`;
+      const res = parseJsonLenient(input);
+      assert.equal(res.ok, true);
+      assert.equal(res.value.script,
+        "a = getX('role=\"admin\"'); b = getY('aria=\"true\"'); return { done: a || b };");
+    });
+
+    it('does not terminate early when " is followed by ] inside a CSS selector', () => {
+      // Without the depth counter, the second `"` (followed by `]`) would
+      // look like a real JSON terminator (string `]` is a JSON structural).
+      // The depth counter knows we're still inside the `[` from `[role=`.
+      const input = `{"id":"1","script":"const x = arr.filter(item => item.id === 'a"b')[0]; return { done: !!x };"}`;
+      const res = parseJsonLenient(input);
+      assert.equal(res.ok, true);
+      assert.equal(res.value.script,
+        "const x = arr.filter(item => item.id === 'a\"b')[0]; return { done: !!x };");
+    });
+
+    it('handles nested objects with code-bearing values at multiple levels', () => {
+      const input = `{"steps":[{"id":"1","script":"x = 'he said \\"hi\\"'"},{"id":"2","script":"y = $count('div[role="article"]')"}]}`;
+      const res = parseJsonLenient(input);
+      assert.equal(res.ok, true);
+      assert.equal(res.value.steps[0].script, 'x = \'he said "hi"\'');
+      assert.equal(res.value.steps[1].script, "y = $count('div[role=\"article\"]')");
+    });
+
+    it('resets code-bearing context across sibling fields', () => {
+      // After parsing `script`, the next field's value should NOT be treated
+      // as code-bearing. The `name` field's value is normal text — if it
+      // contains an unescaped " we should NOT escape it (we don't fix
+      // non-code-bearing fields; that's too risky).
+      const input = `{"script":"x = 'a'","name":"hello"}`;
+      const res = parseJsonLenient(input);
+      assert.equal(res.ok, true);
+      assert.equal(res.value.script, "x = 'a'");
+      assert.equal(res.value.name, 'hello');
+    });
+
+    it('treats condition (a code-bearing key) the same as script', () => {
+      // `condition` is in CODE_BEARING_KEYS because step conditions are JS exprs.
+      const input = `{"id":"1","condition":"document.querySelector('div[role="article"]') !== null","script":"return { done: true };"}`;
+      const res = parseJsonLenient(input);
+      assert.equal(res.ok, true);
+      assert.equal(res.value.condition,
+        "document.querySelector('div[role=\"article\"]') !== null");
+    });
+
+    it('does NOT apply code-bearing repair to non-code-bearing keys (too risky)', () => {
+      // `name` is free text — we deliberately do not escape unescaped " here.
+      // If we did, we'd paper over genuine truncation in non-code fields.
+      const input = `{"name":"a"b","script":"x"}`;
+      const res = parseJsonLenient(input);
+      assert.equal(res.ok, false);
+      assert.match(res.error, /property name|property value/i);
+    });
+
+    it('code-bearing mode handles trailing semicolon before closing "', () => {
+      // Common LLM pattern: end the JS statement with ;, then close the JSON string.
+      const input = `{"script":"return { ok: true };"}`;
+      const res = parseJsonLenient(input);
+      assert.equal(res.ok, true);
+      assert.equal(res.value.script, 'return { ok: true };');
+    });
+
+    it('bare-word CSS attribute (the recommended workaround) parses cleanly', () => {
+      // The prompt now recommends `[role=article]` over `[role="article"]`
+      // to sidestep the escape issue entirely.
+      const input = `{"id":"1","script":"const c = await $count('div[role=article]'); return { done: c > 0 };"}`;
+      const res = parseJsonLenient(input);
+      assert.equal(res.ok, true);
+      assert.equal(res.value.script, "const c = await $count('div[role=article]'); return { done: c > 0 };");
+      // No repair was needed — the input is already valid JSON.
+      assert.deepEqual(res.repairs, []);
+    });
+  });
 });

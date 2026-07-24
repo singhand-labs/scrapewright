@@ -64,16 +64,28 @@ function parseLLMJson(cleaned, contextLabel, rawResult) {
   const posMatch = (res.error || '').match(/at position (\d+)/);
   const pos = posMatch ? parseInt(posMatch[1], 10) : null;
   let positionContext = null;
+  let positionContextFlat = null;
   if (pos != null) {
     const start = Math.max(0, pos - 100);
     const end = Math.min(cleaned.length, pos + 100);
+    const before = cleaned.slice(start, pos);
+    const after = cleaned.slice(pos + 1, end);
+    const charCode = cleaned.charCodeAt(pos);
     positionContext = {
       position: pos,
       char: cleaned[pos],
-      charCode: cleaned.charCodeAt(pos),
-      before: cleaned.slice(start, pos),
-      after: cleaned.slice(pos + 1, end)
+      charCode,
+      before,
+      after
     };
+    // Flat one-line representation so it shows up in bugx.log dumps without
+    // requiring DevTools expansion of the nested object. Uses ASCII markers
+    // (⬅ here, ↳ after) that survive JSON.stringify.
+    positionContextFlat =
+      `pos=${pos} char="${cleaned[pos]}" code=${charCode} ` +
+      `…before=${JSON.stringify(before)} ` +
+      `⬅here↳ ` +
+      `after=${JSON.stringify(after)}`;
   }
   debugLogger.log('error', 'wizard', 'LLM JSON parse failed (lenient)', {
     context: contextLabel,
@@ -81,8 +93,17 @@ function parseLLMJson(cleaned, contextLabel, rawResult) {
     repairsAttempted: res.repairs,
     cleanedLength: cleaned.length,
     positionContext,
+    positionContextFlat,
     cleanedPreview: cleaned.slice(0, 500)
   });
+  // Also log the flat context as a standalone entry — debugLogger may
+  // truncate large nested fields, but a short string always survives.
+  if (positionContextFlat) {
+    debugLogger.log('warn', 'wizard', 'LLM JSON bad position', {
+      context: contextLabel,
+      summary: positionContextFlat
+    });
+  }
   // Persist the FULL failed output for offline analysis (log only stores 500 chars).
   try {
     chrome.storage.local.get(['llmParseFailures'], (data) => {
@@ -1085,6 +1106,14 @@ Return JSON with:
 - inputSchema: JSON Schema object
 - outputSchema: JSON Schema object
 - sampleInput: JSON object with example values
+
+JSON ESCAPING (CRITICAL — failures here abort the wizard):
+The `script` field is a JSON string. Any `"` character INSIDE the JS code must be escaped as `\"`. This applies even when the `"` is inside a JS single-quoted string — JSON does not care that JS treats `'...'` as a string.
+CORRECT (note the backslashes before each inner "):
+"script": "const c = await $count('div[role=\\\"article\\\"]'); return { done: c > 0 };"
+WRONG (bare " inside the value — JSON.parse terminates the string at the first one):
+"script": "const c = await $count('div[role=\"article\"]');"
+Tip: when a CSS attribute value is a bare word (no spaces), prefer the unquoted form to sidestep the issue entirely — `[role=article]` instead of `[role="article"]`.
 
 Use "TERMINATE" to end. Do NOT use "SELF" (no longer supported). For loops/waits, set maxIterations>1 and return { done: false } to retry the same step.
 

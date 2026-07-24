@@ -467,6 +467,14 @@ function stripJSComments(text) {
 //   - Missing commas between members:  { "a":1 "b":2 }        → { "a":1,"b":2 }
 //   - Leading commas:                  { ,"a":1 } / [,1]      → { "a":1 } / [1]
 //   - Double commas:                   [1,,2]                 → [1,2]
+//   - Unescaped " in code-bearing      "script":"...role='x'\"..."
+//     string values (bugx.log          →  "script":"...role='x'\\\"..."
+//     2026-07-24 pos 6671): the
+//     LLM emits JS selectors like
+//     $count('div[role="article"]')
+//     with literal " because that's
+//     legal inside JS single-quoted
+//     strings.
 //
 // Why char-walk instead of regex: every one of these repairs is unsafe inside
 // a JSON string value (a script may legitimately contain `{'a':1}` as text),
@@ -475,9 +483,18 @@ function stripJSComments(text) {
 // and a last-token category so comma insertion fires only between values.
 //
 // What this does NOT fix: truncated input, unescaped control chars inside
-// string values, JS template literals, multi-line string values. Those need a
+// string values (e.g. literal newlines), JS template literals. Those need a
 // full tokenizer; if the LLM emits them, the caller sees the failure and
 // reports position context (see parseLLMJson in wizard.js).
+//
+// CODE_BEARING_KEYS: keys whose values frequently contain JS source code. The
+// LLM routinely emits unescaped " inside these (from JS selectors/strings),
+// which a strict JSON parser treats as the string terminator. For these keys
+// only, we use a peek-ahead reader that escapes any " NOT followed by a
+// structural char (, } ] : or EOF). We deliberately do NOT apply this to all
+// string values — it's too risky for free-text fields where an unescaped "
+// followed by , } ] : might be a genuine truncation we shouldn't paper over.
+const CODE_BEARING_KEYS = new Set(['script', 'functionBody', 'expression', 'code', 'condition']);
 function repairCommonJsonMistakes(text) {
   if (typeof text !== 'string' || !text) return text;
   const isIdentStart = (c) => /[a-zA-Z_$]/.test(c);
@@ -486,6 +503,9 @@ function repairCommonJsonMistakes(text) {
   // Categories of "last emitted token" relevant to comma insertion.
   // Value-terminators are the only ones that may need a comma before the next value.
   const VALUE_ENDS = new Set(['string', 'number', 'ident', 'close-brace', 'close-bracket']);
+  // Structural characters that may legitimately follow a real string terminator.
+  // `:` is excluded — a value string cannot be followed by `:` in valid JSON.
+  const STRING_TERMINATOR_NEXT = new Set([',', '}', ']']);
 
   let out = '';
   let i = 0;
@@ -493,6 +513,7 @@ function repairCommonJsonMistakes(text) {
   let escape = false;
   let stack = []; // 'object' | 'array'
   let lastCat = 'none';
+  let lastKeyName = null; // most recent key parsed at the current object level
 
   const inObject = () => stack[stack.length - 1] === 'object';
   const needsComma = () => stack.length > 0 && VALUE_ENDS.has(lastCat);
@@ -512,8 +533,84 @@ function repairCommonJsonMistakes(text) {
 
     if (isWhitespace(c)) { out += c; i++; continue; }
 
-    // Double-quoted string start.
+    // Double-quoted string. Peek ahead to disambiguate key vs value, and
+    // detect code-bearing values that need unescaped-quote-aware reading.
     if (c === '"') {
+      // Scan to the matching closing quote, respecting backslash escapes.
+      // If we run off the end, end === text.length and there's no closing quote.
+      let end = i + 1;
+      while (end < text.length) {
+        if (text[end] === '\\') { end += 2; continue; }
+        if (text[end] === '"') break;
+        end++;
+      }
+      const hasClose = end < text.length;
+      // Peek past the closing quote to detect key context.
+      let after = hasClose ? end + 1 : text.length;
+      while (after < text.length && isWhitespace(text[after])) after++;
+      const isKey = hasClose && text[after] === ':' && inObject();
+
+      if (isKey) {
+        if (needsComma()) out += ',';
+        // Preserve the key verbatim (including any escape sequences).
+        out += text.slice(i, end + 1) + ':';
+        lastKeyName = text.slice(i + 1, end);
+        lastCat = 'colon';
+        i = after + 1;
+        continue;
+      }
+
+      // Value string. For code-bearing keys, the LLM routinely emits
+      // unescaped " inside the value (from JS selectors like
+      // $count('div[role="article"]')). The inString state machine below would
+      // terminate the string at the first such ", corrupting everything after.
+      // Use a context-tracking reader: maintain a depth counter for JS brackets
+      // ( [ { ( ), so a " inside a CSS selector / array / parenthesised call
+      // is always escaped (the matching ])} has not been seen yet). When depth
+      // is 0, a " is the real JSON terminator only when the next non-whitespace
+      // char is a JSON structural separator (, } ] or EOF).
+      if (lastKeyName && CODE_BEARING_KEYS.has(lastKeyName)) {
+        if (needsComma()) out += ',';
+        out += '"';
+        let p = i + 1;
+        let pesc = false;
+        let depth = 0; // tracks [ { ( inside the JS code
+        while (p < text.length) {
+          const cp = text[p];
+          if (pesc) {
+            // Preserve existing escape sequences verbatim. The backslash was
+            // NOT emitted when cp='\\' was seen — we deferred to here so the
+            // escaped char gets joined with its backslash.
+            out += '\\' + cp;
+            pesc = false; p++; continue;
+          }
+          if (cp === '\\') { pesc = true; p++; continue; }
+          if (cp === '"' && depth > 0) {
+            // Inside a JS nested context (e.g. CSS selector) — never terminate.
+            out += '\\"';
+            p++; continue;
+          }
+          if (cp === '"') {
+            let q = p + 1;
+            while (q < text.length && isWhitespace(text[q])) q++;
+            const nc = q < text.length ? text[q] : '';
+            if (nc === '' || STRING_TERMINATOR_NEXT.has(nc)) break;
+            // Unescaped " at depth 0 not followed by a separator — escape it.
+            out += '\\"';
+            p++; continue;
+          }
+          if (cp === '[' || cp === '{' || cp === '(') depth++;
+          else if (cp === ']' || cp === '}' || cp === ')') depth = Math.max(0, depth - 1);
+          out += cp;
+          p++;
+        }
+        out += '"';
+        lastCat = 'string';
+        i = p + 1;
+        continue;
+      }
+
+      // Normal value string — defer to the inString state machine.
       if (needsComma()) out += ',';
       inString = true;
       out += c;
@@ -565,6 +662,7 @@ function repairCommonJsonMistakes(text) {
       if (inObject() && text[k] === ':') {
         if (needsComma()) out += ',';
         out += '"' + ident + '":';
+        lastKeyName = ident;
         lastCat = 'colon';
         i = k + 1;
         continue;
@@ -597,6 +695,7 @@ function repairCommonJsonMistakes(text) {
       out += c;
       stack.push(c === '{' ? 'object' : 'array');
       lastCat = c === '{' ? 'open-brace' : 'open-bracket';
+      lastKeyName = null; // reset on nested structure
       i++;
       continue;
     }
@@ -604,6 +703,7 @@ function repairCommonJsonMistakes(text) {
       out += c;
       if (stack.length) stack.pop();
       lastCat = c === '}' ? 'close-brace' : 'close-bracket';
+      lastKeyName = null; // reset on structure exit
       i++;
       continue;
     }
