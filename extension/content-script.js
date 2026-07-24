@@ -790,16 +790,7 @@
           attempt1: r1,
           attempt2: r2
         });
-        return {
-          scrolled: r2.scrolled,
-          prevY: r2.prevY,
-          newY: r2.newY,
-          prevScrollHeight: r2.prevScrollHeight,
-          newScrollHeight: r2.newScrollHeight,
-          scrollRoot: r2.scrollRoot,
-          stalled: r2.stalled,
-          attempts: r2.attempts
-        };
+        return r2;
       }
     }
 
