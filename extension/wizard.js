@@ -2429,7 +2429,8 @@ Rules (READ ALL):
   * "field X missing or wrong" → the step whose $extractList fieldMap includes field X (usually the extract step, NOT the finalizer).
   * "only N items extracted" → the scroll/paginate step (under-loaded) OR the extract step (container selector too narrow).
   * "image URLs incomplete" → the step that reads images. If it uses $extract('img', src) for a field declared array, switch to $list('img') — $extract returns ONE.
-  * "posts have wrong author/content" → the extract step's sub-selectors are matching the wrong element.`;
+  * "posts have wrong author/content" → the extract step's sub-selectors are matching the wrong element.
+  * "scroll/poll step returned the same postCount on every iteration with a stalled counter increasing" → the scroll mechanism itself did not progress (page did not actually scroll). NOT a selector problem. Check RUNTIME DIAGNOSTICS above: if scrollRoot is not 'window' or stalled is true, the site uses an inner scroll container — the framework auto-probes one, but if the auto-probe picked the wrong container, pin it explicitly with $scrollToBottom('<inner container selector>').`;
 
   let prompt;
   if (isFailureFix) {
@@ -2513,6 +2514,9 @@ ${buildTimeoutGuidance(DEPLOY_TIMEOUT_MS).text}
 
 FULL STEP WORKFLOW (analyze EVERY step — root cause may be in ANY of them):
 ${allStepsContext}
+
+RUNTIME DIAGNOSTICS (per-step iteration traces from the last test run — read these before deciding root cause):
+${summarizeAllStepDiagnostics(wizardState.lastExecutionEvents || [], wizardState.steps)}
 
 Current output:
 ${currentOutput}
