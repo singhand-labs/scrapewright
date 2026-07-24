@@ -50,6 +50,14 @@ LIST EXTRACTION — When extracting multiple fields from a collection of list it
   return { posts };
 Fall back to $list ONCE PER FIELD only for single-field extraction. NEVER zip independent $list arrays — if one field is missing on some items, the zip silently shifts every later field.
 
+SELECTOR GENERALIZATION — Annotation selectors the user clicked often embed specific values that only match ONE element on the page. Common traps:
+  - aria-label with text: a[role="link"][aria-label="3天"] — matches only the post whose aria-label is literally "3天"; other posts have aria-label="4月27日", "5月1日 10:30", etc. → GENERALIZE to a[role="link"][aria-label] (attribute presence).
+  - text-equality: a[text()='John Doe'] → GENERALIZE to a structural selector (a[href*="/user/"], h3 > a[role="link"], etc.).
+  - nth-child/Nth-of-type indices captured at annotation time → KEEP them only if the user explicitly annotated a specific item; otherwise drop and use the container selector alone.
+If a field returns data for some items but null/empty for others in the same list, the selector is too specific. Re-generalize by removing literal values from attribute matchers.
+
+MULTI-VALUE FIELDS (e.g., images[], attachments[], tags[]) — When the output schema declares an array field inside each list item (e.g. posts.images: array of URLs), do NOT use $extract('img', 'src') inside the container — that returns ONE src. Use $list('img') (returns array of data objects) and map to .src, OR use $extractList with a sub-selector that aggregates. The "field" in $extractList's fieldMap is a single match per container; for multi-value fields, post-process the container via a separate $list call.
+
 EMPTY-LIST BAILOUT — If the parent list query returns 0 items, DO NOT proceed with field queries. Return { done: false } immediately (if the step has a retry budget) or { failed: true, error: 'no items found for selector X' }. Without this rule, a step runs 8+ sequential DOM round-trips that all return empty, burning the step time budget and hiding the real failure behind a generic not-done signal.
 
 IMPORTANT: For waiting or polling scenarios (e.g., checking if AI has finished generating), do NOT use $() in a loop — it will throw after 30s if the element is not found. Instead:
@@ -458,6 +466,48 @@ function parseJsonLenient(text) {
   } catch (e) {
     return { ok: false, error: e.message, repairs, repairedPreview: s.slice(0, 500) };
   }
+}
+
+// Decide which step an autoFix patch should apply to. The marked targetStepId
+// is a heuristic (the last step on user-feedback path; the failing step on
+// error path) — the actual root cause often lives in a different step.
+//
+// Return contract:
+//   {step, redirected: false}                          — apply to targetStepId
+//   {step, redirected: true, redirectedFrom}           — apply to LLM-chosen step
+//   {step, redirected: false, fallbackReason}          — LLM picked invalid step; fell back
+//   {error}                                             — targetStepId itself invalid
+//
+// bugx.log 2026-07-24 04:47:12 showed the LLM understood user feedback
+// ("publishTime missing, only 3 posts") but couldn't act on it because
+// RETURN_FORMAT constrained the patch to the marked step (5, finalize)
+// while the root cause was in step 4 (extract_posts). Letting the LLM
+// redirect unblocks this without forcing a multi-step patch format.
+function resolveAutoFixTarget(obj, targetStepId, allSteps) {
+  if (!obj || typeof obj !== 'object') {
+    return { error: 'invalid LLM response (non-object)' };
+  }
+  const fallbackStep = allSteps.find(s => s.id === targetStepId);
+  if (!fallbackStep) {
+    return { error: 'target step not found: ' + targetStepId };
+  }
+  // Only honor string stepId. Defensive against LLMs that return numbers
+  // (e.g. stepId: 4) — those would silently coerce and might match by accident.
+  const requestedId = (typeof obj.stepId === 'string' && obj.stepId.trim())
+    ? obj.stepId.trim()
+    : null;
+  if (!requestedId || requestedId === targetStepId) {
+    return { step: fallbackStep, redirected: false };
+  }
+  const redirect = allSteps.find(s => s.id === requestedId);
+  if (!redirect) {
+    return {
+      step: fallbackStep,
+      redirected: false,
+      fallbackReason: `LLM requested unknown stepId "${requestedId}", falling back to targetStepId "${targetStepId}"`
+    };
+  }
+  return { step: redirect, redirected: true, redirectedFrom: targetStepId };
 }
 
 function buildResearchPrompt(url, description, html, text) {
@@ -1587,7 +1637,7 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;

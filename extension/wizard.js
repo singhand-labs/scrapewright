@@ -2251,6 +2251,13 @@ async function runFixIteration(userFeedback, config, options = {}) {
   const isFailureFix = !!wizardState.lastErrorStepId;
   updatePhaseUI('fixing');
   showLoading((isFailureFix ? 'Fixing' : 'Improving') + ' step "' + targetStep.name + '"...');
+  debugLogger.log('info', 'wizard', 'autoFix target selected', {
+    targetStepId,
+    targetStepName: targetStep.name,
+    isFailureFix,
+    allSteps: wizardState.steps.map(s => ({ id: s.id, name: s.name, scriptLength: (s.script || '').length })),
+    userFeedback: userFeedback ? userFeedback.slice(0, 500) : null
+  });
 
   // Use the failing step's snapshot (captured at failure time with full HTML), or fall back to fresh capture
   let pageSnapshot = wizardState.lastErrorSnapshot;
@@ -2340,9 +2347,15 @@ If your script does NOT use $openTab, $wait / $ / $extract will run against the 
 
   const RETURN_FORMAT = `RETURN FORMAT — choose ONE:
 (A) Script-only fix (default): return ONLY the fixed JavaScript code, no explanation.
-(B) If you ALSO need to change THIS step's flow (onSuccess/onFailure/maxIterations), return a JSON object and nothing else:
-    {"script": "<fixed JS as one string>", "onSuccess": "<step id or TERMINATE>", "onFailure": "<step id or TERMINATE>", "maxIterations": <number>}
-    Include only the flow fields you are changing; "script" is always required. The new flow must keep the chain valid (every target id exists, no orphan steps, never use "SELF"). Do NOT add or remove steps.`;
+(B) If you ALSO need to change THIS step's flow (onSuccess/onFailure/maxIterations), OR redirect the fix to a DIFFERENT step, return a JSON object and nothing else:
+    {"script": "<fixed JS as one string>", "onSuccess": "<step id or TERMINATE>", "onFailure": "<step id or TERMINATE>", "maxIterations": <number>, "stepId": "<id of step to apply this patch to>"}
+    Include only the flow fields you are changing; "script" is always required. The new flow must keep the chain valid (every target id exists, no orphan steps, never use "SELF"). Do NOT add or remove steps.
+
+REDIRECTING THE FIX (important when user reports extraction-quality issues):
+- The step marked "<<< FIXING" below is a HEURISTIC guess (the last step on the user-feedback path, or the failing step on the error path). The actual root cause frequently lives in an EARLIER step.
+- If your analysis of the user's feedback + the step scripts shows the root cause is in a different step, set "stepId" to that step's id. Your patch will be applied there instead.
+- Example: user says "only 3 posts extracted". The marked step is "5. finalize" which only enriches posts already extracted. The real bug is in "4. extract_posts" whose container selector is too narrow. Return {"stepId":"4", "script":"<fixed step-4 script>"}.
+- If the marked step IS the right one to fix, omit "stepId" (or set it to the marked step's id).`;
 
   let prompt;
   if (isFailureFix) {
@@ -2396,7 +2409,7 @@ ${RETURN_FORMAT}`;
 
     prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${buildFeedbackSection(userFeedback, attemptNum, totalAttempts, wizardState.llmHistory)}${SCRIPT_DSL_GUIDE}
 
-The test passed but the user is not satisfied with the extraction results. Improve the step script based on their feedback.
+The test passed but the user is not satisfied with the extraction results. Analyze ALL the step scripts below (not just the marked one) and apply the fix to whichever step actually contains the root cause. The marker "<<< FIXING" is a heuristic hint — you MAY redirect the fix to a different step by returning "stepId" in the JSON (see RETURN FORMAT).
 ${compactedNote}
 
 Step ID: ${targetStepId}
@@ -2466,70 +2479,94 @@ ${RETURN_FORMAT}`;
       return false;
     }
     // The LLM may return either plain JS (script-only) OR a JSON step object
-    // {"script":..., "onSuccess"?:..., "onFailure"?:..., "maxIterations"?:N} when
-    // it needs to adjust this step's flow (runtime revealed the generation-time
-    // topology was a wrong guess). Only an object with a string "script" field
-    // counts as a step-def; anything else is treated as a plain script.
+    // {"script":..., "onSuccess"?:..., "onFailure"?:..., "maxIterations"?:N,
+    //  "stepId"?:...} when it needs to adjust this step's flow OR redirect the
+    // fix to a different step whose script actually contains the root cause
+    // (bugx.log 2026-07-24: user feedback about extraction quality, marked step
+    // was the finalizer, but the bug was in the extract step). Only an object
+    // with a string "script" field counts as a step-def; anything else is
+    // treated as a plain script.
     let newScript = cleaned;
     let edgePatch = null;
     const trimmed = cleaned.trim();
     if (trimmed.startsWith('{')) {
-      try {
-        const obj = JSON.parse(trimmed);
-        if (obj && typeof obj === 'object' && typeof obj.script === 'string') {
-          newScript = obj.script;
-          edgePatch = obj;
-        }
-      } catch { /* not JSON — treat as plain script */ }
+      const parsed = parseJsonLenient(trimmed);
+      if (parsed.ok && parsed.value && typeof parsed.value === 'object' && typeof parsed.value.script === 'string') {
+        newScript = parsed.value.script;
+        edgePatch = parsed.value;
+      }
     }
     if (!newScript.trim()) {
       appendLog((isFailureFix ? 'Auto-fix' : 'AI improve') + ' returned empty script for step "' + targetStep.name + '", keeping original.', 'warn');
       return false;
     }
+    // Resolve which step the patch applies to. The heuristic targetStepId is a
+    // hint; the LLM may redirect via edgePatch.stepId when the root cause is in
+    // a different step. Plain-JS responses (edgePatch === null) cannot redirect
+    // — they always apply to the heuristic target.
+    let appliedStep = targetStep;
+    let redirectInfo = null;
+    if (edgePatch) {
+      const target = resolveAutoFixTarget(edgePatch, targetStepId, wizardState.steps);
+      if (target.error) {
+        appendLog((isFailureFix ? 'Auto-fix' : 'AI improve') + ' could not resolve target step: ' + target.error, 'warn');
+        return false;
+      }
+      appliedStep = target.step;
+      redirectInfo = target;
+    }
+    if (redirectInfo && redirectInfo.redirected) {
+      debugLogger.log('info', 'wizard', 'autoFix redirected to LLM-chosen step', {
+        fromStepId: targetStepId, toStepId: appliedStep.id, toStepName: appliedStep.name
+      });
+      appendLog((isFailureFix ? 'Auto-fix' : 'AI improve') + ' redirected from step "' + targetStep.name + '" to step "' + appliedStep.name + '" (LLM judged this is where the root cause lives).', 'info');
+    } else if (redirectInfo && redirectInfo.fallbackReason) {
+      appendLog((isFailureFix ? 'Auto-fix' : 'AI improve') + ' ' + redirectInfo.fallbackReason + '.', 'warn');
+    }
     // Build the proposed step and validate the WHOLE chain before committing.
     // A topology change that orphans a step or dangles a pointer is rejected and
     // the previous step is kept (the next auto-fix iteration can retry).
-    const proposed = { ...targetStep, script: newScript };
+    const proposed = { ...appliedStep, script: newScript };
     if (edgePatch) {
       if (typeof edgePatch.onSuccess === 'string' && edgePatch.onSuccess.trim()) proposed.onSuccess = edgePatch.onSuccess.trim();
       if (typeof edgePatch.onFailure === 'string' && edgePatch.onFailure.trim()) proposed.onFailure = edgePatch.onFailure.trim();
       if (Number.isInteger(edgePatch.maxIterations) && edgePatch.maxIterations >= 1) proposed.maxIterations = edgePatch.maxIterations;
     }
-    const trialSteps = wizardState.steps.map(s => (s === targetStep ? proposed : s));
+    const trialSteps = wizardState.steps.map(s => (s === appliedStep ? proposed : s));
     const chainCheck = validateChain(trialSteps);
     if (!chainCheck.valid) {
       appendLog((isFailureFix ? 'Auto-fix' : 'AI improve') + ' proposed an invalid step flow (' + chainCheck.error + '); keeping the previous step.', 'warn');
       return false;
     }
     const flowChanged = !!edgePatch && (
-      proposed.onSuccess !== targetStep.onSuccess ||
-      proposed.onFailure !== targetStep.onFailure ||
-      proposed.maxIterations !== targetStep.maxIterations
+      proposed.onSuccess !== appliedStep.onSuccess ||
+      proposed.onFailure !== appliedStep.onFailure ||
+      proposed.maxIterations !== appliedStep.maxIterations
     );
     // Commit (script always; edges/maxIterations only if the LLM patched them).
-    targetStep.script = proposed.script;
+    appliedStep.script = proposed.script;
     if (edgePatch) {
-      targetStep.onSuccess = proposed.onSuccess;
-      targetStep.onFailure = proposed.onFailure;
-      targetStep.maxIterations = proposed.maxIterations;
+      appliedStep.onSuccess = proposed.onSuccess;
+      appliedStep.onFailure = proposed.onFailure;
+      appliedStep.maxIterations = proposed.maxIterations;
     }
     wizardState.fixAttemptCount++;
-    document.getElementById('currentScript').textContent = targetStep.script;
+    document.getElementById('currentScript').textContent = appliedStep.script;
     // Sync the step's editor inputs so a later confirmDeploy's syncStepsFromEditor
     // keeps the fix — otherwise the stale textarea overwrites the auto-fixed
     // values and the deployed service loses the fix. Syncs script AND (if the
     // flow changed) onSuccess/onFailure/maxIterations.
-    const fixedDetail = document.querySelector(`.step-detail[data-step-id="${targetStep.id}"]`);
+    const fixedDetail = document.querySelector(`.step-detail[data-step-id="${appliedStep.id}"]`);
     if (fixedDetail) {
       const fixedTa = fixedDetail.querySelector('.step-script-input');
-      if (fixedTa) fixedTa.value = targetStep.script;
+      if (fixedTa) fixedTa.value = appliedStep.script;
       if (flowChanged) {
-        const s = fixedDetail.querySelector('.step-success-input'); if (s) s.value = targetStep.onSuccess || 'TERMINATE';
-        const f = fixedDetail.querySelector('.step-failure-input'); if (f) f.value = targetStep.onFailure || 'TERMINATE';
-        const m = fixedDetail.querySelector('.step-maxiter-input'); if (m) m.value = targetStep.maxIterations || 1;
+        const s = fixedDetail.querySelector('.step-success-input'); if (s) s.value = appliedStep.onSuccess || 'TERMINATE';
+        const f = fixedDetail.querySelector('.step-failure-input'); if (f) f.value = appliedStep.onFailure || 'TERMINATE';
+        const m = fixedDetail.querySelector('.step-maxiter-input'); if (m) m.value = appliedStep.maxIterations || 1;
       }
     }
-    appendLog((isFailureFix ? 'Auto-fix' : 'AI improve') + ' applied to step "' + targetStep.name + '" (attempt #' + wizardState.fixAttemptCount + (flowChanged ? ', flow adjusted' : '') + '). Re-testing...');
+    appendLog((isFailureFix ? 'Auto-fix' : 'AI improve') + ' applied to step "' + appliedStep.name + '"' + (redirectInfo && redirectInfo.redirected ? ' [redirected from "' + targetStep.name + '"]' : '') + ' (attempt #' + wizardState.fixAttemptCount + (flowChanged ? ', flow adjusted' : '') + '). Re-testing...');
 
     await testScript();
     // testScript resets wizardState.lastError at start; it's set again in the
