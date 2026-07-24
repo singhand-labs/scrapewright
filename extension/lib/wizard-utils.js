@@ -1311,6 +1311,66 @@ function summarizeAllStepDiagnostics(events, steps) {
       }
       i += runLen;
     }
+
+    // Collect selector diagnostics across all iterations of this step.
+    // These are empirical records of what each $extractList / $list / $extract
+    // / $count call actually matched — surfaced to give the LLM concrete
+    // evidence instead of forcing analytical guessing (bugx.log 2026-07-24
+    // FB publishTime incident: the proposed selector excluded the very
+    // element it was trying to match, but no signal exposed that).
+    const allDiags = [];
+    for (const evt of iterEvents) {
+      if (Array.isArray(evt.selectorDiagnostics)) {
+        for (const d of evt.selectorDiagnostics) allDiags.push(d);
+      }
+    }
+    if (allDiags.length > 0) {
+      lines.push('  SELECTOR DIAGNOSTICS (empirical — what your selectors actually matched):');
+      for (const d of allDiags.slice(0, 10)) {  // cap at 10 calls per step
+        if (d.api === 'extractList') {
+          let header = '    $extractList(\'' + d.containerSelector + '\') — container matched ' + d.containerMatches + ' element(s)';
+          if (d.containerMatches === 0) header += ' (returned [] — allowEmpty was set or container selector is wrong)';
+          lines.push(header);
+          // Sort fields: 0-match fields first (those are the suspicious ones), then by name.
+          const sortedFields = (d.perField || []).slice().sort((a, b) => {
+            if ((a.matchCount === 0) !== (b.matchCount === 0)) return a.matchCount === 0 ? -1 : 1;
+            return String(a.field).localeCompare(String(b.field));
+          });
+          for (const f of sortedFields) {
+            const overConstrained = (f.matchCount === 0 && d.containerMatches > 0) ? ' ← OVER-CONSTRAINED (excludes the element you want)' : '';
+            const mismatch = (!overConstrained && f.matchCount !== d.containerMatches && f.matchCount > 0)
+              ? ' ← PARTIAL (' + f.matchCount + '/' + d.containerMatches + ' containers had this field)'
+              : '';
+            const samples = f.sampleTexts && f.sampleTexts.length > 0
+              ? ' sample texts: ' + JSON.stringify(f.sampleTexts)
+              : '';
+            const hrefs = f.sampleHrefs && f.sampleHrefs.length > 0
+              ? ' sample hrefs: ' + JSON.stringify(f.sampleHrefs)
+              : '';
+            let line = '      field ' + f.field + ' (sel \'' + f.subSelector + '\'' + (f.attr ? ', attr=\'' + f.attr + '\'' : '') + '): ' + f.matchCount + ' matches.' + overConstrained + mismatch + samples + hrefs;
+            if (line.length > 240) line = line.slice(0, 237) + '...';
+            lines.push(line);
+          }
+        } else if (d.api === 'list' || d.api === 'extract') {
+          const fn = d.api === 'list' ? '$list' : '$extract';
+          const samples = d.sampleTexts && d.sampleTexts.length > 0
+            ? ' sample texts: ' + JSON.stringify(d.sampleTexts)
+            : '';
+          const hrefs = d.sampleHrefs && d.sampleHrefs.length > 0
+            ? ' sample hrefs: ' + JSON.stringify(d.sampleHrefs)
+            : '';
+          const overConstrained = (d.api === 'extract' && d.matchCount === 0) ? ' ← OVER-CONSTRAINED (selector matched nothing)' : '';
+          let line = '    ' + fn + '(\'' + d.selector + '\') — matched ' + d.matchCount + ' element(s).' + overConstrained + samples + hrefs;
+          if (line.length > 240) line = line.slice(0, 237) + '...';
+          lines.push(line);
+        } else if (d.api === 'count') {
+          let line = '    $count(\'' + d.selector + '\') — matched ' + d.matchCount + ' element(s).';
+          if (line.length > 240) line = line.slice(0, 237) + '...';
+          lines.push(line);
+        }
+      }
+    }
+
     lines.push('');
   }
 
