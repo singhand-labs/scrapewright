@@ -162,3 +162,102 @@ describe('computeSimpleSelectorDiagnostics', () => {
     assert.deepEqual(diag.sampleTexts, []);
   });
 });
+
+const { summarizeAllStepDiagnostics } = require('../lib/wizard-utils');
+
+describe('summarizeAllStepDiagnostics — selector diagnostics rendering', () => {
+  it('renders a per-step selector diagnostics block when STEP_ITERATION has selectorDiagnostics', () => {
+    const steps = [{ id: '4', name: 'extract_posts' }];
+    const events = [{
+      type: 'STEP_ITERATION',
+      stepId: '4',
+      iteration: 1,
+      resultPreview: '{"posts":[{"author":"Alice"}]}',
+      selectorDiagnostics: [
+        {
+          api: 'extractList',
+          containerSelector: 'div[role="article"]',
+          containerMatches: 6,
+          perField: [
+            { field: 'author', subSelector: 'h3 a[role="link"]', attr: null, matchCount: 6, sampleTexts: ['Alice', 'Bob', 'Carol'], sampleHrefs: ['/alice', '/bob', '/carol'] },
+            { field: 'publishTime', subSelector: 'a[role="link"][aria-label]:not([href*="facebook.com/"])', attr: null, matchCount: 0, sampleTexts: [], sampleHrefs: [] },
+            { field: 'content', subSelector: 'div[data-ad-rendering-role=story_message] > div', attr: null, matchCount: 3, sampleTexts: ['post1', 'post2', 'post3'], sampleHrefs: [] }
+          ]
+        }
+      ]
+    }];
+    const out = summarizeAllStepDiagnostics(events, steps);
+
+    // Section header appears
+    assert.match(out, /SELECTOR DIAGNOSTICS/);
+    // Container match count appears
+    assert.match(out, /container matched 6/);
+    // Per-field entries appear with matchCount
+    assert.match(out, /field author.*6 matches/);
+    assert.match(out, /field publishTime.*0 matches/);
+    // OVER-CONSTRAINED marker fires when matchCount=0 but containerMatches > 0
+    assert.match(out, /publishTime[\s\S]*OVER-CONSTRAINED/);
+    // Sample texts appear (truncated/quoted)
+    assert.match(out, /Alice/);
+    // Sample hrefs appear when present
+    assert.match(out, /\/alice/);
+  });
+
+  it('omits the selector diagnostics block when events have no selectorDiagnostics (backward compat)', () => {
+    const steps = [{ id: '1', name: 's1' }];
+    const events = [{
+      type: 'STEP_ITERATION',
+      stepId: '1',
+      iteration: 1,
+      resultPreview: '{"done":true}'
+      // no selectorDiagnostics field — pre-fix event shape
+    }];
+    const out = summarizeAllStepDiagnostics(events, steps);
+    assert.doesNotMatch(out, /SELECTOR DIAGNOSTICS/);
+  });
+
+  it('renders single-selector diagnostics for $list / $extract / $count', () => {
+    const steps = [{ id: '2', name: 'scroll_load' }];
+    const events = [{
+      type: 'STEP_ITERATION',
+      stepId: '2',
+      iteration: 1,
+      resultPreview: '{"done":true,"postCount":4}',
+      selectorDiagnostics: [
+        { api: 'count', selector: 'div[role="article"]', matchCount: 4, sampleTexts: [], sampleHrefs: [] },
+        { api: 'list', selector: 'a[role="link"][aria-label]', matchCount: 8, sampleTexts: ['Alice','5分钟','Bob'], sampleHrefs: ['/alice','/posts/1','/bob'] }
+      ]
+    }];
+    const out = summarizeAllStepDiagnostics(events, steps);
+    assert.match(out, /\$count\('div\[role="article"\]'\).*matched 4/);
+    assert.match(out, /\$list\('a\[role="link"\]\[aria-label\]'\).*matched 8/);
+  });
+
+  it('caps each field line at 240 chars (prompt-size budget)', () => {
+    const longSamples = Array.from({ length: 3 }, (_, i) => 'x'.repeat(200));
+    const steps = [{ id: '1', name: 's1' }];
+    const events = [{
+      type: 'STEP_ITERATION',
+      stepId: '1',
+      iteration: 1,
+      resultPreview: '{}',
+      selectorDiagnostics: [{
+        api: 'extractList',
+        containerSelector: 'c',
+        containerMatches: 3,
+        perField: [{
+          field: 'f', subSelector: 'x', attr: null, matchCount: 3,
+          sampleTexts: longSamples, sampleHrefs: longSamples
+        }]
+      }]
+    }];
+    const out = summarizeAllStepDiagnostics(events, steps);
+    // Find the line containing 'field f' and verify it's under 280 chars
+    // (cap is 240, plus some slack for the "..." suffix and surrounding text).
+    const lines = out.split('\n').filter(l => l.includes('field f'));
+    assert.ok(lines.length > 0, 'expected a "field f" line');
+    for (const line of lines) {
+      assert.ok(line.length < 280, `field line too long: ${line.length}`);
+    }
+  });
+});
