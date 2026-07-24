@@ -5,7 +5,8 @@
   let sandboxIframe = null;
   let sandboxReady = false;
   let sandboxReadyTimer = null;
-  let sandboxInitiallyReady = false;
+  let sandboxRecreateCount = 0;
+  const SANDBOX_MAX_RECREATES = 3;
   const pendingExecutes = [];
   const forwardedResponseIds = new Set();
 
@@ -25,19 +26,32 @@
     }
   }
 
-  // When the sandbox iframe onload fires AFTER the initial ready, the sandbox
-  // was most likely navigated away from sandbox.html (e.g. an LLM-generated
-  // script did window.location.href = ...). The iframe's contentWindow is now
-  // pointing at a destroyed/different document; messages posted to it are
-  // silently dropped. Reset readiness and wait for a fresh SANDBOX_READY. If
-  // none arrives within 2s, recreate the iframe. See bugx.log 2026-07-24.
+  // When the sandbox iframe onload fires for the SECOND+ time on the SAME
+  // iframe instance, the iframe was reloaded/navigated (e.g. an LLM-generated
+  // script did window.location.href = ...). The iframe's contentWindow now
+  // points at a different document; messages posted to it are silently dropped.
+  // Reset readiness and wait for a fresh SANDBOX_READY. If none arrives within
+  // 2s, recreate the iframe. See bugx.log 2026-07-24.
+  //
+  // IMPORTANT: the FIRST onload on a new iframe must NOT trigger this logic.
+  // In Chrome, SANDBOX_READY arrives via postMessage BEFORE the iframe's load
+  // event fires. Treating the first onload as a reload causes an infinite
+  // loop (sandbox posts ready → onload fires → reset readiness → watchdog
+  // recreates → new sandbox posts ready → ...).
   function armSandboxReadyWatchdog(reason) {
     clearSandboxReadyTimer();
     sandboxReadyTimer = setTimeout(() => {
       if (sandboxReady) return;
+      if (sandboxRecreateCount >= SANDBOX_MAX_RECREATES) {
+        sendDebugLog('error', 'offscreen',
+          'Sandbox reload-recreate limit reached — giving up to avoid infinite loop. Test execution will fail with SCRIPT_TIMEOUT.',
+          { recreateCount: sandboxRecreateCount, reason });
+        return;
+      }
+      sandboxRecreateCount += 1;
       sendDebugLog('error', 'offscreen',
         'Sandbox did not re-send SANDBOX_READY after onload — assuming it was navigated away. Recreating iframe.',
-        { reason });
+        { reason, recreateCount: sandboxRecreateCount });
       try { if (sandboxIframe) sandboxIframe.remove(); } catch (e) { /* ignore */ }
       sandboxIframe = null;
       ensureSandbox();
@@ -49,19 +63,22 @@
     sandboxIframe = document.createElement('iframe');
     sandboxIframe.style.cssText = 'position:absolute;width:0;height:0;border:0;opacity:0;pointer-events:none;';
     sandboxIframe.src = chrome.runtime.getURL('sandbox.html');
+    // Per-iframe flag: the FIRST onload on a fresh iframe is the normal load
+    // (sandbox.js has already posted SANDBOX_READY by the time onload fires).
+    // Only SUBSEQUENT onloads on the same iframe instance indicate a reload.
+    let initialOnloadSeen = false;
     sandboxIframe.onload = () => {
-      sendDebugLog('info', 'offscreen', 'Sandbox iframe onload fired', { initiallyReady: sandboxInitiallyReady });
-      if (sandboxInitiallyReady) {
-        // This is a RE-load (the initial onload already fired and SANDBOX_READY
-        // was received once). Treat the iframe as dead until a new SANDBOX_READY
-        // arrives. If the sandbox was navigated, no new ready will come and the
-        // watchdog recreates the iframe.
-        sandboxReady = false;
-        sendDebugLog('warn', 'offscreen',
-          'Sandbox iframe reloaded after initial ready — likely a navigation attempt (window.location.*) inside the sandbox. Resetting readiness.',
-          {});
-        armSandboxReadyWatchdog('post-initial-onload');
+      sendDebugLog('info', 'offscreen', 'Sandbox iframe onload fired', { initialOnloadSeen });
+      if (!initialOnloadSeen) {
+        initialOnloadSeen = true;
+        return;
       }
+      // A reload on the SAME iframe instance — navigation likely happened.
+      sandboxReady = false;
+      sendDebugLog('warn', 'offscreen',
+        'Sandbox iframe reloaded after initial load — likely a navigation attempt (window.location.*) inside the sandbox. Resetting readiness.',
+        {});
+      armSandboxReadyWatchdog('post-initial-onload');
     };
     sandboxIframe.onerror = (err) => {
       sendDebugLog('error', 'offscreen', 'Sandbox iframe onerror fired', { error: String(err) });
@@ -81,7 +98,7 @@
 
     if (e.data.type === 'SANDBOX_READY') {
       sandboxReady = true;
-      sandboxInitiallyReady = true;
+      sandboxRecreateCount = 0;  // healthy sandbox — reset the recreate budget
       clearSandboxReadyTimer();
       sendDebugLog('info', 'offscreen', 'Sandbox ready, processing pending executes', { count: pendingExecutes.length });
       while (pendingExecutes.length) {
