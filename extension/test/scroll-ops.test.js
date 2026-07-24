@@ -109,3 +109,57 @@ describe('scrollToBottomIncremental — growth-probe loop', () => {
     assert.equal(sleepCalls, 0, 'sleep must not be invoked when settleMs is 0');
   });
 });
+
+const { findScrollableContainer } = require('../lib/scroll-ops');
+
+function makeFakeElement({ scrollHeight = 0, clientHeight = 0, overflowY = 'auto', tag = 'div' }) {
+  return {
+    tagName: tag.toUpperCase(),
+    scrollHeight: scrollHeight,
+    clientHeight: clientHeight,
+    style: {},
+    _computedOverflowY: overflowY,
+    // No methods needed — findScrollableContainer only reads properties.
+  };
+}
+
+describe('findScrollableContainer', () => {
+  it('returns null when no element has overflowY auto/scroll AND scrollHeight > clientHeight * 1.5', () => {
+    const doc = {
+      querySelectorAll: () => [
+        makeFakeElement({ scrollHeight: 100, clientHeight: 90, overflowY: 'auto' }),    // ratio too small
+        makeFakeElement({ scrollHeight: 100, clientHeight: 90, overflowY: 'visible' })  // not scrollable
+      ],
+      defaultView: { getComputedStyle: () => ({ overflowY: 'visible' }) }
+    };
+    assert.equal(findScrollableContainer(doc), null);
+  });
+
+  it('returns the element with the largest scrollHeight among scrollable candidates', () => {
+    const small = makeFakeElement({ scrollHeight: 1000, clientHeight: 400, overflowY: 'auto' });
+    const big = makeFakeElement({ scrollHeight: 5000, clientHeight: 400, overflowY: 'scroll' });
+    const nonScrollable = makeFakeElement({ scrollHeight: 9999, clientHeight: 400, overflowY: 'hidden' });
+    const doc = {
+      querySelectorAll: () => [small, big, nonScrollable],
+      defaultView: { getComputedStyle: (el) => ({ overflowY: el._computedOverflowY }) }
+    };
+    assert.equal(findScrollableContainer(doc), big);
+  });
+
+  it('skips elements whose scrollHeight is not at least 1.5x clientHeight', () => {
+    const borderline = makeFakeElement({ scrollHeight: 600, clientHeight: 400, overflowY: 'auto' }); // 1.5x exactly — should NOT qualify
+    const doc = {
+      querySelectorAll: () => [borderline],
+      defaultView: { getComputedStyle: (el) => ({ overflowY: el._computedOverflowY }) }
+    };
+    assert.equal(findScrollableContainer(doc), null);
+  });
+
+  it('returns null when doc has no defaultView (defensive)', () => {
+    const doc = {
+      querySelectorAll: () => [makeFakeElement({ scrollHeight: 5000, clientHeight: 400, overflowY: 'auto' })],
+      defaultView: null
+    };
+    assert.equal(findScrollableContainer(doc), null);
+  });
+});

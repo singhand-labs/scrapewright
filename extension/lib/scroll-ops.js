@@ -90,7 +90,46 @@ function scrollToBottomIncremental(root, opts) {
   })();
 }
 
+// findScrollableContainer(doc) → Element | null
+//
+// Enumerates all elements in `doc` whose computed overflowY is 'auto' or
+// 'scroll' AND whose scrollHeight exceeds 1.5x their clientHeight. Returns
+// the one with the largest scrollHeight, or null if none qualify.
+//
+// Used by domScrollToBottom's fallback path: when the document.scrollingElement
+// makes zero progress (the page's scroll root is an inner container), this
+// probes for the real scroll root.
+function findScrollableContainer(doc) {
+  if (!doc || !doc.defaultView) return null;
+  var view = doc.defaultView;
+  var all;
+  try {
+    all = doc.querySelectorAll('*');
+  } catch (e) {
+    return null;
+  }
+  var best = null;
+  var bestHeight = 0;
+  for (var i = 0; i < all.length; i++) {
+    var el = all[i];
+    var style;
+    try { style = view.getComputedStyle(el); } catch (e) { continue; }
+    if (!style) continue;
+    var ov = style.overflowY;
+    if (ov !== 'auto' && ov !== 'scroll') continue;
+    var sh = el.scrollHeight || 0;
+    var ch = el.clientHeight || 0;
+    if (sh <= ch * 1.5) continue;
+    if (sh > bestHeight) {
+      bestHeight = sh;
+      best = el;
+    }
+  }
+  return best;
+}
+
 var api = { scrollToBottomIncremental: scrollToBottomIncremental,
+            findScrollableContainer: findScrollableContainer,
             DEFAULT_MAX_ATTEMPTS: DEFAULT_MAX_ATTEMPTS,
             DEFAULT_NO_PROGRESS_LIMIT: DEFAULT_NO_PROGRESS_LIMIT,
             DEFAULT_SETTLE_MS: DEFAULT_SETTLE_MS,
