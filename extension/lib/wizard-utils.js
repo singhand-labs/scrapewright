@@ -1258,6 +1258,65 @@ function summarizeExecutionDiagnostics(events, failingStepId) {
   return '\n' + lines.join('\n') + '\n';
 }
 
+// summarizeAllStepDiagnostics(events, steps) → string
+//
+// Like summarizeExecutionDiagnostics, but iterates over EVERY step in `steps`
+// that has at least one STEP_ITERATION event. Used by the user-feedback autoFix
+// path where there is no single failing step to anchor on — the LLM needs the
+// per-step trace for ALL poll-style steps to diagnose "scroll never progressed"
+// vs "selector too narrow" (bugx.log 2026-07-24 misdiagnosis).
+//
+// Output format (one block per qualifying step):
+//   Step <id> (<name>) — <iterationCount> iteration(s):
+//     Iteration 1: <preview>
+//     Iteration 2: <preview>
+//     ...
+//     [collapse marker if N identical consecutive previews]
+//
+// Returns '' if no step has iterations.
+function summarizeAllStepDiagnostics(events, steps) {
+  if (!Array.isArray(events) || events.length === 0) return '';
+  if (!Array.isArray(steps) || steps.length === 0) return '';
+
+  const byStep = new Map();
+  for (const evt of events) {
+    if (!evt || evt.type !== 'STEP_ITERATION') continue;
+    if (!byStep.has(evt.stepId)) byStep.set(evt.stepId, []);
+    byStep.get(evt.stepId).push(evt);
+  }
+
+  const lines = [];
+  for (const step of steps) {
+    if (!step || !step.id) continue;
+    const iterEvents = byStep.get(step.id);
+    if (!iterEvents || iterEvents.length === 0) continue;
+
+    lines.push('Step ' + step.id + ' (' + (step.name || '(unnamed)') + ') — ' + iterEvents.length + ' iteration(s):');
+
+    // Collapse runs of identical consecutive resultPreviews.
+    let i = 0;
+    while (i < iterEvents.length) {
+      const cur = iterEvents[i];
+      let runLen = 1;
+      while (i + runLen < iterEvents.length &&
+             (iterEvents[i + runLen].resultPreview === cur.resultPreview)) {
+        runLen += 1;
+      }
+      const preview = cur.resultPreview == null ? '(empty)' : cur.resultPreview;
+      if (runLen === 1) {
+        lines.push('  Iteration ' + cur.iteration + ': ' + preview);
+      } else {
+        lines.push('  Iterations ' + cur.iteration + '-' + iterEvents[i + runLen - 1].iteration +
+                   ' (' + runLen + ' identical): ' + preview);
+      }
+      i += runLen;
+    }
+    lines.push('');
+  }
+
+  return lines.length === 0 ? '' : lines.join('\n');
+}
+
 // Pure scoring function for autoFix best-of-N comparison.
 // Returns { score, breakdown, isData }:
 //   score = requiredCoverage * 100 + listItemCount * 10 + avgFieldsPerItem * 5
@@ -2064,7 +2123,7 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
@@ -2076,6 +2135,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.summarizeFixIteration = summarizeFixIteration;
   window.formatDomActivitySummary = formatDomActivitySummary;
   window.summarizeExecutionDiagnostics = summarizeExecutionDiagnostics;
+  window.summarizeAllStepDiagnostics = summarizeAllStepDiagnostics;
   window.scoreAttemptResult = scoreAttemptResult;
   window.classifyIntervention = classifyIntervention;
   window.buildFeedbackSection = buildFeedbackSection;
@@ -2117,6 +2177,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.summarizeFixIteration = summarizeFixIteration;
   self.formatDomActivitySummary = formatDomActivitySummary;
   self.summarizeExecutionDiagnostics = summarizeExecutionDiagnostics;
+  self.summarizeAllStepDiagnostics = summarizeAllStepDiagnostics;
   self.scoreAttemptResult = scoreAttemptResult;
   self.classifyIntervention = classifyIntervention;
   self.buildFeedbackSection = buildFeedbackSection;
