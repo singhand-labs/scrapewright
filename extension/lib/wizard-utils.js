@@ -59,6 +59,15 @@ SELECTOR GENERALIZATION — Annotation selectors the user clicked often embed sp
   - nth-child/Nth-of-type indices captured at annotation time → KEEP them only if the user explicitly annotated a specific item; otherwise drop and use the container selector alone.
 If a field returns data for some items but null/empty for others in the same list, the selector is too specific. Re-generalize by removing literal values from attribute matchers.
 
+
+FIELD COLLISION ON GENERALIZATION — After generalizing an annotation selector per the rule above, VERIFY that no two outputFields end up matching the SAME element. The most common collision is on sites where multiple semantic elements share the same attribute (Facebook example: BOTH the author link and the timestamp link carry aria-label). When two fields would collapse onto the same selector:
+- Add a STRUCTURAL discriminator to one of them. Patterns that work in practice:
+  * href content: author links usually have href*="/user/" or href*="/profile.php"; timestamp links often have href*="/posts/" or no href at all.
+  * ancestor tag: timestamp links are usually NOT inside <h3>; author links are.
+  * attribute value pattern: aria-label on a timestamp matches date/time regexes (e.g. /\\d+分钟|^\\d月|年\\d+月/); aria-label on an author is a person name.
+- Do NOT use bare attribute-presence selectors ([aria-label], [href]) for BOTH fields — that guarantees collision. Pick one field to make specific.
+- When unsure, run $list on each candidate selector separately and inspect the returned textContent/href arrays — they should differ field-by-field.
+
 MULTI-VALUE FIELDS (e.g., images[], attachments[], tags[]) — When the output schema declares an array field inside each list item (e.g. posts.images: array of URLs), do NOT use $extract('img', 'src') inside the container — that returns ONE src. Use $list('img') (returns array of data objects) and map to .src, OR use $extractList with a sub-selector that aggregates. The "field" in $extractList's fieldMap is a single match per container; for multi-value fields, post-process the container via a separate $list call.
 
 EMPTY-LIST BAILOUT — If the parent list query returns 0 items, DO NOT proceed with field queries. Return { done: false } immediately (if the step has a retry budget) or { failed: true, error: 'no items found for selector X' }. Without this rule, a step runs 8+ sequential DOM round-trips that all return empty, burning the step time budget and hiding the real failure behind a generic not-done signal.
