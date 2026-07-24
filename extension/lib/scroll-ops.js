@@ -71,6 +71,12 @@ function scrollToBottomIncremental(root, opts) {
 
     var newY = root.scrollTop || 0;
     var newScrollHeight = root.scrollHeight || 0;
+    // `scrolled` reflects VIEWPORT MOVEMENT ONLY (backward-compat with the
+    // legacy $scrollToBottom contract: { scrolled, prevY, newY }). It does NOT
+    // flip on scrollHeight growth alone. The stall detector above is stricter
+    // — it treats heightGrew OR posChanged as progress — so callers that need
+    // the "did anything happen" signal should read `stalled` (false = making
+    // progress) or compare prevScrollHeight/newScrollHeight directly.
     return {
       scrolled: newY !== prevY,
       prevY: prevY,

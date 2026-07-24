@@ -16,7 +16,6 @@ function makeFakeRoot({ initialHeight = 1000, clientHeight = 500, growPerScroll 
   let scrollHeight = initialHeight;
   let scrollCount = 0;
   return {
-    scrollTop,
     get scrollTop() { return scrollTop; },
     set scrollTop(v) { scrollTop = Math.max(0, Math.min(v, scrollHeight - clientHeight)); },
     get scrollHeight() { return scrollHeight; },
@@ -67,7 +66,7 @@ describe('scrollToBottomIncremental — growth-probe loop', () => {
     const root = makeFakeRoot({ initialHeight: 500, clientHeight: 500, growPerScroll: 0 });
     const res = await scrollToBottomIncremental(root, { sleep: noSleep, maxAttempts: 8, noProgressLimit: 3 });
     assert.equal(res.stalled, true);
-    assert.ok(res.attempts >= 3, 'expected at least noProgressLimit attempts before stalled');
+    assert.equal(res.attempts, 3, 'expected stall to trigger exactly at noProgressLimit=3');
   });
 
   it('returns the documented shape (scrolled, prevY, newY, prevScrollHeight, newScrollHeight, scrollRoot, stalled, attempts)', async () => {
@@ -83,5 +82,30 @@ describe('scrollToBottomIncremental — growth-probe loop', () => {
     const root = makeFakeRoot({ initialHeight: 2000, clientHeight: 500, growPerScroll: 0 });
     const res = await scrollToBottomIncremental(root, { sleep: noSleep, maxAttempts: 3, noProgressLimit: 3 });
     assert.equal(res.scrolled, res.newY !== res.prevY);
+  });
+
+  it('falls back to direct scrollTop mutation when root has no scrollBy method', async () => {
+    // Defensive branch: some element-likes expose scrollTop but not scrollBy.
+    // The helper must still make progress via the setter.
+    const calls = [];
+    const fakeRoot = {
+      _y: 0,
+      get scrollTop() { return this._y; },
+      set scrollTop(v) { this._y = v; calls.push(v); },
+      scrollHeight: 3000,
+      clientHeight: 500
+      // No scrollBy method.
+    };
+    const res = await scrollToBottomIncremental(fakeRoot, { sleep: noSleep, maxAttempts: 2, noProgressLimit: 5 });
+    assert.ok(calls.length >= 1, 'expected setter to be invoked at least once');
+    assert.ok(res.newY > 0, 'expected scroll position to advance via setter');
+  });
+
+  it('skips sleep entirely when settleMs is 0', async () => {
+    let sleepCalls = 0;
+    const sleep = () => { sleepCalls += 1; return Promise.resolve(); };
+    const root = makeFakeRoot({ initialHeight: 3000, clientHeight: 500, growPerScroll: 0 });
+    await scrollToBottomIncremental(root, { sleep, maxAttempts: 3, noProgressLimit: 3, settleMs: 0 });
+    assert.equal(sleepCalls, 0, 'sleep must not be invoked when settleMs is 0');
   });
 });
