@@ -752,20 +752,62 @@
 
   async function domScrollToBottom(sel) {
     const target = resolveScrollTarget(sel);
-    const root = target || document.scrollingElement || document.documentElement;
-    const prevY = root.scrollTop || 0;
-    // scrollHeight is the canonical "bottom" signal. For window-like roots,
-    // document.scrollingElement covers the viewport scroll; for inner elements
-    // (overflow:auto/scroll containers), the same property is element-relative.
-    const bottom = root.scrollHeight || 0;
-    root.scrollTo ? root.scrollTo(0, bottom) : (root.scrollTop = bottom);
+    const initialRoot = target || document.scrollingElement || document.documentElement;
+    const ops = (typeof window !== 'undefined' && window.ScrollOps)
+      || (typeof self !== 'undefined' && self.ScrollOps);
+    // Defensive: if the lib helper didn't load, fall back to the legacy one-shot
+    // behavior so the API still functions (older bug logs show this matters).
+    if (!ops || typeof ops.scrollToBottomIncremental !== 'function') {
+      const prevY = initialRoot.scrollTop || 0;
+      const bottom = initialRoot.scrollHeight || 0;
+      initialRoot.scrollTo ? initialRoot.scrollTo(0, bottom) : (initialRoot.scrollTop = bottom);
+      sendDebugLog('warn', 'content-script', 'domScrollToBottom', {
+        selector: sel || '(window)',
+        note: 'ScrollOps helper missing — used legacy one-shot scroll',
+        prevY, targetBottom: bottom, newY: initialRoot.scrollTop || 0
+      });
+      return { scrolled: (initialRoot.scrollTop || 0) !== prevY, prevY, newY: initialRoot.scrollTop || 0 };
+    }
+
+    // First attempt: incremental scroll on the resolved root.
+    const r1 = await ops.scrollToBottomIncremental(initialRoot, {
+      scrollRootLabel: target ? ('selector:' + sel) : 'window'
+    });
+
+    // Fallback: if the resolved root made zero position progress AND the user
+    // didn't pass a selector (meaning we guessed window), probe for an inner
+    // scrollable container and try again. This catches FB-style pages whose
+    // scroll root is an inner overflow:auto element, not the document.
+    if (!target && !r1.scrolled && r1.attempts > 0) {
+      const inner = typeof ops.findScrollableContainer === 'function'
+        ? ops.findScrollableContainer(document)
+        : null;
+      if (inner && inner !== initialRoot) {
+        const r2 = await ops.scrollToBottomIncremental(inner, { scrollRootLabel: 'inner' });
+        sendDebugLog('info', 'content-script', 'domScrollToBottom', {
+          selector: sel || '(window)',
+          fallback: 'inner-container',
+          attempt1: r1,
+          attempt2: r2
+        });
+        return {
+          scrolled: r2.scrolled,
+          prevY: r2.prevY,
+          newY: r2.newY,
+          prevScrollHeight: r2.prevScrollHeight,
+          newScrollHeight: r2.newScrollHeight,
+          scrollRoot: r2.scrollRoot,
+          stalled: r2.stalled,
+          attempts: r2.attempts
+        };
+      }
+    }
+
     sendDebugLog('info', 'content-script', 'domScrollToBottom', {
       selector: sel || '(window)',
-      prevY,
-      targetBottom: bottom,
-      newY: root.scrollTop || 0
+      result: r1
     });
-    return { scrolled: (root.scrollTop || 0) !== prevY, prevY, newY: root.scrollTop || 0 };
+    return r1;
   }
 
   async function domScrollIntoView(sel) {
