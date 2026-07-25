@@ -2,9 +2,7 @@
   'use strict';
 
   // Log as early as possible — before any other code runs
-  try {
-    parent.postMessage({ type: 'DEBUG_LOG', level: 'info', component: 'sandbox', message: 'sandbox.js IIFE entered', data: { location: typeof location !== 'undefined' ? location.href : 'n/a' } }, '*');
-  } catch (e) { /* no connection */ }
+  console.log('[info] [sandbox] sandbox.js IIFE entered', { location: typeof location !== 'undefined' ? location.href : 'n/a' });
 
   let domRequestId = 0;
   const pendingDomRequests = new Map();
@@ -15,10 +13,10 @@
   let __selectorDiagnostics__ = [];
 
   function sendDebugLog(level, component, message, data) {
-    try {
-      parent.postMessage({ type: 'DEBUG_LOG', level, component, message, data }, '*');
-      console.log(`[${level}] [${component}] ${message}`, data || '');
-    } catch (e) { /* no connection */ }
+    const prefix = '[' + level + '] [' + component + '] ' + message;
+    if (level === 'error') console.error(prefix, data || '');
+    else if (level === 'warn') console.warn(prefix, data || '');
+    else console.log(prefix, data || '');
   }
 
   function sendDomRequest(action, selector, args) {
@@ -166,8 +164,6 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
     parent.postMessage({ type: 'SANDBOX_READY' }, '*');
     sendDebugLog('info', 'sandbox', 'SANDBOX_READY sent successfully');
   } catch (e) {
-    try {
-      parent.postMessage({ type: 'DEBUG_LOG', level: 'error', component: 'sandbox', message: 'SANDBOX_READY postMessage failed', data: { error: e.message } }, '*');
-    } catch (e2) { /* no connection */ }
+    console.error('[error] [sandbox] SANDBOX_READY postMessage failed', { error: e.message });
   }
 })();

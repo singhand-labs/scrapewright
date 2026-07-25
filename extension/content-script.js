@@ -124,11 +124,10 @@
   let lastHoverTarget = null;
 
   function sendDebugLog(level, component, message, data) {
-    try {
-      const payload = { type: 'DEBUG_LOG', level, component, message, data };
-      chrome.runtime.sendMessage(payload);
-      console.log(`[${level}] [${component}] ${message}`, data || '');
-    } catch (e) { /* no connection */ }
+    const prefix = '[' + level + '] [' + component + '] ' + message;
+    if (level === 'error') console.error(prefix, data || '');
+    else if (level === 'warn') console.warn(prefix, data || '');
+    else console.log(prefix, data || '');
   }
 
   sendDebugLog('info', 'content-script', 'Content script loaded', { url: location.href, readyState: document.readyState });
@@ -224,8 +223,6 @@
           subTabSnapshot: e.data.subTabSnapshot,
           tabId: currentSenderTabId
         });
-      } else if (e.data.type === 'DEBUG_LOG') {
-        sendDebugLog(e.data.level, e.data.component, e.data.message, e.data.data);
       }
     });
   }

@@ -1539,7 +1539,6 @@ async function continueResearch(tabId, config, pageInfo, postPageInfo) {
     showToast('Step generation failed: ' + e.message, 'error', 5000);
   } finally {
     hideLoading();
-    try { await debugLogger.persist(); } catch (_) {}
   }
 }
 
@@ -1875,7 +1874,6 @@ async function testScript() {
   if (!wizardState.testAborted) {
     goToPhase(5);
   }
-  await debugLogger.persist();
 }
 
 async function improveStepWithAI(stepIndex, userFeedback) {
