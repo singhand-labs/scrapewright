@@ -2503,6 +2503,7 @@ Identify EVERY step in the workflow below whose script contains a root cause for
 - "only N items extracted" → the scroll/paginate step (under-loaded) OR the extract step (container selector too narrow).
 - "field X has wrong value" → the step that extracts that field — its selector matches the wrong element.
 - "image URLs incomplete" → if the field is declared array and the script uses $extract('img','src'), switch to $list('img') (one src vs array of srcs).
+- "field X populated in an earlier step but empty in final output" → INTER-STEP FIELD-NAME DRIFT. When a step consumes another step's result via __lastResult__ / __stepResults__, it MUST use the EXACT property names the upstream step writes. Cross-check the upstream step's return statement before reading any field off its output — a single renamed property silently erases the field (e.g. upstream returns {authorName, publishTime} but downstream reads p.author / p.time → both become undefined).
 ${compactedNote}
 
 Target URL: ${wizardState.targetUrl}
