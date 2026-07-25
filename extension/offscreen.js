@@ -10,6 +10,25 @@
   const pendingExecutes = [];
   const forwardedResponseIds = new Set();
 
+  // Build the payload to postMessage to the sandbox iframe when a DOM_RESPONSE
+  // arrives from background. Extracted as a named pure function so the
+  // _diagnostics preservation contract has a unit test (regression for
+  // bugx.log 2026-07-25: this hop previously dropped _diagnostics, which
+  // silently broke the entire selector-diagnostics pipeline and produced
+  // selectorDiagnosticCount: 0 on every STEP_ITERATION despite the
+  // instrumentation being live in source).
+  function buildSandboxForwardPayload(message) {
+    return {
+      type: 'DOM_RESPONSE',
+      id: message.id,
+      result: message.result,
+      error: message.error,
+      _diagnostics: message._diagnostics
+    };
+  }
+  if (typeof self !== 'undefined') self.buildSandboxForwardPayload = buildSandboxForwardPayload;
+  if (typeof window !== 'undefined') window.buildSandboxForwardPayload = buildSandboxForwardPayload;
+
   function sendDebugLog(level, component, message, data) {
     const prefix = '[' + level + '] [' + component + '] ' + message;
     if (level === 'error') console.error(prefix, data || '');
@@ -164,12 +183,7 @@
       }
       sendDebugLog('info', 'offscreen', 'DOM_RESPONSE forwarding to sandbox', { id: message.id });
       if (sandboxIframe?.contentWindow) {
-        sandboxIframe.contentWindow.postMessage({
-          type: 'DOM_RESPONSE',
-          id: message.id,
-          result: message.result,
-          error: message.error
-        }, '*');
+        sandboxIframe.contentWindow.postMessage(buildSandboxForwardPayload(message), '*');
       }
       return false;
     }
