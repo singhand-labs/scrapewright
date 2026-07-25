@@ -882,12 +882,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // when an $openTab body fails, and threads up through the chain so
     // step-orchestrator can hand autoFix the failing sub-tab's DOM instead
     // of snapshotting the (wrong) main tab.
+    //
+    // _diagnostics must also be preserved: content-script's dom* helpers
+    // attach per-call selector diagnostics here, and the sandbox downstream
+    // accumulates them into __selectorDiagnostics__ for the EXECUTE_RESULT
+    // envelope. Dropping _diagnostics at this relay silently breaks the
+    // entire selector-diagnostics pipeline (bugx.log 2026-07-25:
+    // selectorDiagnosticCount: 0 on every STEP_ITERATION despite the
+    // instrumentation being live in source).
     chrome.runtime.sendMessage({
       type: 'DOM_RESPONSE',
       id: message.id,
       result: message.result,
       error: message.error,
       subTabSnapshot: message.subTabSnapshot,
+      _diagnostics: message._diagnostics,
       _fromOffscreen: true
     }).catch(() => {
       // offscreen may not be listening
