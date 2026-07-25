@@ -21,9 +21,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  document.getElementById('exportDebug')?.addEventListener('click', exportDebugLogs);
-  document.getElementById('clearDebug')?.addEventListener('click', clearDebugLogs);
-
   document.getElementById('nativeReconnect')?.addEventListener('click', reconnectNative);
   document.getElementById('nativeCopyDiag')?.addEventListener('click', copyNativeDiagnostics);
 
@@ -508,22 +505,6 @@ async function importServices(file) {
     (importFailures.length > 0 ? '\n\nFailed:\n' + importFailures.join('\n') : '');
   showToast(message, importedCount > 0 ? 'success' : 'error', 8000);
   await loadServices();
-}
-
-async function exportDebugLogs() {
-  const logs = await debugLogger.exportAll();
-  const blob = new Blob([JSON.stringify(logs, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'scrapewright-debug-' + new Date().toISOString().slice(0, 19).replace(/:/g, '-') + '.json';
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-async function clearDebugLogs() {
-  await debugLogger.clear();
-  showToast('Debug logs cleared', 'success');
 }
 
 async function loadExecHistory() {

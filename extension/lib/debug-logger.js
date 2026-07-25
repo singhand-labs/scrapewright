@@ -1,28 +1,17 @@
-class DebugLogger {
-  constructor() {
-    this.inMemory = [];
-    this.maxInMemory = 500;
-    this.maxDays = 3;
-  }
+// Thin console-only logger. Previously this class also accumulated entries in
+// chrome.storage.local and the options page exposed Export/Clear buttons —
+// that parallel infrastructure duplicated what the browser's devtools console
+// already does better, so it was removed (bugx.log 2026-07-25 cleanup).
+// All existing debugLogger.log() call sites continue to work unchanged; they
+// just emit to console.error/warn/log directly.
+//
+// Objects are JSON.stringified before being passed to console so Chrome
+// devtools "Save All as Log" doesn't collapse them to "Object" — without
+// that, fields like selectorDiagnosticCount are invisible in exported logs.
 
+class DebugLogger {
   log(level, component, message, data = null) {
-    const entry = {
-      timestamp: Date.now(),
-      iso: new Date().toISOString(),
-      level,
-      component,
-      message,
-      data
-    };
-    this.inMemory.push(entry);
-    if (this.inMemory.length > this.maxInMemory) {
-      this.inMemory.shift();
-    }
-    const prefix = `[${entry.iso}] [${component}] ${message}`;
-    // Stringify objects so Chrome devtools "Save All as Log" doesn't collapse
-    // them to "Object" — without this, fields like selectorDiagnosticCount are
-    // invisible in exported logs (bugx.log 2026-07-25: 6 occurrences of
-    // "Script executed Object" with no way to see what the Object contained).
+    const prefix = '[' + new Date().toISOString() + '] [' + component + '] ' + message;
     let suffix = '';
     if (data != null) {
       suffix = typeof data === 'string' ? data : (() => {
@@ -33,49 +22,6 @@ class DebugLogger {
     else if (level === 'warn') console.warn(prefix, suffix);
     else console.log(prefix, suffix);
   }
-
-  async persist() {
-    const key = `debugLogs_${new Date().toISOString().slice(0, 10)}`;
-    const existing = (await chrome.storage.local.get(key))[key] || [];
-    const merged = existing.concat(this.inMemory);
-    const trimmed = merged.slice(-2000);
-    await chrome.storage.local.set({ [key]: trimmed });
-    this.inMemory = [];
-
-    // Auto-clean logs older than maxDays
-    await this.pruneOldLogs();
-
-    return key;
-  }
-
-  async pruneOldLogs() {
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - this.maxDays);
-    const cutoffKey = `debugLogs_${cutoff.toISOString().slice(0, 10)}`;
-
-    const all = await chrome.storage.local.get();
-    const oldKeys = Object.keys(all).filter(k =>
-      k.startsWith('debugLogs_') && k < cutoffKey
-    );
-    if (oldKeys.length) {
-      await chrome.storage.local.remove(oldKeys);
-    }
-  }
-
-  async exportAll() {
-    const all = await chrome.storage.local.get();
-    const logs = {};
-    for (const [k, v] of Object.entries(all)) {
-      if (k.startsWith('debugLogs_')) logs[k] = v;
-    }
-    return logs;
-  }
-
-  async clear() {
-    const all = await chrome.storage.local.get();
-    const keys = Object.keys(all).filter(k => k.startsWith('debugLogs_'));
-    if (keys.length) await chrome.storage.local.remove(keys);
-  }
 }
 
 const debugLogger = new DebugLogger();
@@ -85,4 +31,7 @@ if (typeof module !== 'undefined' && module.exports) {
 } else if (typeof window !== 'undefined') {
   window.DebugLogger = DebugLogger;
   window.debugLogger = debugLogger;
+} else if (typeof self !== 'undefined') {
+  self.DebugLogger = DebugLogger;
+  self.debugLogger = debugLogger;
 }

@@ -116,8 +116,6 @@ chrome.action.onClicked.addListener(() => {
 
 // Keep Service Worker alive: alarm fires every 25s to wake up SW and reconnect if needed
 chrome.alarms.create('keepalive', { periodInMinutes: 0.4 });
-// Daily log cleanup
-chrome.alarms.create('logCleanup', { periodInMinutes: 60 });
 // Periodic job queue cleanup (remove jobs older than 24h)
 chrome.alarms.create('jobCleanup', { periodInMinutes: 10 });
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -126,8 +124,6 @@ chrome.alarms.onAlarm.addListener((alarm) => {
       debugLogger.log('info', 'background', 'Keepalive alarm: reconnecting');
       initCommunication();
     }
-  } else if (alarm.name === 'logCleanup') {
-    debugLogger.pruneOldLogs();
   } else if (alarm.name === 'jobCleanup') {
     pruneJobQueue();
   }
@@ -456,7 +452,6 @@ async function processJob(jobId, serviceName, input) {
       completedAt: Date.now()
     });
   }
-  await debugLogger.persist();
 }
 
 async function pruneJobQueue(maxSize = 100, ttlMs = 24 * 60 * 60 * 1000) {
@@ -593,11 +588,9 @@ async function handleExecute(serviceName, input) {
         const outErr = oc.code + ': missing [' + oc.missing.join(', ') + '] — result has [' + gotKeys.join(', ') + ']; the extraction step must return outputSchema field names';
         debugLogger.log('warn', 'background', 'Output failed required-field check', { missing: oc.missing, got: gotKeys });
         await logExecution(service, input, result.finalResult, outErr, attempt);
-        await debugLogger.persist();
         return { success: false, error: outErr, data: result.finalResult, steps: stepTrace };
       }
       await logExecution(service, input, result.finalResult, null, attempt);
-      await debugLogger.persist();
       return { success: true, data: result.finalResult, steps: stepTrace };
 
     } catch (error) {
@@ -615,7 +608,6 @@ async function handleExecute(serviceName, input) {
 
       if (error.code === 'MISSING_URL_PARAM') {
         await logExecution(service, input, null, error.message, attempt);
-        await debugLogger.persist();
         return {
           success: false,
           error: error.message,
@@ -635,7 +627,6 @@ async function handleExecute(serviceName, input) {
         // misleading "missing required field" error.
         const stepTrace = sanitizeSteps(error.steps);
         await logExecution(service, input, null, error.message, attempt);
-        await debugLogger.persist();
         return {
           success: false,
           error: error.message,
@@ -666,7 +657,6 @@ async function handleExecute(serviceName, input) {
   }
 
   await logExecution(service, input, null, lastError?.message, maxRetries);
-  await debugLogger.persist();
   return { success: false, error: lastError?.message || 'Execution failed', steps: sanitizeSteps(lastError?.steps) };
 }
 
@@ -849,10 +839,6 @@ async function logExecution(service, input, output, error, retryCount) {
 
 // Internal message handlers
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === 'DEBUG_LOG') {
-    debugLogger.log(message.level, message.component, message.message, message.data);
-    return false;
-  }
   if (message.type === 'OFFSCREEN_READY' && message._fromOffscreen) {
     debugLogger.log('info', 'background', 'Offscreen document ready');
     return false;
