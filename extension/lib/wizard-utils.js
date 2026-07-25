@@ -98,6 +98,7 @@ INPUT DATA:
 STEP RESULTS (available in every step except the first):
 - __lastResult__: The return value of the immediately preceding step (any type). Use for simple sequential flows.
 - __stepResults__: Object mapping step IDs to their return values. Example: __stepResults__['2'] gives step 2's result. Use to access any prior step's data.
+- FIELD-NAME COHERENCE: when reading fields off __lastResult__ or __stepResults__['N'], use the EXACT property names the upstream step writes in its return statement. A renamed property silently becomes undefined (e.g. upstream returns {authorName, publishTime} but downstream reads __lastResult__.author / __lastResult__.time → both undefined). Before consuming any field, list the upstream step's actual property names verbatim.
 
 RETURN VALUE:
 - Each step script must return a JSON-serializable value (string, number, boolean, object, array).
