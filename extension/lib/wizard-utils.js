@@ -1331,6 +1331,38 @@ function summarizeAllStepDiagnostics(events, steps) {
           let header = '    $extractList(\'' + d.containerSelector + '\') — container matched ' + d.containerMatches + ' element(s)';
           if (d.containerMatches === 0) header += ' (returned [] — allowEmpty was set or container selector is wrong)';
           lines.push(header);
+          // Compute field collisions up-front: two fields whose non-empty
+          // sample sets are identical (order-independent) are clearly grabbing
+          // the same elements. Generic signal — surfaces author/publishTime-
+          // style collisions without hardcoding field names (bugx.log
+          // 2026-07-25: glm-5.1 saw author=["Alice","Bob"] and publishTime=
+          // ["Alice","Bob"] in the same prompt but never noticed they were
+          // identical across fields).
+          const collisionPeers = (function() {
+            const peers = new Map();
+            const fields = (d.perField || []);
+            const normSets = fields.map(f => {
+              const samples = Array.isArray(f.sampleTexts) ? f.sampleTexts : [];
+              const set = new Set(samples.map(s => String(s).trim()).filter(s => s.length > 0));
+              return { field: f.field, set };
+            });
+            for (let i = 0; i < normSets.length; i++) {
+              for (let j = i + 1; j < normSets.length; j++) {
+                const a = normSets[i];
+                const b = normSets[j];
+                if (a.set.size === 0 || b.set.size === 0) continue;
+                if (a.set.size !== b.set.size) continue;
+                let allMatch = true;
+                for (const s of a.set) { if (!b.set.has(s)) { allMatch = false; break; } }
+                if (!allMatch) continue;
+                if (!peers.has(a.field)) peers.set(a.field, []);
+                if (!peers.has(b.field)) peers.set(b.field, []);
+                peers.get(a.field).push(b.field);
+                peers.get(b.field).push(a.field);
+              }
+            }
+            return peers;
+          })();
           // Sort fields: 0-match fields first (those are the suspicious ones), then by name.
           const sortedFields = (d.perField || []).slice().sort((a, b) => {
             if ((a.matchCount === 0) !== (b.matchCount === 0)) return a.matchCount === 0 ? -1 : 1;
@@ -1341,13 +1373,29 @@ function summarizeAllStepDiagnostics(events, steps) {
             const mismatch = (!overConstrained && f.matchCount !== d.containerMatches && f.matchCount > 0)
               ? ' ← PARTIAL (' + f.matchCount + '/' + d.containerMatches + ' containers had this field)'
               : '';
+            // EMPTY-EXTRACTIONS: selector matched N elements but every sample
+            // text is empty/whitespace. Skipped for attr-based extracts (samples
+            // are empty by design there). Skipped when matchCount=0 (OVER-
+            // CONSTRAINED handles that case). Without this marker the LLM sees
+            // "N matches" and assumes the selector is fine — but the output
+            // field is "" because the matched element has no text content
+            // (e.g., wrong element, missing attr, or text in a child node).
+            const _samplesArr = Array.isArray(f.sampleTexts) ? f.sampleTexts : [];
+            const _allEmpty = !f.attr && _samplesArr.length > 0 && _samplesArr.every(s => String(s).trim().length === 0);
+            const emptyExtract = (_allEmpty && f.matchCount > 0)
+              ? ' ← EMPTY-EXTRACTIONS (matched ' + f.matchCount + ' element(s) but every sample text is empty/whitespace — selector matches the wrong element or this element has no usable text; the field will be "" in the output)'
+              : '';
+            const _peers = collisionPeers.get(f.field) || [];
+            const collision = _peers.length > 0
+              ? ' ← FIELD COLLISION with field(s) [' + _peers.join(', ') + '] (sample texts are identical — selectors are matching the SAME elements; narrow one selector to point at a different element)'
+              : '';
             const samples = f.sampleTexts && f.sampleTexts.length > 0
               ? ' sample texts: ' + JSON.stringify(f.sampleTexts)
               : '';
             const hrefs = f.sampleHrefs && f.sampleHrefs.length > 0
               ? ' sample hrefs: ' + JSON.stringify(f.sampleHrefs)
               : '';
-            let line = '      field ' + f.field + ' (sel \'' + f.subSelector + '\'' + (f.attr ? ', attr=\'' + f.attr + '\'' : '') + '): ' + f.matchCount + ' matches.' + overConstrained + mismatch + samples + hrefs;
+            let line = '      field ' + f.field + ' (sel \'' + f.subSelector + '\'' + (f.attr ? ', attr=\'' + f.attr + '\'' : '') + '): ' + f.matchCount + ' matches.' + overConstrained + mismatch + emptyExtract + collision + samples + hrefs;
             if (line.length > 240) line = line.slice(0, 237) + '...';
             lines.push(line);
           }

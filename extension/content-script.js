@@ -697,7 +697,7 @@
     const records = ops.extractListRecords(containers, fieldMap, opts || {});
     const _diagnostics = ops && ops.computeExtractListDiagnostics
       ? ops.computeExtractListDiagnostics(containers, fieldMap, containerSel)
-      : { api: 'extractList', containerSelector: containerSel, matchCount: containers.length, perField: {} };
+      : { api: 'extractList', containerSelector: containerSel, containerMatches: containers.length, perField: [] };
     return { result: records, _diagnostics };
   }
 

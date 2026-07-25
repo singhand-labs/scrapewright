@@ -19,9 +19,19 @@ class DebugLogger {
       this.inMemory.shift();
     }
     const prefix = `[${entry.iso}] [${component}] ${message}`;
-    if (level === 'error') console.error(prefix, data || '');
-    else if (level === 'warn') console.warn(prefix, data || '');
-    else console.log(prefix, data || '');
+    // Stringify objects so Chrome devtools "Save All as Log" doesn't collapse
+    // them to "Object" — without this, fields like selectorDiagnosticCount are
+    // invisible in exported logs (bugx.log 2026-07-25: 6 occurrences of
+    // "Script executed Object" with no way to see what the Object contained).
+    let suffix = '';
+    if (data != null) {
+      suffix = typeof data === 'string' ? data : (() => {
+        try { return JSON.stringify(data); } catch { return String(data); }
+      })();
+    }
+    if (level === 'error') console.error(prefix, suffix);
+    else if (level === 'warn') console.warn(prefix, suffix);
+    else console.log(prefix, suffix);
   }
 
   async persist() {
