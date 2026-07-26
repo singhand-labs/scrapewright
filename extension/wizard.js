@@ -2099,6 +2099,14 @@ async function autoFix(userFeedback = null) {
   // userFeedback null → up to 3 silent retries before giving up and asking
   // the user for a hint. Triggered automatically by testScript on failure.
   const MAX_ATTEMPTS = userFeedback ? 1 : 3;
+  // User-feedback path: start compact. The original steps-generation prompt
+  // sitting in llmHistory is huge (SCRIPT_DSL_GUIDE + 30K-char snapshot), and
+  // glm-5.1's proxy rejects prompts pre-emptively when total size crosses an
+  // internal threshold. Going straight to 15K snapshot avoids the
+  // overflow-then-retry round-trip. Failure-fix path keeps the larger default
+  // (its prompts are smaller because there's a single target step).
+  // Regression for console.log 2026-07-26 RC7.
+  let compactMode = !!userFeedback;
   // Always clear any stale intervention banner from a prior autoFix run —
   // testScript's reset only fires on a fresh test, but btnAutoFix can invoke
   // autoFix() directly while a previous banner is still on screen.
@@ -2111,11 +2119,12 @@ async function autoFix(userFeedback = null) {
 
   const prevAutoFixing = wizardState.autoFixing;
   wizardState.autoFixing = true;
-  // Sticky: once the LLM signals context-window overflow, every subsequent
-  // iteration in this autoFix run uses the compact prompt (truncated HTML).
-  // Without this, attempt N+1 would re-send the full-sized prompt and hit the
-  // same overflow — compacting once should apply to the rest of the run.
-  let compactMode = false;
+  // compactMode initialized above (true for user-feedback path, false for
+  // failure-fix path). Sticky: once the LLM signals context-window overflow,
+  // every subsequent iteration in this autoFix run uses the compact prompt
+  // (truncated HTML). Without this, attempt N+1 would re-send the full-sized
+  // prompt and hit the same overflow — compacting once should apply to the
+  // rest of the run.
   try {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       if (wizardState.testAborted) break;
@@ -2542,8 +2551,32 @@ ${RETURN_FORMAT_FEEDBACK}`;
   try {
     const client = new LLMClient(config.config);
     const systemMsg = { role: 'system', content: buildSystemMessageWithGlobalContext('You are a web scraping script fixer. Return fixed JavaScript code, or a JSON {"script":...} object if you also need to change this step flow (onSuccess/onFailure/maxIterations).') };
+    // User-feedback path: each iteration's prompt is self-contained (full steps
+    // + current output + diagnostics). The accumulated history is largely noise
+    // and the original steps-generation prompt (~30K chars with full snapshot)
+    // blows up glm-5.1's effective context via the proxy. Keep only the most
+    // recent user-assistant pair so the LLM remembers its last fix attempt
+    // without dragging the entire conversation forward.
+    // Regression for console.log 2026-07-26 RC7: autoFix hit
+    // finish_reason=model_context_window_exceeded with prompt_tokens:0 — the
+    // proxy rejected the prompt pre-emptively. Trimming here prevents overflow
+    // on the FIRST attempt instead of relying on the post-overflow retry.
+    const historyForPrompt = isFailureFix
+      ? wizardState.llmHistory
+      : wizardState.llmHistory.slice(-2);
     const userMsg = { role: 'user', content: prompt };
-    const messages = [systemMsg, ...wizardState.llmHistory, userMsg];
+    const messages = [systemMsg, ...historyForPrompt, userMsg];
+    const promptSizeStats = {
+      isFailureFix,
+      historyMessages: historyForPrompt.length,
+      historyChars: historyForPrompt.reduce((n, m) => n + (m.content?.length || 0), 0),
+      promptChars: prompt.length,
+      totalChars: historyForPrompt.reduce((n, m) => n + (m.content?.length || 0), 0) + prompt.length,
+      snapshotBudget,
+      steps: wizardState.steps.length
+    };
+    console.log('[autoFix] Prompt sizes:', promptSizeStats);
+    appendLog(`Prompt size: ${promptSizeStats.totalChars} chars (history ${promptSizeStats.historyMessages} msgs / ${promptSizeStats.historyChars} chars + current ${promptSizeStats.promptChars} chars, snapshot budget ${promptSizeStats.snapshotBudget})`, 'info');
     const result = await client.chat(messages, { maxTokens: 8192 });
 
     wizardState.llmHistory.push(

@@ -4,14 +4,71 @@
 // content-script.js wraps these with querySelectorAllDeep to produce
 // domExtractList / domClickInList.
 
+// DOM properties that look like attributes but aren't — getAttribute returns
+// null for these. Read from the element directly when `attr` names one of them.
+// Regression for console.log 2026-07-26 RC5: $extract(_, 'outerHTML') returned
+// null because outerHTML is a DOM property, silently breaking the domHtml
+// field in extraction outputs.
+const DOM_PROPERTY_READS = new Set(['outerHTML', 'innerHTML']);
+
 function readField(container, spec) {
   // spec is either a string ('.author') or { selector, attr? }
   const sel = typeof spec === 'string' ? spec : spec.selector;
   const attr = typeof spec === 'string' ? null : spec.attr;
+  if (!sel) {
+    // Empty selector → the container itself.
+    if (attr) {
+      if (DOM_PROPERTY_READS.has(attr)) return container[attr];
+      return container.getAttribute(attr);
+    }
+    return (container.textContent || '').trim();
+  }
   const el = container.querySelector(sel);
   if (!el) return undefined;
-  if (attr) return el.getAttribute(attr);
+  if (attr) {
+    if (DOM_PROPERTY_READS.has(attr)) return el[attr];
+    return el.getAttribute(attr);
+  }
   return (el.textContent || '').trim();
+}
+// Needed when CSS alone can't disambiguate which match is the right one —
+// e.g. a[role=link] inside a Facebook post matches both the author link and
+// the timestamp link. $extractList picks first-only; the LLM needs ALL matches
+// so it can filter in JS by text/attribute regex.
+//
+// Each field value is an Array<string|null> (textContent or attribute value
+// per match, in document order). Empty arrays when no matches.
+//
+// Regression for console.log 2026-07-26 RC4: $extractList returned first-match
+// only, so the LLM kept picking the author link as publishTime and producing
+// empty timestamps across every iteration.
+function readFieldAll(container, spec) {
+  const sel = typeof spec === 'string' ? spec : spec.selector;
+  const attr = typeof spec === 'string' ? null : spec.attr;
+  if (!sel) {
+    // Empty selector → the container itself (single-element "match").
+    // Used to read the container's own outerHTML/textContent/attribute.
+    let val;
+    if (attr) {
+      if (DOM_PROPERTY_READS.has(attr)) val = container[attr];
+      else val = container.getAttribute(attr);
+    } else {
+      val = (container.textContent || '').trim();
+    }
+    return [val];
+  }
+  const els = container.querySelectorAll(sel);
+  const out = [];
+  for (let i = 0; i < els.length; i++) {
+    const el = els[i];
+    if (attr) {
+      if (DOM_PROPERTY_READS.has(attr)) out.push(el[attr]);
+      else out.push(el.getAttribute(attr));
+    } else {
+      out.push((el.textContent || '').trim());
+    }
+  }
+  return out;
 }
 
 function extractListRecords(containers, fieldMap, opts) {
@@ -33,6 +90,32 @@ function extractListRecords(containers, fieldMap, opts) {
         rec[field] = readField(container, spec);
       } catch (err) {
         throw new Error(`$extractList field "${field}" selector invalid: ${err.message}`);
+      }
+    }
+    records.push(rec);
+  }
+  return records;
+}
+
+function extractListMultiRecords(containers, fieldMap, opts) {
+  if (!Array.isArray(containers)) {
+    throw new Error('$extractListMulti: containers must be an array');
+  }
+  if (!fieldMap || typeof fieldMap !== 'object' || Object.keys(fieldMap).length === 0) {
+    throw new Error('$extractListMulti fieldMap must be a non-empty object');
+  }
+  if (!containers.length) {
+    if (opts && opts.allowEmpty) return [];
+    throw new Error('$extractListMulti: no containers matched');
+  }
+  const records = [];
+  for (const container of containers) {
+    const rec = {};
+    for (const [field, spec] of Object.entries(fieldMap)) {
+      try {
+        rec[field] = readFieldAll(container, spec);
+      } catch (err) {
+        throw new Error(`$extractListMulti field "${field}" selector invalid: ${err.message}`);
       }
     }
     records.push(rec);
@@ -142,6 +225,7 @@ function computeSimpleSelectorDiagnostics(elements, selector, api) {
 
 const api = {
   extractListRecords,
+  extractListMultiRecords,
   clickInListItems,
   computeExtractListDiagnostics,
   computeSimpleSelectorDiagnostics

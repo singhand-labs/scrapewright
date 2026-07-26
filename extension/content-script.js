@@ -349,6 +349,14 @@
           recordDomActivity('$extractList', data.selector, Array.isArray(result) ? result.length : 0, Date.now() - __t0);
           break;
         }
+        case 'extractListMulti': {
+          const __t0 = Date.now();
+          const __r = domExtractListMulti(data.selector, data.args && data.args[0], data.args && data.args[1]);
+          result = __r.result;
+          _diagnostics = __r._diagnostics;
+          recordDomActivity('$extractListMulti', data.selector, Array.isArray(result) ? result.length : 0, Date.now() - __t0);
+          break;
+        }
         case 'clickInList': {
           const __t0 = Date.now();
           result = await domClickInList(data.selector, data.args && data.args[0], data.args && data.args[1]);
@@ -552,7 +560,18 @@
     const found = querySelectorDeep(sel);
     if (!found) throw new Error('ELEMENT_NOT_FOUND: ' + sel);
     const el = found.element;
-    const result = attr ? el.getAttribute(attr) : el.textContent.trim();
+    // outerHTML / innerHTML are DOM PROPERTIES, not HTML ATTRIBUTES — getAttribute
+    // returns null for them. Read from the element directly when attr names one.
+    // Regression for console.log 2026-07-26 RC5: $extract(sel, 'outerHTML') returned
+    // null, silently breaking the domHtml field in extraction outputs.
+    let result;
+    if (attr === 'outerHTML' || attr === 'innerHTML') {
+      result = el[attr];
+    } else if (attr) {
+      result = el.getAttribute(attr);
+    } else {
+      result = el.textContent.trim();
+    }
     const matchedEls = [el];
     const ops = getListExtractOps();
     const _diagnostics = ops && ops.computeSimpleSelectorDiagnostics
@@ -692,6 +711,41 @@
       throw new Error('$extractList runtime missing: lib/list-extract-ops.js did not attach window.ListExtractOps. Reload the extension and refresh the target tab.');
     }
     const records = ops.extractListRecords(containers, fieldMap, opts || {});
+    const _diagnostics = ops && ops.computeExtractListDiagnostics
+      ? ops.computeExtractListDiagnostics(containers, fieldMap, containerSel)
+      : { api: 'extractList', containerSelector: containerSel, containerMatches: containers.length, perField: [] };
+    return { result: records, _diagnostics };
+  }
+
+  // Multi-match variant of domExtractList. Each field value is an Array of
+  // all matches in document order (textContent or attribute value), not just
+  // the first match. Use when CSS alone can't disambiguate which match is the
+  // right one (e.g. a[role=link] inside an FB post matches BOTH the author
+  // link and the timestamp link — the LLM needs both so it can pick by text
+  // regex in JS). Regression for console.log 2026-07-26 RC4.
+  function domExtractListMulti(containerSel, fieldMap, opts) {
+    if (!containerSel || typeof containerSel !== 'string') {
+      throw new Error('$extractListMulti containerSel must be a non-empty string');
+    }
+    let containers;
+    try {
+      containers = querySelectorAllDeep(containerSel);
+    } catch (err) {
+      throw new Error('$extractListMulti container selector invalid: ' + (err.message || err));
+    }
+    sendDebugLog('info', 'content-script', 'domExtractListMulti resolved containers', {
+      selector: containerSel,
+      count: containers.length,
+      fields: Object.keys(fieldMap || {})
+    });
+    const ops = getListExtractOps();
+    if (!ops) {
+      throw new Error('$extractListMulti runtime missing: lib/list-extract-ops.js did not attach window.ListExtractOps. Reload the extension and refresh the target tab.');
+    }
+    const records = ops.extractListMultiRecords(containers, fieldMap, opts || {});
+    // Reuse the same diagnostics shape — diagnostics count matches per field,
+    // which is what autoFix needs to see ("your publishTime selector matched 0
+    // out of N containers" remains meaningful for the multi-match variant).
     const _diagnostics = ops && ops.computeExtractListDiagnostics
       ? ops.computeExtractListDiagnostics(containers, fieldMap, containerSel)
       : { api: 'extractList', containerSelector: containerSel, containerMatches: containers.length, perField: [] };

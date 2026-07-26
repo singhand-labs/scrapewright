@@ -17,7 +17,14 @@ AVAILABLE API FUNCTIONS:
 - $openTab(url, functionBody): Open new tab at the given URL, wait for page load, then execute the function body (a string of JavaScript statements) in the new tab context. Returns whatever the function body returns. Use to scrape detail pages. Example: await $openTab(href, \`const title = await $extract('h1'); return { title };\`)
 - $count(selector): Count elements matching selector (main document + same-origin iframes). Returns number. Do NOT use with :nth-child() to iterate — use $list() instead.
 - $list(selector): Get ALL matching elements across main document + same-origin iframes. Returns array of { tagName, id, className, textContent, value, href, src, checked, disabled }. Use this for iterating multiple elements. Same data-object limitation as $().
-- $extractList(containerSel, fieldMap, opts?): Extract a list of records in ONE call. fieldMap is { subField: subSelector | { selector, attr? } }; each sub-selector is evaluated INSIDE each container element. Returns an array of objects in container order. Prefers this over $list-per-field for multi-field lists (avoids field-misalignment when fields are missing on some items). Throws 'empty list' if no container matches; set opts.allowEmpty=true to return [] instead.
+- $extractList(containerSel, fieldMap, opts?): Extract a list of records in ONE call. fieldMap is { subField: subSelector | { selector, attr? } }; each sub-selector is evaluated INSIDE each container element and returns the FIRST match per container. Returns an array of objects in container order. Prefers this over $list-per-field for multi-field lists (avoids field-misalignment when fields are missing on some items). Throws 'empty list' if no container matches; set opts.allowEmpty=true to return [] instead.
+- $extractListMulti(containerSel, fieldMap, opts?): Like $extractList, but each field returns an Array of ALL matches per container (in document order), not just the first. Use when CSS alone cannot disambiguate which match is the right one — e.g. a[role="link"] inside a Facebook post matches BOTH the author link (1st) AND the timestamp link (2nd). With $extractList you'd get only the author; with $extractListMulti you get both and can pick in JS by text/attribute regex. attr may be 'outerHTML' or 'innerHTML' to read raw HTML. Example:
+  const records = await $extractListMulti('div[role="article"]', { links: 'a[role="link"][aria-label]' }, { allowEmpty: true });
+  const posts = records.map(r => {
+    const time = r.links.find(t => /\\d+月\\d+日|^\\d+小时$|^\\d+天$/.test(t)) || '';
+    const author = r.links[0] || '';
+    return { author, publishTime: time };
+  });
 - $clickInList(containerSel, subSel, opts?): Click subSel INSIDE each container element. Default opts.delayMs=500 (waits between clicks for expand/animations to settle). Returns { clicked: N, errors: [...] }. Use for "click 展开 in every post before extracting full content" — see EXPAND PATTERN below.
 - $waitForStable(selector, opts?): Poll the element's textContent (or opts.attr) every opts.interval ms (default 1500); return true after opts.stableChecks (default 2) consecutive unchanged + non-empty samples; false after opts.maxMs (default 20000). Prefer this for streaming-content completion (AI answers, live feeds) instead of guessing fragile loading-class selectors.
 - $scrollBy(deltaY, selector?): Scroll the window (or element matching selector) by deltaY pixels. Returns { scrolled, prevY, newY }. Use for infinite feeds / load-more pages.
@@ -217,6 +224,35 @@ CRITICAL: "position did not change" (r.scrolled === false) is the only reliable 
   return { done: false, postCount, stalled };
 
 SCROLL CONTAINER (not the window): some sites scroll an inner element (overflow:auto/scroll), not the document. If $count returns 0 after $scrollToBottom() with no selector, find the scrollable container in the snapshot and pass its selector: await $scrollToBottom('div[data-scrollable-container]'). A quick heuristic: the element with the largest scrollHeight that is NOT document.body is usually the feed's scroll root.
+
+VIRTUALIZED FEEDS (Facebook search, Twitter, TikTok, Reddit infinite-scroll): these feeds UNMOUNT posts as you scroll past them — $count('div[role="article"]') STAYS AT 7 across iterations even though new posts are loading in. The stalled-counter pattern above will declare "exhausted" prematurely because postCount never grows past the visible-window size. Track UNIQUE post signatures across iterations via __lastResult__ instead:
+  // Step 2 (scroll_and_load_posts, maxIterations: 20, onSuccess: '3', onFailure: 'TERMINATE'):
+  const seen = new Set((__lastResult__ && __lastResult__.seenSignatures) || []);
+  const r = await $scrollToBottom();
+  await new Promise(resolve => setTimeout(resolve, 1500));
+  // Snapshot current articles — use a STABLE signature (author + first 80 chars of content)
+  const articles = await $list('div[role="article"]');
+  for (const a of articles) {
+    const sig = (a.textContent || '').slice(0, 100);   // stable across scroll position
+    if (sig.trim()) seen.add(sig);
+  }
+  const uniqueCount = seen.size;
+  const stalled = (__lastResult__ && __lastResult__.stalled || 0) + (r.scrolled ? 0 : 1);
+  if (uniqueCount >= 10) return { done: true, uniqueCount, seenSignatures: [...seen].slice(0, 50) };
+  if (stalled >= 5 && uniqueCount > 0) return { done: true, uniqueCount, seenSignatures: [...seen].slice(0, 50), exhausted: true };
+  return { done: false, uniqueCount, stalled, seenSignatures: [...seen].slice(0, 50) };
+Key insight: $count(DOM) ≠ unique posts seen. The DOM is a sliding window; signatures accumulated across iterations are the truth. Cap seenSignatures at ~50 entries to avoid unbounded growth across long feeds.
+
+RAW HTML EXTRACTION (domHtml, full post HTML fields):
+$extract(sel) and $extractList(sel, { field: { selector, attr } }) support attribute reads. outerHTML and innerHTML are DOM PROPERTIES (not HTML attributes) — historically getAttribute returned null for them. They are now supported: pass attr='outerHTML' or attr='innerHTML' and the runner reads the DOM property directly.
+  // Full HTML of the post container:
+  const html = await $extract('div[role="article"]', 'outerHTML');
+  // Per-post HTML inside a list:
+  const records = await $extractListMulti('div[role="article"]', {
+    html: { selector: '', attr: 'outerHTML' }    // empty selector → the container itself
+  });
+  // ^ Note: empty selector inside $extractListMulti returns the container's own outerHTML.
+Do NOT use textContent as a substitute for outerHTML when outputSchema asks for raw HTML — textContent strips all tags and produces plain text the consumer cannot parse.
 
 ROBUSTNESS RULES (MANDATORY — these prevent the most common silent failures):
 

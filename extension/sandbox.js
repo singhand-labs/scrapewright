@@ -46,6 +46,11 @@
 window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opts || {}]);
   window.$openTab = (url, fn) => sendDomRequest('openTab', null, [url, fn ? fn.toString() : '']);
   window.$extractList = (containerSel, fieldMap, opts) => sendDomRequest('extractList', containerSel, [fieldMap, opts || {}]);
+  // Multi-match variant: each field returns Array of ALL matches (not just first).
+  // Use when CSS alone can't disambiguate which match is the right one (e.g.
+  // a[role=link] inside an FB post matches BOTH author and timestamp links —
+  // pick by text/attribute regex in JS). Regression for console.log 2026-07-26 RC4.
+  window.$extractListMulti = (containerSel, fieldMap, opts) => sendDomRequest('extractListMulti', containerSel, [fieldMap, opts || {}]);
   window.$clickInList = (containerSel, subSel, opts) => sendDomRequest('clickInList', containerSel, [subSel, opts || {}]);
   // Scroll DSL — see SCROLLING section in SCRIPT_DSL_GUIDE. Scrolls the target
   // tab (window or a matched scrollable element), NOT the sandbox iframe.
