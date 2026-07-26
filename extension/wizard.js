@@ -1485,9 +1485,29 @@ async function continueResearch(tabId, config, pageInfo, postPageInfo) {
       // detail URL — pass null and let generateStepsWithSelectors proceed
       // without a detail snapshot.
       if (detailUrl) {
-        if (!detailUrl.startsWith('http')) {
-          detailUrl = new URL(detailUrl, pageInfo.url).href;
+        // Defensive guard: detailUrl came from a DOM result via
+        // results?.[0]?.result — never trust the shape. Non-string values
+        // would crash chrome.tabs.create ("Invalid type: expected string").
+        if (typeof detailUrl !== 'string') {
+          debugLogger.log('warn', 'wizard', 'Skipping detail snapshot in step-gen — detailUrl is not a string', {
+            detailUrlType: typeof detailUrl,
+            detailUrlPreview: String(detailUrl).slice(0, 100)
+          });
+          detailUrl = null;
+        } else if (!detailUrl.startsWith('http')) {
+          // Relative URL — resolve against the page's URL.
+          try {
+            detailUrl = new URL(detailUrl, pageInfo.url).href;
+          } catch (_) {
+            debugLogger.log('warn', 'wizard', 'Skipping detail snapshot — could not resolve relative detailUrl', {
+              detailUrlPreview: detailUrl.slice(0, 100),
+              base: pageInfo.url
+            });
+            detailUrl = null;
+          }
         }
+      }
+      if (detailUrl) {
         showLoading('Capturing detail page structure...');
         const detailTab = await chrome.tabs.create({ url: detailUrl, active: false });
         await new Promise(r => setTimeout(r, 8000));
@@ -1908,7 +1928,9 @@ async function improveStepWithAI(stepIndex, userFeedback) {
   // If improving a $openTab step, capture the detail page snapshot
   if (step.script?.includes('$openTab')) {
     const detailUrl = findSampleDetailUrl(wizardState.testResult);
-    if (detailUrl) {
+    // Defensive guard: findSampleDetailUrl should enforce string-only, but a
+    // single bug there crashes improve() with "Invalid type: expected string".
+    if (typeof detailUrl === 'string' && /^https?:\/\//.test(detailUrl)) {
       try {
         showLoading('Capturing detail page for improvement...');
         const detailTab = await chrome.tabs.create({ url: detailUrl, active: false });
@@ -1921,6 +1943,11 @@ async function improveStepWithAI(stepIndex, userFeedback) {
       } catch (e) {
         console.warn('Could not capture detail page for improve:', e);
       }
+    } else if (detailUrl) {
+      debugLogger.log('warn', 'wizard', 'Skipping improve detail snapshot — detailUrl is not an http(s) string', {
+        detailUrlType: typeof detailUrl,
+        detailUrlPreview: typeof detailUrl === 'string' ? detailUrl.slice(0, 100) : String(detailUrl).slice(0, 100)
+      });
     }
   }
 
@@ -1985,20 +2012,25 @@ function findSampleDetailUrl(testResult) {
 
 function findHrefInObject(obj, depth = 0) {
   if (depth > 3 || !obj || typeof obj !== 'object') return null;
+  // Strict-string helper. Earlier versions used `if (item?.href) return item.href;`
+  // which returned ANY truthy value (function refs, objects, numbers, arrays).
+  // That crashed chrome.tabs.create downstream with "Invalid type: expected
+  // string, found function" when an LLM-generated result happened to surface a
+  // non-string truthy `href`/`link`/`url` field. Strict typeof guard prevents
+  // the bad value from propagating.
+  const STR = (v) => (typeof v === 'string' && v) ? v : null;
   if (Array.isArray(obj)) {
     for (const item of obj) {
-      if (item?.href) return item.href;
-      if (item?.link) return item.link;
-      if (item?.url) return item.url;
+      const h = STR(item?.href) || STR(item?.link) || STR(item?.url);
+      if (h) return h;
     }
   }
   for (const value of Object.values(obj)) {
     if (typeof value === 'string' && value.startsWith('http')) return value;
     if (Array.isArray(value)) {
       for (const item of value) {
-        if (item?.href) return item.href;
-        if (item?.link) return item.link;
-        if (item?.url) return item.url;
+        const h = STR(item?.href) || STR(item?.link) || STR(item?.url);
+        if (h) return h;
       }
     }
     if (typeof value === 'object' && !Array.isArray(value)) {
@@ -2332,15 +2364,26 @@ async function runFixIteration(userFeedback, config, options = {}) {
   );
   let detailPageHint = '';
   if (shouldCaptureDetail) {
-    try {
-      showLoading('Capturing detail page snapshot for better fix...');
-      const detailTab = await chrome.tabs.create({ url: detailUrl, active: false });
-      // Wait for page + iframe content to load (8s for dynamic iframe chains)
-      await new Promise(r => setTimeout(r, 8000));
-      const response = await chrome.tabs.sendMessage(detailTab.id, { type: 'GET_DOM_SNAPSHOT', mode: 'full' });
-      if (response?.snapshot) {
-        pageSnapshot = response.snapshot;
-        detailPageHint = `IMPORTANT — PAGE BOUNDARY:
+    // Defensive guard: never hand a non-string or non-http(s) value to
+    // chrome.tabs.create — Chrome rejects with "Invalid type: expected string"
+    // (or opens about:blank for malformed URLs). findSampleDetailUrl is
+    // supposed to enforce this, but a single bug there crashes the whole
+    // autoFix iteration.
+    if (typeof detailUrl !== 'string' || !/^https?:\/\//.test(detailUrl)) {
+      debugLogger.log('warn', 'wizard', 'Skipping detail-page snapshot — detailUrl is not an http(s) string', {
+        detailUrlType: typeof detailUrl,
+        detailUrlPreview: typeof detailUrl === 'string' ? detailUrl.slice(0, 100) : String(detailUrl).slice(0, 100)
+      });
+    } else {
+      try {
+        showLoading('Capturing detail page snapshot for better fix...');
+        const detailTab = await chrome.tabs.create({ url: detailUrl, active: false });
+        // Wait for page + iframe content to load (8s for dynamic iframe chains)
+        await new Promise(r => setTimeout(r, 8000));
+        const response = await chrome.tabs.sendMessage(detailTab.id, { type: 'GET_DOM_SNAPSHOT', mode: 'full' });
+        if (response?.snapshot) {
+          pageSnapshot = response.snapshot;
+          detailPageHint = `IMPORTANT — PAGE BOUNDARY:
 The snapshot below is from the DETAIL PAGE: ${detailUrl}
 The script's main execution context is the SEARCH/LIST page (the page that's currently loaded when this step runs).
 To interact with elements in the snapshot below, your script MUST wrap the operations in $openTab:
@@ -2352,16 +2395,17 @@ To interact with elements in the snapshot below, your script MUST wrap the opera
 If your script does NOT use $openTab, $wait / $ / $extract will run against the wrong page (search/list) and time out with ELEMENT_NOT_FOUND.
 
 `;
-        debugLogger.log('info', 'wizard', 'Captured detail page snapshot for auto-fix', {
-          url: detailUrl,
-          htmlLength: pageSnapshot.html?.length,
-          structureLength: pageSnapshot.structure?.length,
-          anyStepUsesOpenTab
-        });
+          debugLogger.log('info', 'wizard', 'Captured detail page snapshot for auto-fix', {
+            url: detailUrl,
+            htmlLength: pageSnapshot.html?.length,
+            structureLength: pageSnapshot.structure?.length,
+            anyStepUsesOpenTab
+          });
+        }
+        await chrome.tabs.remove(detailTab.id).catch(() => {});
+      } catch (e) {
+        console.warn('Could not capture detail page snapshot:', e);
       }
-      await chrome.tabs.remove(detailTab.id).catch(() => {});
-    } catch (e) {
-      console.warn('Could not capture detail page snapshot:', e);
     }
   }
 
