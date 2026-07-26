@@ -1689,8 +1689,20 @@ async function testScript() {
   wizardState.lastErrorSnapshot = null;
   wizardState.lastExecutionEvents = [];
   wizardState.testAbortController = new AbortController();
-  wizardState.bestAttempt = null;
-  wizardState.dismissedInterventions = null;
+  // RC11: only clear bestAttempt when the user explicitly re-runs the test
+  // (btnRetryTest). When testScript is invoked from INSIDE autoFix (via
+  // runFixIteration → line ~2866), clearing bestAttempt here would wipe the
+  // prior iteration's tracked score BEFORE the scoring loop can compare.
+  // That defeats the restore-on-regression logic for both the silent-retry
+  // path (silent retries that previously scored > 0) and the user-feedback
+  // path (prior submission's working state preserved across calls).
+  // wizardState.autoFixing is true throughout the autoFix call (set at the
+  // top, restored in finally), so it's a reliable "called from autoFix"
+  // signal.
+  if (!wizardState.autoFixing) {
+    wizardState.bestAttempt = null;
+    wizardState.dismissedInterventions = null;
+  }
   clearInterventionBanner();
   debugLogger.log('info', 'wizard', 'testScript start', {
     targetUrl: wizardState.targetUrl,
@@ -2043,25 +2055,94 @@ function findHrefInObject(obj, depth = 0) {
 
 // Spec 5: restore the highest-scoring attempt when the last iteration regressed.
 // Applies the plan from planRestoreBestAttempt (pure) to wizardState + DOM.
+// Supports both the multi-step shape (stepsSnapshot + historyMarker, current)
+// and the legacy single-step shape (stepId + script + ..., retained for any
+// bestAttempt objects persisted from older builds).
 function restoreBestAttempt(best) {
   const plan = planRestoreBestAttempt(best, wizardState.steps, wizardState.llmHistory);
   if (!plan) return;
-  const targetStep = wizardState.steps.find(s => s.id === plan.stepId);
-  if (!targetStep) return;
-  Object.assign(targetStep, plan.stepPatch);
-  wizardState.llmHistory = plan.truncatedHistory;
-  // Sync step editor textarea so confirmDeploy's syncStepsFromEditor keeps the restore
-  const detail = document.querySelector(`.step-detail[data-step-id="${plan.stepId}"]`);
-  if (detail) {
-    const ta = detail.querySelector('.step-script-input');
-    if (ta) ta.value = targetStep.script;
-    const s = detail.querySelector('.step-success-input'); if (s) s.value = targetStep.onSuccess || 'TERMINATE';
-    const f = detail.querySelector('.step-failure-input'); if (f) f.value = targetStep.onFailure || 'TERMINATE';
-    const m = detail.querySelector('.step-maxiter-input'); if (m) m.value = targetStep.maxIterations || 1;
+  const patches = Array.isArray(plan.stepPatches) ? plan.stepPatches : [];
+  if (patches.length === 0) {
+    // Legacy single-step return shape (planRestoreBestAttempt older version).
+    const legacyStepId = plan.stepId;
+    const legacyPatch = plan.stepPatch;
+    if (!legacyStepId || !legacyPatch) return;
+    const legacyTarget = wizardState.steps.find(s => s.id === legacyStepId);
+    if (!legacyTarget) return;
+    Object.assign(legacyTarget, legacyPatch);
+    wizardState.llmHistory = plan.truncatedHistory;
+    syncStepEditorUI(legacyStepId, legacyTarget);
+    const legacyScriptEl = document.getElementById('currentScript');
+    if (legacyScriptEl) legacyScriptEl.textContent = legacyTarget.script;
+    appendLog(plan.logMessage, 'info');
+    return;
   }
+  for (const p of patches) {
+    const targetStep = wizardState.steps.find(s => s.id === p.id);
+    if (!targetStep) continue;
+    Object.assign(targetStep, p.stepPatch);
+    syncStepEditorUI(p.id, targetStep);
+  }
+  wizardState.llmHistory = plan.truncatedHistory;
   const currentScriptEl = document.getElementById('currentScript');
-  if (currentScriptEl) currentScriptEl.textContent = targetStep.script;
+  if (currentScriptEl && patches.length > 0) {
+    const firstTarget = wizardState.steps.find(s => s.id === patches[0].id);
+    if (firstTarget) currentScriptEl.textContent = firstTarget.script;
+  }
   appendLog(plan.logMessage, 'info');
+}
+
+// Spec 5 helper: keep a step's editor textareas in sync after a programmatic
+// script/edge/maxIterations restore, so confirmDeploy's syncStepsFromEditor
+// doesn't clobber the restore.
+function syncStepEditorUI(stepId, step) {
+  const detail = document.querySelector(`.step-detail[data-step-id="${stepId}"]`);
+  if (!detail) return;
+  const ta = detail.querySelector('.step-script-input');
+  if (ta) ta.value = step.script;
+  const s = detail.querySelector('.step-success-input'); if (s) s.value = step.onSuccess || 'TERMINATE';
+  const f = detail.querySelector('.step-failure-input'); if (f) f.value = step.onFailure || 'TERMINATE';
+  const m = detail.querySelector('.step-maxiter-input'); if (m) m.value = step.maxIterations || 1;
+}
+
+// RC11: pull finalResult out of wizardState.testResult without crashing when
+// either field is null. Used by the user-feedback prompt builder to score the
+// CURRENT state against bestAttempt — same pattern as the scoring loop in
+// autoFix.
+function wafeFallbackFinalResult(state) {
+  if (!state || !state.testResult) return null;
+  return state.testResult.finalResult !== undefined ? state.testResult.finalResult : null;
+}
+
+// RC11: build a regression-guard section for the user-feedback prompt. Returns
+// '' when no bestAttempt is on record OR the current state already matches
+// beats it. Otherwise returns a multi-line warning that surfaces the
+// best-known-good metrics so the LLM treats the current scripts as a baseline
+// to PRESERVE, not a blank slate to rewrite from. Generic across sites —
+// speaks in terms of item count, field coverage, and required-field coverage,
+// never about specific selectors or sites.
+function buildRegressionGuard(bestAttempt, currentScoreResult) {
+  if (!bestAttempt || !bestAttempt.score || bestAttempt.score <= 0) return '';
+  const currentScore = (currentScoreResult && typeof currentScoreResult.score === 'number')
+    ? currentScoreResult.score
+    : 0;
+  if (currentScore >= bestAttempt.score) return '';
+  const lines = [];
+  lines.push('');
+  lines.push('REGRESSION GUARD — read before editing:');
+  lines.push(`- The current scripts are the BEST-KNOWN-WORKING version. A previous user-feedback iteration regressed the output, and we rolled the scripts back.`);
+  const bd = bestAttempt.breakdown || {};
+  if (bd && typeof bd === 'object') {
+    const parts = [];
+    if (typeof bd.listItemCount === 'number') parts.push(`items extracted: ${bd.listItemCount}`);
+    if (typeof bd.avgFieldsPerItem === 'number') parts.push(`avg fields per item: ${bd.avgFieldsPerItem.toFixed(2)}`);
+    if (typeof bd.requiredCoverage === 'number') parts.push(`required-field coverage: ${(bd.requiredCoverage * 100).toFixed(0)}%`);
+    if (parts.length) lines.push(`- Best-known output metrics — ${parts.join(', ')}.`);
+  }
+  lines.push(`- Score (higher is better) — best-known: ${bestAttempt.score}, current run: ${currentScore}.`);
+  lines.push('- DO NOT rewrite a selector that is already producing the metrics above. Identify the SPECIFIC field or step that the user is reporting a problem on, and change ONLY that. "Improving" a working selector to "be safer" or "more general" is how the previous iteration regressed.');
+  lines.push('- If you cannot pinpoint the broken selector from RUNTIME DIAGNOSTICS + the user feedback, return the current scripts UNCHANGED (one patch per step with the same script) rather than guessing. A no-op is strictly better than a regression here.');
+  return lines.join('\n');
 }
 
 // Spec 5: render the intervention banner in #phase5 and wire button actions.
@@ -2209,21 +2290,34 @@ async function autoFix(userFeedback = null) {
         ? wizardState.testResult.finalResult
         : null;
       const scoreResult = scoreAttemptResult(finalResult, wizardState.outputSchema);
-      if (scoreResult.isData && wizardState.lastErrorStepId) {
-        const targetStep = wizardState.steps.find(s => s.id === wizardState.lastErrorStepId);
-        if (targetStep) {
-          if (!wizardState.bestAttempt || scoreResult.score > wizardState.bestAttempt.score) {
-            wizardState.bestAttempt = {
-              stepId: targetStep.id,
-              script: targetStep.script,
-              onSuccess: targetStep.onSuccess,
-              onFailure: targetStep.onFailure,
-              maxIterations: targetStep.maxIterations,
-              score: scoreResult.score,
-              attemptNum: attempt,
-              breakdown: scoreResult.breakdown
-            };
-          }
+      // Track best attempt regardless of error state. The previous gate on
+      // lastErrorStepId broke coverage for both:
+      //   - successful silent retries (testScript clears lastErrorStepId on entry)
+      //   - user-feedback iterations (no error to begin with — lastErrorStepId null)
+      // Without this, a user-feedback regression that drops extraction to 0
+      // items cannot be detected + reverted (console.log 2026-07-26 14:49:08
+      // RC11). Snapshot ALL steps so multi-step patches can be rolled back,
+      // not just the failing step's script.
+      if (scoreResult.isData && scoreResult.score > 0) {
+        if (!wizardState.bestAttempt || scoreResult.score > wizardState.bestAttempt.score) {
+          wizardState.bestAttempt = {
+            stepsSnapshot: wizardState.steps.map(s => ({
+              id: s.id,
+              name: s.name,
+              script: s.script,
+              onSuccess: s.onSuccess,
+              onFailure: s.onFailure,
+              maxIterations: s.maxIterations
+            })),
+            // summarizeFixIteration emits `[Attempt — step "<id>" ...]`. When
+            // targetStepId is null (user-feedback path), the marker literally
+            // contains "null". Store the exact prefix so planRestoreBestAttempt
+            // can slice llmHistory at the right boundary regardless of path.
+            historyMarker: `[Attempt — step "${wizardState.lastErrorStepId || 'null'}"`,
+            score: scoreResult.score,
+            attemptNum: attempt,
+            breakdown: scoreResult.breakdown
+          };
         }
       }
       // Classifier (only on failure — if success, we return below before reaching here anyway)
@@ -2554,6 +2648,19 @@ ${RETURN_FORMAT}`;
       ? JSON.stringify(stripSnapshotsFromTestResult(wizardState.testResult), null, 2)
       : '(no output)';
 
+    // RC11 regression guard. The user-feedback path runs MAX_ATTEMPTS=1 per
+    // submit, but the test result still flows through scoreAttemptResult and
+    // bestAttempt tracking. If a prior user-feedback iteration produced a
+    // HIGHER-scoring output than the current state (i.e. the last submit
+    // regressed), wizardState.bestAttempt holds the working snapshot after
+    // restoreBestAttempt rolls the scripts back. Surface this to the LLM so
+    // it treats the current scripts as a known-good baseline and only
+    // changes what's actually broken — without this, glm-5.1 will happily
+    // rewrite a working selector to "improve" it and regress again
+    // (console.log 2026-07-26 14:49:08 RC11: working `h3 a[role="link"]`
+    // replaced with broken `a[role="link"][aria-label]`).
+    const regressionGuard = buildRegressionGuard(wizardState.bestAttempt, scoreAttemptResult(wafeFallbackFinalResult(wizardState), wizardState.outputSchema));
+
     prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${buildFeedbackSection(userFeedback, attemptNum, totalAttempts, wizardState.llmHistory)}${SCRIPT_DSL_GUIDE}
 
 CONTEXT — read carefully:
@@ -2585,7 +2692,7 @@ ${summarizeAllStepDiagnostics(wizardState.lastExecutionEvents || [], wizardState
 
 Current output:
 ${currentOutput}
-
+${regressionGuard}
 ${detailPageHint}Page HTML (cleaned, noise removed):
 ${pageSnapshot.html || ''}
 

@@ -50,7 +50,7 @@ describe('autoFix orchestration decisions (via pure helpers)', () => {
     ];
     const plan = planRestoreBestAttempt(best, steps, history);
     assert.equal(plan.truncatedHistory.length, 2);
-    assert.equal(plan.stepPatch.script, 'best');
+    assert.equal(plan.stepPatches[0].stepPatch.script, 'best');
   });
 
   it('happy path: attempt 2 score > attempt 1, no restore needed', () => {
