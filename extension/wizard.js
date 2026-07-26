@@ -1509,7 +1509,10 @@ async function continueResearch(tabId, config, pageInfo, postPageInfo) {
       }
       if (detailUrl) {
         showLoading('Capturing detail page structure...');
-        const detailTab = await chrome.tabs.create({ url: detailUrl, active: false });
+        // RC12: popup window so the detail page's lazy-loaded content (FB
+        // post comments, product image galleries, etc.) actually renders
+        // before we capture the snapshot.
+        const detailTab = await createScrapeTab(detailUrl);
         await new Promise(r => setTimeout(r, 8000));
         const detailResponse = await chrome.tabs.sendMessage(detailTab.id, {
           type: 'GET_DOM_SNAPSHOT', mode: 'compressed'
@@ -1585,7 +1588,9 @@ async function startResearch() {
   wizardState.description = buildRequirementsBlock(wizardState.requirements);
   if (!wizardState.userDescription) wizardState.userDescription = wizardState.description;
 
-  const tab = await chrome.tabs.create({ url: wizardState.targetUrl, active: false });
+  // RC12: popup window so the research page renders its lazy-loaded content
+  // during the initial snapshot capture (FB feed, search results, etc.).
+  const tab = await createScrapeTab(wizardState.targetUrl);
   wizardState.researchTabId = tab.id;
 
   try {
@@ -1731,7 +1736,16 @@ async function testScript() {
 
     const result = await StepOrchestrator.execute(service, wizardState.testInput || {}, {
       createTab: async (url) => {
-        tab = await withTimeout(chrome.tabs.create({ url, active: false }), 10000, 'Failed to create tab (10s timeout)');
+        // RC12: use a popup window instead of a background tab so the page
+        // actually renders. The legacy `active:false` tab pattern leaves the
+        // renderer in a low-priority state where IntersectionObserver-based
+        // lazy-load (FB feed, Twitter, infinite scroll) doesn't fire — the
+        // page loads initial content only and the scroll loop's uniqueCount
+        // stays flat. console.log 2026-07-26 16:30 (BG) vs 16:32 (FG) shows
+        // the same scrape landing 3 posts in a background tab vs 10 in a
+        // foreground tab. Popup window with focused:false keeps the user's
+        // keyboard focus intact while letting the page render normally.
+        tab = await withTimeout(createScrapeTab(url), 10000, 'Failed to create tab (10s timeout)');
         appendLog('Opening ' + url + '...');
         return tab;
       },
@@ -1945,7 +1959,8 @@ async function improveStepWithAI(stepIndex, userFeedback) {
     if (typeof detailUrl === 'string' && /^https?:\/\//.test(detailUrl)) {
       try {
         showLoading('Capturing detail page for improvement...');
-        const detailTab = await chrome.tabs.create({ url: detailUrl, active: false });
+        // RC12: popup window so the detail page actually renders.
+        const detailTab = await createScrapeTab(detailUrl);
         await new Promise(r => setTimeout(r, 8000));
         const response = await chrome.tabs.sendMessage(detailTab.id, { type: 'GET_DOM_SNAPSHOT', mode: 'compressed' });
         if (response?.snapshot) {
@@ -2471,7 +2486,9 @@ async function runFixIteration(userFeedback, config, options = {}) {
     } else {
       try {
         showLoading('Capturing detail page snapshot for better fix...');
-        const detailTab = await chrome.tabs.create({ url: detailUrl, active: false });
+        // RC12: popup window so the detail page actually renders its lazy-
+        // loaded content before we snapshot it.
+        const detailTab = await createScrapeTab(detailUrl);
         // Wait for page + iframe content to load (8s for dynamic iframe chains)
         await new Promise(r => setTimeout(r, 8000));
         const response = await chrome.tabs.sendMessage(detailTab.id, { type: 'GET_DOM_SNAPSHOT', mode: 'full' });

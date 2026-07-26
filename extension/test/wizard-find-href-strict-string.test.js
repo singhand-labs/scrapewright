@@ -91,17 +91,24 @@ describe('findHrefInObject strict-string enforcement', () => {
 });
 
 describe('findHrefInObject chrome.tabs.create guard', () => {
-  it('every chrome.tabs.create({ url: detailUrl }) site is type-guarded', () => {
+  it('every createScrapeTab(detailUrl) site is type-guarded', () => {
     // Structural check: there are THREE call sites that pass detailUrl to
-    // chrome.tabs.create (generateStepsWithSelectors, improveStep,
+    // createScrapeTab (generateStepsWithSelectors, improveStep,
     // runFixIteration). Each must be guarded so a non-string detailUrl never
     // reaches the Chrome API. The guards live in different shapes per site
     // (early-return / if-else branch / typeof check) — what matters is that
     // SOME form of typeof-string check appears in the 1500 chars before the
     // call, since all three sites use `if (typeof detailUrl ...)` immediately
     // before the create call.
+    //
+    // RC12 update: the call sites were renamed from
+    //   chrome.tabs.create({ url: detailUrl, active: false })
+    // to
+    //   createScrapeTab(detailUrl)
+    // (lib/scrape-tab.js wraps chrome.windows.create with type:'popup').
+    // The type guards are unchanged — only the wrapper name changed.
     const src = fs.readFileSync(WIZARD_PATH, 'utf8');
-    const probe = 'chrome.tabs.create({ url: detailUrl';
+    const probe = 'createScrapeTab(detailUrl)';
     let cursor = 0;
     const sites = [];
     while (true) {
@@ -110,7 +117,7 @@ describe('findHrefInObject chrome.tabs.create guard', () => {
       sites.push(idx);
       cursor = idx + probe.length;
     }
-    assert.ok(sites.length >= 3, `wizard.js: expected ≥3 chrome.tabs.create({ url: detailUrl }) sites, found ${sites.length}`);
+    assert.ok(sites.length >= 3, `wizard.js: expected ≥3 createScrapeTab(detailUrl) sites, found ${sites.length}`);
 
     for (const idx of sites) {
       // Look at the 1500 chars preceding the call — that contains the
@@ -119,7 +126,7 @@ describe('findHrefInObject chrome.tabs.create guard', () => {
       assert.ok(
         /typeof\s+detailUrl\s*!==\s*['"]string['"]/.test(preceding) ||
         /typeof\s+detailUrl\s*===\s*['"]string['"]/.test(preceding),
-        `wizard.js: chrome.tabs.create({ url: detailUrl }) at offset ${idx} has no typeof detailUrl === 'string' guard in preceding 1500 chars`
+        `wizard.js: createScrapeTab(detailUrl) at offset ${idx} has no typeof detailUrl === 'string' guard in preceding 1500 chars`
       );
     }
   });
