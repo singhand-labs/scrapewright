@@ -2542,8 +2542,16 @@ ${RETURN_FORMAT}`;
     // broken selector. Restructured: ALL steps shown first as equals, no
     // single "current step" block, and the new RETURN_FORMAT_FEEDBACK
     // requires an explicit stepId on every patch.
+    // RC9 audit miss: this site also serializes wizardState.testResult and
+    // must route through stripSnapshotsFromTestResult. Without it, a 5-step
+    // FB-shaped testResult carrying ~150K-char per-step snapshot.html bloated
+    // the autoFix-on-empty prompt to ~845K chars (console.log 2026-07-26
+    // 13:33:09), drowning the "container matched 0 element(s)" diagnostic
+    // signal that would have told the LLM to broaden its selector. The LLM
+    // then iterated on more hallucinated restrictive selectors and stayed at
+    // 0 matches.
     const currentOutput = wizardState.testResult
-      ? JSON.stringify(wizardState.testResult, null, 2)
+      ? JSON.stringify(stripSnapshotsFromTestResult(wizardState.testResult), null, 2)
       : '(no output)';
 
     prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${buildFeedbackSection(userFeedback, attemptNum, totalAttempts, wizardState.llmHistory)}${SCRIPT_DSL_GUIDE}
