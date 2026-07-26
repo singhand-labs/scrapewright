@@ -1186,13 +1186,55 @@ function summarizeFixIteration({ stepId, stepName, script, annotations, userFeed
     lines.push('Result: (none)');
   } else {
     try {
-      lines.push('Result: ' + JSON.stringify(result));
+      // Strip snapshots + cap field sizes — without this, a 5-step FB test
+      // result carries ~750K chars of per-step HTML and overflows the LLM
+      // context. The failing step's DOM is already supplied separately via
+      // the truncated `pageSnapshot` (30K budget). console.log 2026-07-26:
+      // testResultSection + summarizeFixIteration were the two bloat sources.
+      lines.push('Result: ' + JSON.stringify(stripSnapshotsFromTestResult(result)));
     } catch {
       lines.push('Result: (unserializable)');
     }
   }
 
   return lines.join('\n');
+}
+
+// stripSnapshotsFromTestResult(testResult) — defensive shape-cleanup before
+// serializing a testResult into any LLM-bound string. Removes the per-step
+// `snapshot` field (which carries ~150K chars of full-page HTML per step on
+// FB-like feeds) and caps every remaining string field at FIELD_CHAR_CAP so
+// a single huge result value can't blow up the prompt either. Returns a deep
+// clone — never mutates the input (the wizard needs the unsimplified
+// testResult for the result-summary pane, diagnostics, etc.).
+//
+// What survives:
+//   - top-level: finalResult, steps[], any diagnostics fields
+//   - per-step: stepId, stepName, result, error, durationMs, skipped, etc.
+//   - per-snapshot: REMOVED entirely (the failing step's DOM is provided
+//     separately via the truncated `pageSnapshot` passed alongside).
+const TEST_RESULT_FIELD_CHAR_CAP = 5000;
+function stripSnapshotsFromTestResult(testResult) {
+  if (!testResult || typeof testResult !== 'object') return testResult;
+  const capStr = (s) => {
+    if (typeof s !== 'string') return s;
+    if (s.length <= TEST_RESULT_FIELD_CHAR_CAP) return s;
+    return `[TRUNCATED ${s.length} chars] ` + s.substring(0, TEST_RESULT_FIELD_CHAR_CAP - 30);
+  };
+  // Recursively walk plain data, capping strings + dropping `snapshot` keys.
+  const walk = (node) => {
+    if (Array.isArray(node)) return node.map(walk);
+    if (node && typeof node === 'object') {
+      const out = {};
+      for (const [k, v] of Object.entries(node)) {
+        if (k === 'snapshot') continue;            // drop — biggest bloat source
+        out[k] = walk(v);
+      }
+      return out;
+    }
+    return capStr(node);
+  };
+  return walk(testResult);
 }
 
 function formatDomActivitySummary(activities) {
@@ -2268,7 +2310,7 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, stripSnapshotsFromTestResult, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
@@ -2278,6 +2320,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.getOutputFieldOptions = getOutputFieldOptions;
   window.truncateSnapshotForLLM = truncateSnapshotForLLM;
   window.summarizeFixIteration = summarizeFixIteration;
+  window.stripSnapshotsFromTestResult = stripSnapshotsFromTestResult;
   window.formatDomActivitySummary = formatDomActivitySummary;
   window.summarizeExecutionDiagnostics = summarizeExecutionDiagnostics;
   window.summarizeAllStepDiagnostics = summarizeAllStepDiagnostics;
@@ -2320,6 +2363,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.getOutputFieldOptions = getOutputFieldOptions;
   self.truncateSnapshotForLLM = truncateSnapshotForLLM;
   self.summarizeFixIteration = summarizeFixIteration;
+  self.stripSnapshotsFromTestResult = stripSnapshotsFromTestResult;
   self.formatDomActivitySummary = formatDomActivitySummary;
   self.summarizeExecutionDiagnostics = summarizeExecutionDiagnostics;
   self.summarizeAllStepDiagnostics = summarizeAllStepDiagnostics;
