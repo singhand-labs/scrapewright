@@ -5,6 +5,7 @@ importScripts(
   'lib/url-template.js',
   'lib/step-orchestrator.js',
   'lib/wizard-utils.js',
+  'lib/scrape-tab.js',
   'lib/debug-logger.js'
 );
 
@@ -517,7 +518,11 @@ async function handleExecute(serviceName, input) {
 
       const result = await StepOrchestrator.execute(service, input, {
         createTab: async (url) => {
-          const tab = await chrome.tabs.create({ url, active: false });
+          // RC12: popup window, not background tab — see lib/scrape-tab.js
+          // for the why. Short version: background-tab renderers don't fire
+          // IntersectionObserver, so lazy-loaded feeds (FB/Twitter/infinite
+          // scroll) never load more content during the scrape.
+          const tab = await createScrapeTab(url);
           await waitForTabLoad(tab.id, tabLoadTimeoutMs);
           // WS2.1: wait for the content-script to be listening before the first
           // DOM_REQUEST — prevents the RELAY_FAILED (tabId:null) race.
@@ -998,7 +1003,9 @@ async function waitForContentScript(tabId, maxAttempts = 20, interval = 300) {
 
 async function handleOpenTabExecute(url, scriptStr, parentTabId, reqId) {
   debugLogger.log('info', 'background', 'handleOpenTabExecute start', { url, parentTabId, reqId });
-  const tab = await chrome.tabs.create({ url, active: false });
+  // RC12: popup window so the detail page actually renders its lazy-loaded
+  // content (FB post comments, product reviews, etc.).
+  const tab = await createScrapeTab(url);
   await waitForTabLoad(tab.id);
   const csReady = await waitForContentScript(tab.id);
   if (!csReady) {

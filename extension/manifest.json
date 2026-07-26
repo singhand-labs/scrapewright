@@ -9,6 +9,7 @@
     "alarms",
     "scripting",
     "tabs",
+    "windows",
     "offscreen"
   ],
   "host_permissions": [
