@@ -1748,25 +1748,90 @@ function buildFeedbackSection(feedback, attemptNum, totalAttempts, llmHistory) {
 }
 
 // Pure planning helper: decide what to patch + how to truncate llmHistory when
-// restoring the best attempt. Returns null if the target step no longer exists.
+// restoring the best attempt. Returns null if no patches apply.
 // wizard.js applies the returned plan (mutates wizardState + syncs DOM).
+//
+// Two shapes are accepted (bestAttempt is in-memory only — no persistence
+// migration, but tests + callers may construct either):
+//
+//   NEW (RC11) — multi-step snapshot, used after the lastErrorStepId gate was
+//   dropped from wizard.js scoring. The user-feedback path uses
+//   RETURN_FORMAT_FEEDBACK which patches MULTIPLE steps in one iteration; a
+//   single-step snapshot would only revert one of N patches and leave the
+//   workflow in a half-reverted state.
+//     { stepsSnapshot: [{id, script, onSuccess, onFailure, maxIterations}, ...],
+//       historyMarker: '[Attempt — step "4"',  // matches summarizeFixIteration
+//       score, attemptNum, breakdown }
+//
+//   LEGACY — single-step shape (pre-RC11). Still emitted by older call sites
+//   and tests; kept supported to avoid breaking anything that constructs
+//   bestAttempt manually.
+//     { stepId, script, onSuccess, onFailure, maxIterations, score, attemptNum }
+//
+// Returns { stepPatches: [{id, stepPatch}], truncatedHistory, logMessage }.
+// stepPatches has length >= 1 on success (null return otherwise).
 function planRestoreBestAttempt(bestAttempt, currentSteps, currentLlmHistory) {
   try {
     if (!bestAttempt || typeof bestAttempt !== 'object') return null;
     if (!Array.isArray(currentSteps)) return null;
-    const step = currentSteps.find(s => s && s.id === bestAttempt.stepId);
-    if (!step) return null;
 
-    const stepPatch = {
-      script: bestAttempt.script,
-      onSuccess: bestAttempt.onSuccess,
-      onFailure: bestAttempt.onFailure,
-      maxIterations: bestAttempt.maxIterations
-    };
+    const snapshots = Array.isArray(bestAttempt.stepsSnapshot) ? bestAttempt.stepsSnapshot : null;
+    let stepPatches = [];
+    let markerStepId = bestAttempt.stepId || null;
 
-    // Truncate llmHistory at the boundary of the best attempt's user-message marker.
-    // summarizeFixIteration emits "[Attempt — step \"<id>\" (\"<name>\")]" as the first line.
-    const marker = `[Attempt — step "${bestAttempt.stepId}"`;
+    if (snapshots) {
+      // Multi-step: match each snapshot to a current step by id. Skip
+      // snapshots whose step was removed (don't re-add — topology changes
+      // need explicit relink via removeStepWithRelink / appendStepWithChainLink).
+      for (const snap of snapshots) {
+        if (!snap || typeof snap !== 'object' || !snap.id) continue;
+        const cur = currentSteps.find(s => s && s.id === snap.id);
+        if (!cur) continue;
+        stepPatches.push({
+          id: snap.id,
+          stepPatch: {
+            script: snap.script,
+            onSuccess: snap.onSuccess,
+            onFailure: snap.onFailure,
+            maxIterations: snap.maxIterations
+          }
+        });
+      }
+      if (stepPatches.length === 0) return null;
+      // Prefer the first surviving snapshot's id as the marker source — but
+      // only when the caller didn't supply historyMarker explicitly (the
+      // user-feedback path emits `[Attempt — step "null"]` because
+      // summarizeFixIteration is called with stepId=null when targetStep is
+      // null, so we MUST honor bestAttempt.historyMarker when present).
+      if (bestAttempt.historyMarker) {
+        markerStepId = null; // signal to use historyMarker directly below
+      } else if (!markerStepId && snapshots[0]) {
+        markerStepId = snapshots[0].id;
+      }
+    } else if (bestAttempt.stepId) {
+      // Legacy single-step shape.
+      const step = currentSteps.find(s => s && s.id === bestAttempt.stepId);
+      if (!step) return null;
+      stepPatches.push({
+        id: bestAttempt.stepId,
+        stepPatch: {
+          script: bestAttempt.script,
+          onSuccess: bestAttempt.onSuccess,
+          onFailure: bestAttempt.onFailure,
+          maxIterations: bestAttempt.maxIterations
+        }
+      });
+    } else {
+      return null;
+    }
+
+    // Truncate llmHistory at the boundary of the best attempt's user-message
+    // marker. summarizeFixIteration emits "[Attempt — step \"<id>\" (\"<name>\")]".
+    // The user-feedback path emits `[Attempt — step "null"]` because stepId
+    // is null when no target step exists — bestAttempt.historyMarker captures
+    // the exact string to match.
+    const marker = bestAttempt.historyMarker
+      || `[Attempt — step "${markerStepId || 'null'}"`;
     const history = Array.isArray(currentLlmHistory) ? currentLlmHistory : [];
 
     // Find the attemptNum-th user message whose content includes the marker (1-indexed).
@@ -1790,8 +1855,7 @@ function planRestoreBestAttempt(bestAttempt, currentSteps, currentLlmHistory) {
     }
 
     return {
-      stepId: bestAttempt.stepId,
-      stepPatch,
+      stepPatches,
       truncatedHistory,
       logMessage: `Restored attempt #${bestAttempt.attemptNum} (scored ${bestAttempt.score}) — higher than last attempt.`
     };

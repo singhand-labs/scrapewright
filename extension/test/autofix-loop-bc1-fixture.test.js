@@ -68,7 +68,7 @@ describe('bc1.log regression fixture', () => {
       { role: 'assistant', content: 'attempt3-script' }
     ];
     const plan = planRestoreBestAttempt(best, steps, history);
-    assert.equal(plan.stepPatch.script, 'attempt1-script');
+    assert.equal(plan.stepPatches[0].stepPatch.script, 'attempt1-script');
     assert.equal(plan.truncatedHistory.length, 2);
     assert.equal(plan.truncatedHistory[0].content, history[0].content);
   });
