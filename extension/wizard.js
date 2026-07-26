@@ -2434,9 +2434,14 @@ If your script does NOT use $openTab, $wait / $ / $extract will run against the 
     return `Step ${s.id} (${s.name}):${marker}\n  onSuccess → ${s.onSuccess || 'TERMINATE'}\n  Script:\n${s.script}`;
   }).join('\n\n');
 
-  // Build test results context
+  // Build test results context. Strip snapshots and cap field sizes —
+  // without this, a 5-step FB test result carries ~750K chars of per-step
+  // snapshot HTML and overflows the LLM context (console.log 2026-07-26:
+  // model_context_window_exceeded with prompt_tokens:0 even after the
+  // compactMode retry path fired). The failing step's DOM is supplied
+  // separately via the truncated `pageSnapshot` above.
   const testResultSection = wizardState.testResult
-    ? '\n\nPREVIOUS TEST RESULT:\n' + JSON.stringify(wizardState.testResult, null, 2)
+    ? '\n\nPREVIOUS TEST RESULT:\n' + JSON.stringify(stripSnapshotsFromTestResult(wizardState.testResult), null, 2)
     : '';
 
   const RETURN_FORMAT = `RETURN FORMAT — choose ONE:
