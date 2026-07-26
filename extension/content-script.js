@@ -15,15 +15,68 @@
   // total) so $extractList / $clickInList always work regardless of whether
   // the separate file made it in. lib/list-extract-ops.js remains the source
   // of truth for Node tests; this fallback is a defensive duplicate.
+  // ⚠️ DRIFT GUARD: This inline object MUST mirror the public `api` export
+  // of lib/list-extract-ops.js exactly (function names + behavior). The drift
+  // guard test (test/inline-list-extract-ops-drift.test.js) asserts that
+  // `Object.keys(api).sort()` matches `Object.keys(inlineApi).sort()`. If you
+  // add a function to one, add a stub/real impl to the other in the same
+  // commit — otherwise the inline fallback silently loses capabilities when
+  // the MV3 injection glitch triggers it (see bugx.log 2026-07-23 + the
+  // console.log 2026-07-26 regression where $extractListMultiRecords was
+  // missing from this fallback and the LLM-generated script crashed at step
+  // 4 with "ops.extractListMultiRecords is not a function").
   function createInlineListExtractOps() {
+    // DOM properties that look like attributes but aren't — getAttribute
+    // returns null for these. Read from the element directly when `attr`
+    // names one of them. Mirrors lib/list-extract-ops.js (RC5 fix).
+    const DOM_PROPERTY_READS = new Set(['outerHTML', 'innerHTML']);
+
     function readField(container, spec) {
       const sel = typeof spec === 'string' ? spec : spec.selector;
       const attr = typeof spec === 'string' ? null : spec.attr;
+      if (!sel) {
+        if (attr) {
+          if (DOM_PROPERTY_READS.has(attr)) return container[attr];
+          return container.getAttribute(attr);
+        }
+        return (container.textContent || '').trim();
+      }
       const el = container.querySelector(sel);
       if (!el) return undefined;
-      if (attr) return el.getAttribute(attr);
+      if (attr) {
+        if (DOM_PROPERTY_READS.has(attr)) return el[attr];
+        return el.getAttribute(attr);
+      }
       return (el.textContent || '').trim();
     }
+
+    function readFieldAll(container, spec) {
+      const sel = typeof spec === 'string' ? spec : spec.selector;
+      const attr = typeof spec === 'string' ? null : spec.attr;
+      if (!sel) {
+        let val;
+        if (attr) {
+          if (DOM_PROPERTY_READS.has(attr)) val = container[attr];
+          else val = container.getAttribute(attr);
+        } else {
+          val = (container.textContent || '').trim();
+        }
+        return [val];
+      }
+      const els = container.querySelectorAll(sel);
+      const out = [];
+      for (let i = 0; i < els.length; i++) {
+        const el = els[i];
+        if (attr) {
+          if (DOM_PROPERTY_READS.has(attr)) out.push(el[attr]);
+          else out.push(el.getAttribute(attr));
+        } else {
+          out.push((el.textContent || '').trim());
+        }
+      }
+      return out;
+    }
+
     function extractListRecords(containers, fieldMap, opts) {
       if (!Array.isArray(containers)) {
         throw new Error('$extractList: containers must be an array');
@@ -49,6 +102,33 @@
       }
       return records;
     }
+
+    function extractListMultiRecords(containers, fieldMap, opts) {
+      if (!Array.isArray(containers)) {
+        throw new Error('$extractListMulti: containers must be an array');
+      }
+      if (!fieldMap || typeof fieldMap !== 'object' || Object.keys(fieldMap).length === 0) {
+        throw new Error('$extractListMulti fieldMap must be a non-empty object');
+      }
+      if (!containers.length) {
+        if (opts && opts.allowEmpty) return [];
+        throw new Error('$extractListMulti: no containers matched');
+      }
+      const records = [];
+      for (const container of containers) {
+        const rec = {};
+        for (const [field, spec] of Object.entries(fieldMap)) {
+          try {
+            rec[field] = readFieldAll(container, spec);
+          } catch (err) {
+            throw new Error(`$extractListMulti field "${field}" selector invalid: ${err.message}`);
+          }
+        }
+        records.push(rec);
+      }
+      return records;
+    }
+
     function clickInListItems(containers, subSel, clickFn, delayMs) {
       const delay = Math.max(0, Math.min(5000, typeof delayMs === 'number' ? delayMs : 500));
       let clicked = 0;
@@ -68,7 +148,77 @@
       });
       return { clicked, errors, delayMs: delay };
     }
-    return { extractListRecords, clickInListItems };
+
+    function computeExtractListDiagnostics(containers, fieldMap, containerSelector) {
+      const containerArr = Array.isArray(containers) ? containers : [];
+      const fields = fieldMap && typeof fieldMap === 'object' ? Object.entries(fieldMap) : [];
+      const perField = fields.map(([field, spec]) => {
+        const subSelector = typeof spec === 'string' ? spec : (spec && spec.selector);
+        const attr = typeof spec === 'string' ? null : (spec && spec.attr) || null;
+        const sampleTexts = [];
+        const sampleHrefs = [];
+        let matchCount = 0;
+        if (!subSelector) {
+          return { field, subSelector: null, attr, matchCount: 0, sampleTexts: [], sampleHrefs: [] };
+        }
+        for (const c of containerArr) {
+          let el;
+          try { el = c.querySelector(subSelector); } catch (_) { el = null; }
+          if (!el) continue;
+          matchCount += 1;
+          if (!attr && sampleTexts.length < 3 && typeof el.textContent === 'string') {
+            sampleTexts.push(el.textContent.trim().slice(0, 80));
+          }
+          if (!attr && sampleHrefs.length < 3 && el.getAttribute) {
+            const href = el.getAttribute('href');
+            if (href) sampleHrefs.push(String(href).slice(0, 120));
+          }
+        }
+        return { field, subSelector, attr, matchCount, sampleTexts, sampleHrefs };
+      });
+      return {
+        api: 'extractList',
+        containerSelector: containerSelector || null,
+        containerMatches: containerArr.length,
+        perField
+      };
+    }
+
+    function computeSimpleSelectorDiagnostics(elements, selector, api) {
+      const apiName = api || 'list';
+      const arr = Array.isArray(elements) ? elements : [];
+      const wantSamples = apiName !== 'count';
+      const sampleTexts = [];
+      const sampleHrefs = [];
+      if (wantSamples) {
+        for (const el of arr) {
+          if (!el) continue;
+          if (sampleTexts.length < 3 && typeof el.textContent === 'string') {
+            sampleTexts.push(el.textContent.trim().slice(0, 80));
+          }
+          if (sampleHrefs.length < 3 && el.getAttribute) {
+            const href = el.getAttribute('href');
+            if (href) sampleHrefs.push(String(href).slice(0, 120));
+          }
+          if (sampleTexts.length >= 3 && sampleHrefs.length >= 3) break;
+        }
+      }
+      return {
+        api: apiName,
+        selector: selector || null,
+        matchCount: arr.length,
+        sampleTexts,
+        sampleHrefs
+      };
+    }
+
+    return {
+      extractListRecords,
+      extractListMultiRecords,
+      clickInListItems,
+      computeExtractListDiagnostics,
+      computeSimpleSelectorDiagnostics
+    };
   }
 
   let __listOpsFallbackWarned = false;
@@ -741,6 +891,13 @@
     const ops = getListExtractOps();
     if (!ops) {
       throw new Error('$extractListMulti runtime missing: lib/list-extract-ops.js did not attach window.ListExtractOps. Reload the extension and refresh the target tab.');
+    }
+    if (typeof ops.extractListMultiRecords !== 'function') {
+      // Drift between lib/list-extract-ops.js and the inline fallback in this
+      // file. The drift guard test should prevent this — if you see this error
+      // at runtime, run the drift-guard test and update the inline fallback to
+      // mirror the module's public api.
+      throw new Error('$extractListMulti runtime stale: ops.extractListMultiRecords missing — lib/list-extract-ops.js and content-script.js inline fallback are out of sync. Reload the extension; if it persists, run test/inline-list-extract-ops-drift.test.js.');
     }
     const records = ops.extractListMultiRecords(containers, fieldMap, opts || {});
     // Reuse the same diagnostics shape — diagnostics count matches per field,
