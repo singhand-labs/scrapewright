@@ -2,7 +2,7 @@ const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const { JSDOM } = require('jsdom');
 
-const { extractListRecords, clickInListItems } = require('../lib/list-extract-ops');
+const { extractListRecords, clickInListItems, extractListMultiRecords } = require('../lib/list-extract-ops');
 
 function setupDOM(html) {
   const dom = new JSDOM(html, { url: 'https://example.com/page' });
@@ -50,6 +50,29 @@ describe('extractListRecords', () => {
     assert.equal(records[0].body, 'Hi');
     assert.equal(records[1].author, undefined);
     assert.equal(records[1].body, 'Yo');
+  });
+
+  // Regression for console.log 2026-07-26 RC5: outerHTML/innerHTML are DOM
+  // properties, not HTML attributes — getAttribute returns null. The single-
+  // match path must read DOM properties when attr names one of them.
+  it('reads outerHTML DOM property (not getAttribute) for raw HTML', () => {
+    document.body.innerHTML = `<div class="post"><p class="body">Hi</p></div>`;
+    const containers = Array.from(document.querySelectorAll('.post'));
+    const records = extractListRecords(containers, {
+      body: { selector: '.body', attr: 'outerHTML' }
+    });
+    assert.equal(records.length, 1);
+    assert.match(records[0].body, /^<p class="body">Hi<\/p>$/);
+  });
+
+  it('reads innerHTML DOM property for raw inner HTML', () => {
+    document.body.innerHTML = `<div class="post"><div class="wrap"><span>x</span></div></div>`;
+    const containers = Array.from(document.querySelectorAll('.post'));
+    const records = extractListRecords(containers, {
+      inner: { selector: '.wrap', attr: 'innerHTML' }
+    });
+    assert.equal(records.length, 1);
+    assert.match(records[0].inner, /^<span>x<\/span>$/);
   });
 
   it('supports attr form for href extraction', () => {
@@ -137,5 +160,93 @@ describe('clickInListItems', () => {
     assert.equal(r.clicked, 0);
     assert.equal(r.errors.length, 2);
     assert.match(r.errors[0].reason, /boom/);
+  });
+});
+
+// Regression for console.log 2026-07-26: $extractList's readField uses
+// container.querySelector(sel) — returns FIRST match only. The LLM cannot
+// express "the 2nd a[role=link] in this container" or "the a[role=link]
+// whose aria-label matches a date pattern" — needed to disambiguate
+// Facebook's author link (1st a[role=link]) from the timestamp link (2nd).
+// Without this primitive, the LLM produced brittle sibling selectors that
+// matched neither, leaving publishTime empty across every iteration.
+describe('extractListMultiRecords', () => {
+  beforeEach(() => {
+    setupDOM('<!DOCTYPE html><html><body></body></html>');
+  });
+
+  it('returns ALL matches per field per container as arrays', () => {
+    // Facebook-shaped DOM: each post has two a[role=link] elements — first is
+    // the author, second is the timestamp. $extractList picks first only;
+    // $extractListMulti must return both so the LLM can disambiguate in JS.
+    document.body.innerHTML = `
+      <div class="post">
+        <a role="link" aria-label="Alice">Alice</a>
+        <a role="link" aria-label="2026年7月7日">7月7日</a>
+      </div>
+      <div class="post">
+        <a role="link" aria-label="Bob">Bob</a>
+        <a role="link" aria-label="2天">2天</a>
+      </div>
+    `;
+    const containers = Array.from(document.querySelectorAll('.post'));
+    const records = extractListMultiRecords(containers, { links: 'a[role="link"]' });
+    assert.equal(records.length, 2);
+    assert.deepEqual(records[0].links, ['Alice', '7月7日']);
+    assert.deepEqual(records[1].links, ['Bob', '2天']);
+  });
+
+  it('returns empty array for fields with no matches (not undefined)', () => {
+    document.body.innerHTML = `<div class="post"><a>Alice</a></div>`;
+    const containers = Array.from(document.querySelectorAll('.post'));
+    const records = extractListMultiRecords(containers, {
+      links: 'a',
+      missing: '.nope'
+    });
+    assert.deepEqual(records[0].links, ['Alice']);
+    assert.deepEqual(records[0].missing, []);
+  });
+
+  it('supports { selector, attr } spec form', () => {
+    document.body.innerHTML = `
+      <div class="post">
+        <a href="/u/alice">Alice</a>
+        <a href="/posts/123">7月7日</a>
+      </div>
+    `;
+    const containers = Array.from(document.querySelectorAll('.post'));
+    const records = extractListMultiRecords(containers, {
+      hrefs: { selector: 'a', attr: 'href' }
+    });
+    assert.deepEqual(records[0].hrefs, ['/u/alice', '/posts/123']);
+  });
+
+  it('throws on empty containers without allowEmpty', () => {
+    assert.throws(() => extractListMultiRecords([], { a: '.a' }), /no containers matched/);
+  });
+
+  it('returns [] when allowEmpty is true and containers empty', () => {
+    assert.deepEqual(extractListMultiRecords([], { a: '.a' }, { allowEmpty: true }), []);
+  });
+
+  it('supports outerHTML property read for raw-HTML extraction', () => {
+    document.body.innerHTML = `<div class="post"><p>Hello</p></div>`;
+    const containers = Array.from(document.querySelectorAll('.post'));
+    const records = extractListMultiRecords(containers, {
+      html: { selector: 'p', attr: 'outerHTML' }
+    });
+    assert.equal(records.length, 1);
+    assert.match(records[0].html[0], /^<p>Hello<\/p>$/);
+  });
+
+  it('empty selector returns the container itself (for per-container outerHTML)', () => {
+    document.body.innerHTML = `<div class="post"><p>Hello</p></div><div class="post"><p>World</p></div>`;
+    const containers = Array.from(document.querySelectorAll('.post'));
+    const records = extractListMultiRecords(containers, {
+      html: { selector: '', attr: 'outerHTML' }
+    });
+    assert.equal(records.length, 2);
+    assert.match(records[0].html[0], /^<div class="post"><p>Hello<\/p><\/div>$/);
+    assert.match(records[1].html[0], /^<div class="post"><p>World<\/p><\/div>$/);
   });
 });
