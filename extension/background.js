@@ -381,6 +381,8 @@ function sanitizeSteps(steps) {
 
 async function createJob(serviceName, input) {
   debugLogger.log('info', 'background', 'Creating job', { serviceName, input });
+  // pages[] carries every web page the scraper saw (RC16). pagesTruncated
+  // counts captures dropped due to the per-job cap. Both optional for clients.
   const job = {
     id: crypto.randomUUID(),
     serviceName,
@@ -626,7 +628,19 @@ async function handleExecute(serviceName, input) {
       });
 
       if (error.message?.includes('LOGIN_REQUIRED')) {
-        return { success: false, error: 'LOGIN_REQUIRED: Please log in and retry' };
+        // This fires from the catch path where `error` is the orchestrator's
+        // thrown error — which carries the same pages[] / pagesTruncated /
+        // steps enrichment as the success path. Thread them so callers
+        // investigating a login wall still get the trail of pages captured
+        // before the failure. Shape-consistent with the other catch returns
+        // (MISSING_URL_PARAM, POLL_EXHAUSTED) below.
+        return {
+          success: false,
+          error: 'LOGIN_REQUIRED: Please log in and retry',
+          steps: error?.steps ? sanitizeSteps(error.steps) : [],
+          pages: error?.pages || [],
+          pagesTruncated: error?.pagesTruncated || 0
+        };
       }
 
       if (error.code === 'MISSING_URL_PARAM') {
