@@ -1068,6 +1068,32 @@ async function waitForContentScript(tabId, maxAttempts = 20, interval = 300) {
   return false;
 }
 
+// captureSubTabSnapshot — fetch a DOM snapshot from a sub-tab before it's
+// destroyed. Used by handleOpenTabExecute on both success and failure paths
+// so the snapshot is available for error.subTabSnapshot (autoFix signal)
+// AND for the RC16 pages[] list (via currentExecutionTracker.record).
+// `label` distinguishes success vs failure in log messages. Returns
+// { snapshot, error }; never throws — capture failures are logged at 'warn'.
+async function captureSubTabSnapshot(tabId, label) {
+  try {
+    // No `mode` arg — matches captureSnapshot's pattern in the orchestrator
+    // (functionally equivalent to mode:'full', kept consistent to avoid drift).
+    const snapResp = await chrome.tabs.sendMessage(tabId, { type: 'GET_DOM_SNAPSHOT' });
+    const snapshot = snapResp?.snapshot || null;
+    debugLogger.log('info', 'background', `Captured sub-tab snapshot (${label})`, {
+      tabId,
+      htmlLength: snapshot?.html?.length
+    });
+    return { snapshot, error: null };
+  } catch (snapErr) {
+    debugLogger.log('warn', 'background', `Sub-tab snapshot capture failed (${label})`, {
+      tabId,
+      error: snapErr?.message || String(snapErr)
+    });
+    return { snapshot: null, error: snapErr };
+  }
+}
+
 async function handleOpenTabExecute(url, scriptStr, parentTabId, reqId) {
   debugLogger.log('info', 'background', 'handleOpenTabExecute start', { url, parentTabId, reqId });
   // RC12: popup window so the detail page actually renders its lazy-loaded
@@ -1093,18 +1119,7 @@ async function handleOpenTabExecute(url, scriptStr, parentTabId, reqId) {
     // object for autoFix). The success-path capture feeds the new pages[]
     // list so the user can recover detail-page HTML (FB post comments,
     // product reviews, etc.) that the script operated on.
-    let subTabSnapshot = null;
-    try {
-      const snapResp = await chrome.tabs.sendMessage(tab.id, { type: 'GET_DOM_SNAPSHOT', mode: 'full' });
-      subTabSnapshot = snapResp?.snapshot || null;
-      debugLogger.log('info', 'background', 'Captured sub-tab snapshot on success', {
-        tabId: tab.id,
-        htmlLength: subTabSnapshot?.html?.length,
-        structureLength: subTabSnapshot?.structure?.length
-      });
-    } catch (snapErr) {
-      debugLogger.log('warn', 'background', 'Sub-tab snapshot capture failed (success path)', { tabId: tab.id, error: snapErr.message });
-    }
+    const { snapshot: subTabSnapshot } = await captureSubTabSnapshot(tab.id, 'on success');
     if (subTabSnapshot && currentExecutionTracker) {
       currentExecutionTracker.record(subTabSnapshot, {
         sourceStepId: '__opentab__',
@@ -1129,18 +1144,7 @@ async function handleOpenTabExecute(url, scriptStr, parentTabId, reqId) {
     // a script that operates on the detail page. Capturing here also grabs
     // the post-interaction DOM state (after clicks/scrolls/loads inside the
     // $openTab body), which is what the script was actually operating on.
-    let subTabSnapshot = null;
-    try {
-      const snapResp = await chrome.tabs.sendMessage(tab.id, { type: 'GET_DOM_SNAPSHOT', mode: 'full' });
-      subTabSnapshot = snapResp?.snapshot || null;
-      debugLogger.log('info', 'background', 'Captured sub-tab snapshot before destroy', {
-        tabId: tab.id,
-        htmlLength: subTabSnapshot?.html?.length,
-        structureLength: subTabSnapshot?.structure?.length
-      });
-    } catch (snapErr) {
-      debugLogger.log('warn', 'background', 'Sub-tab snapshot capture failed', { tabId: tab.id, error: snapErr.message });
-    }
+    const { snapshot: subTabSnapshot } = await captureSubTabSnapshot(tab.id, 'before destroy');
     // RC16: also feed the failure-path snapshot into the tracker. The
     // orchestrator owns the same instance (passed via options.tracker), so
     // this surfaces the failing detail page in pages[] alongside the rest
