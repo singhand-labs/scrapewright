@@ -108,6 +108,14 @@
         <summary>Raw JSON output</summary>
         <pre id="testResults"></pre>
       </details>
+      <!-- RC16: pages viewer — read-only list of every page the scraper saw -->
+      <div id="pages-viewer" class="pages-viewer" hidden>
+        <h4>Pages seen during scrape (<span id="pages-count">0</span>)</h4>
+        <details>
+          <summary>Show pages</summary>
+          <div id="pages-list" class="pages-list"></div>
+        </details>
+      </div>
       <pre id="currentScript"></pre>
       <textarea id="feedbackInput" rows="3" placeholder="Point out the problem with the extracted data — e.g. &quot;publishTime is missing&quot;, &quot;only 3 posts extracted&quot;, &quot;images should have multiple URLs&quot;"></textarea>
       <div id="phase5Actions">
