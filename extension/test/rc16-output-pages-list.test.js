@@ -205,3 +205,34 @@ describe('RC16 PageTracker — opt-out and defensive guards', () => {
 function SAMPLE_SNAPSHOT(url, html, title) {
   return { html, url, title: title || '', textContent: '', structure: '', textSummary: '' };
 }
+
+describe('RC16 content-script snapshot — url + title fields', () => {
+  // getDomSnapshot lives inside the content-script IIFE and touches `document`,
+  // so it can't be unit-tested directly. Instead, pin the SHAPE CONTRACT: any
+  // captureSnapshot result fed to PageTracker must carry url + title. The
+  // step-orchestrator's deps.captureSnapshot returns whatever the content-script
+  // sends back via GET_DOM_SNAPSHOT — these tests assert PageTracker reads
+  // snapshot.url and snapshot.title without choking when they're present.
+  it('PageTracker surfaces snapshot.url and snapshot.title on the page entry', () => {
+    const t = new PageTracker();
+    t.record(
+      { html: '<html>x</html>', url: 'https://example.com/page', title: 'Example', textContent: '' },
+      { sourceStepId: 's1' }
+    );
+    const page = t.list()[0];
+    assert.equal(page.url, 'https://example.com/page');
+    assert.equal(page.title, 'Example');
+  });
+
+  it('PageTracker tolerates missing url/title (defensive — older snapshots)', () => {
+    const t = new PageTracker();
+    t.record(
+      { html: '<html>x</html>' }, // no url, no title
+      { sourceStepId: 's1' }
+    );
+    const page = t.list()[0];
+    assert.equal(page.url, '');
+    assert.equal(page.title, '');
+    assert.match(page.id, /^page_0001_/);
+  });
+});

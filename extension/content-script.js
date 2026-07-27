@@ -1906,8 +1906,8 @@
     if (html.length > 80000) html = html.slice(0, 80000) + '\n... [truncated]';
 
     return {
-      url: location.href,
-      title: document.title,
+      url: (typeof location !== 'undefined' && location && location.href) || '',
+      title: (typeof document !== 'undefined' && document && document.title) || '',
       html: html,
       textContent: document.body.innerText.slice(0, 15000)
     };
