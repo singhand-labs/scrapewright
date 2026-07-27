@@ -3,56 +3,95 @@
 // Helper for opening a "scrape tab" — the browser tab we drive via
 // chrome.scripting / chrome.tabs.sendMessage to actually run scrape steps.
 //
-// WHY THIS EXISTS (RC12, console.log 2026-07-26 16:30-16:32):
-// The straightforward approach is chrome.tabs.create({ url, active: false }).
-// That works for static pages but BREAKS on sites that lazy-load content via
-// IntersectionObserver (Facebook feed, Twitter, infinite-scroll feeds, etc.):
+// === History of this module (RC12 → RC14) ===
 //
-//   - Background tabs (active: false) are render-deferred by Chrome. The
-//     renderer doesn't produce compositor frames at full rate, and
-//     IntersectionObserver callbacks either fire with isIntersecting:false
-//     or don't fire at all.
-//   - Symptom in logs: postCount lower than foreground (7 vs 13 on the same
-//     FB search), scroll loop's uniqueCount stays flat across iterations
-//     (4 → 4 → 4 ...), r.scrolled flips to false after the first iteration
-//     (scrollHeight isn't growing because the page isn't loading more posts).
-//   - Foreground tab (user activates it manually): everything works.
+// RC12 (console.log 2026-07-26 16:30 BG vs 16:32 FG): introduced popup window
+// via chrome.windows.create({type:'popup', focused:false}) because BG tabs
+// (chrome.tabs.create({active:false})) landed only 3 posts vs FG's 10. The
+// diagnosis was that Chrome throttles inactive-tab renderers, so Intersection-
+// Observer-based lazy-load never fires.
 //
-// The fix is to open the URL in a popup window (chrome.windows.create with
-// type: 'popup'). Popup windows are rendered normally even when not focused,
-// so IntersectionObserver fires correctly. The user's keyboard focus stays
-// on whatever they were doing — focused: false prevents focus steal.
+// RC13 (console.log 2026-07-27): two compounding fixes.
+//   (1) scrape-tab.js's top-level `var api` collided with list-pattern.js's
+//       top-level `const api` in wizard.html's shared global lexical env, so
+//       the entire file failed to parse — silently disabling RC12. IIFE-wrapped.
+//   (2) Even with popup working, Chrome throttles UNFOCUSED popup windows.
+//       Added lib/visibility-keepalive.js which injects pageWorldKeepalive
+//       into the page's MAIN world via chrome.scripting.executeScript, over-
+//       riding document.visibilityState / hidden / hasFocus + rAF keep-alive.
 //
-// RC13 (console.log 2026-07-27 01:44): wrap the entire module in an IIFE.
-// Previously the top-level `var api = {...}` collided with list-pattern.js's
-// top-level `const api = {...}` in wizard.html's shared global lexical
-// environment (V8 throws "Identifier 'api' has already been declared" at
-// parse time, preventing the entire file from executing). The IIFE scopes
-// all of this module's declarations to its own function scope, eliminating
-// the collision regardless of what other modules the host page loads.
+// RC14 (this version, user feedback 2026-07-27): popup windows AUTO-ACTIVATE
+// on Linux/GNOME and Windows even with focused:false — Chrome documents this
+// as "the operating system may not honor this request". A 1280x800 popup
+// landing at (0,0) looks fullscreen and steals keyboard focus. User reports
+// the tab activates mid-scrape, disrupting their work.
 //
-// This module is intentionally tiny and side-effect-free. Callers still use
-// chrome.tabs.* APIs (sendMessage, executeScript, remove) on the returned
-// tab — popup-window tabs behave identically to normal tabs for those APIs.
-// When the tab is removed via chrome.tabs.remove(tabId), Chrome auto-closes
-// the popup window if that was the only tab.
+// INSIGHT: the RC12 failure mode ("BG tab loads only 3 posts") is now under-
+// stood to be caused by page JS reading document.visibilityState==='hidden'
+// and gating further loading on it — NOT by Chrome throttling Intersection-
+// Observer itself (IO is layout-driven and continues to fire on inactive
+// tabs). RC13's visibility-keepalive override already addresses the real root
+// cause. So we can safely default back to chrome.tabs.create({active:false}),
+// which:
+//   - Reliably does NOT activate the tab (no OS will ignore active:false)
+//   - Opens in the CURRENT window as a normal-looking tab (no fullscreen popup)
+//   - Lets visibility-keepalive keep the page JS loading content as if visible
+//
+// The popup-window path is preserved as opt-in via options.usePopup=true,
+// for sites where the background-tab + visibility-override combination turns
+// out to be insufficient (rare — would manifest as scroll loop's uniqueCount
+// staying flat across iterations).
+
 (function (global) {
-  var DEFAULT_POPUP_WIDTH = 1280;
-  var DEFAULT_POPUP_HEIGHT = 800;
-  var DEFAULT_POPUP_LEFT = 0;
-  var DEFAULT_POPUP_TOP = 0;
+  // Default geometry for the popup-window fallback path. Kept modest so that
+  // even when usePopup:true is set, the window doesn't look fullscreen.
+  var DEFAULT_POPUP_WIDTH = 1024;
+  var DEFAULT_POPUP_HEIGHT = 600;
+  var DEFAULT_POPUP_LEFT = 80;
+  var DEFAULT_POPUP_TOP = 80;
 
   // createScrapeTab(url, options?) → Promise<chrome.tabs.Tab>
   //
   // options:
-  //   width, height, left, top   — window geometry (default 1280x800 at 0,0)
-  //   focused                     — default false (don't steal keyboard focus)
-  //   type                        — default 'popup' (no browser chrome, smaller)
+  //   usePopup (default false) — opt into the popup-window path. The default
+  //     background-tab path is preferred (doesn't steal focus, no fullscreen).
+  //     Set to true only if you have evidence the background tab is being
+  //     throttled in a way visibility-keepalive can't override.
+  //   active (default false) — for the background-tab path, whether to active:
+  //     the tab. Default false (don't switch focus to it).
+  //   width, height, left, top — window geometry for usePopup:true path
+  //   focused — for usePopup:true path, default false (don't steal focus)
+  //   type — for usePopup:true path, default 'popup'
   //
-  // Returns the tab object. Throws on chrome.windows.create failure or if the
-  // window has no tab (defensive — shouldn't happen with type:'popup' + url).
+  // Returns the tab object. Throws on window/tab creation failure.
   async function createScrapeTab(url, options) {
     options = options || {};
+    if (options.usePopup) {
+      return await createPopupTab(url, options);
+    }
+    return await createBackgroundTab(url, options);
+  }
+
+  // Default path: chrome.tabs.create({active:false}). Does not steal focus,
+  // does not look fullscreen — just a normal inactive tab in the current
+  // window. visibility-keepalive is injected afterwards so the page keeps
+  // loading lazy content as if it were visible.
+  async function createBackgroundTab(url, options) {
+    var tabOpts = {
+      url: url,
+      active: options.active === undefined ? false : !!options.active
+    };
+    var tab = await chrome.tabs.create(tabOpts);
+    if (!tab) throw new Error('createScrapeTab: chrome.tabs.create returned no tab');
+    return await afterTabOpen(tab);
+  }
+
+  // Fallback path: chrome.windows.create({type:'popup', focused:false}).
+  // Used when caller passes usePopup:true. Popup windows get rendered even
+  // when not focused, which is the original RC12 win for sites that genuinely
+  // need an active compositor. Caveat: many OSes ignore focused:false and
+  // activate the popup anyway — prefer the default background-tab path.
+  async function createPopupTab(url, options) {
     var winOpts = {
       url: url,
       type: options.type || 'popup',
@@ -62,33 +101,33 @@
       left: typeof options.left === 'number' ? options.left : DEFAULT_POPUP_LEFT,
       top: typeof options.top === 'number' ? options.top : DEFAULT_POPUP_TOP
     };
+    if (options.state) winOpts.state = options.state;
     var win = await chrome.windows.create(winOpts);
     if (!win) throw new Error('createScrapeTab: chrome.windows.create returned no window');
     var tab = (win.tabs && win.tabs[0]) || null;
     if (!tab) throw new Error('createScrapeTab: popup window opened with no tab');
-    // Stash the windowId on the returned tab so callers that want to close
-    // the entire popup window (not just the tab) can do so. chrome.tabs.remove
-    // on the tab id will also close the popup window if it's the only tab,
-    // so most callers don't need this — it's for diagnostics + explicit cleanup.
     tab._popupWindowId = win.id;
+    return await afterTabOpen(tab);
+  }
 
-    // RC13: inject the visibility-keepalive override into the page's MAIN
-    // world ASAP. Without this, when the user switches focus away from the
-    // popup (or runs parallel scrape tasks), Chrome throttles the renderer
-    // and visibility-gated lazy-load (FB/Twitter/infinite-scroll) stops
-    // firing — same failure mode RC12 was meant to fix. The injection is
-    // best-effort: if it fails (rare — usually a tab gone or a permission
-    // issue), the scrape still runs, just without the visibility boost.
-    // Don't await here — we don't want to block tab creation on injection.
+  // Common post-open hook: inject visibility-keepalive so the page's JS sees
+  // visibilityState='visible' regardless of actual tab/window state. Without
+  // this, FB/Twitter/Reddit/SPA-infinite-scroll would stop loading more
+  // content the moment the tab becomes inactive.
+  //
+  // Fire-and-forget: we don't want to block tab creation on injection. If
+  // injection fails (rare), the scrape still runs, just without the override.
+  async function afterTabOpen(tab) {
     if (typeof injectVisibilityKeepalive === 'function') {
       Promise.resolve(injectVisibilityKeepalive(tab.id)).catch(function () {});
     }
-
     return tab;
   }
 
   var api = {
     createScrapeTab: createScrapeTab,
+    createBackgroundTab: createBackgroundTab,
+    createPopupTab: createPopupTab,
     DEFAULT_POPUP_WIDTH: DEFAULT_POPUP_WIDTH,
     DEFAULT_POPUP_HEIGHT: DEFAULT_POPUP_HEIGHT,
     DEFAULT_POPUP_LEFT: DEFAULT_POPUP_LEFT,
@@ -100,8 +139,6 @@
   if (typeof self !== 'undefined') self.ScrapeTab = api;
   // Expose createScrapeTab as a top-level free variable so wizard.js's
   // `await createScrapeTab(url)` call sites work without qualification.
-  // Wrapped in IIFE so the global assignment is explicit, not implicit via
-  // hoisting (which is what triggered the var-after-const SyntaxError).
   if (typeof global !== 'undefined') {
     global.createScrapeTab = createScrapeTab;
     global.ScrapeTab = api;

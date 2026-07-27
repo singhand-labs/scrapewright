@@ -75,7 +75,12 @@ function makeSandbox() {
       windows: {
         create: async (opts) => ({ id: 1, tabs: [{ id: 99, url: opts && opts.url }] })
       },
-      tabs: {},
+      // RC14: createScrapeTab's default path uses chrome.tabs.create({active:false})
+      // (was: chrome.windows.create popup). Wire it to the same fake-tab
+      // generator so the visibility-keepalive injection test stays meaningful.
+      tabs: {
+        create: async (opts) => ({ id: 99, url: opts && opts.url })
+      },
       scripting: {
         executeScript: async (cfg) => {
           sandbox._lastExecuteScriptCfg = cfg;
