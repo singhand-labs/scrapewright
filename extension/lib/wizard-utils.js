@@ -1417,6 +1417,25 @@ function summarizeAllStepDiagnostics(events, steps) {
           let header = '    $extractList(\'' + d.containerSelector + '\') — container matched ' + d.containerMatches + ' element(s)';
           if (d.containerMatches === 0) header += ' (returned [] — allowEmpty was set or container selector is wrong)';
           lines.push(header);
+          // RC13 (console.log 2026-07-27 02:30): surface the first matched
+          // container's actual outerHTML so the LLM can see WHERE each field's
+          // value lives inside one record. Without this, when the user reports
+          // "field X missing", the LLM has no way to discover that — for
+          // example — a count lives in a nested span rather than the button
+          // element itself. The cleaned full-page HTML has typically stripped
+          // these nested spans, and the per-field sampleTexts only reflect
+          // what the LLM's (wrong) selectors already returned. Showing one
+          // real record's DOM lets the LLM pick the right sub-element.
+          if (d.firstContainerHtml && typeof d.firstContainerHtml === 'string' && d.firstContainerHtml.length > 0) {
+            lines.push('      RECORD HTML (first container\'s actual outerHTML — read this to find where missing fields live):');
+            // Cap at 1800 chars per call so N extractList calls in one step
+            // can't blow up the prompt. The source-side cap is 2000; this
+            // trims a bit more to leave room for the surrounding markers.
+            const html = d.firstContainerHtml.length > 1800
+              ? d.firstContainerHtml.slice(0, 1800) + '…[truncated]'
+              : d.firstContainerHtml;
+            lines.push('        ' + html);
+          }
           // Compute field collisions up-front: two fields whose non-empty
           // sample sets are identical (order-independent) are clearly grabbing
           // the same elements. Generic signal — surfaces author/publishTime-

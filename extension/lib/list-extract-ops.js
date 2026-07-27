@@ -154,6 +154,16 @@ function clickInListItems(containers, subSel, clickFn, delayMs) {
 //
 // Mirrors readField()'s selector/attr semantics so the diagnostic exactly
 // reflects what extractListRecords returned.
+//
+// firstContainerHtml (RC13, console.log 2026-07-27 02:30): the outerHTML of
+// the first matched container, lightly trimmed + capped. WITHOUT this, when
+// the user reports "field X missing" the LLM has no way to discover WHERE
+// the missing field's value lives in the DOM neighborhood of a record. It
+// only sees its own (wrong) selectors' sample texts and the cleaned full-
+// page HTML (which has typically stripped the very nested spans that carry
+// reaction/comment/share counts). Showing one real record's outerHTML lets
+// the LLM discover "the count is in a <span> inside the button, not the
+// button itself" — a fully generic fix that works for any site, any field.
 function computeExtractListDiagnostics(containers, fieldMap, containerSelector) {
   const containerArr = Array.isArray(containers) ? containers : [];
   const fields = fieldMap && typeof fieldMap === 'object' ? Object.entries(fieldMap) : [];
@@ -181,10 +191,25 @@ function computeExtractListDiagnostics(containers, fieldMap, containerSelector) 
     }
     return { field, subSelector, attr, matchCount, sampleTexts, sampleHrefs };
   });
+  // Capture up to 2000 chars of the first container's outerHTML. The cap is
+  // per-call: if there are multiple $extractList calls in one step, each one
+  // contributes its own snippet. summarizeAllStepDiagnostics further caps the
+  // aggregate to avoid unbounded prompt growth.
+  let firstContainerHtml = null;
+  if (containerArr.length > 0) {
+    const c0 = containerArr[0];
+    if (c0 && typeof c0.outerHTML === 'string') {
+      // Collapse runs of whitespace to keep the snippet compact and to avoid
+      // dumping huge indented DOM. Keep newlines so the LLM can read structure.
+      const collapsed = c0.outerHTML.replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, ' ');
+      firstContainerHtml = collapsed.length > 2000 ? collapsed.slice(0, 2000) + '…[truncated]' : collapsed;
+    }
+  }
   return {
     api: 'extractList',
     containerSelector: containerSelector || null,
     containerMatches: containerArr.length,
+    firstContainerHtml,
     perField
   };
 }
