@@ -149,6 +149,18 @@ describe('RC16 PageTracker — list() shape and size cap', () => {
     assert.equal(pages[9].url, 'https://a.com/19');
   });
 
+  it('honors maxPagesCaptured: 0 (cap=0 means capture nothing; || would have swallowed 0)', () => {
+    const t = new PageTracker({ maxPagesCaptured: 0 });
+    assert.equal(t.maxPagesCaptured, 0,
+      'constructor must preserve 0 — || would have rewritten to default');
+    for (let i = 0; i < 5; i++) {
+      t.record(SAMPLE_SNAPSHOT('https://a.com/' + i, '<html>' + i + '</html>'), { sourceStepId: 's' });
+    }
+    const { pages, pagesTruncated } = t.listWithMeta();
+    assert.deepEqual(pages, [], 'cap=0 must return no pages');
+    assert.equal(pagesTruncated, 5, 'cap=0 must report all 5 entries as truncated');
+  });
+
   it('exposes pagesTruncated count via listWithMeta() return meta when over cap', () => {
     const t = new PageTracker();
     for (let i = 0; i < 60; i++) {
