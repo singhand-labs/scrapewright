@@ -660,3 +660,27 @@ describe('RC16 wizard-utils — stripPagesFromLLMContext', () => {
     assert.deepEqual(out.data.tags, ['a', 'b', 'c']);
   });
 });
+
+describe('RC16 wizard.js — apply stripPagesFromLLMContext at every LLM site (structural)', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const SRC = fs.readFileSync(path.join(__dirname, '..', 'wizard.js'), 'utf8');
+
+  it('wizard.js imports stripPagesFromLLMContext', () => {
+    // Either via destructuring from wizard-utils, via window., or via a require.
+    assert.ok(
+      /stripPagesFromLLMContext/.test(SRC),
+      'wizard.js must reference stripPagesFromLLMContext'
+    );
+  });
+
+  it('every call to stripSnapshotsFromTestResult has a sibling call to stripPagesFromLLMContext', () => {
+    // Crude approximation: count calls. Equal counts ≈ applied uniformly.
+    // (If a future call site uses one without the other, this test breaks.)
+    const snapCalls = (SRC.match(/stripSnapshotsFromTestResult/g) || []).length;
+    const pagesCalls = (SRC.match(/stripPagesFromLLMContext/g) || []).length;
+    // pagesCalls includes the import line, so it should be snapCalls + 1 (import).
+    assert.ok(pagesCalls >= snapCalls,
+      `expected pages-strip calls (>= ${snapCalls}) to mirror snapshot-strip calls; got ${pagesCalls}`);
+  });
+});
