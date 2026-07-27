@@ -8,6 +8,11 @@
 // objects containing another array of objects) only stamp at the outermost
 // array — inner arrays are left to the script to manage. This keeps the
 // stamping predictable and avoids surprising deep mutation.
+//
+// Note: the orchestrator's caller-side guard (`!Array.isArray(result)`) rejects
+// bare-array results before reaching this helper, so the array branch in the
+// early-return below is defensive only. Scripts that return a bare array of
+// records should wrap as `{items: [...]}` for provenance stamping to apply.
 function stampSourcePageId(target, pageId) {
   if (!target || typeof target !== 'object' || Array.isArray(target)) return;
   const arrays = Object.values(target).filter(v => Array.isArray(v));
@@ -274,6 +279,7 @@ class StepOrchestrator {
             }
           } catch {
             snapshot = null;
+            currentPageId = null;
           }
         }
 
