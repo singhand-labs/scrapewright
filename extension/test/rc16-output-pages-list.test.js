@@ -740,3 +740,22 @@ describe('RC16 lib/wizard-utils.js — apply stripPagesFromLLMContext at every L
       `expected pages-strip references (${pagesCalls}) to match snapshot-strip references (${snapCalls}) in wizard-utils.js call sites`);
   });
 });
+
+describe('RC16 wizard UI — pages viewer (structural)', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const HTML = fs.readFileSync(path.join(__dirname, '..', 'wizard.html'), 'utf8');
+  const JS = fs.readFileSync(path.join(__dirname, '..', 'wizard.js'), 'utf8');
+
+  it('wizard.html has a pages-viewer container in the result section', () => {
+    assert.ok(/id=["']pages-viewer["']|class=["'][^"']*\bpages-viewer\b/.test(HTML),
+      'wizard.html must have a #pages-viewer (or .pages-viewer) element');
+  });
+
+  it('wizard.js renders pages into the viewer when testResult has pages', () => {
+    assert.ok(/pages-viewer/.test(JS),
+      'wizard.js must reference the pages-viewer element');
+    assert.ok(/renderPagesViewer|populatePagesViewer|testResult\.pages/.test(JS),
+      'wizard.js must have a function that renders pages[] into the viewer');
+  });
+});

@@ -454,6 +454,65 @@ function renderResultSummary(result) {
   document.getElementById('rawOutputDetails')?.classList.remove('hidden');
 }
 
+// RC16: render the pages[] (captured page list) into a read-only viewer.
+// Each entry shows id, url, title, captureReason, and a collapsed HTML preview.
+// DOM rendering is capped at 20 entries — the full list remains in the API
+// response. No-op when there are no pages (e.g. older test runs).
+function renderPagesViewer(testResult) {
+  const viewer = document.getElementById('pages-viewer');
+  if (!viewer) return;
+  const pages = Array.isArray(testResult && testResult.pages) ? testResult.pages : [];
+  const countEl = document.getElementById('pages-count');
+  const listEl = document.getElementById('pages-list');
+  if (pages.length === 0) {
+    viewer.hidden = true;
+    return;
+  }
+  viewer.hidden = false;
+  if (countEl) countEl.textContent = String(pages.length);
+  if (!listEl) return;
+  // Cap DOM rendering at 20 entries to avoid browser slowdown on huge lists.
+  // The full list is still available in the API response; the wizard UI just
+  // caps what it renders.
+  const rendered = pages.slice(0, 20);
+  listEl.innerHTML = '';
+  for (const page of rendered) {
+    const item = document.createElement('div');
+    item.className = 'page-entry';
+    const header = document.createElement('div');
+    header.className = 'page-entry__header';
+    const idText = page && page.id != null ? String(page.id) : '(no id)';
+    const urlText = page && page.url ? String(page.url) : '(no url)';
+    const titleText = page && page.title ? String(page.title) : '';
+    const reasonText = page && page.captureReason ? String(page.captureReason) : '';
+    const truncated = !!(page && page.truncated);
+    header.innerHTML =
+      '<strong>' + escapeHtml(idText) + '</strong> ' +
+      '<span class="page-entry__url">' + escapeHtml(urlText) + '</span>' +
+      (titleText ? ' <span class="page-entry__title">' + escapeHtml(titleText) + '</span>' : '') +
+      (reasonText ? ' <span class="page-entry__reason">' + escapeHtml(reasonText) + '</span>' : '') +
+      (truncated ? ' <span class="page-entry__truncated">[truncated]</span>' : '');
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    const htmlLen = page && typeof page.html === 'string' ? page.html.length : 0;
+    summary.textContent = 'HTML (' + htmlLen + ' chars)';
+    details.appendChild(summary);
+    const pre = document.createElement('pre');
+    pre.className = 'page-entry__html';
+    pre.textContent = (page && page.html) || '';
+    details.appendChild(pre);
+    item.appendChild(header);
+    item.appendChild(details);
+    listEl.appendChild(item);
+  }
+  if (pages.length > rendered.length) {
+    const more = document.createElement('div');
+    more.className = 'pages-list__more';
+    more.textContent = '+ ' + (pages.length - rendered.length) + ' more — see API response';
+    listEl.appendChild(more);
+  }
+}
+
 function goToPhase(n) {
   if (wizardState.testAbortController && !wizardState.testAbortController.signal.aborted) {
     wizardState.testAbortController.abort();
@@ -1820,6 +1879,7 @@ async function testScript() {
     wizardState.lastErrorStepId = null;
     document.getElementById('testResults').textContent = JSON.stringify(result, null, 2);
     renderResultSummary(result);
+    renderPagesViewer(result);
     appendLog('All steps completed successfully.', 'success');
     result.steps.forEach((step, i) => {
       appendLog(`Step ${i + 1} "${step.stepName}": ${step.skipped ? 'skipped (' + step.skipReason + ')' : 'completed'}`, step.skipped ? 'info' : 'success');
@@ -1887,6 +1947,7 @@ async function testScript() {
     }
     document.getElementById('testResults').textContent = 'Error: ' + e.message + (e.stepId ? ' (in step: ' + e.stepId + ')' : '');
     document.getElementById('resultSummary').innerHTML = '';
+    renderPagesViewer(wizardState.testResult);
     document.getElementById('rawOutputDetails')?.classList.remove('hidden');
     appendLog('Execution failed: ' + e.message, 'error');
     if (e.steps) renderExecutionTimeline(e.steps);
