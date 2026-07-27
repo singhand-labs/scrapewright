@@ -23,8 +23,11 @@ const TRUNCATION_MARKER_RESERVE = 30; // length of "[TRUNCATED NNNN chars] " wor
 class PageTracker {
   constructor(options = {}) {
     this.capturePages = options.capturePages !== false;
-    this.maxPagesCaptured = options.maxPagesCaptured || DEFAULT_MAX_PAGES;
-    this.htmlCap = options.htmlCap || DEFAULT_HTML_CAP;
+    // Use ?? (nullish-coalescing) so maxPagesCaptured:0 is honored as a real value.
+    // (|| would swallow 0 and substitute the default — making the cap<=0 guard
+    // in listWithMeta unreachable for the canonical cap=0 case.)
+    this.maxPagesCaptured = options.maxPagesCaptured ?? DEFAULT_MAX_PAGES;
+    this.htmlCap = options.htmlCap ?? DEFAULT_HTML_CAP;
     this._entries = [];      // unique-page records in insertion order
     this._dedupe = new Map(); // hash → pageId
     this._seq = 0;
