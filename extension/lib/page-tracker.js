@@ -18,6 +18,7 @@
 
 const DEFAULT_MAX_PAGES = 50;
 const DEFAULT_HTML_CAP = 80000;
+const TRUNCATION_MARKER_RESERVE = 30; // length of "[TRUNCATED NNNN chars] " worst case
 
 class PageTracker {
   constructor(options = {}) {
@@ -38,6 +39,10 @@ class PageTracker {
   record(snapshot, meta = {}) {
     if (!this.capturePages) return null;
     if (!snapshot || typeof snapshot !== 'object') return null;
+    // Defensive: snapshots without meaningful content produce junk entries that
+    // pollute the pages[] list. Require at least an html string of length > 0.
+    // (url is allowed to be empty — e.g. about:blank tabs have empty URLs.)
+    if (typeof snapshot.html !== 'string' || snapshot.html.length === 0) return null;
 
     const url = String(snapshot.url || '');
     const rawHtml = String(snapshot.html || '');
@@ -55,7 +60,7 @@ class PageTracker {
 
     const htmlOverCap = rawHtml.length > this.htmlCap;
     const html = htmlOverCap
-      ? `[TRUNCATED ${rawHtml.length} chars] ` + rawHtml.slice(0, this.htmlCap - 30)
+      ? `[TRUNCATED ${rawHtml.length} chars] ` + rawHtml.slice(0, this.htmlCap - TRUNCATION_MARKER_RESERVE)
       : rawHtml;
 
     this._entries.push({
@@ -84,6 +89,10 @@ class PageTracker {
 
   listWithMeta() {
     if (!this.capturePages) return { pages: [], pagesTruncated: 0 };
+    if (this.maxPagesCaptured <= 0) {
+      // cap=0 means "capture nothing" — return all entries as truncated.
+      return { pages: [], pagesTruncated: this._entries.length };
+    }
     const total = this._entries.length;
     if (total <= this.maxPagesCaptured) {
       return { pages: this._entries.slice(), pagesTruncated: 0 };
@@ -111,19 +120,27 @@ class PageTracker {
 function normalizeHtmlForHash(html) {
   if (typeof html !== 'string') return '';
   let out = html;
+  // Strip HTML comments FIRST, before any attribute-drop regexes. Pages with
+  // timestamped/cache-buster comments (e.g. `<!-- built at 2024-01-01T12:00:00 -->`
+  // or `<!-- sessionId=abc123 -->`) would otherwise hash differently on every
+  // re-render, breaking dedup.
+  out = out.replace(/<!--[\s\S]*?-->/g, '');
   // Drop volatile attributes: data-reactid, nonce, integrity, and data-*
   // whose value looks like a long base62 (render IDs, cache busters).
   out = out.replace(/\s+(?:data-reactid|nonce|integrity)="[^"]*"/gi, '');
   out = out.replace(/\s+data-[a-z0-9-]+="[A-Za-z0-9_-]{20,}"/gi, '');
   // Sort attributes within each element tag.
   out = out.replace(/<([a-zA-Z][\w-]*)([^>]*?)(\s*\/?)>/g, (m, tag, attrs, close) => {
-    if (!attrs || !attrs.trim()) return m;
+    attrs = attrs.trim();
+    if (!attrs) return m;
     const list = [];
-    const re = /\s+([a-zA-Z_:][\w:.-]*)\s*=\s*"([^"]*)"/g;
+    // Use (^|\s+) so the first attribute is matched even after the trim above
+    // (which strips the leading whitespace the original regex relied on).
+    const re = /(?:^|\s+)([a-zA-Z_:][\w:.-]*)\s*=\s*"([^"]*)"/g;
     let am;
     while ((am = re.exec(attrs)) !== null) list.push([am[1], am[2]]);
     // Also capture valueless attributes (e.g. <input disabled>)
-    const bareRe = /\s+([a-zA-Z_:][\w:.-]*)(?=\s|$)/g;
+    const bareRe = /(?:^|\s+)([a-zA-Z_:][\w:.-]*)(?=\s|$)/g;
     let bm;
     while ((bm = bareRe.exec(attrs)) !== null) {
       if (!list.find(([k]) => k === bm[1])) list.push([bm[1], '']);
@@ -137,12 +154,19 @@ function normalizeHtmlForHash(html) {
   return out;
 }
 
-// SHA-256 → 64-char lowercase hex string. Synchronous fallback to a
-// non-crypto hash if crypto.subtle is unavailable (e.g. unit tests without
-// a global crypto). The fallback is FNV-1a over the input — not
-// cryptographically secure, but adequate for dedup. The crypto.subtle path
-// is async; to keep record() sync (orchestrator code is simpler that way),
-// we use the sync path in this v1. A follow-up can switch to async hash.
+// sha256Hex(input) → 64-char lowercase hex used for page identity and dedup.
+//
+// Two paths:
+//   - Node (tests, any env where require() works): synchronous SHA-256 via
+//     the built-in `crypto` module. Production-quality.
+//   - Browser (Service Worker / offscreen doc without Node crypto): a
+//     deterministic non-cryptographic FNV-1a-style hash, padded to 64 hex
+//     chars. NOT cryptographically secure — but the use here is dedup of
+//     <100 entries per execution, where collision probability is negligible.
+//
+// Note: the `hash` field stored on each page entry is whatever this function
+// returns — SHA-256 in test traces, FNV-1a-derived in browser traces. Treat
+// it as an opaque stable dedup key, not a cryptographic commitment.
 function sha256Hex(input) {
   // Prefer Node's synchronous crypto when available (test environment).
   if (typeof require === 'function') {
