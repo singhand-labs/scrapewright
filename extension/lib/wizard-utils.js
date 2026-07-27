@@ -1375,6 +1375,31 @@ function stripSnapshotsFromTestResult(testResult) {
   return walk(testResult);
 }
 
+// stripPagesFromLLMContext(testResult) — defensive shape-cleanup before
+// serializing a testResult into any LLM-bound string. Removes the top-level
+// `pages` and `pagesTruncated` fields (RC16) and recursively strips the
+// `sourcePageId` field from every record. The pages list can carry ~4MB of
+// HTML (50 pages × 80K); sourcePageId is meaningless to the LLM (it's a
+// framework-added provenance field). Returns a deep clone — never mutates
+// the input. Apply alongside stripSnapshotsFromTestResult at every LLM
+// boundary.
+function stripPagesFromLLMContext(testResult) {
+  if (!testResult || typeof testResult !== 'object') return testResult;
+  const walk = (node) => {
+    if (Array.isArray(node)) return node.map(walk);
+    if (node && typeof node === 'object') {
+      const out = {};
+      for (const [k, v] of Object.entries(node)) {
+        if (k === 'pages' || k === 'pagesTruncated' || k === 'sourcePageId') continue;
+        out[k] = walk(v);
+      }
+      return out;
+    }
+    return node;
+  };
+  return walk(testResult);
+}
+
 function formatDomActivitySummary(activities) {
   if (!Array.isArray(activities) || activities.length === 0) return '(no DOM calls)';
   const groups = new Map();
@@ -2531,7 +2556,7 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, stripSnapshotsFromTestResult, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, stripSnapshotsFromTestResult, stripPagesFromLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
@@ -2544,6 +2569,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.truncateSnapshotForLLM = truncateSnapshotForLLM;
   window.summarizeFixIteration = summarizeFixIteration;
   window.stripSnapshotsFromTestResult = stripSnapshotsFromTestResult;
+  window.stripPagesFromLLMContext = stripPagesFromLLMContext;
   window.formatDomActivitySummary = formatDomActivitySummary;
   window.summarizeExecutionDiagnostics = summarizeExecutionDiagnostics;
   window.summarizeAllStepDiagnostics = summarizeAllStepDiagnostics;
@@ -2589,6 +2615,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.truncateSnapshotForLLM = truncateSnapshotForLLM;
   self.summarizeFixIteration = summarizeFixIteration;
   self.stripSnapshotsFromTestResult = stripSnapshotsFromTestResult;
+  self.stripPagesFromLLMContext = stripPagesFromLLMContext;
   self.formatDomActivitySummary = formatDomActivitySummary;
   self.summarizeExecutionDiagnostics = summarizeExecutionDiagnostics;
   self.summarizeAllStepDiagnostics = summarizeAllStepDiagnostics;
