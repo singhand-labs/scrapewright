@@ -520,15 +520,14 @@ describe('RC16 background.js — sub-tab capture on $openTab success (structural
       'background.js must declare a module-level currentExecutionTracker binding');
   });
 
-  it('captures the sub-tab snapshot on the success path before destroying the tab', () => {
-    // Look for a GET_DOM_SNAPSHOT capture call that appears BEFORE the
-    // success-path chrome.tabs.remove. The existing failure-path capture
-    // already exists in the catch block; this asserts a PARALLEL capture
-    // exists in the success try-block.
-    const successCapture = SRC.match(/try\s*{[\s\S]*?const\s+result\s*=\s*await\s+executor\.execute\([\s\S]*?\)[\s\S]*?await\s+chrome\.tabs\.sendMessage\([^)]*GET_DOM_SNAPSHOT/);
-    assert.ok(successCapture,
-      'handleOpenTabExecute must capture the sub-tab snapshot on the success path before destroying the tab');
-  });
+  // Test #2 (success-path capture via file-wide regex) was deleted — see
+  // Important #1 in the T5 review follow-up. The regex used non-greedy
+  // `[\s\S]*?` across the whole file, which also matched via the
+  // failure-path catch block; removing the success capture would still
+  // have passed it. The order check below (test #3) is the load-bearing
+  // assertion: it slices out just handleOpenTabExecute's body before
+  // checking capture-before-remove, so it can only match the success
+  // try-block.
 
   it('does not destroy the sub-tab BEFORE capturing on success', () => {
     // Order assertion: capture must come before remove on the success path.
@@ -536,16 +535,22 @@ describe('RC16 background.js — sub-tab capture on $openTab success (structural
     // owns the success/catch split) — otherwise the regex picks up unrelated
     // try-blocks earlier in background.js (ExecutionQueue, processJob, etc.)
     // and the order check gets scrambled.
+    //
+    // Note: the success-path capture was previously a literal
+    // GET_DOM_SNAPSHOT call inside handleOpenTabExecute. After T5 review
+    // follow-up, both call sites share the captureSubTabSnapshot() helper,
+    // so we now look for the helper invocation (with the 'on success' label
+    // unique to the success path) instead of the literal GET_DOM_SNAPSHOT.
     const fnStart = SRC.indexOf('async function handleOpenTabExecute(');
     assert.ok(fnStart !== -1, 'handleOpenTabExecute must exist');
     // Slice up to the next top-level function def or end of file. The
     // function is the last one in background.js, so end-of-file is fine.
     const fnBody = SRC.slice(fnStart);
     // Within the success try-block (the FIRST try in handleOpenTabExecute),
-    // GET_DOM_SNAPSHOT must appear before chrome.tabs.remove.
+    // captureSubTabSnapshot(..., 'on success') must appear before chrome.tabs.remove.
     const tryBlock = fnBody.match(/try\s*\{[\s\S]*?await\s+chrome\.tabs\.remove\(tab\.id\)\.catch\(\(\)\s*=>\s*\{\}\);[\s\S]*?catch\s*\(error\)/);
     assert.ok(tryBlock, 'could not locate the success try-block');
-    const captureIdx = tryBlock[0].indexOf('GET_DOM_SNAPSHOT');
+    const captureIdx = tryBlock[0].indexOf("captureSubTabSnapshot(tab.id, 'on success')");
     const removeIdx = tryBlock[0].indexOf('chrome.tabs.remove');
     assert.ok(captureIdx !== -1 && captureIdx < removeIdx,
       'sub-tab snapshot capture must occur BEFORE chrome.tabs.remove on the success path');
@@ -560,6 +565,18 @@ describe('RC16 background.js — sub-tab capture on $openTab success (structural
       'handleOpenTabExecute must record into currentExecutionTracker on both success and failure paths; got ' + recordCalls.length);
     assert.ok(/captureReason:\s*['"]subtab_pre_destroy['"]/.test(SRC),
       'recordings must tag captureReason as subtab_pre_destroy');
+  });
+
+  it('preserves subTabSnapshot in the failure-path TAB_RESULT payload (autoFix depends on it)', () => {
+    // autoFix reads error.subTabSnapshot to regenerate the failing script.
+    // The new tracker.record call must NOT displace it from the TAB_RESULT
+    // message. Slice handleOpenTabExecute's body so the regex can't match
+    // unrelated code elsewhere in background.js.
+    const fnStart = SRC.indexOf('async function handleOpenTabExecute(');
+    assert.ok(fnStart !== -1, 'handleOpenTabExecute function not found');
+    const body = SRC.slice(fnStart);
+    assert.ok(/TAB_RESULT[\s\S]{0,400}subTabSnapshot/.test(body),
+      'failure-path TAB_RESULT payload must still include subTabSnapshot');
   });
 
   it('instantiates the tracker in handleExecute and passes it to StepOrchestrator via options.tracker', () => {

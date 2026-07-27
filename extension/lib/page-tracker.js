@@ -36,6 +36,9 @@ class PageTracker {
   // record(snapshot, meta) → pageId (string) or null (when capturePages:false).
   //   snapshot: { html, url, title, ... } — content-script's getDomSnapshot output
   //   meta:     { sourceStepId, captureReason }
+  //             sourceStepId is normally the step id from the service graph;
+  //             it may also be the sentinel '__opentab__' for sub-tab captures
+  //             (see background.js handleOpenTabExecute / captureSubTabSnapshot).
   // If (url, normalizedHtml) matches an existing entry, returns the existing
   // pageId WITHOUT creating a new entry. captureReason of the FIRST capture
   // wins (subsequent dedup hits don't overwrite).
