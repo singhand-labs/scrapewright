@@ -3,6 +3,7 @@ importScripts(
   'lib/llm-client.js',
   'lib/offscreen-executor.js',
   'lib/url-template.js',
+  'lib/page-tracker.js',
   'lib/step-orchestrator.js',
   'lib/wizard-utils.js',
   'lib/visibility-keepalive.js',
@@ -57,6 +58,12 @@ const executionQueue = new ExecutionQueue();
 // Communication channels
 let pollingActive = false;
 let serverPort = 8765;
+
+// RC16: the current execution's PageTracker, if any. Set by handleExecute
+// before invoking StepOrchestrator.execute and read by handleOpenTabExecute
+// to record sub-tab snapshots into the same list. Cleared in a finally
+// block to avoid leaking references between executions.
+let currentExecutionTracker = null;
 
 // Native host connection state — surfaced to the options page UI.
 // Persisted to chrome.storage.local so SW restarts don't lose the last error.
@@ -523,65 +530,83 @@ async function handleExecute(serviceName, input) {
       sendLog('Starting step execution for ' + service.targetUrl + '...');
       debugLogger.log('info', 'background', 'Calling StepOrchestrator.execute', { serviceName, targetUrl: service.targetUrl });
 
-      const result = await StepOrchestrator.execute(service, input, {
-        createTab: async (url) => {
-          // RC12: popup window, not background tab — see lib/scrape-tab.js
-          // for the why. Short version: background-tab renderers don't fire
-          // IntersectionObserver, so lazy-loaded feeds (FB/Twitter/infinite
-          // scroll) never load more content during the scrape.
-          const tab = await createScrapeTab(url);
-          await waitForTabLoad(tab.id, tabLoadTimeoutMs);
-          // WS2.1: wait for the content-script to be listening before the first
-          // DOM_REQUEST — prevents the RELAY_FAILED (tabId:null) race.
-          const csReady = await waitForContentScript(tab.id);
-          if (!csReady) {
-            await chrome.tabs.remove(tab.id).catch(() => {});
-            throw new Error('CONTENT_SCRIPT_NOT_READY');
-          }
-          return tab;
-        },
-        waitForTabLoad: async (tabId) => {
-          await waitForTabLoad(tabId, tabLoadTimeoutMs);
-          sendLog('Page loaded successfully');
-        },
-        executeScript: async (tabId, script, input, timeoutMs) => {
-          sendLog('Executing script via offscreen...');
-          const executor = new OffscreenExecutor(tabId);
-          executor.timeoutMs = timeoutMs || service.config.timeoutMs;
-          return await executor.execute(script, input);
-        },
-        captureSnapshot: async (tabId) => {
-          try {
-            const response = await chrome.tabs.sendMessage(tabId, { type: 'GET_DOM_SNAPSHOT' });
-            return response.snapshot;
-          } catch (e) {
-            return null;
-          }
-        },
-        removeTab: async (tabId) => {
-          if (service.config.autoCloseTab !== false) {
-            await chrome.tabs.remove(tabId).catch(() => {});
-          }
-        },
-        evaluateCondition: async (tabId, conditionExpr) => {
-          try {
-            const results = await chrome.scripting.executeScript({
-              target: { tabId },
-              func: (expr) => {
-                try {
-                  return eval(expr);
-                } catch (e) {
-                  return false;
-                }
-              },
-              args: [conditionExpr]
-            });
-            return results[0]?.result || false;
-          } catch (e) {
-            return false;
-          }
-        }
+      // RC16: build the tracker HERE so handleOpenTabExecute can record
+      // sub-tab captures into the same list. Passed to StepOrchestrator via
+      // options.tracker (the orchestrator falls back to creating its own
+      // if this is omitted, but then sub-tab captures wouldn't reach it).
+      const tracker = new PageTracker({
+        capturePages: service.config.capturePages !== false,
+        maxPagesCaptured: service.config.maxPagesCaptured
       });
+      currentExecutionTracker = tracker;
+
+      let result;
+      try {
+        result = await StepOrchestrator.execute(service, input, {
+          createTab: async (url) => {
+            // RC12: popup window, not background tab — see lib/scrape-tab.js
+            // for the why. Short version: background-tab renderers don't fire
+            // IntersectionObserver, so lazy-loaded feeds (FB/Twitter/infinite
+            // scroll) never load more content during the scrape.
+            const tab = await createScrapeTab(url);
+            await waitForTabLoad(tab.id, tabLoadTimeoutMs);
+            // WS2.1: wait for the content-script to be listening before the first
+            // DOM_REQUEST — prevents the RELAY_FAILED (tabId:null) race.
+            const csReady = await waitForContentScript(tab.id);
+            if (!csReady) {
+              await chrome.tabs.remove(tab.id).catch(() => {});
+              throw new Error('CONTENT_SCRIPT_NOT_READY');
+            }
+            return tab;
+          },
+          waitForTabLoad: async (tabId) => {
+            await waitForTabLoad(tabId, tabLoadTimeoutMs);
+            sendLog('Page loaded successfully');
+          },
+          executeScript: async (tabId, script, input, timeoutMs) => {
+            sendLog('Executing script via offscreen...');
+            const executor = new OffscreenExecutor(tabId);
+            executor.timeoutMs = timeoutMs || service.config.timeoutMs;
+            return await executor.execute(script, input);
+          },
+          captureSnapshot: async (tabId) => {
+            try {
+              const response = await chrome.tabs.sendMessage(tabId, { type: 'GET_DOM_SNAPSHOT' });
+              return response.snapshot;
+            } catch (e) {
+              return null;
+            }
+          },
+          removeTab: async (tabId) => {
+            if (service.config.autoCloseTab !== false) {
+              await chrome.tabs.remove(tabId).catch(() => {});
+            }
+          },
+          evaluateCondition: async (tabId, conditionExpr) => {
+            try {
+              const results = await chrome.scripting.executeScript({
+                target: { tabId },
+                func: (expr) => {
+                  try {
+                    return eval(expr);
+                  } catch (e) {
+                    return false;
+                  }
+                },
+                args: [conditionExpr]
+              });
+              return results[0]?.result || false;
+            } catch (e) {
+              return false;
+            }
+          }
+        }, { tracker });
+      } finally {
+        // Clear the binding ASAP so a later handleOpenTabExecute call (e.g.
+        // during autoFix retry) doesn't accidentally record into a stale
+        // tracker from this attempt. Each attempt gets a fresh tracker.
+        currentExecutionTracker = null;
+      }
 
       sendLog('All steps completed successfully', 'success');
       result.steps.forEach(step => {
@@ -1061,6 +1086,32 @@ async function handleOpenTabExecute(url, scriptStr, parentTabId, reqId) {
   try {
     // scriptStr is a function body (may contain function declarations + return statements)
     const result = await executor.execute(`return await (async () => { ${scriptStr} })();`, {});
+
+    // RC16: capture the sub-tab's HTML BEFORE destroying it, on BOTH success
+    // and failure paths. The success-path capture is NEW — previously only
+    // the catch block captured (and only attached the snapshot to the error
+    // object for autoFix). The success-path capture feeds the new pages[]
+    // list so the user can recover detail-page HTML (FB post comments,
+    // product reviews, etc.) that the script operated on.
+    let subTabSnapshot = null;
+    try {
+      const snapResp = await chrome.tabs.sendMessage(tab.id, { type: 'GET_DOM_SNAPSHOT', mode: 'full' });
+      subTabSnapshot = snapResp?.snapshot || null;
+      debugLogger.log('info', 'background', 'Captured sub-tab snapshot on success', {
+        tabId: tab.id,
+        htmlLength: subTabSnapshot?.html?.length,
+        structureLength: subTabSnapshot?.structure?.length
+      });
+    } catch (snapErr) {
+      debugLogger.log('warn', 'background', 'Sub-tab snapshot capture failed (success path)', { tabId: tab.id, error: snapErr.message });
+    }
+    if (subTabSnapshot && currentExecutionTracker) {
+      currentExecutionTracker.record(subTabSnapshot, {
+        sourceStepId: '__opentab__',
+        captureReason: 'subtab_pre_destroy'
+      });
+    }
+
     await chrome.tabs.remove(tab.id).catch(() => {});
     debugLogger.log('info', 'background', 'handleOpenTabExecute sub-tab completed', { tabId: tab.id });
     if (parentTabId) {
@@ -1089,6 +1140,17 @@ async function handleOpenTabExecute(url, scriptStr, parentTabId, reqId) {
       });
     } catch (snapErr) {
       debugLogger.log('warn', 'background', 'Sub-tab snapshot capture failed', { tabId: tab.id, error: snapErr.message });
+    }
+    // RC16: also feed the failure-path snapshot into the tracker. The
+    // orchestrator owns the same instance (passed via options.tracker), so
+    // this surfaces the failing detail page in pages[] alongside the rest
+    // of the trail. The error.subTabSnapshot attachment below stays as-is
+    // for the autoFix path.
+    if (subTabSnapshot && currentExecutionTracker) {
+      currentExecutionTracker.record(subTabSnapshot, {
+        sourceStepId: '__opentab__',
+        captureReason: 'subtab_pre_destroy'
+      });
     }
     await chrome.tabs.remove(tab.id).catch(() => {});
     debugLogger.log('error', 'background', 'handleOpenTabExecute sub-tab failed', { tabId: tab.id, error: error.message });
