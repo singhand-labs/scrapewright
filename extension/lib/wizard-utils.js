@@ -1324,12 +1324,14 @@ function summarizeFixIteration({ stepId, stepName, script, annotations, userFeed
     lines.push('Result: (none)');
   } else {
     try {
-      // Strip snapshots + cap field sizes — without this, a 5-step FB test
-      // result carries ~750K chars of per-step HTML and overflows the LLM
-      // context. The failing step's DOM is already supplied separately via
-      // the truncated `pageSnapshot` (30K budget). console.log 2026-07-26:
-      // testResultSection + summarizeFixIteration were the two bloat sources.
-      lines.push('Result: ' + JSON.stringify(stripSnapshotsFromTestResult(result)));
+      // Strip snapshots + strip pages[]/sourcePageId + cap field sizes — without
+      // this, a 5-step FB test result carries ~750K chars of per-step HTML and
+      // overflows the LLM context. The failing step's DOM is already supplied
+      // separately via the truncated `pageSnapshot` (30K budget). Also drop
+      // pages[] (~4MB) and sourcePageId (meaningless provenance). console.log
+      // 2026-07-26: testResultSection + summarizeFixIteration were the two bloat
+      // sources; the pages[] leak was caught in code review on T7.
+      lines.push('Result: ' + JSON.stringify(stripPagesFromLLMContext(stripSnapshotsFromTestResult(result))));
     } catch {
       lines.push('Result: (unserializable)');
     }
