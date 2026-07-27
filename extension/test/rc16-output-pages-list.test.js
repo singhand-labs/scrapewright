@@ -69,6 +69,19 @@ describe('RC16 PageTracker — content-hash dedup', () => {
     const id2 = t.record(SAMPLE_SNAPSHOT('https://a.com', '<div b="2" a="1"></div>'), { sourceStepId: 's1' });
     assert.equal(id1, id2, 'attribute order is not semantically meaningful');
   });
+
+  it('strips HTML comments before hashing so timestamped comments do not break dedup', () => {
+    const t = new PageTracker();
+    const id1 = t.record(
+      SAMPLE_SNAPSHOT('https://a.com', '<html><!-- built 2024-01-01 --><body>X</body></html>'),
+      { sourceStepId: 's1' }
+    );
+    const id2 = t.record(
+      SAMPLE_SNAPSHOT('https://a.com', '<html><!-- built 2024-01-02 --><body>X</body></html>'),
+      { sourceStepId: 's1' }
+    );
+    assert.equal(id1, id2, 'HTML comment differences must not affect the hash');
+  });
 });
 
 describe('RC16 PageTracker — list() shape and size cap', () => {
@@ -147,7 +160,7 @@ describe('RC16 PageTracker — list() shape and size cap', () => {
   });
 });
 
-describe('RC16 PageTracker — opt-out', () => {
+describe('RC16 PageTracker — opt-out and defensive guards', () => {
   it('capturePages:false disables capture entirely', () => {
     const t = new PageTracker({ capturePages: false });
     const id = t.record(SAMPLE_SNAPSHOT('https://a.com', '<html>x</html>'), { sourceStepId: 's1' });
@@ -155,6 +168,24 @@ describe('RC16 PageTracker — opt-out', () => {
     const { pages, pagesTruncated } = t.listWithMeta();
     assert.deepEqual(pages, []);
     assert.equal(pagesTruncated, 0);
+  });
+
+  it('record(null) returns null without producing an entry', () => {
+    const t = new PageTracker();
+    assert.equal(t.record(null, { sourceStepId: 's1' }), null);
+    assert.equal(t.record(undefined, { sourceStepId: 's1' }), null);
+    assert.equal(t.record('string-not-object', { sourceStepId: 's1' }), null);
+    assert.deepEqual(t.list(), []);
+  });
+
+  it('record({}) returns null when snapshot.html is missing or empty', () => {
+    const t = new PageTracker();
+    assert.equal(t.record({}, { sourceStepId: 's1' }), null);
+    assert.equal(t.record({ html: '', url: 'https://a.com' }, { sourceStepId: 's1' }), null);
+    assert.equal(t.record({ html: undefined, url: 'https://a.com' }, { sourceStepId: 's1' }), null);
+    assert.equal(t.record({ html: 123, url: 'https://a.com' }, { sourceStepId: 's1' }), null,
+      'html must be a string; numbers rejected');
+    assert.deepEqual(t.list(), []);
   });
 });
 
