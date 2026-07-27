@@ -492,3 +492,101 @@ describe('RC16 background.js — job envelope threading (structural test)', () =
       'handleExecute final-fallback return must thread pages: lastError?.pages || [] at >=1 site; got ' + lastErrMatches);
   });
 });
+
+describe('RC16 background.js — sub-tab capture on $openTab success (structural)', () => {
+  // T5: handleOpenTabExecute previously captured the sub-tab snapshot only on
+  // the FAILURE path (for autoFix). For the pages-list feature, the same
+  // snapshot must also be recorded into the tracker on the SUCCESS path so
+  // detail-page scrapes (FB post comments, product reviews, etc.) appear in
+  // pages[] with captureReason='subtab_pre_destroy'.
+  //
+  // The tracker is owned by StepOrchestrator internally. To share the same
+  // instance with handleOpenTabExecute (which is invoked through the
+  // OffscreenExecutor message chain, not a direct call from handleExecute),
+  // background.js instantiates the tracker itself, passes it to the
+  // orchestrator via options.tracker, and stashes it in a module-level
+  // binding that handleOpenTabExecute reads.
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const SRC = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
+
+  it('exposes a module-level current-execution-tracker binding', () => {
+    // The orchestrator-owned tracker must be reachable from
+    // handleOpenTabExecute, which is invoked through the OffscreenExecutor
+    // message chain (not a direct call from processJob). A module-level
+    // binding set by handleExecute and read by handleOpenTabExecute is the
+    // shared-state bridge.
+    assert.ok(/let\s+currentExecutionTracker\s*=/.test(SRC),
+      'background.js must declare a module-level currentExecutionTracker binding');
+  });
+
+  it('captures the sub-tab snapshot on the success path before destroying the tab', () => {
+    // Look for a GET_DOM_SNAPSHOT capture call that appears BEFORE the
+    // success-path chrome.tabs.remove. The existing failure-path capture
+    // already exists in the catch block; this asserts a PARALLEL capture
+    // exists in the success try-block.
+    const successCapture = SRC.match(/try\s*{[\s\S]*?const\s+result\s*=\s*await\s+executor\.execute\([\s\S]*?\)[\s\S]*?await\s+chrome\.tabs\.sendMessage\([^)]*GET_DOM_SNAPSHOT/);
+    assert.ok(successCapture,
+      'handleOpenTabExecute must capture the sub-tab snapshot on the success path before destroying the tab');
+  });
+
+  it('does not destroy the sub-tab BEFORE capturing on success', () => {
+    // Order assertion: capture must come before remove on the success path.
+    // We slice out just the body of handleOpenTabExecute (the function that
+    // owns the success/catch split) — otherwise the regex picks up unrelated
+    // try-blocks earlier in background.js (ExecutionQueue, processJob, etc.)
+    // and the order check gets scrambled.
+    const fnStart = SRC.indexOf('async function handleOpenTabExecute(');
+    assert.ok(fnStart !== -1, 'handleOpenTabExecute must exist');
+    // Slice up to the next top-level function def or end of file. The
+    // function is the last one in background.js, so end-of-file is fine.
+    const fnBody = SRC.slice(fnStart);
+    // Within the success try-block (the FIRST try in handleOpenTabExecute),
+    // GET_DOM_SNAPSHOT must appear before chrome.tabs.remove.
+    const tryBlock = fnBody.match(/try\s*\{[\s\S]*?await\s+chrome\.tabs\.remove\(tab\.id\)\.catch\(\(\)\s*=>\s*\{\}\);[\s\S]*?catch\s*\(error\)/);
+    assert.ok(tryBlock, 'could not locate the success try-block');
+    const captureIdx = tryBlock[0].indexOf('GET_DOM_SNAPSHOT');
+    const removeIdx = tryBlock[0].indexOf('chrome.tabs.remove');
+    assert.ok(captureIdx !== -1 && captureIdx < removeIdx,
+      'sub-tab snapshot capture must occur BEFORE chrome.tabs.remove on the success path');
+  });
+
+  it('records the captured sub-tab snapshot into currentExecutionTracker', () => {
+    // The capture alone isn't enough — it must also be recorded into the
+    // shared tracker instance so it shows up in pages[] with the
+    // 'subtab_pre_destroy' reason.
+    const recordCalls = SRC.match(/currentExecutionTracker\.record\(/g) || [];
+    assert.ok(recordCalls.length >= 2,
+      'handleOpenTabExecute must record into currentExecutionTracker on both success and failure paths; got ' + recordCalls.length);
+    assert.ok(/captureReason:\s*['"]subtab_pre_destroy['"]/.test(SRC),
+      'recordings must tag captureReason as subtab_pre_destroy');
+  });
+
+  it('instantiates the tracker in handleExecute and passes it to StepOrchestrator via options.tracker', () => {
+    // Tracker ownership moved from StepOrchestrator to handleExecute so the
+    // same instance is shared with handleOpenTabExecute. handleExecute must
+    // (a) construct a PageTracker, (b) stash it in currentExecutionTracker,
+    // and (c) pass { tracker } as the 4th arg to StepOrchestrator.execute.
+    assert.ok(/new\s+PageTracker\(/.test(SRC),
+      'handleExecute must instantiate the PageTracker itself');
+    assert.ok(/currentExecutionTracker\s*=\s*tracker/.test(SRC),
+      'handleExecute must assign the tracker to currentExecutionTracker');
+    assert.ok(/StepOrchestrator\.execute\([\s\S]*?\{[\s\S]*?tracker[\s\S]*?\}\s*\)/.test(SRC),
+      'handleExecute must pass { tracker } as 4th arg to StepOrchestrator.execute');
+  });
+
+  it('clears currentExecutionTracker in a finally block to avoid leaking between executions', () => {
+    // The binding is module-level — without a cleanup, a tracker from one
+    // job could be referenced by handleOpenTabExecute in a later job. The
+    // try/finally around the orchestrator call ensures it's cleared.
+    assert.ok(/finally\s*\{[\s\S]*?currentExecutionTracker\s*=\s*null/.test(SRC),
+      'handleExecute must clear currentExecutionTracker in a finally block');
+  });
+
+  it('imports lib/page-tracker.js so PageTracker is in scope', () => {
+    // Without this importScripts entry, `new PageTracker(...)` throws
+    // ReferenceError at runtime in the service worker.
+    assert.ok(/['"]lib\/page-tracker\.js['"]/.test(SRC),
+      "background.js importScripts list must include 'lib/page-tracker.js'");
+  });
+});

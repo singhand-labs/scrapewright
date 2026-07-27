@@ -83,12 +83,16 @@ class StepOrchestrator {
     const tabId = tab.id;
     debugLogger.log('info', 'step-orchestrator', 'Tab created', { tabId, url: resolvedUrl });
     const stepOutputs = [];
-    const tracker = PageTrackerRef
+    // RC16: the tracker may be supplied externally (background.js shares it
+    // with handleOpenTabExecute so sub-tab captures reach the same list).
+    // Fall back to instantiating one locally for backward compat with tests
+    // and other call sites that don't supply options.tracker.
+    const tracker = options.tracker || (PageTrackerRef
       ? new PageTrackerRef({
           capturePages: config.capturePages !== false,
           maxPagesCaptured: config.maxPagesCaptured
         })
-      : null;
+      : null);
     let currentPageId = null;
     const stepIterationCounts = {};
     const enteredStepIds = new Set();
