@@ -388,4 +388,39 @@ describe('RC16 StepOrchestrator — PageTracker integration', () => {
     const result = await StepOrchestrator.execute(service, {}, deps);
     assert.equal(result.pages.length, 1, 'identical-content captures must dedupe to one entry');
   });
+
+  it('attaches pages[] and pagesTruncated to the error when the orchestrator throws', async () => {
+    // The error path (catch block at the bottom of execute) must enrich the
+    // thrown error with the same pages[] / pagesTruncated payload the success
+    // path returns, so callers investigating a failure still get the trail of
+    // pages the scraper saw before things blew up.
+    //
+    // We trigger POLL_EXHAUSTED via a step that always returns {done:false} and
+    // routes its onFailure straight to TERMINATE — the same pattern used in
+    // step-orchestrator.test.js (see the POLL_EXHAUSTED regression tests).
+    const service = {
+      targetUrl: 'http://example.com',
+      steps: [
+        { id: 'poll', name: 'Poll', script: 'p', onSuccess: 'extract', onFailure: 'TERMINATE', maxIterations: 2 },
+        { id: 'extract', name: 'Extract', script: 'e', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }
+      ],
+      config: {}
+    };
+    const deps = {
+      ...mockDeps([{ html: '<html>p</html>', url: 'http://example.com', title: '' }]),
+      executeScript: async () => ({ result: { done: false } })
+    };
+    await assert.rejects(
+      StepOrchestrator.execute(service, {}, deps),
+      (err) => {
+        assert.ok(Array.isArray(err.pages), 'err.pages must be an array');
+        assert.equal(typeof err.pagesTruncated, 'number', 'err.pagesTruncated must be a number');
+        // The page captured before the failure must be present, proving the
+        // tracker was recording even as the chain was about to throw.
+        assert.ok(err.pages.length >= 1, 'page captured before failure must be included');
+        assert.equal(err.pages[0].url, 'http://example.com');
+        return true;
+      }
+    );
+  });
 });
