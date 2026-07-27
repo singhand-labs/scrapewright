@@ -291,7 +291,32 @@ Response (once the job finishes):
   "job": {
     "id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
     "status": "completed",
-    "result": { "thinking": "...", "answer": "..." },
+    "result": {
+      "thinking": "...",
+      "answer": "...",
+      "posts": [
+        {
+          "author": "...",
+          "likes": "4",
+          "sourcePageId": "page_0007_a1b2c3d4"
+        }
+      ]
+    },
+    "pages": [
+      {
+        "id": "page_0007_a1b2c3d4",
+        "url": "https://example.com/...",
+        "title": "Example",
+        "capturedAt": 1717123456789,
+        "sourceStepId": "extract",
+        "captureReason": "step_iteration",
+        "hash": "a1b2c3d4...",
+        "html": "<html>...</html>",
+        "truncated": false
+      }
+    ],
+    "pagesTruncated": 0,
+    "steps": [...],
     "error": null,
     "queuePosition": 0,
     "createdAt": 1717700000000,
@@ -300,6 +325,25 @@ Response (once the job finishes):
   }
 }
 ```
+
+#### `pages[]`
+
+Every web page the scraper saw during execution. Each entry includes:
+
+- `id` — `page_NNNN_HHHHHHHH` format. `NNNN` is the capture sequence (0001, 0002, …); `HHHHHHHH` is the first 8 hex chars of `SHA-256(url + normalizedHtml)`. Two captures of the same URL with identical normalized content produce the same ID and are deduplicated; different URL or different content produces a new entry.
+- `url`, `title` — page location and `<title>` at capture time.
+- `capturedAt` — Unix millisecond timestamp.
+- `sourceStepId` — which step captured this page.
+- `captureReason` — `step_iteration` (after a step runs) or `subtab_pre_destroy` (before an `$openTab` sub-tab is closed).
+- `hash` — full 64-char SHA-256 hex of the dedup input.
+- `html` — cleaned page HTML. Capped at 80,000 chars per page (over-cap: truncated with a `[TRUNCATED N chars]` prefix, `truncated: true`).
+- `truncated` — boolean, true if HTML was over the cap.
+
+**Size cap:** the list is capped at 50 unique pages by default. If a scrape produces more, the first 5 and last 45 entries are kept; `pagesTruncated` reports how many were dropped. Override via `config.maxPagesCaptured`. Disable entirely via `config.capturePages: false`.
+
+#### `sourcePageId` on extracted records
+
+Every record in an array-of-objects result (e.g. each element of `result.posts[]`) gets an auto-attached `sourcePageId` linking back to the page its data was extracted from. Flat-object results (`{answer: "..."}`) get a top-level `sourcePageId`. Stamping is non-destructive — if your script sets `sourcePageId` itself, the orchestrator preserves it.
 
 #### Query job status
 

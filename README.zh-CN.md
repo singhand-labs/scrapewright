@@ -291,7 +291,32 @@ GET /api/v1/jobs/{jobId}/wait?timeout=120
   "job": {
     "id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
     "status": "completed",
-    "result": { "thinking": "...", "answer": "..." },
+    "result": {
+      "thinking": "...",
+      "answer": "...",
+      "posts": [
+        {
+          "author": "...",
+          "likes": "4",
+          "sourcePageId": "page_0007_a1b2c3d4"
+        }
+      ]
+    },
+    "pages": [
+      {
+        "id": "page_0007_a1b2c3d4",
+        "url": "https://example.com/...",
+        "title": "Example",
+        "capturedAt": 1717123456789,
+        "sourceStepId": "extract",
+        "captureReason": "step_iteration",
+        "hash": "a1b2c3d4...",
+        "html": "<html>...</html>",
+        "truncated": false
+      }
+    ],
+    "pagesTruncated": 0,
+    "steps": [...],
     "error": null,
     "queuePosition": 0,
     "createdAt": 1717700000000,
@@ -300,6 +325,25 @@ GET /api/v1/jobs/{jobId}/wait?timeout=120
   }
 }
 ```
+
+#### `pages[]` 字段
+
+采集过程中见过的每一个网页。每条记录包括：
+
+- `id` —— `page_NNNN_HHHHHHHH` 格式。`NNNN` 是捕获顺序（0001、0002……），`HHHHHHHH` 是 `SHA-256(url + 归一化HTML)` 的前 8 位十六进制。同一 URL 下内容相同（归一化后）的两次捕获会生成相同的 ID 并被去重；URL 不同或内容不同则生成新条目。
+- `url`、`title` —— 捕获时的页面地址和 `<title>`。
+- `capturedAt` —— Unix 毫秒时间戳。
+- `sourceStepId` —— 哪个步骤捕获了此页面。
+- `captureReason` —— `step_iteration`（步骤执行后）或 `subtab_pre_destroy`（`$openTab` 子标签页关闭前）。
+- `hash` —— 完整的 64 字符 SHA-256 十六进制值。
+- `html` —— 清洗后的页面 HTML。每页上限 80,000 字符（超限会被截断并加 `[TRUNCATED N chars]` 前缀，`truncated: true`）。
+- `truncated` —— 布尔值，HTML 是否超过上限。
+
+**容量上限：** 列表默认上限 50 个唯一页面。如果采集产生更多，会保留前 5 个和后 45 条；`pagesTruncated` 字段报告丢弃数量。可通过 `config.maxPagesCaptured` 调整；`config.capturePages: false` 完全关闭。
+
+#### 抽取记录上的 `sourcePageId`
+
+对象数组结果中的每条记录（例如 `result.posts[]` 的每个元素）会自动附加 `sourcePageId`，指向其数据来源的页面。扁平对象结果（`{answer: "..."}`）会在顶层附加一个 `sourcePageId`。该字段不会被覆盖 —— 如果脚本自己设置了 `sourcePageId`，编排器会保留脚本的值。
 
 #### 查询任务状态
 
