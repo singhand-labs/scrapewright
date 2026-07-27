@@ -424,3 +424,47 @@ describe('RC16 StepOrchestrator — PageTracker integration', () => {
     );
   });
 });
+
+describe('RC16 background.js — job envelope threading (structural test)', () => {
+  // We can't easily require background.js (it's a service worker). This
+  // test asserts the SHAPE CONTRACT on the job envelope by reading the
+  // background.js source text and checking that the relevant fields are
+  // threaded through. A follow-up integration test exercises the runtime.
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const SRC = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
+
+  it('createJob initializes pages: [] on new jobs', () => {
+    assert.ok(/pages:\s*\[\]/.test(SRC),
+      'createJob must initialize pages: [] for shape consistency');
+  });
+
+  it('processJob writes result.pages + result.pagesTruncated into the job on success', () => {
+    // The success path: updateJob(jobId, { ..., pages: result.pages, pagesTruncated: result.pagesTruncated, ... })
+    assert.ok(/pages:\s*result\.pages\s*\|\|\s*\[\]/.test(SRC),
+      'processJob must default pages to [] when orchestrator returned none');
+    assert.ok(/pagesTruncated:\s*result\.pagesTruncated\s*\|\|\s*0/.test(SRC),
+      'processJob must default pagesTruncated to 0 when missing');
+  });
+
+  it('handleExecute threads pages from orchestrator result on the success path', () => {
+    // The success / outputSchema-failure returns must thread pages from `result`.
+    // Require at least one `result.pages || []` reference in a return-shaped context.
+    assert.ok(/pages:\s*result\.pages\s*\|\|\s*\[\]/.test(SRC),
+      'handleExecute success path must thread pages: result.pages || []');
+    assert.ok(/pagesTruncated:\s*result\.pagesTruncated\s*\|\|\s*0/.test(SRC),
+      'handleExecute success path must thread pagesTruncated: result.pagesTruncated || 0');
+  });
+
+  it('handleExecute threads pages from the error envelope on catch-block returns', () => {
+    // The catch path can't reference `result` (it doesn't exist there). It must
+    // pull pages from the orchestrator's error object instead.
+    assert.ok(/pages:\s*error\.pages\s*\|\|\s*\[\]/.test(SRC),
+      'handleExecute catch path must thread pages: error.pages || []');
+    assert.ok(/pagesTruncated:\s*error\.pagesTruncated\s*\|\|\s*0/.test(SRC),
+      'handleExecute catch path must thread pagesTruncated: error.pagesTruncated || 0');
+    // lastError fallback (final return after retries exhausted) must also thread.
+    assert.ok(/pages:\s*lastError\?\.pages\s*\|\|\s*\[\]/.test(SRC),
+      'handleExecute final-fallback return must thread pages: lastError?.pages || []');
+  });
+});

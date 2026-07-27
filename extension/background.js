@@ -389,6 +389,8 @@ async function createJob(serviceName, input) {
     result: null,
     error: null,
     steps: [],
+    pages: [],
+    pagesTruncated: 0,
     createdAt: Date.now(),
     startedAt: null,
     completedAt: null
@@ -444,6 +446,8 @@ async function processJob(jobId, serviceName, input) {
       result: result.data || null,
       error: result.error || null,
       steps: result.steps || [],
+      pages: result.pages || [],
+      pagesTruncated: result.pagesTruncated || 0,
       completedAt: Date.now()
     });
   } catch (error) {
@@ -594,10 +598,23 @@ async function handleExecute(serviceName, input) {
         const outErr = oc.code + ': missing [' + oc.missing.join(', ') + '] — result has [' + gotKeys.join(', ') + ']; the extraction step must return outputSchema field names';
         debugLogger.log('warn', 'background', 'Output failed required-field check', { missing: oc.missing, got: gotKeys });
         await logExecution(service, input, result.finalResult, outErr, attempt);
-        return { success: false, error: outErr, data: result.finalResult, steps: stepTrace };
+        return {
+          success: false,
+          error: outErr,
+          data: result.finalResult,
+          steps: stepTrace,
+          pages: result.pages || [],
+          pagesTruncated: result.pagesTruncated || 0
+        };
       }
       await logExecution(service, input, result.finalResult, null, attempt);
-      return { success: true, data: result.finalResult, steps: stepTrace };
+      return {
+        success: true,
+        data: result.finalResult,
+        steps: stepTrace,
+        pages: result.pages || [],
+        pagesTruncated: result.pagesTruncated || 0
+      };
 
     } catch (error) {
       lastError = error;
@@ -619,7 +636,9 @@ async function handleExecute(serviceName, input) {
           error: error.message,
           code: error.code,
           paramName: error.paramName,
-          steps: []
+          steps: [],
+          pages: error.pages || [],
+          pagesTruncated: error.pagesTruncated || 0
         };
       }
 
@@ -638,7 +657,9 @@ async function handleExecute(serviceName, input) {
           error: error.message,
           code: error.code,
           stepId: error.stepId,
-          steps: stepTrace
+          steps: stepTrace,
+          pages: error.pages || [],
+          pagesTruncated: error.pagesTruncated || 0
         };
       }
 
@@ -663,7 +684,13 @@ async function handleExecute(serviceName, input) {
   }
 
   await logExecution(service, input, null, lastError?.message, maxRetries);
-  return { success: false, error: lastError?.message || 'Execution failed', steps: sanitizeSteps(lastError?.steps) };
+  return {
+    success: false,
+    error: lastError?.message || 'Execution failed',
+    steps: sanitizeSteps(lastError?.steps),
+    pages: lastError?.pages || [],
+    pagesTruncated: lastError?.pagesTruncated || 0
+  };
 }
 
 function waitForTabLoad(tabId, timeoutMs = 60000) {
