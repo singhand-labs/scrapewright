@@ -72,7 +72,11 @@ describe('StepOrchestrator', () => {
     const deps = makeMockDeps({ executeScript: async () => results[i++] });
     const result = await StepOrchestrator.execute(service, {}, deps);
     assert.deepEqual(result.steps.map(s => s.stepId), ['wait', 'wait', 'wait', 'extract']);
-    assert.deepEqual(result.finalResult, { answer: 'final' });
+    // RC16: StepOrchestrator now stamps sourcePageId on flat-object finalResults.
+    // Strip it before deepEqual so this test stays focused on the retry sequence.
+    const { sourcePageId, ...finalResultWithoutPageId } = result.finalResult;
+    assert.deepEqual(finalResultWithoutPageId, { answer: 'final' });
+    assert.equal(typeof sourcePageId, 'string', 'sourcePageId stamped by PageTracker');
   });
 
   it('follows onFailure when a not-ready step exhausts maxIterations (no skip entry)', async () => {

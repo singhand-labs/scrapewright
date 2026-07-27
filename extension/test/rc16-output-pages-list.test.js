@@ -236,3 +236,156 @@ describe('RC16 content-script snapshot — url + title fields', () => {
     assert.match(page.id, /^page_0001_/);
   });
 });
+
+describe('RC16 StepOrchestrator — PageTracker integration', () => {
+  // Set up the test scaffolding the same way step-orchestrator.test.js does.
+  global.debugLogger = { log: () => {} };
+  const { StepOrchestrator } = require('../lib/step-orchestrator');
+  const urlTemplate = require('../lib/url-template');
+  global.UrlTemplate = urlTemplate;
+
+  function mockDeps(snapshotSequence) {
+    let i = 0;
+    return {
+      createTab: async (url) => ({ id: 1, url }),
+      waitForTabLoad: async () => {},
+      executeScript: async () => ({ result: { done: true } }),
+      captureSnapshot: async () => {
+        const snap = snapshotSequence[i++] || snapshotSequence[0];
+        return snap;
+      },
+      removeTab: async () => {},
+      evaluateCondition: async () => true,
+      resetDomActivity: async () => {},
+      getDomActivity: async () => []
+    };
+  }
+
+  it('returns pages[] in the result envelope', async () => {
+    const service = {
+      targetUrl: 'http://example.com',
+      steps: [{ id: 'a', name: 'A', script: 'return 1;', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }],
+      config: {}
+    };
+    const deps = mockDeps([{ html: '<html>page-1</html>', url: 'http://example.com', title: 'Example' }]);
+    const result = await StepOrchestrator.execute(service, {}, deps);
+    assert.ok(Array.isArray(result.pages), 'result.pages must be an array');
+    assert.equal(result.pages.length, 1);
+    assert.equal(result.pages[0].url, 'http://example.com');
+    assert.equal(result.pages[0].sourceStepId, 'a');
+    assert.match(result.pages[0].id, /^page_0001_/);
+  });
+
+  it('returns pagesTruncated count alongside pages[]', async () => {
+    const service = {
+      targetUrl: 'http://example.com',
+      steps: [{ id: 'a', name: 'A', script: 'return 1;', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }],
+      config: {}
+    };
+    const deps = mockDeps([{ html: '<html>x</html>', url: 'http://example.com', title: '' }]);
+    const result = await StepOrchestrator.execute(service, {}, deps);
+    assert.equal(typeof result.pagesTruncated, 'number');
+    assert.equal(result.pagesTruncated, 0);
+  });
+
+  it('stamps sourcePageId on array-of-objects results', async () => {
+    const service = {
+      targetUrl: 'http://example.com',
+      steps: [{
+        id: 'extract', name: 'E', script: 'extract',
+        onSuccess: 'TERMINATE', onFailure: 'TERMINATE'
+      }],
+      config: {}
+    };
+    const deps = {
+      ...mockDeps([{ html: '<html>p</html>', url: 'http://example.com', title: '' }]),
+      executeScript: async () => ({ result: { posts: [{ author: 'A' }, { author: 'B' }] } })
+    };
+    const result = await StepOrchestrator.execute(service, {}, deps);
+    assert.equal(result.finalResult.posts[0].sourcePageId, result.pages[0].id);
+    assert.equal(result.finalResult.posts[1].sourcePageId, result.pages[0].id);
+  });
+
+  it('stamps sourcePageId on flat-object result', async () => {
+    const service = {
+      targetUrl: 'http://example.com',
+      steps: [{
+        id: 'extract', name: 'E', script: 'extract',
+        onSuccess: 'TERMINATE', onFailure: 'TERMINATE'
+      }],
+      config: {}
+    };
+    const deps = {
+      ...mockDeps([{ html: '<html>p</html>', url: 'http://example.com', title: '' }]),
+      executeScript: async () => ({ result: { answer: '42', question: 'what' } })
+    };
+    const result = await StepOrchestrator.execute(service, {}, deps);
+    assert.equal(result.finalResult.sourcePageId, result.pages[0].id,
+      'flat-object result must get a top-level sourcePageId');
+  });
+
+  it('does NOT overwrite a sourcePageId the script already set', async () => {
+    const service = {
+      targetUrl: 'http://example.com',
+      steps: [{
+        id: 'extract', name: 'E', script: 'extract',
+        onSuccess: 'TERMINATE', onFailure: 'TERMINATE'
+      }],
+      config: {}
+    };
+    const deps = {
+      ...mockDeps([{ html: '<html>p</html>', url: 'http://example.com', title: '' }]),
+      executeScript: async () => ({ result: { posts: [{ author: 'A', sourcePageId: 'script-set' }] } })
+    };
+    const result = await StepOrchestrator.execute(service, {}, deps);
+    assert.equal(result.finalResult.posts[0].sourcePageId, 'script-set',
+      'script-set sourcePageId must be preserved');
+  });
+
+  it('honors config.capturePages:false (no pages, no sourcePageId)', async () => {
+    const service = {
+      targetUrl: 'http://example.com',
+      steps: [{
+        id: 'extract', name: 'E', script: 'extract',
+        onSuccess: 'TERMINATE', onFailure: 'TERMINATE'
+      }],
+      config: { capturePages: false }
+    };
+    const deps = {
+      ...mockDeps([{ html: '<html>p</html>', url: 'http://example.com', title: '' }]),
+      executeScript: async () => ({ result: { posts: [{ author: 'A' }] } })
+    };
+    const result = await StepOrchestrator.execute(service, {}, deps);
+    assert.deepEqual(result.pages, []);
+    assert.equal(result.pagesTruncated, 0);
+    assert.equal(result.finalResult.posts[0].sourcePageId, undefined,
+      'capturePages:false must skip sourcePageId stamping');
+  });
+
+  it('dedupes consecutive identical-content captures to one page entry', async () => {
+    // A poll step that returns not-ready 3 times against the SAME page HTML
+    // (i.e. nothing actually changed on the page) should produce ONE page
+    // entry, not three.
+    const results = [{ done: false }, { done: false }, { done: true }];
+    let i = 0;
+    const service = {
+      targetUrl: 'http://example.com',
+      steps: [
+        { id: 'wait', name: 'Wait', script: 'w', onSuccess: 'extract', onFailure: 'TERMINATE', maxIterations: 5 },
+        { id: 'extract', name: 'E', script: 'e', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }
+      ],
+      config: {}
+    };
+    const deps = {
+      ...mockDeps([
+        { html: '<html>same</html>', url: 'http://example.com', title: '' },
+        { html: '<html>same</html>', url: 'http://example.com', title: '' },
+        { html: '<html>same</html>', url: 'http://example.com', title: '' },
+        { html: '<html>same</html>', url: 'http://example.com', title: '' }
+      ]),
+      executeScript: async () => ({ result: results[i++] })
+    };
+    const result = await StepOrchestrator.execute(service, {}, deps);
+    assert.equal(result.pages.length, 1, 'identical-content captures must dedupe to one entry');
+  });
+});

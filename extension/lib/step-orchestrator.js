@@ -1,3 +1,41 @@
+// stampSourcePageId(target, pageId) — non-destructively attach sourcePageId
+// to every record in the result, per the spec's attachment rules:
+//   - if target is an array: stamp each object element
+//   - if target is an object: for every value that is an array of objects,
+//     stamp each element of that array; otherwise (flat object) stamp top-level
+//   - never overwrite an existing sourcePageId (script-set provenance wins)
+// Single-level only: nested arrays (object containing array containing
+// objects containing another array of objects) only stamp at the outermost
+// array — inner arrays are left to the script to manage. This keeps the
+// stamping predictable and avoids surprising deep mutation.
+function stampSourcePageId(target, pageId) {
+  if (!target || typeof target !== 'object' || Array.isArray(target)) return;
+  const arrays = Object.values(target).filter(v => Array.isArray(v));
+  if (arrays.length === 0) {
+    // Flat object: stamp top-level only.
+    if (target.sourcePageId === undefined) target.sourcePageId = pageId;
+    return;
+  }
+  for (const arr of arrays) {
+    for (const rec of arr) {
+      if (rec && typeof rec === 'object' && !Array.isArray(rec) && rec.sourcePageId === undefined) {
+        rec.sourcePageId = pageId;
+      }
+    }
+  }
+}
+
+// Top of file — load PageTracker for RC16 page-list tracking.
+// In Node tests, require() scopes the class to this module; mirror the
+// runtime by also attaching to global. (Same pattern as UrlTemplate.)
+let _PageTracker = null;
+try {
+  if (typeof require === 'function') {
+    _PageTracker = require('./page-tracker').PageTracker;
+  }
+} catch { /* fall through to global lookup below */ }
+const PageTrackerRef = _PageTracker || (typeof PageTracker !== 'undefined' ? PageTracker : null);
+
 class StepOrchestrator {
   static async execute(service, input, deps, options = {}) {
     debugLogger.log('info', 'step-orchestrator', 'execute start', {
@@ -40,6 +78,13 @@ class StepOrchestrator {
     const tabId = tab.id;
     debugLogger.log('info', 'step-orchestrator', 'Tab created', { tabId, url: resolvedUrl });
     const stepOutputs = [];
+    const tracker = PageTrackerRef
+      ? new PageTrackerRef({
+          capturePages: config.capturePages !== false,
+          maxPagesCaptured: config.maxPagesCaptured
+        })
+      : null;
+    let currentPageId = null;
     const stepIterationCounts = {};
     const enteredStepIds = new Set();
 
@@ -221,9 +266,21 @@ class StepOrchestrator {
           try {
             snapshot = await deps.captureSnapshot(tabId);
             debugLogger.log('info', 'step-orchestrator', 'Snapshot captured', { stepId: step.id, snapshotSize: snapshot?.html?.length || snapshot?.structure?.length });
+            if (tracker && snapshot) {
+              currentPageId = tracker.record(snapshot, {
+                sourceStepId: step.id,
+                captureReason: 'step_iteration'
+              });
+            }
           } catch {
             snapshot = null;
           }
+        }
+
+        // Stash the (possibly stamped) result on the step output AND update lastStepResult
+        // to point at the stamped version, so the finalResult carries sourcePageId.
+        if (tracker && currentPageId && result && typeof result === 'object' && !Array.isArray(result)) {
+          stampSourcePageId(result, currentPageId);
         }
 
         lastStepResult = result;
@@ -302,7 +359,10 @@ class StepOrchestrator {
 
       debugLogger.log('info', 'step-orchestrator', 'Execution complete', { finalResultType: typeof lastStepResult, stepCount: stepOutputs.length });
       emit('EXECUTION_DONE', { finalResultType: typeof lastStepResult, totalElapsedMs: Date.now() - startTime });
-      return { finalResult: lastStepResult, steps: stepOutputs };
+      const { pages, pagesTruncated } = tracker
+        ? tracker.listWithMeta()
+        : { pages: [], pagesTruncated: 0 };
+      return { finalResult: lastStepResult, steps: stepOutputs, pages, pagesTruncated };
     } catch (error) {
       debugLogger.log('error', 'step-orchestrator', 'Execution failed', { error: error.message, stepId: error.stepId, stack: error.stack });
       if (error.stepId) {
@@ -314,6 +374,11 @@ class StepOrchestrator {
       }
       emit('EXECUTION_DONE', { finalResultType: 'error', totalElapsedMs: Date.now() - startTime });
       error.steps = stepOutputs;
+      if (tracker) {
+        const { pages, pagesTruncated } = tracker.listWithMeta();
+        error.pages = pages;
+        error.pagesTruncated = pagesTruncated;
+      }
       throw error;
     } finally {
       if (autoCloseTab !== false) {
