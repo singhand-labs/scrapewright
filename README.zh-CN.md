@@ -341,6 +341,8 @@ GET /api/v1/jobs/{jobId}/wait?timeout=120
 
 **容量上限：** 列表默认上限 50 个唯一页面。如果采集产生更多，会保留前 5 个和后 45 条；`pagesTruncated` 字段报告丢弃数量。可通过 `config.maxPagesCaptured` 调整；`config.capturePages: false` 完全关闭。
 
+**字节预算：** 为控制 `chrome.storage.local` 增长，每个任务的 HTML 总载荷默认上限为 2MB。触及上限时会丢弃中间条目（始终保留首尾两条，保证你既能看到初始状态又能看到最近一次活动）。可通过 `config.maxPagesBytes` 调整（设为 `0` 完全关闭字节预算，仅用条数上限）。扩展声明了 `unlimitedStorage` 权限，所以浏览器的 10MB 配额不再是硬上限，但字节预算仍能防止长时间运行的服务失控占盘。
+
 #### 抽取记录上的 `sourcePageId`
 
 对象数组结果中的每条记录（例如 `result.posts[]` 的每个元素）会自动附加 `sourcePageId`，指向其数据来源的页面。扁平对象结果（`{answer: "..."}`）会在顶层附加一个 `sourcePageId`。该字段不会被覆盖 —— 如果脚本自己设置了 `sourcePageId`，编排器会保留脚本的值。

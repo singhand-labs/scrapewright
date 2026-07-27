@@ -536,7 +536,8 @@ async function handleExecute(serviceName, input) {
       // if this is omitted, but then sub-tab captures wouldn't reach it).
       const tracker = new PageTracker({
         capturePages: service.config.capturePages !== false,
-        maxPagesCaptured: service.config.maxPagesCaptured
+        maxPagesCaptured: service.config.maxPagesCaptured,
+        maxPagesBytes: service.config.maxPagesBytes
       });
       currentExecutionTracker = tracker;
 

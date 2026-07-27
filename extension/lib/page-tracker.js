@@ -18,6 +18,12 @@
 
 const DEFAULT_MAX_PAGES = 50;
 const DEFAULT_HTML_CAP = 80000;
+// Total-byte budget for pages[] returned per job. Bounds chrome.storage.local
+// growth: without it, 100 retained jobs × 4MB each = 400MB. The unlimitedStorage
+// permission removes the hard 10MB cap, but runaway growth would still trash
+// the user's disk. The byte budget drops middle entries to stay under threshold.
+// Set maxPagesBytes:0 in service config to disable (count cap alone applies).
+const DEFAULT_MAX_PAGES_BYTES = 2 * 1024 * 1024;
 const TRUNCATION_MARKER_RESERVE = 30; // length of "[TRUNCATED NNNN chars] " worst case
 
 class PageTracker {
@@ -28,6 +34,8 @@ class PageTracker {
     // in listWithMeta unreachable for the canonical cap=0 case.)
     this.maxPagesCaptured = options.maxPagesCaptured ?? DEFAULT_MAX_PAGES;
     this.htmlCap = options.htmlCap ?? DEFAULT_HTML_CAP;
+    // maxPagesBytes:0 disables the byte budget entirely (count cap alone applies).
+    this.maxPagesBytes = options.maxPagesBytes ?? DEFAULT_MAX_PAGES_BYTES;
     this._entries = [];      // unique-page records in insertion order
     this._dedupe = new Map(); // hash → pageId
     this._seq = 0;
@@ -85,10 +93,13 @@ class PageTracker {
   }
 
   // Returns the page list with cap enforcement applied.
-  // Cap rule: keepFirst = ceil(cap/10) initial + keepLast = (cap - keepFirst)
-  // most-recent. The first slice preserves the starting page state for
-  // context; the last slice preserves the most-recent activity (typically
-  // the most debuggable states).
+  // Two passes:
+  //   1. Count cap (keepFirst = ceil(cap/10) + keepLast = cap-keepFirst) — preserves
+  //      initial state for context + most-recent activity.
+  //   2. Byte budget (drops middle entries when total html.length exceeds
+  //      maxPagesBytes) — bounds chrome.storage.local growth. Skipped when
+  //      maxPagesBytes:0. Always keeps first + last so the user has at least
+  //      the initial-state and most-recent captures.
   list() {
     return this.listWithMeta().pages;
   }
@@ -100,15 +111,46 @@ class PageTracker {
       return { pages: [], pagesTruncated: this._entries.length };
     }
     const total = this._entries.length;
+    let pages, truncated;
     if (total <= this.maxPagesCaptured) {
-      return { pages: this._entries.slice(), pagesTruncated: 0 };
+      pages = this._entries.slice();
+      truncated = 0;
+    } else {
+      const keepFirst = Math.ceil(this.maxPagesCaptured / 10);
+      const keepLast = this.maxPagesCaptured - keepFirst;
+      const first = this._entries.slice(0, keepFirst);
+      const last = this._entries.slice(total - keepLast);
+      pages = first.concat(last);
+      truncated = total - this.maxPagesCaptured;
     }
-    const keepFirst = Math.ceil(this.maxPagesCaptured / 10);
-    const keepLast = this.maxPagesCaptured - keepFirst;
-    const first = this._entries.slice(0, keepFirst);
-    const last = this._entries.slice(total - keepLast);
-    return { pages: first.concat(last), pagesTruncated: total - this.maxPagesCaptured };
+    if (this.maxPagesBytes > 0) {
+      const bytes = pages.reduce((s, p) => s + (p.html ? p.html.length : 0), 0);
+      if (bytes > this.maxPagesBytes) {
+        const result = enforceByteBudget(pages, this.maxPagesBytes);
+        pages = result.pages;
+        truncated += result.dropped;
+      }
+    }
+    return { pages, pagesTruncated: truncated };
   }
+}
+
+// Drop middle entries from pages[] until total html.length <= budget.
+// Always keeps first + last (worst case: 2 entries remaining, possibly still
+// over budget — accepted as better than 0 entries).
+function enforceByteBudget(pages, budget) {
+  if (pages.length <= 2) return { pages, dropped: 0 };
+  let bytes = pages.reduce((s, p) => s + (p.html ? p.html.length : 0), 0);
+  if (bytes <= budget) return { pages, dropped: 0 };
+  const arr = pages.slice();
+  let dropped = 0;
+  while (arr.length > 2 && bytes > budget) {
+    const mid = Math.floor(arr.length / 2);
+    bytes -= (arr[mid].html ? arr[mid].html.length : 0);
+    arr.splice(mid, 1);
+    dropped++;
+  }
+  return { pages: arr, dropped };
 }
 
 // Normalize HTML for hash stability across equivalent re-renders.
@@ -197,7 +239,7 @@ function sha256Hex(input) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { PageTracker, normalizeHtmlForHash, sha256Hex };
+  module.exports = { PageTracker, normalizeHtmlForHash, sha256Hex, enforceByteBudget };
 } else if (typeof window !== 'undefined') {
   window.PageTracker = PageTracker;
 }

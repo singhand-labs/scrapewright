@@ -341,6 +341,8 @@ Every web page the scraper saw during execution. Each entry includes:
 
 **Size cap:** the list is capped at 50 unique pages by default. If a scrape produces more, the first 5 and last 45 entries are kept; `pagesTruncated` reports how many were dropped. Override via `config.maxPagesCaptured`. Disable entirely via `config.capturePages: false`.
 
+**Byte budget:** to bound `chrome.storage.local` growth, the total HTML payload per job is capped at 2MB by default. When the cap is hit, middle entries are dropped (first + last are always preserved so you keep both initial state and most-recent activity). Override via `config.maxPagesBytes` (set to `0` to disable the byte budget entirely; count cap alone applies). The extension declares the `unlimitedStorage` permission so the 10MB browser quota is not a hard ceiling, but the byte budget prevents runaway disk usage on long-running services.
+
 #### `sourcePageId` on extracted records
 
 Every record in an array-of-objects result (e.g. each element of `result.posts[]`) gets an auto-attached `sourcePageId` linking back to the page its data was extracted from. Flat-object results (`{answer: "..."}`) get a top-level `sourcePageId`. Stamping is non-destructive — if your script sets `sourcePageId` itself, the orchestrator preserves it.
