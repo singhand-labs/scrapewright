@@ -2552,7 +2552,7 @@ If your script does NOT use $openTab, $wait / $ / $extract will run against the 
   // compactMode retry path fired). The failing step's DOM is supplied
   // separately via the truncated `pageSnapshot` above.
   const testResultSection = wizardState.testResult
-    ? '\n\nPREVIOUS TEST RESULT:\n' + JSON.stringify(stripSnapshotsFromTestResult(wizardState.testResult), null, 2)
+    ? '\n\nPREVIOUS TEST RESULT:\n' + JSON.stringify(stripPagesFromLLMContext(stripSnapshotsFromTestResult(wizardState.testResult)), null, 2)
     : '';
 
   const RETURN_FORMAT = `RETURN FORMAT — choose ONE:
@@ -2654,15 +2654,15 @@ ${RETURN_FORMAT}`;
     // single "current step" block, and the new RETURN_FORMAT_FEEDBACK
     // requires an explicit stepId on every patch.
     // RC9 audit miss: this site also serializes wizardState.testResult and
-    // must route through stripSnapshotsFromTestResult. Without it, a 5-step
-    // FB-shaped testResult carrying ~150K-char per-step snapshot.html bloated
-    // the autoFix-on-empty prompt to ~845K chars (console.log 2026-07-26
-    // 13:33:09), drowning the "container matched 0 element(s)" diagnostic
-    // signal that would have told the LLM to broaden its selector. The LLM
-    // then iterated on more hallucinated restrictive selectors and stayed at
-    // 0 matches.
+    // must route through stripSnapshotsFromTestResult + stripPagesFromLLMContext.
+    // Without it, a 5-step FB-shaped testResult carrying ~150K-char per-step
+    // snapshot.html bloated the autoFix-on-empty prompt to ~845K chars
+    // (console.log 2026-07-26 13:33:09), drowning the "container matched 0
+    // element(s)" diagnostic signal that would have told the LLM to broaden its
+    // selector. The LLM then iterated on more hallucinated restrictive selectors
+    // and stayed at 0 matches.
     const currentOutput = wizardState.testResult
-      ? JSON.stringify(stripSnapshotsFromTestResult(wizardState.testResult), null, 2)
+      ? JSON.stringify(stripPagesFromLLMContext(stripSnapshotsFromTestResult(wizardState.testResult)), null, 2)
       : '(no output)';
 
     // RC11 regression guard. The user-feedback path runs MAX_ATTEMPTS=1 per
