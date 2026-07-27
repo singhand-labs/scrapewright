@@ -760,6 +760,156 @@ describe('RC16 wizard UI — pages viewer (structural)', () => {
   });
 });
 
+// Byte-budget cap (storage quota defense). The default 2MB budget drops middle
+// page entries when total html.length exceeds the threshold, keeping first +
+// last so the user always has initial-state + most-recent captures. Set
+// maxPagesBytes:0 to disable (count cap alone applies). Without this cap, 100
+// retained jobs × ~4MB pages each could overflow chrome.storage.local even
+// with unlimitedStorage permission.
+describe('RC16 PageTracker — byte-budget cap (storage quota defense)', () => {
+  const { enforceByteBudget } = require('../lib/page-tracker');
+
+  it('enforceByteBudget returns input unchanged when under budget', () => {
+    const pages = [
+      { html: 'a'.repeat(50) },
+      { html: 'b'.repeat(50) },
+      { html: 'c'.repeat(50) }
+    ];
+    const out = enforceByteBudget(pages, 1000);
+    assert.equal(out.pages.length, 3, 'no drops when total well under budget');
+    assert.equal(out.dropped, 0);
+  });
+
+  it('enforceByteBudget drops middle entries to fit budget, keeps first + last', () => {
+    const pages = [
+      { html: 'first' },           // 5 bytes
+      { html: 'x'.repeat(100) },   // 100 bytes — middle
+      { html: 'y'.repeat(100) },   // 100 bytes — middle
+      { html: 'last' }             // 4 bytes
+    ];
+    // Total = 209. Budget = 50. Must drop middle entries until ≤50.
+    // After dropping both middle entries: 5+4=9 ≤ 50.
+    const out = enforceByteBudget(pages, 50);
+    assert.equal(out.pages.length, 2, 'should keep only first + last');
+    assert.equal(out.pages[0].html, 'first');
+    assert.equal(out.pages[out.pages.length - 1].html, 'last');
+    assert.equal(out.dropped, 2);
+  });
+
+  it('enforceByteBudget never drops below 2 entries (always keeps endpoints)', () => {
+    // Even when first + last alone exceed budget, they're kept — better to be
+    // slightly over budget than to lose the initial-state or most-recent capture.
+    const pages = [
+      { html: 'x'.repeat(1000) },
+      { html: 'y'.repeat(1000) },
+      { html: 'z'.repeat(1000) }
+    ];
+    const out = enforceByteBudget(pages, 100); // budget way under any single page
+    assert.equal(out.pages.length, 2, 'must keep first + last even if over budget');
+    assert.equal(out.dropped, 1);
+  });
+
+  it('enforceByteBudget is a no-op for arrays of length <= 2', () => {
+    const pages = [{ html: 'a'.repeat(1000) }, { html: 'b'.repeat(1000) }];
+    const out = enforceByteBudget(pages, 10);
+    assert.equal(out.pages.length, 2);
+    assert.equal(out.dropped, 0);
+  });
+
+  it('PageTracker.listWithMeta drops middle pages when total html.length exceeds maxPagesBytes', () => {
+    const t = new PageTracker({ maxPagesCaptured: 50, maxPagesBytes: 200 });
+    // 5 entries x 80 bytes html each = 400 bytes total. Budget = 200.
+    // Must drop middle entries until <= 200 bytes.
+    for (let i = 0; i < 5; i++) {
+      t.record(
+        SAMPLE_SNAPSHOT('https://x.com/p' + i, 'h'.repeat(80) + i),
+        { sourceStepId: 's' + i }
+      );
+    }
+    const { pages, pagesTruncated } = t.listWithMeta();
+    assert.ok(pages.length < 5, 'must drop some entries to fit byte budget');
+    assert.ok(pages.length >= 2, 'must keep at least first + last');
+    // First entry preserved (initial state for context)
+    assert.equal(pages[0].url, 'https://x.com/p0');
+    // Last entry preserved (most recent activity)
+    assert.equal(pages[pages.length - 1].url, 'https://x.com/p4');
+    // pagesTruncated counts byte-budget drops
+    assert.equal(pagesTruncated, 5 - pages.length);
+    // Total bytes within budget (or as close as possible with first+last kept)
+    const totalBytes = pages.reduce((s, p) => s + (p.html ? p.html.length : 0), 0);
+    const endpointsBytes = pages[0].html.length + pages[pages.length - 1].html.length;
+    if (endpointsBytes <= 200) {
+      assert.ok(totalBytes <= 200, 'total must be under budget when endpoints fit: ' + totalBytes);
+    }
+  });
+
+  it('maxPagesBytes:0 disables byte-budget cap (count cap alone applies)', () => {
+    const t = new PageTracker({ maxPagesCaptured: 50, maxPagesBytes: 0 });
+    for (let i = 0; i < 5; i++) {
+      t.record(
+        SAMPLE_SNAPSHOT('https://y.com/p' + i, 'h'.repeat(80) + i),
+        { sourceStepId: 's' + i }
+      );
+    }
+    const { pages, pagesTruncated } = t.listWithMeta();
+    assert.equal(pages.length, 5, 'all 5 entries kept when byte budget disabled');
+    assert.equal(pagesTruncated, 0);
+  });
+
+  it('byte-budget stacks with count cap (both can drop entries)', () => {
+    // 60 entries, count cap = 10, byte budget tight. Count cap drops 50 first
+    // (keeps first 1 + last 9). Byte budget may drop more from those 10.
+    const t = new PageTracker({ maxPagesCaptured: 10, maxPagesBytes: 200 });
+    for (let i = 0; i < 60; i++) {
+      t.record(
+        SAMPLE_SNAPSHOT('https://z.com/p' + i, 'h'.repeat(80) + String(i).padStart(3, '0')),
+        { sourceStepId: 's' + i }
+      );
+    }
+    const { pages, pagesTruncated } = t.listWithMeta();
+    // Count cap alone would leave 10. Byte budget should drop some of those 10.
+    assert.ok(pages.length <= 10, 'count cap of 10 must hold');
+    assert.ok(pages.length >= 2, 'byte budget keeps at least first + last');
+    // pagesTruncated = count drops (50) + byte drops
+    assert.ok(pagesTruncated >= 50, 'must include the 50 count-cap drops at minimum');
+  });
+
+  it('PageTracker default maxPagesBytes is 2MB (bounds storage growth)', () => {
+    // Sanity: the default constructor wires the 2MB constant.
+    const t = new PageTracker();
+    assert.equal(t.maxPagesBytes, 2 * 1024 * 1024,
+      'default byte budget must be 2MB so 100 jobs cap at ~200MB worst case');
+  });
+});
+
+// Storage quota defense — manifest must declare unlimitedStorage, and
+// background.js must thread config.maxPagesBytes into the PageTracker.
+// Without unlimitedStorage, chrome.storage.local caps at ~10MB total, which
+// a single 50-page x 80K job can blow past.
+describe('RC16 storage quota — manifest + background wiring (structural)', () => {
+  const fs = require('fs');
+  const path = require('path');
+
+  it('manifest.json declares unlimitedStorage permission', () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(__dirname, '..', 'manifest.json'), 'utf8')
+    );
+    assert.ok(
+      Array.isArray(manifest.permissions) && manifest.permissions.indexOf('unlimitedStorage') !== -1,
+      'manifest.permissions must include "unlimitedStorage" — got: ' + JSON.stringify(manifest.permissions)
+    );
+  });
+
+  it('background.js threads config.maxPagesBytes into PageTracker constructor', () => {
+    const bg = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
+    // Look for the PageTracker instantiation and verify maxPagesBytes is wired.
+    const m = bg.match(/new\s+PageTracker\(\s*\{[^}]+\}\s*\)/);
+    assert.ok(m, 'background.js must instantiate PageTracker');
+    assert.ok(/maxPagesBytes:\s*service\.config\.maxPagesBytes/.test(m[0]),
+      'PageTracker constructor must pass maxPagesBytes from service config — got: ' + m[0]);
+  });
+});
+
 describe('RC16 integration — FB-shaped scroll+extract scenario', () => {
   // Regression anchor: the canonical FB search scrape. Scroll step polls
   // against a page whose HTML grows on each iteration (simulating FB's
