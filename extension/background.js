@@ -5,6 +5,7 @@ importScripts(
   'lib/url-template.js',
   'lib/step-orchestrator.js',
   'lib/wizard-utils.js',
+  'lib/visibility-keepalive.js',
   'lib/scrape-tab.js',
   'lib/debug-logger.js'
 );
