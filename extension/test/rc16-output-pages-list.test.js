@@ -759,3 +759,140 @@ describe('RC16 wizard UI — pages viewer (structural)', () => {
       'wizard.js must have a function that renders pages[] into the viewer');
   });
 });
+
+describe('RC16 integration — FB-shaped scroll+extract scenario', () => {
+  // Regression anchor: the canonical FB search scrape. Scroll step polls
+  // against a page whose HTML grows on each iteration (simulating FB's
+  // virtualized feed). Extract step returns 3 posts. We assert:
+  //   - each unique-content scroll state produces a distinct page entry
+  //   - all posts are stamped with the LAST captured page ID
+  //   - pages[] and sourcePageId round-trip through StepOrchestrator
+  //
+  // The assertions are GENERIC — no FB-specific terms. Any site where the
+  // page grows during scroll and an array-of-records is extracted produces
+  // the same shape.
+  global.debugLogger = { log: () => {} };
+  const { StepOrchestrator } = require('../lib/step-orchestrator');
+  const urlTemplate = require('../lib/url-template');
+  global.UrlTemplate = urlTemplate;
+
+  it('produces N unique page entries for N distinct content states, stamps all records with the last', async () => {
+    // Simulate a poll step that returns not-ready while the page grows.
+    const readySequence = [
+      { done: false },   // iteration 1: html has 1 post
+      { done: false },   // iteration 2: html has 2 posts
+      { done: false },   // iteration 3: html has 3 posts
+      { done: true }     // iteration 4: ready, hand off to extract
+    ];
+    const snapshotSequence = [
+      { html: '<html>post1</html>', url: 'https://example.com/search', title: 'Search' },
+      { html: '<html>post1post2</html>', url: 'https://example.com/search', title: 'Search' },
+      { html: '<html>post1post2post3</html>', url: 'https://example.com/search', title: 'Search' },
+      { html: '<html>post1post2post3</html>', url: 'https://example.com/search', title: 'Search' },
+      { html: '<html>post1post2post3-extracted</html>', url: 'https://example.com/search', title: 'Search' }
+    ];
+    let snapIdx = 0;
+    let readyIdx = 0;
+    const extractResult = {
+      posts: [
+        { author: '美食推薦官', likes: '4', comments: '', shares: '' },
+        { author: 'UserB',     likes: '1', comments: '', shares: '' },
+        { author: 'UserC',     likes: '294', comments: '', shares: '' }
+      ]
+    };
+
+    const service = {
+      targetUrl: 'https://example.com/search',
+      steps: [
+        { id: 'scroll', name: 'Scroll', script: 's', onSuccess: 'extract', onFailure: 'TERMINATE', maxIterations: 10 },
+        { id: 'extract', name: 'Extract', script: 'e', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }
+      ],
+      config: {}
+    };
+
+    const deps = {
+      createTab: async (url) => ({ id: 1, url }),
+      waitForTabLoad: async () => {},
+      executeScript: async () => {
+        // First 4 calls are scroll-step iterations (returns readySequence),
+        // 5th call is extract-step (returns extractResult).
+        if (readyIdx < readySequence.length) {
+          return { result: readySequence[readyIdx++] };
+        }
+        return { result: extractResult };
+      },
+      captureSnapshot: async () => snapshotSequence[snapIdx++],
+      removeTab: async () => {},
+      evaluateCondition: async () => true,
+      resetDomActivity: async () => {},
+      getDomActivity: async () => []
+    };
+
+    const result = await StepOrchestrator.execute(service, {}, deps);
+
+    // The 3 unique-content states (1 post, 2 posts, 3 posts) + 1 for the
+    // extract-step capture = 4 page entries. The duplicate "3 posts" state
+    // (iteration 4's snapshot equals iteration 3's) must dedupe.
+    assert.equal(result.pages.length, 4,
+      'expected 4 unique pages (3 growth states + extract); got: ' + result.pages.length);
+
+    // All 3 post records must be stamped with the last captured page ID
+    // (the extract-step's page).
+    const lastPageId = result.pages[result.pages.length - 1].id;
+    for (let i = 0; i < 3; i++) {
+      assert.equal(result.finalResult.posts[i].sourcePageId, lastPageId,
+        `posts[${i}].sourcePageId must be the last captured page ID`);
+    }
+
+    // pagesTruncated is 0 (under cap).
+    assert.equal(result.pagesTruncated, 0);
+
+    // No page entry should have html over 80K (FB pages are big, but the
+    // test snapshots are tiny).
+    for (const p of result.pages) {
+      assert.ok(p.html.length <= 80000 || p.truncated === true,
+        `page ${p.id} html over cap must be flagged truncated`);
+    }
+  });
+
+  it('produces pages[] even when the orchestrator hits an error mid-execution', async () => {
+    // Scroll step polls, then extract step throws. The error envelope must
+    // still carry pages captured up to that point (mirrors the existing
+    // behavior where error.steps preserves the trace).
+    const service = {
+      targetUrl: 'https://example.com',
+      steps: [
+        { id: 'scroll', name: 'Scroll', script: 's', onSuccess: 'extract', onFailure: 'TERMINATE', maxIterations: 5 },
+        { id: 'extract', name: 'Extract', script: 'e', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }
+      ],
+      config: {}
+    };
+    let iter = 0;
+    const deps = {
+      createTab: async (url) => ({ id: 1, url }),
+      waitForTabLoad: async () => {},
+      executeScript: async () => {
+        iter++;
+        if (iter <= 2) return { result: { done: false } };
+        if (iter === 3) return { result: { done: true } };
+        throw new Error('EXTRACT_FAILED');
+      },
+      captureSnapshot: async () => ({ html: '<html>state-' + iter + '</html>', url: 'https://example.com', title: '' }),
+      removeTab: async () => {},
+      evaluateCondition: async () => true,
+      resetDomActivity: async () => {},
+      getDomActivity: async () => []
+    };
+
+    let caught = null;
+    try {
+      await StepOrchestrator.execute(service, {}, deps);
+    } catch (err) {
+      caught = err;
+    }
+    assert.ok(caught, 'orchestrator must throw');
+    assert.ok(Array.isArray(caught.pages), 'error envelope must carry pages[]');
+    assert.ok(caught.pages.length >= 2, 'at least 2 page captures before the error');
+    assert.equal(typeof caught.pagesTruncated, 'number');
+  });
+});
