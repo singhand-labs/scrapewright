@@ -429,42 +429,66 @@ describe('RC16 background.js — job envelope threading (structural test)', () =
   // We can't easily require background.js (it's a service worker). This
   // test asserts the SHAPE CONTRACT on the job envelope by reading the
   // background.js source text and checking that the relevant fields are
-  // threaded through. A follow-up integration test exercises the runtime.
+  // threaded through. T10 (integration regression anchor) will exercise
+  // the runtime; until then, these source-text checks guard the shape.
+  //
+  // We COUNT occurrences (not .test) so a future edit that drops pages
+  // from one return site can't hide behind another site still matching.
   const fs = require('node:fs');
   const path = require('node:path');
   const SRC = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
 
+  function countMatches(regex) {
+    return (SRC.match(regex) || []).length;
+  }
+
   it('createJob initializes pages: [] on new jobs', () => {
-    assert.ok(/pages:\s*\[\]/.test(SRC),
-      'createJob must initialize pages: [] for shape consistency');
+    // Only one site: the createJob job object literal.
+    const matches = countMatches(/pages:\s*\[\]/g);
+    assert.ok(matches >= 1,
+      'createJob must initialize pages: [] for shape consistency; got ' + matches);
   });
 
   it('processJob writes result.pages + result.pagesTruncated into the job on success', () => {
     // The success path: updateJob(jobId, { ..., pages: result.pages, pagesTruncated: result.pagesTruncated, ... })
-    assert.ok(/pages:\s*result\.pages\s*\|\|\s*\[\]/.test(SRC),
-      'processJob must default pages to [] when orchestrator returned none');
-    assert.ok(/pagesTruncated:\s*result\.pagesTruncated\s*\|\|\s*0/.test(SRC),
-      'processJob must default pagesTruncated to 0 when missing');
+    const pagesMatches = countMatches(/pages:\s*result\.pages\s*\|\|\s*\[\]/g);
+    const truncMatches = countMatches(/pagesTruncated:\s*result\.pagesTruncated\s*\|\|\s*0/g);
+    assert.ok(pagesMatches >= 1,
+      'processJob must default pages to [] when orchestrator returned none; got ' + pagesMatches);
+    assert.ok(truncMatches >= 1,
+      'processJob must default pagesTruncated to 0 when missing; got ' + truncMatches);
   });
 
   it('handleExecute threads pages from orchestrator result on the success path', () => {
-    // The success / outputSchema-failure returns must thread pages from `result`.
-    // Require at least one `result.pages || []` reference in a return-shaped context.
-    assert.ok(/pages:\s*result\.pages\s*\|\|\s*\[\]/.test(SRC),
-      'handleExecute success path must thread pages: result.pages || []');
-    assert.ok(/pagesTruncated:\s*result\.pagesTruncated\s*\|\|\s*0/.test(SRC),
-      'handleExecute success path must thread pagesTruncated: result.pagesTruncated || 0');
+    // `result.pages || []` appears at multiple return sites:
+    //   1. processJob success updateJob (covered above but counted here too)
+    //   2. output-schema validation failure return
+    //   3. success return
+    // Require >=2 so removing it from any one return site is caught.
+    const pagesMatches = countMatches(/pages:\s*result\.pages\s*\|\|\s*\[\]/g);
+    const truncMatches = countMatches(/pagesTruncated:\s*result\.pagesTruncated\s*\|\|\s*0/g);
+    assert.ok(pagesMatches >= 2,
+      'handleExecute success path must thread pages: result.pages || [] at >=2 return sites; got ' + pagesMatches);
+    assert.ok(truncMatches >= 2,
+      'handleExecute success path must thread pagesTruncated: result.pagesTruncated || 0 at >=2 return sites; got ' + truncMatches);
   });
 
   it('handleExecute threads pages from the error envelope on catch-block returns', () => {
     // The catch path can't reference `result` (it doesn't exist there). It must
-    // pull pages from the orchestrator's error object instead.
-    assert.ok(/pages:\s*error\.pages\s*\|\|\s*\[\]/.test(SRC),
-      'handleExecute catch path must thread pages: error.pages || []');
-    assert.ok(/pagesTruncated:\s*error\.pagesTruncated\s*\|\|\s*0/.test(SRC),
-      'handleExecute catch path must thread pagesTruncated: error.pagesTruncated || 0');
+    // pull pages from the orchestrator's error object instead. Currently three
+    // catch returns thread pages: LOGIN_REQUIRED, MISSING_URL_PARAM, and
+    // POLL_EXHAUSTED. Accept both `error.pages` and `error?.pages` (optional
+    // chaining) since both shapes appear in the source. Require >=2 so removing
+    // pages from any one catch site is caught.
+    const errorPagesMatches = countMatches(/pages:\s*error\??\.pages\s*\|\|\s*\[\]/g);
+    const errorTruncMatches = countMatches(/pagesTruncated:\s*error\??\.pagesTruncated\s*\|\|\s*0/g);
+    assert.ok(errorPagesMatches >= 2,
+      'handleExecute catch path must thread pages: error.pages || [] at >=2 return sites; got ' + errorPagesMatches);
+    assert.ok(errorTruncMatches >= 2,
+      'handleExecute catch path must thread pagesTruncated: error.pagesTruncated || 0 at >=2 return sites; got ' + errorTruncMatches);
     // lastError fallback (final return after retries exhausted) must also thread.
-    assert.ok(/pages:\s*lastError\?\.pages\s*\|\|\s*\[\]/.test(SRC),
-      'handleExecute final-fallback return must thread pages: lastError?.pages || []');
+    const lastErrMatches = countMatches(/pages:\s*lastError\?\.pages\s*\|\|\s*\[\]/g);
+    assert.ok(lastErrMatches >= 1,
+      'handleExecute final-fallback return must thread pages: lastError?.pages || [] at >=1 site; got ' + lastErrMatches);
   });
 });
