@@ -607,3 +607,56 @@ describe('RC16 background.js — sub-tab capture on $openTab success (structural
       "background.js importScripts list must include 'lib/page-tracker.js'");
   });
 });
+
+describe('RC16 wizard-utils — stripPagesFromLLMContext', () => {
+  const { stripPagesFromLLMContext } = require('../lib/wizard-utils');
+
+  it('returns input unchanged for non-objects', () => {
+    assert.equal(stripPagesFromLLMContext(null), null);
+    assert.equal(stripPagesFromLLMContext(undefined), undefined);
+    assert.equal(stripPagesFromLLMContext('string'), 'string');
+    assert.equal(stripPagesFromLLMContext(42), 42);
+  });
+
+  it('removes a top-level pages field', () => {
+    const input = { data: { posts: [] }, pages: [{ id: 'p1', html: 'x' }], pagesTruncated: 0 };
+    const out = stripPagesFromLLMContext(input);
+    assert.equal(out.pages, undefined, 'pages must be stripped');
+    assert.equal(out.pagesTruncated, undefined, 'pagesTruncated must be stripped');
+    assert.deepEqual(out.data, { posts: [] });
+  });
+
+  it('recursively removes sourcePageId from records', () => {
+    const input = {
+      data: {
+        posts: [
+          { author: 'A', sourcePageId: 'page_0001_aaa' },
+          { author: 'B', sourcePageId: 'page_0001_aaa' }
+        ]
+      },
+      steps: [{ result: { posts: [{ sourcePageId: 'x' }] } }]
+    };
+    const out = stripPagesFromLLMContext(input);
+    assert.equal(out.data.posts[0].sourcePageId, undefined);
+    assert.equal(out.data.posts[1].sourcePageId, undefined);
+    assert.equal(out.steps[0].result.posts[0].sourcePageId, undefined);
+    // Non-provenance fields preserved.
+    assert.equal(out.data.posts[0].author, 'A');
+  });
+
+  it('returns a deep clone — never mutates input', () => {
+    const input = { data: { posts: [{ author: 'A', sourcePageId: 'p1' }] }, pages: [] };
+    const out = stripPagesFromLLMContext(input);
+    assert.notEqual(out, input);
+    assert.notEqual(out.data, input.data);
+    // Input is untouched.
+    assert.equal(input.data.posts[0].sourcePageId, 'p1');
+    assert.equal(input.pages.length, 0);
+  });
+
+  it('preserves arrays of primitives (does not add sourcePageId to strings)', () => {
+    const input = { data: { tags: ['a', 'b', 'c'] } };
+    const out = stripPagesFromLLMContext(input);
+    assert.deepEqual(out.data.tags, ['a', 'b', 'c']);
+  });
+});
