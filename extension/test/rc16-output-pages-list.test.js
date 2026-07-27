@@ -659,6 +659,33 @@ describe('RC16 wizard-utils — stripPagesFromLLMContext', () => {
     const out = stripPagesFromLLMContext(input);
     assert.deepEqual(out.data.tags, ['a', 'b', 'c']);
   });
+
+  it('summarizeFixIteration output contains no pages[] or sourcePageId', () => {
+    // Code-review follow-up on T7 (commit 4c2aa6e): summarizeFixIteration in
+    // lib/wizard-utils.js was JSON.stringifying testResult into llmHistory
+    // without applying stripPagesFromLLMContext. This test guards against
+    // regression — pages[] and sourcePageId must never reach the LLM history.
+    const { summarizeFixIteration } = require('../lib/wizard-utils');
+    const result = {
+      steps: [
+        { stepId: 'extract', result: { posts: [{ author: 'a', sourcePageId: 'page_0001_aaa' }] } }
+      ],
+      finalResult: { posts: [{ author: 'a', sourcePageId: 'page_0001_aaa' }] },
+      pages: [{ id: 'page_0001_aaa', url: 'http://x', html: 'h'.repeat(100) }],
+      pagesTruncated: 0
+    };
+    const out = summarizeFixIteration({
+      stepId: 'extract',
+      stepName: 'Extract',
+      script: 'return 1',
+      result
+    });
+    assert.equal(typeof out, 'string');
+    assert.ok(out.indexOf('author') !== -1, 'non-provenance fields must survive');
+    assert.ok(out.indexOf('sourcePageId') === -1, 'sourcePageId must be stripped');
+    assert.ok(out.indexOf('pages') === -1, 'pages field must be stripped');
+    assert.ok(out.indexOf('pagesTruncated') === -1, 'pagesTruncated must be stripped');
+  });
 });
 
 describe('RC16 wizard.js — apply stripPagesFromLLMContext at every LLM site (structural)', () => {
@@ -675,12 +702,41 @@ describe('RC16 wizard.js — apply stripPagesFromLLMContext at every LLM site (s
   });
 
   it('every call to stripSnapshotsFromTestResult has a sibling call to stripPagesFromLLMContext', () => {
-    // Crude approximation: count calls. Equal counts ≈ applied uniformly.
-    // (If a future call site uses one without the other, this test breaks.)
-    const snapCalls = (SRC.match(/stripSnapshotsFromTestResult/g) || []).length;
-    const pagesCalls = (SRC.match(/stripPagesFromLLMContext/g) || []).length;
-    // pagesCalls includes the import line, so it should be snapCalls + 1 (import).
-    assert.ok(pagesCalls >= snapCalls,
-      `expected pages-strip calls (>= ${snapCalls}) to mirror snapshot-strip calls; got ${pagesCalls}`);
+    // Strip line comments and block comments so the count reflects real code only.
+    // (Earlier the test passed by coincidence: 2 real calls + 1 comment mention.)
+    const noComments = SRC
+      .replace(/\/\/[^\n]*/g, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '');
+    const snapCalls = (noComments.match(/stripSnapshotsFromTestResult/g) || []).length;
+    const pagesCalls = (noComments.match(/stripPagesFromLLMContext/g) || []).length;
+    assert.ok(pagesCalls >= snapCalls && snapCalls >= 1,
+      `expected pages-strip calls (${pagesCalls}) to mirror snapshot-strip calls (${snapCalls}) in wizard.js`);
+  });
+});
+
+// Same hardening for lib/wizard-utils.js since summarizeFixIteration lives there.
+describe('RC16 lib/wizard-utils.js — apply stripPagesFromLLMContext at every LLM site (structural)', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+
+  it('every stripSnapshotsFromTestResult call in lib/wizard-utils.js has a sibling stripPagesFromLLMContext', () => {
+    const SRC = fs.readFileSync(path.join(__dirname, '..', 'lib', 'wizard-utils.js'), 'utf8');
+    // Strip comments first so comment text doesn't pad the count.
+    const noComments = SRC
+      .replace(/\/\/[^\n]*/g, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '');
+    // Then strip the function DEFINITIONS themselves so only CALL sites remain
+    // (definitions are symmetric — both helpers defined — but the invariant we
+    // want is "every call site pairs both helpers", which is cleaner to check).
+    const callSitesOnly = noComments
+      .replace(/function\s+stripSnapshotsFromTestResult\s*\([^)]*\)\s*\{[\s\S]*?^\}/gm, '')
+      .replace(/function\s+stripPagesFromLLMContext\s*\([^)]*\)\s*\{[\s\S]*?^\}/gm, '');
+    const snapCalls = (callSitesOnly.match(/stripSnapshotsFromTestResult/g) || []).length;
+    const pagesCalls = (callSitesOnly.match(/stripPagesFromLLMContext/g) || []).length;
+    // After def-stripping, every remaining stripSnapshotsFromTestResult reference
+    // (call, export, window/self mount) must have a matching stripPagesFromLLMContext
+    // reference. If a future edit pairs only one, this breaks.
+    assert.ok(pagesCalls >= snapCalls && snapCalls >= 1,
+      `expected pages-strip references (${pagesCalls}) to match snapshot-strip references (${snapCalls}) in wizard-utils.js call sites`);
   });
 });
