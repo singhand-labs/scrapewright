@@ -1110,6 +1110,137 @@ function findEmptyExtractionFields(data, outputSchema) {
   return empty;
 }
 
+// detectEmptyOutputFieldsByRatio(data, outputSchema, options?) → array of
+// { field, path, emptyCount, totalCount, emptyRatio, sampleNonEmpty }
+//
+// Surfaces PARTIAL-EMPTY fields: fields declared in the schema that are empty
+// in a significant fraction of records but NOT all (which findEmptyExtractionFields
+// already handles as a separate case). The FB-comments-shares incident
+// (console.log 2026-07-27 RC15): finalResult had 3 posts with `likes` populated
+// ("4","1","294") but `comments` and `shares` empty ("") across ALL records.
+// findEmptyExtractionFields returned [] because the records had other non-empty
+// fields (domHtml, author, content). The user-feedback autoFix prompt had no
+// data-driven signal connecting "fields X,Y are empty across records" to the
+// LLM — so glm-5.1 misread the ambiguous Chinese feedback ("为空的不正常") as
+// "not enough posts" and rewrote the scroll step instead of fixing the
+// extraction selectors.
+//
+// This function analyzes the finalResult OBJECTively: walks array-of-objects
+// outputs, counts how often each declared sub-field is empty, and returns the
+// fields whose emptyRatio exceeds a threshold. The autoFix prompt then has a
+// data-driven "EMPTY FIELDS IN OUTPUT" block that pins the LLM's attention on
+// the actual failing fields, regardless of how the user phrased the feedback.
+//
+// Threshold default 0.5: a field empty in >half of records is suspicious.
+// Fields empty in 100% of records are included (findEmptyExtractionFields
+// treats that as a different kind of failure but it's still a useful signal
+// here for the prompt). `sampleNonEmpty` shows up to 3 non-empty values from
+// the same record set, giving the LLM a contrastive example.
+//
+// options:
+//   emptyRatioThreshold (default 0.5) — fields with emptyRatio >= this are
+//     returned. Lower = more sensitive. 0 = return any field with at least
+//     one empty value (rarely useful).
+//   maxSamples (default 3) — cap on sampleNonEmpty values per field.
+//   minRecords (default 2) — ignore output arrays shorter than this. A single
+//     record can't meaningfully establish a "pattern of emptiness".
+function detectEmptyOutputFieldsByRatio(data, outputSchema, options) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return [];
+  if (!outputSchema || typeof outputSchema !== 'object') return [];
+  const opts = options || {};
+  const threshold = typeof opts.emptyRatioThreshold === 'number' ? opts.emptyRatioThreshold : 0.5;
+  const maxSamples = typeof opts.maxSamples === 'number' ? opts.maxSamples : 3;
+  const minRecords = typeof opts.minRecords === 'number' ? opts.minRecords : 2;
+
+  const isEmptyValue = (v) =>
+    v === '' || v === null || v === undefined ||
+    (Array.isArray(v) && v.length === 0) ||
+    (typeof v === 'string' && v.trim() === '');
+
+  const props = outputSchema.properties && typeof outputSchema.properties === 'object'
+    ? outputSchema.properties
+    : {};
+
+  const result = [];
+  for (const key of Object.keys(props)) {
+    const prop = props[key];
+    if (!prop || prop.type !== 'array' || !prop.items || prop.items.type !== 'object') continue;
+    const arr = data[key];
+    if (!Array.isArray(arr) || arr.length < minRecords) continue;
+    const itemSchema = prop.items.properties && typeof prop.items.properties === 'object'
+      ? prop.items.properties
+      : {};
+    const itemRequired = Array.isArray(prop.items.required) ? prop.items.required : null;
+    const fieldKeys = itemRequired && itemRequired.length > 0
+      ? itemRequired
+      : Object.keys(itemSchema);
+    if (fieldKeys.length === 0) continue;
+    for (const fk of fieldKeys) {
+      let emptyCount = 0;
+      const samples = [];
+      for (const rec of arr) {
+        if (!rec || typeof rec !== 'object') { emptyCount += 1; continue; }
+        const v = rec[fk];
+        if (isEmptyValue(v)) {
+          emptyCount += 1;
+        } else if (samples.length < maxSamples) {
+          samples.push(typeof v === 'string' ? v.slice(0, 80) : v);
+        }
+      }
+      const emptyRatio = emptyCount / arr.length;
+      if (emptyRatio < threshold) continue;
+      result.push({
+        field: fk,
+        path: `${key}.${fk}`,
+        emptyCount,
+        totalCount: arr.length,
+        emptyRatio,
+        sampleNonEmpty: samples
+      });
+    }
+  }
+  return result;
+}
+
+// formatEmptyOutputFieldsSignal(fields) → string
+//
+// Renders the output of detectEmptyOutputFieldsByRatio into a prompt-ready
+// "EMPTY FIELDS IN OUTPUT" block. Returns '' when there's nothing to surface
+// (so the caller can unconditionally interpolate the result).
+//
+// Format:
+//   EMPTY FIELDS IN OUTPUT (data-driven — these fields are empty in >50% of
+//   extracted records, regardless of how the user phrased their feedback):
+//     - path: empty in N/M records (XX%). Other fields in the same records
+//       produced values like: "sample1", "sample2". Find the step whose
+//       selector / JS post-processing extracts `field` and fix it.
+//
+// Why this framing: when the LLM is told "fix the empty fields", it can
+// mis-interpret ambiguous user feedback (Chinese "为空的不正常" was read as
+// "not enough posts" instead of "fields are empty"). A data-driven signal
+// that NAMES the failing fields and shows CONTRASTIVE non-empty examples
+// from neighboring fields pins the LLM's attention on extraction-quality,
+// not scroll/pagination.
+function formatEmptyOutputFieldsSignal(fields) {
+  if (!Array.isArray(fields) || fields.length === 0) return '';
+  const lines = [];
+  lines.push('EMPTY FIELDS IN OUTPUT (data-driven — these fields are empty in ≥50% of');
+  lines.push('extracted records, regardless of how the user phrased their feedback —');
+  lines.push('fix the step whose selector / JS post-processing produces these fields):');
+  for (const f of fields) {
+    const pct = Math.round((f.emptyRatio || 0) * 100);
+    const samples = (f.sampleNonEmpty || [])
+      .filter(s => s !== '' && s !== null && s !== undefined)
+      .slice(0, 3)
+      .map(s => typeof s === 'string' ? `"${s.slice(0, 60)}"` : JSON.stringify(s));
+    const tail = samples.length > 0
+      ? ` Other fields in the same records produced values like: ${samples.join(', ')} — so the container selector is correct; only this sub-field's selector is wrong.`
+      : '';
+    lines.push(`  - ${f.path}: empty in ${f.emptyCount}/${f.totalCount} records (${pct}%).${tail}`);
+  }
+  return lines.join('\n');
+}
+
 // Enumerate the output fields a user can map an annotated selector to.
 // Scalar outputs expose their top-level keys. Array-of-objects outputs
 // (e.g. posts: [{group, username, ...}]) descend into the array item's
@@ -2400,13 +2531,15 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, stripSnapshotsFromTestResult, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, stripSnapshotsFromTestResult, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
   window.validateInputAgainstSchema = validateInputAgainstSchema;
   window.validateOutputAgainstSchema = validateOutputAgainstSchema;
   window.findEmptyExtractionFields = findEmptyExtractionFields;
+  window.detectEmptyOutputFieldsByRatio = detectEmptyOutputFieldsByRatio;
+  window.formatEmptyOutputFieldsSignal = formatEmptyOutputFieldsSignal;
   window.getOutputFieldOptions = getOutputFieldOptions;
   window.truncateSnapshotForLLM = truncateSnapshotForLLM;
   window.summarizeFixIteration = summarizeFixIteration;
@@ -2450,6 +2583,8 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.validateInputAgainstSchema = validateInputAgainstSchema;
   self.validateOutputAgainstSchema = validateOutputAgainstSchema;
   self.findEmptyExtractionFields = findEmptyExtractionFields;
+  self.detectEmptyOutputFieldsByRatio = detectEmptyOutputFieldsByRatio;
+  self.formatEmptyOutputFieldsSignal = formatEmptyOutputFieldsSignal;
   self.getOutputFieldOptions = getOutputFieldOptions;
   self.truncateSnapshotForLLM = truncateSnapshotForLLM;
   self.summarizeFixIteration = summarizeFixIteration;

@@ -2678,6 +2678,17 @@ ${RETURN_FORMAT}`;
     // replaced with broken `a[role="link"][aria-label]`).
     const regressionGuard = buildRegressionGuard(wizardState.bestAttempt, scoreAttemptResult(wafeFallbackFinalResult(wizardState), wizardState.outputSchema));
 
+    // RC15 (console.log 2026-07-27): user feedback "为空的不正常" was ambiguous
+    // and glm-5.1 misread it as "not enough posts" — rewrote the scroll step
+    // instead of fixing the extraction. The data-driven signal below names the
+    // ACTUAL empty fields with contrastive non-empty examples from the same
+    // records, so the LLM's attention is pinned on extraction-quality
+    // regardless of how the user phrased the feedback. Generic — works for
+    // any site, any field, not just FB comments/shares.
+    const emptyFieldsSignal = formatEmptyOutputFieldsSignal(
+      detectEmptyOutputFieldsByRatio(wafeFallbackFinalResult(wizardState), wizardState.outputSchema)
+    );
+
     prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${buildFeedbackSection(userFeedback, attemptNum, totalAttempts, wizardState.llmHistory)}${SCRIPT_DSL_GUIDE}
 
 CONTEXT — read carefully:
@@ -2687,7 +2698,7 @@ CONTEXT — read carefully:
 
 User's observation feedback:
 ${userFeedback}
-
+${emptyFieldsSignal ? '\n' + emptyFieldsSignal + '\n' : ''}
 Identify EVERY step in the workflow below whose script contains a root cause for the reported problems, and return a fix for each. Do NOT anchor on any particular step — the bug may be in any of them. Typical patterns:
 - "field X is missing/wrong" → find the step whose $extractList / $extract call reads field X (usually the EXTRACT step, not the finalizer). Fix it there.
 - "only N items extracted" → the scroll/paginate step (under-loaded) OR the extract step (container selector too narrow).
