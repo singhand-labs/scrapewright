@@ -34,6 +34,46 @@
       <p class="hint">The host runs as an OS background service (systemd / launchd / scheduled task). If the badge is red, the host isn't reachable — copy diagnostics or run <code>scrapewright doctor</code>.</p>
     </section>
 
+    <section class="enhanced-mode">
+      <h2>Enhanced Scraping Mode</h2>
+      <div class="enhanced-mode-row">
+        <label class="switch">
+          <input type="checkbox" id="enhancedModeToggle" />
+          <span class="slider"></span>
+        </label>
+        <div>
+          <div id="enhancedModeStatus">Not enabled</div>
+          <div id="enhancedModeDesc" class="enhanced-mode-desc">
+            Complementary layer: transiently attaches <code>chrome.debugger</code>
+            to scrape tabs and issues <code>Page.setWebLifecycleState(active)</code>
+            to lift Chrome's page-lifecycle throttle.
+          </div>
+        </div>
+      </div>
+      <p class="hint">
+        <strong>Limitation:</strong> this toggle addresses the page-lifecycle
+        layer but <em>not</em> the compositor frame-production layer. For sites
+        with lazy-load (Facebook feeds, infinite scroll, virtualized lists),
+        IntersectionObserver callbacks still won't fire on background tabs
+        because no frame is produced. <strong>For reliable background-tab
+        scraping on such sites, run:</strong>
+        <code>scrapewright throttle on</code>
+        and restart Chrome — this sets Chrome launch flags
+        (<code>--disable-renderer-backgrounding</code> and friends) that
+        disable frame-production throttling at the process level.
+      </p>
+      <p class="hint">
+        The <code>debugger</code> permission is granted at install time (Chrome
+        does not allow it as an optional permission); this toggle controls
+        whether the extension actually <em>uses</em> the debugger at runtime.
+        While enabled, Chrome will briefly show a yellow "extension is
+        debugging this browser" banner each time a scrape tab opens
+        (transient, &lt;100ms). Detection-risk minimized: only
+        <code>Page.setWebLifecycleState</code> is issued, never
+        <code>Runtime.evaluate</code>.
+      </p>
+    </section>
+
     <section class="services">
       <div class="section-head">
         <h2>Services</h2>
@@ -101,6 +141,7 @@
   <script src="lib/list-pattern.js"></script>
   <script src="lib/wizard-utils.js"></script>
   <script src="lib/service-doc.js"></script>
+  <script src="lib/renderer-activation.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

@@ -100,6 +100,25 @@ class StepOrchestrator {
     try {
       await deps.waitForTabLoad(tabId);
       debugLogger.log('info', 'step-orchestrator', 'Tab loaded', { tabId });
+      // RC16 (console.log 2026-07-27 16:44): re-inject visibility-keepalive
+      // AFTER page load completes. The early injection inside createScrapeTab's
+      // afterTabOpen uses injectImmediately:true, which runs the function in
+      // a transient pre-load context whose window writes are discarded by the
+      // time the page actually finishes loading. Verification at the post-load
+      // context reads injected:false. Re-injecting here runs in the persistent
+      // post-load context, so the visibilityState override actually sticks.
+      if (typeof injectVisibilityKeepalive === 'function') {
+        try {
+          const reinject = await injectVisibilityKeepalive(tabId);
+          debugLogger.log('info', 'step-orchestrator', 'Post-load visibility keepalive injection', { tabId, ...reinject });
+          if (typeof verifyVisibilityKeepalive === 'function') {
+            const reverify = await verifyVisibilityKeepalive(tabId);
+            debugLogger.log('info', 'step-orchestrator', 'Post-load visibility keepalive verification', { tabId, ...reverify });
+          }
+        } catch (e) {
+          debugLogger.log('warn', 'step-orchestrator', 'Post-load visibility keepalive injection failed', { tabId, error: e && e.message });
+        }
+      }
       const firstStepId = service.steps[0].id;
       if (typeof firstStepId !== 'string') {
         throw new Error('Service first step must have a valid id');

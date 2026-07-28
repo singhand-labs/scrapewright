@@ -7,6 +7,7 @@ importScripts(
   'lib/step-orchestrator.js',
   'lib/wizard-utils.js',
   'lib/visibility-keepalive.js',
+  'lib/renderer-activation.js',
   'lib/scrape-tab.js',
   'lib/debug-logger.js'
 );
@@ -64,6 +65,13 @@ let serverPort = 8765;
 // to record sub-tab snapshots into the same list. Cleared in a finally
 // block to avoid leaking references between executions.
 let currentExecutionTracker = null;
+
+// RC17: map of tabId → popupWindowId for tabs opened via createScrapeTab's
+// default popup path. Used by the removeTab callback so closing a scrape tab
+// also closes its host popup window — otherwise an empty popup would linger
+// on screen after every execution.
+const popupWindowsByTabId = new Map();
+
 
 // Native host connection state — surfaced to the options page UI.
 // Persisted to chrome.storage.local so SW restarts don't lose the last error.
@@ -545,17 +553,26 @@ async function handleExecute(serviceName, input) {
       try {
         result = await StepOrchestrator.execute(service, input, {
           createTab: async (url) => {
-            // RC12: popup window, not background tab — see lib/scrape-tab.js
-            // for the why. Short version: background-tab renderers don't fire
-            // IntersectionObserver, so lazy-loaded feeds (FB/Twitter/infinite
-            // scroll) never load more content during the scrape.
+            // RC12→RC17: popup window, not background tab — see lib/scrape-tab.js
+            // for the why. Short version: only the active tab in a visible window
+            // gets renderer frame production, which IntersectionObserver-driven
+            // lazy-load feeds (FB/Twitter/infinite scroll) require. Background
+            // tabs get throttled at the renderer level — visibilityState override
+            // alone doesn't help.
             const tab = await createScrapeTab(url);
+            // RC17: track popup window id by tab id so removeTab can close the
+            // whole window, not just the tab. Closing only the tab would leave
+            // an empty popup window on screen.
+            if (tab && tab._popupWindowId != null) {
+              popupWindowsByTabId.set(tab.id, tab._popupWindowId);
+            }
             await waitForTabLoad(tab.id, tabLoadTimeoutMs);
             // WS2.1: wait for the content-script to be listening before the first
             // DOM_REQUEST — prevents the RELAY_FAILED (tabId:null) race.
             const csReady = await waitForContentScript(tab.id);
             if (!csReady) {
-              await chrome.tabs.remove(tab.id).catch(() => {});
+              await closeScrapeTab(tab);
+              if (tab && tab._popupWindowId != null) popupWindowsByTabId.delete(tab.id);
               throw new Error('CONTENT_SCRIPT_NOT_READY');
             }
             return tab;
@@ -580,7 +597,13 @@ async function handleExecute(serviceName, input) {
           },
           removeTab: async (tabId) => {
             if (service.config.autoCloseTab !== false) {
-              await chrome.tabs.remove(tabId).catch(() => {});
+              const popupWinId = popupWindowsByTabId.get(tabId);
+              if (popupWinId != null) {
+                await chrome.windows.remove(popupWinId).catch(() => {});
+                popupWindowsByTabId.delete(tabId);
+              } else {
+                await chrome.tabs.remove(tabId).catch(() => {});
+              }
             }
           },
           evaluateCondition: async (tabId, conditionExpr) => {
@@ -1097,13 +1120,13 @@ async function captureSubTabSnapshot(tabId, label) {
 
 async function handleOpenTabExecute(url, scriptStr, parentTabId, reqId) {
   debugLogger.log('info', 'background', 'handleOpenTabExecute start', { url, parentTabId, reqId });
-  // RC12: popup window so the detail page actually renders its lazy-loaded
+  // RC12→RC17: popup window so the detail page actually renders its lazy-loaded
   // content (FB post comments, product reviews, etc.).
   const tab = await createScrapeTab(url);
   await waitForTabLoad(tab.id);
   const csReady = await waitForContentScript(tab.id);
   if (!csReady) {
-    await chrome.tabs.remove(tab.id).catch(() => {});
+    await closeScrapeTab(tab);
     debugLogger.log('error', 'background', 'handleOpenTabExecute content-script not ready', { tabId: tab.id });
     throw new Error('CONTENT_SCRIPT_NOT_READY');
   }
@@ -1128,7 +1151,7 @@ async function handleOpenTabExecute(url, scriptStr, parentTabId, reqId) {
       });
     }
 
-    await chrome.tabs.remove(tab.id).catch(() => {});
+    await closeScrapeTab(tab);
     debugLogger.log('info', 'background', 'handleOpenTabExecute sub-tab completed', { tabId: tab.id });
     if (parentTabId) {
       chrome.tabs.sendMessage(parentTabId, {
@@ -1157,7 +1180,7 @@ async function handleOpenTabExecute(url, scriptStr, parentTabId, reqId) {
         captureReason: 'subtab_pre_destroy'
       });
     }
-    await chrome.tabs.remove(tab.id).catch(() => {});
+    await closeScrapeTab(tab);
     debugLogger.log('error', 'background', 'handleOpenTabExecute sub-tab failed', { tabId: tab.id, error: error.message });
     if (parentTabId) {
       chrome.tabs.sendMessage(parentTabId, {

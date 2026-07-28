@@ -43,12 +43,15 @@
   // self-contained (no closure over outer-scope variables, no imports).
   // `injectVisibilityKeepalive` (below) passes this to chrome.scripting.
   function pageWorldKeepalive() {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined') return 'no-window';
     // Idempotency: a re-injection (e.g., after a tab reload) shouldn't stack
     // another interval/rAF loop. The flag survives same-document reinjects
     // but not navigations — which is exactly what we want.
-    if (window.__SCRAPEWRIGHT_VISIBILITY_KEEPALIVE__) return;
+    if (window.__SCRAPEWRIGHT_VISIBILITY_KEEPALIVE__) return 'already-injected';
     window.__SCRAPEWRIGHT_VISIBILITY_KEEPALIVE__ = true;
+    // Record injection timestamp for diagnostic read-back. verifyVisibility-
+    // Keepalive probes this to confirm the function actually ran in the page.
+    window.__SCRAPEWRIGHT_VISIBILITY_KEEPALIVE_INJECTED_AT__ = Date.now();
 
     const defineGetter = (obj, key, value) => {
       try {
@@ -116,8 +119,50 @@
       });
       // chrome.scripting.executeScript returns one result per frame; check
       // that at least one frame actually ran the function without throwing.
+      // Capture the return value too — pageWorldKeepalive returns a sentinel
+      // ('injected' / 'already-injected' / 'no-window') so we can tell from
+      // logs whether the function actually ran vs. silently no-op'd (the
+      // RC16 console.log 2026-07-27 incident: inject returned ok:true but the
+      // page never saw the override — the function ran in a transient pre-
+      // load context that got discarded when the page finished loading).
       const ok = Array.isArray(results) && results.length > 0 && !results[0].error;
-      return { ok, frameCount: Array.isArray(results) ? results.length : 0 };
+      const returnValue = ok && results[0] ? results[0].result : null;
+      return { ok, frameCount: Array.isArray(results) ? results.length : 0, returnValue };
+    } catch (e) {
+      return { ok: false, reason: e && e.message };
+    }
+  }
+
+  // verifyVisibilityKeepalive(tabId): re-executes a probe in the page's MAIN
+  // world to confirm: (a) the keepalive function actually ran (injection was
+  // not silently rejected), and (b) the visibilityState override is in effect.
+  // Used by scrape-tab.js afterTabOpen for diagnostic logging so the operator
+  // can tell from the console log whether visibility-keepalive is working.
+  //
+  // Returns: { ok, injected, injectedAt, visibilityState, hidden, hasFocus }
+  // ok=true means the probe itself ran. injected=true means pageWorldKeepalive
+  // had also run. visibilityState='visible' means the override took effect.
+  async function verifyVisibilityKeepalive(tabId) {
+    if (typeof chrome === 'undefined' || !chrome.scripting || !chrome.scripting.executeScript) {
+      return { ok: false, reason: 'chrome.scripting unavailable' };
+    }
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId, allFrames: false },
+        world: 'MAIN',
+        func: () => ({
+          injected: !!window.__SCRAPEWRIGHT_VISIBILITY_KEEPALIVE__,
+          injectedAt: window.__SCRAPEWRIGHT_VISIBILITY_KEEPALIVE_INJECTED_AT__ || null,
+          visibilityState: document.visibilityState,
+          hidden: document.hidden,
+          hasFocus: typeof document.hasFocus === 'function' ? document.hasFocus() : null
+        })
+      });
+      if (Array.isArray(results) && results.length > 0 && !results[0].error) {
+        const r = results[0].result || {};
+        return { ok: true, ...r };
+      }
+      return { ok: false, reason: 'verify probe returned no result' };
     } catch (e) {
       return { ok: false, reason: e && e.message };
     }
@@ -125,6 +170,7 @@
 
   const api = {
     injectVisibilityKeepalive: injectVisibilityKeepalive,
+    verifyVisibilityKeepalive: verifyVisibilityKeepalive,
     pageWorldKeepalive: pageWorldKeepalive
   };
 
@@ -134,13 +180,16 @@
     // Expose injectVisibilityKeepalive as a free variable so scrape-tab.js
     // (also IIFE-wrapped) can reference it without `window.` qualification.
     window.injectVisibilityKeepalive = injectVisibilityKeepalive;
+    window.verifyVisibilityKeepalive = verifyVisibilityKeepalive;
   }
   if (typeof self !== 'undefined') {
     self.VisibilityKeepalive = api;
     self.injectVisibilityKeepalive = injectVisibilityKeepalive;
+    self.verifyVisibilityKeepalive = verifyVisibilityKeepalive;
   }
   if (typeof global !== 'undefined') {
     global.VisibilityKeepalive = api;
     global.injectVisibilityKeepalive = injectVisibilityKeepalive;
+    global.verifyVisibilityKeepalive = verifyVisibilityKeepalive;
   }
 })(typeof globalThis !== 'undefined' ? globalThis : this);

@@ -84,13 +84,16 @@ function makeSandbox() {
       scripting: {
         executeScript: async (cfg) => {
           sandbox._lastExecuteScriptCfg = cfg;
+          sandbox._allExecuteScriptCfgs = sandbox._allExecuteScriptCfgs || [];
+          sandbox._allExecuteScriptCfgs.push(cfg);
           return [{ result: true }];
         }
       }
     },
     console: { log: () => {}, error: () => {}, warn: () => {} },
     setTimeout: () => 0,
-    _lastExecuteScriptCfg: null
+    _lastExecuteScriptCfg: null,
+    _allExecuteScriptCfgs: []
   };
   return sandbox;
 }
@@ -158,18 +161,43 @@ describe('RC13 — scrape-tab.js + visibility-keepalive.js IIFE guards', () => {
     const { sandbox, failures } = loadAllInSandbox(WIZARD_HTML_SCRIPT_ORDER);
     assert.deepEqual(failures, []);
     const tab = await sandbox.createScrapeTab('https://example.com');
-    // The injection is fire-and-forget (Promise.resolve.catch). Wait one
-    // macrotask so the Promise.resolve(injectVisibilityKeepalive(...)) chain
-    // has a chance to invoke chrome.scripting.executeScript.
+    // Injection is now awaited (RC16 instrumentation) so executeScript calls
+    // complete before createScrapeTab resolves. The 50ms wait is belt-and-
+    // suspenders for any future change back to fire-and-forget.
     await new Promise(r => setTimeout(r, 50));
-    assert.ok(sandbox._lastExecuteScriptCfg,
-      'createScrapeTab must trigger chrome.scripting.executeScript for visibility-keepalive');
-    assert.equal(sandbox._lastExecuteScriptCfg.world, 'MAIN',
-      `injection must use world:'MAIN' to override page-visible globals; got: ${sandbox._lastExecuteScriptCfg.world}`);
-    assert.equal(sandbox._lastExecuteScriptCfg.injectImmediately, true,
+    const cfgs = sandbox._allExecuteScriptCfgs || [];
+    assert.ok(cfgs.length >= 1,
+      'createScrapeTab must trigger at least one chrome.scripting.executeScript call');
+    // Find the injection cfg (vs the verify cfg). pageWorldKeepalive is the
+    // marker — it's the function passed via `func:` for the override itself.
+    const injectCfg = cfgs.find(c => c.func && c.func.name === 'pageWorldKeepalive');
+    assert.ok(injectCfg,
+      'one executeScript call must pass pageWorldKeepalive as `func` — got cfgs: '
+      + JSON.stringify(cfgs.map(c => ({ funcName: c.func && c.func.name, world: c.world })))
+    );
+    assert.equal(injectCfg.world, 'MAIN',
+      `injection must use world:'MAIN' to override page-visible globals; got: ${injectCfg.world}`);
+    assert.equal(injectCfg.injectImmediately, true,
       'injection must use injectImmediately:true to run before page scripts');
-    assert.equal(typeof sandbox._lastExecuteScriptCfg.func, 'function',
+    assert.equal(typeof injectCfg.func, 'function',
       'injection must pass a function (pageWorldKeepalive) — not a file, to avoid web_accessible_resources overhead');
+  });
+
+  it('createScrapeTab also triggers a verify probe (RC16 instrumentation) so we can tell from logs whether injection actually ran', async () => {
+    const { sandbox, failures } = loadAllInSandbox(WIZARD_HTML_SCRIPT_ORDER);
+    assert.deepEqual(failures, []);
+    await sandbox.createScrapeTab('https://example.com');
+    await new Promise(r => setTimeout(r, 50));
+    const cfgs = sandbox._allExecuteScriptCfgs || [];
+    assert.ok(cfgs.length >= 2,
+      'createScrapeTab must make at least 2 executeScript calls (inject + verify) — got: '
+      + cfgs.length);
+    // The verify probe is anonymous — its `func.name` is empty string.
+    // Distinguish from inject by checking it's NOT pageWorldKeepalive.
+    const verifyCfg = cfgs.find(c => !c.func || c.func.name !== 'pageWorldKeepalive');
+    assert.ok(verifyCfg, 'verify probe cfg not found');
+    assert.equal(verifyCfg.world, 'MAIN',
+      'verify probe must also use world:"MAIN" so it reads the override state');
   });
 });
 
