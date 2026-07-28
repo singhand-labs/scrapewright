@@ -530,7 +530,7 @@ describe('RC16 background.js — sub-tab capture on $openTab success (structural
   // try-block.
 
   it('does not destroy the sub-tab BEFORE capturing on success', () => {
-    // Order assertion: capture must come before remove on the success path.
+    // Order assertion: capture must come before destroy on the success path.
     // We slice out just the body of handleOpenTabExecute (the function that
     // owns the success/catch split) — otherwise the regex picks up unrelated
     // try-blocks earlier in background.js (ExecutionQueue, processJob, etc.)
@@ -541,19 +541,24 @@ describe('RC16 background.js — sub-tab capture on $openTab success (structural
     // follow-up, both call sites share the captureSubTabSnapshot() helper,
     // so we now look for the helper invocation (with the 'on success' label
     // unique to the success path) instead of the literal GET_DOM_SNAPSHOT.
+    //
+    // RC17: the destroy call is now closeScrapeTab(tab) (was
+    // chrome.tabs.remove(tab.id)) because handleOpenTabExecute opens the
+    // sub-tab in a popup window via createScrapeTab — closeScrapeTab closes
+    // both the tab and its host popup window.
     const fnStart = SRC.indexOf('async function handleOpenTabExecute(');
     assert.ok(fnStart !== -1, 'handleOpenTabExecute must exist');
     // Slice up to the next top-level function def or end of file. The
     // function is the last one in background.js, so end-of-file is fine.
     const fnBody = SRC.slice(fnStart);
     // Within the success try-block (the FIRST try in handleOpenTabExecute),
-    // captureSubTabSnapshot(..., 'on success') must appear before chrome.tabs.remove.
-    const tryBlock = fnBody.match(/try\s*\{[\s\S]*?await\s+chrome\.tabs\.remove\(tab\.id\)\.catch\(\(\)\s*=>\s*\{\}\);[\s\S]*?catch\s*\(error\)/);
-    assert.ok(tryBlock, 'could not locate the success try-block');
+    // captureSubTabSnapshot(..., 'on success') must appear before closeScrapeTab(tab).
+    const tryBlock = fnBody.match(/try\s*\{[\s\S]*?await\s+closeScrapeTab\(tab\);[\s\S]*?catch\s*\(error\)/);
+    assert.ok(tryBlock, 'could not locate the success try-block (looking for closeScrapeTab(tab) between try and catch)');
     const captureIdx = tryBlock[0].indexOf("captureSubTabSnapshot(tab.id, 'on success')");
-    const removeIdx = tryBlock[0].indexOf('chrome.tabs.remove');
-    assert.ok(captureIdx !== -1 && captureIdx < removeIdx,
-      'sub-tab snapshot capture must occur BEFORE chrome.tabs.remove on the success path');
+    const destroyIdx = tryBlock[0].indexOf('closeScrapeTab(tab)');
+    assert.ok(captureIdx !== -1 && captureIdx < destroyIdx,
+      'sub-tab snapshot capture must occur BEFORE closeScrapeTab(tab) on the success path');
   });
 
   it('records the captured sub-tab snapshot into currentExecutionTracker', () => {

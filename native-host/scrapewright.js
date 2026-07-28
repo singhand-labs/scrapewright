@@ -20,6 +20,7 @@ const IS_WIN = process.platform === 'win32';
 
 const serviceInstall = require('./lib/service-install');
 const migration = require('./lib/migration');
+const throttleConfig = require('./lib/throttle-config');
 const { locateNode } = require('./lib/service-install/locate-node');
 
 // --- printers ---------------------------------------------------------------
@@ -287,6 +288,63 @@ function cmdLogs(opts) {
   return 0;
 }
 
+function cmdThrottle(args) {
+  const sub = args[0];
+  if (sub === 'on' || sub === 'enable') {
+    say('Enabling Chrome throttle-disable flags...');
+    try {
+      const r = throttleConfig.enable();
+      if (!r.ok) { fail(r.reason); return 2; }
+      if (r.already) { info('already enabled'); }
+      else {
+        ok('Chrome launch config updated with throttle-disable flags.');
+        if (r.target) info('  target: ' + r.target);
+        say('');
+        warn('These flags affect ALL Chrome windows — CPU/battery cost on every tab.');
+        say('Restart Chrome for the flags to take effect.');
+      }
+      return 0;
+    } catch (e) {
+      fail('throttle enable failed: ' + e.message);
+      return 2;
+    }
+  }
+  if (sub === 'off' || sub === 'disable') {
+    say('Restoring original Chrome launch config...');
+    try {
+      const r = throttleConfig.disable();
+      if (!r.ok) { fail(r.reason); return 2; }
+      if (r.already) { info('not enabled — nothing to restore'); }
+      else {
+        ok('Chrome launch config restored.');
+        if (r.target) info('  target: ' + r.target);
+        say('Restart Chrome for the change to take effect.');
+      }
+      return 0;
+    } catch (e) {
+      fail('throttle disable failed: ' + e.message);
+      return 2;
+    }
+  }
+  if (sub === 'status' || sub === undefined || sub === '--json') {
+    const jsonOut = sub === '--json' || args.includes('--json');
+    const s = throttleConfig.status();
+    if (jsonOut) { console.log(JSON.stringify(s, null, 2)); return 0; }
+    say('Throttle-disable flags: ' + (s.installed ? 'ENABLED' : 'not enabled'));
+    if (s.target) info('  target: ' + s.target);
+    if (s.source) info('  source: ' + s.source);
+    if (s.hasBackup === false && s.installed === false) info('  backup: none (nothing modified yet)');
+    if (s.note) info('  ' + s.note);
+    if (Array.isArray(s.flagsPresent)) {
+      info('  flags present: ' + (s.flagsPresent.length ? s.flagsPresent.join(', ') : '(none)'));
+    }
+    return 0;
+  }
+  fail('unknown throttle subcommand: ' + sub);
+  say('Usage: scrapewright throttle <on|off|status>');
+  return 2;
+}
+
 function cmdHelp() {
   say('Scrapewright CLI');
   say('');
@@ -305,6 +363,9 @@ function cmdHelp() {
   say('  status [--json]              Show service state + /health.');
   say('  doctor [--json]              Diagnose install / reachability / migration state.');
   say('  logs [-f]                    Tail host log (follow with -f).');
+  say('  throttle <on|off|status>     Modify Chrome launch config to add/remove');
+  say('                               renderer throttle-disable flags. Affects all');
+  say('                               Chrome windows — restart Chrome to apply.');
   say('  help                         Show this message.');
   say('');
   say('Defaults: port ' + PORT + ' (SCRAPEWRIGHT_PORT env). Log: ' + resolveLogPath());
@@ -330,6 +391,7 @@ async function main() {
     case 'dr':          return cmdDoctor(jsonOut);
     case 'logs':
     case 'log':         return cmdLogs(parseLogsFlags(rest));
+    case 'throttle':    return cmdThrottle(rest);
     case 'help':
     case '--help':
     case '-h':

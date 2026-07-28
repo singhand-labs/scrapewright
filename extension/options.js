@@ -24,6 +24,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('nativeReconnect')?.addEventListener('click', reconnectNative);
   document.getElementById('nativeCopyDiag')?.addEventListener('click', copyNativeDiagnostics);
 
+  document.getElementById('enhancedModeToggle')?.addEventListener('change', toggleEnhancedMode);
+  loadEnhancedModeState();
+
   document.getElementById('openSettings')?.addEventListener('click', () => {
     document.getElementById('settingsModal').classList.remove('hidden');
   });
@@ -183,6 +186,66 @@ function showToast(message, type = 'info', duration = 3000) {
   } else {
     el.className = 'toast ' + type;
     el._timer = setTimeout(() => { el.className = 'toast hidden'; }, duration);
+  }
+}
+
+// --- Enhanced scraping mode (chrome.debugger transient activation) ----------
+
+// Reflects the current permission state into the toggle UI. The actual grant
+// is held by Chrome itself (optional_permissions:'debugger'), not in our
+// storage — so we just query chrome.permissions.contains on load.
+async function loadEnhancedModeState() {
+  const toggle = document.getElementById('enhancedModeToggle');
+  const statusEl = document.getElementById('enhancedModeStatus');
+  if (!toggle || !statusEl) return;
+  if (typeof hasDebuggerPermission !== 'function') {
+    toggle.disabled = true;
+    statusEl.textContent = 'Unavailable (renderer-activation module not loaded)';
+    return;
+  }
+  try {
+    const granted = await hasDebuggerPermission();
+    toggle.checked = !!granted;
+    statusEl.textContent = granted ? 'Enabled' : 'Not enabled';
+  } catch (e) {
+    toggle.disabled = true;
+    statusEl.textContent = 'Error checking state: ' + (e && e.message);
+  }
+}
+
+// Toggle handler — MUST run in a user-gesture context (the change event from
+// the toggle click). Chrome will show its own permission dialog; if the user
+// denies it, requestDebuggerPermission resolves false and we revert the toggle.
+async function toggleEnhancedMode(e) {
+  const toggle = e.target;
+  const statusEl = document.getElementById('enhancedModeStatus');
+  const wantEnabled = toggle.checked;
+  if (typeof requestDebuggerPermission !== 'function' || typeof removeDebuggerPermission !== 'function') {
+    showToast('Enhanced mode unavailable (module not loaded)', 'error');
+    toggle.checked = !wantEnabled;
+    return;
+  }
+  if (wantEnabled) {
+    const result = await requestDebuggerPermission();
+    if (!result.granted) {
+      toggle.checked = false;
+      if (statusEl) statusEl.textContent = 'Not enabled';
+      showToast('Enhanced mode could not be enabled — ' + (result.reason || 'unknown'), 'error', 8000);
+      console.warn('[Enhanced Mode] enable failed:', result);
+      return;
+    }
+    if (statusEl) statusEl.textContent = 'Enabled';
+    showToast('Enhanced scraping mode enabled', 'success');
+  } else {
+    const removed = await removeDebuggerPermission();
+    if (!removed) {
+      toggle.checked = true;
+      if (statusEl) statusEl.textContent = 'Enabled (remove failed)';
+      showToast('Could not revoke debugger permission', 'error');
+      return;
+    }
+    if (statusEl) statusEl.textContent = 'Not enabled';
+    showToast('Enhanced scraping mode disabled', 'info');
   }
 }
 

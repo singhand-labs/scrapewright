@@ -121,6 +121,7 @@ Scrapewright 的应对之道 —— 这也是它作为 **AI 网页采集器**的
 | `scrapewright start` / `stop` / `restart` | 服务控制（改完 `host.js` 用 `restart`）|
 | `scrapewright run [--port=N]` | 前台运行主机（调试 / 一次性运行用）|
 | `scrapewright logs [-f]` | 实时查看主机日志 |
+| `scrapewright throttle on\|off\|status` | 切换 Chrome 启动参数，关闭渲染端节流（懒加载站点专用，详见 [采集懒加载站点](#采集懒加载站点facebook无限滚动)）|
 | `scrapewright uninstall` | 停止并移除 OS 服务 |
 
 > Windows 用 `.\bin\scrapewright.cmd ...`（命令相同）。
@@ -202,6 +203,34 @@ Options 页底部显示 **Execution History**（最近 20 条执行记录），�
 ```
 
 > **注意：** 前台运行时，确保扩展选项页中的端口与 `--port` 参数一致。
+
+## 采集懒加载站点（Facebook、无限滚动）
+
+Scrapewright 驱动的是一个真实的 Chrome 标签页，默认以**后台标签**方式打开（`chrome.tabs.create({active:false})`），保证你的键盘焦点不会离开当前编辑器。对大多数网站来说都没问题。但对那些依赖 `IntersectionObserver` 懒加载的站点——Facebook 信息流、无限滚动列表、虚拟化表格——后台标签会撞上 Chrome 的渲染端帧产出节流：非可见标签不会触发合成器帧，`IntersectionObserver` 回调永远不会触发，懒加载自然就停了。
+
+Scrapewright 通过三层叠加方案来应对（每一层针对一种不同的节流机制，所以是叠加而非替代）：
+
+| 层 | 做了什么 | 不能解决什么 |
+|----|---------|-------------|
+| **visibility-keepalive**（默认开启）| 往页面 MAIN world 注入一段覆盖：让 `document.visibilityState='visible'`、`document.hidden=false`、`document.hasFocus()=true`，再跑一个 `requestAnimationFrame` 保活循环。修复那些**自己**检查可见性来决定是否继续加载的页面 JS。 | 并不能让 Chrome 合成器为非可见标签产生帧。 |
+| **Enhanced Scraping Mode**（选项页可开启）| 给每个采集标签瞬态挂载 `chrome.debugger`（<100ms），发送 `Page.setWebLifecycleState({state:'active'})`，解除 Chrome 的页面级生命周期冻结（JS 执行、定时器、rAF 的"强节流"）。 | 并不能让 Chrome 合成器为非可见标签产生帧。经实测确认：CDP 命令返回 `ok:true`，但 `IntersectionObserver` 驱动的懒加载依然不工作。 |
+| **Chrome 启动参数**（IO 类懒加载的真正解决方案）| `scrapewright throttle on` 重写你的 Chrome 启动器（Linux `.desktop`、macOS 包装 AppleScript 应用、Windows `.lnk` 快捷方式），加入 `--disable-background-timer-throttling`、`--disable-backgrounding-occluded-windows`、`--disable-renderer-backgrounding`、`--disable-features=CalculateNativeWinOcclusion`。然后重启 Chrome。 | 需要重启 Chrome，且对所有 Chrome 窗口全局生效。 |
+
+**IO 驱动的懒加载站点推荐配置：**
+
+```bash
+./bin/scrapewright throttle on       # 把四个参数写入 Chrome 启动器
+# 完全退出 Chrome（Cmd-Q / Ctrl-Shift-Q）后重新启动，再正常采集
+./bin/scrapewright throttle status   # 确认参数已生效
+```
+
+撤销（例如 Chrome 升级前，或想换回原始启动器）：
+
+```bash
+./bin/scrapewright throttle off      # 从备份恢复原始启动器
+```
+
+选项页上的 Enhanced Scraping Mode 开关是一个**补充层**——对那些把 JS 执行挂在页面生命周期状态上的站点可以开启，但**不要**单独依赖它处理 `IntersectionObserver` 驱动的站点。开关点击时不会申请新的 Chrome 权限：`debugger` 权限在安装时已声明（Chrome 不允许把它作为可选权限），这个开关只控制扩展在运行时是否实际使用它。
 
 ## 故障排查 / 常见问题
 

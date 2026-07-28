@@ -121,6 +121,7 @@ This registers a systemd user unit (Linux), a launchd LaunchAgent (macOS), or a 
 | `scrapewright start` / `stop` / `restart` | Service control (use `restart` after editing `host.js`) |
 | `scrapewright run [--port=N]` | Run host in the foreground (for debugging / one-off runs) |
 | `scrapewright logs [-f]` | Tail the host log in real time |
+| `scrapewright throttle on\|off\|status` | Toggle Chrome launch flags that disable renderer throttling for lazy-load sites (see [Scraping lazy-load sites](#scraping-lazy-load-sites-facebook-infinite-scroll)) |
 | `scrapewright uninstall` | Stop and remove the OS service |
 
 > On Windows use `.\bin\scrapewright.cmd ...` (same commands).
@@ -202,6 +203,34 @@ You can also run the host in the foreground for debugging:
 ```
 
 > **Note:** In foreground mode, make sure the port on the extension's options page matches the `--port` argument.
+
+## Scraping lazy-load sites (Facebook, infinite scroll)
+
+Scrapewright drives a real Chrome tab, and by default that tab is opened as a **background tab** (`chrome.tabs.create({active:false})`) so your keyboard focus stays in your editor. For most sites this is fine. For sites that lazy-load content via `IntersectionObserver` — Facebook feeds, infinite-scroll lists, virtualized tables — background tabs hit Chrome's renderer-level frame-production throttle: no compositor frame is produced for a non-visible tab, so `IntersectionObserver` callbacks never fire and lazy-load never triggers.
+
+Scrapewright addresses this in three stacked layers (each targets a distinct throttle mechanism, so they combine rather than replace):
+
+| Layer | What it does | What it does NOT fix |
+|-------|--------------|----------------------|
+| **visibility-keepalive** (on by default) | Injects an override into the page's MAIN world so `document.visibilityState='visible'`, `document.hidden=false`, `document.hasFocus()=true`, plus a `requestAnimationFrame` keep-alive loop. Fixes page-JS that gates further loading on its own visibility check. | Does NOT cause Chrome's compositor to produce frames for a non-visible tab. |
+| **Enhanced Scraping Mode** (opt-in, options page) | Transiently attaches `chrome.debugger` to each scrape tab (sub-100ms) and issues `Page.setWebLifecycleState({state:'active'})` to lift Chrome's page-lifecycle freeze (intensive throttling of JS execution, timers, rAF). | Does NOT cause Chrome's compositor to produce frames for a non-visible tab. Empirically confirmed: the CDP command reports `ok:true` while `IntersectionObserver`-driven lazy-load still flatlines. |
+| **Chrome launch flags** (the actual fix for IO-driven lazy-load) | `scrapewright throttle on` rewrites your Chrome launcher (Linux `.desktop`, macOS wrapper AppleScript app, Windows `.lnk` shortcuts) to add `--disable-background-timer-throttling`, `--disable-backgrounding-occluded-windows`, `--disable-renderer-backgrounding`, `--disable-features=CalculateNativeWinOcclusion`. Then restart Chrome. | Requires a Chrome restart and applies globally to all Chrome windows. |
+
+**Recommended setup for IO-driven lazy-load sites:**
+
+```bash
+./bin/scrapewright throttle on       # rewrite Chrome launcher with the four flags
+# Quit Chrome completely (Cmd-Q / Ctrl-Shift-Q) and relaunch, then scrape normally.
+./bin/scrapewright throttle status   # verify the flags are in place
+```
+
+To undo (e.g. before a Chrome update or to use a different launcher):
+
+```bash
+./bin/scrapewright throttle off      # restore the original launcher from backup
+```
+
+The Enhanced Scraping Mode toggle on the options page is **complementary** — enable it for sites that gate JS execution on page-lifecycle state, but do not rely on it alone for `IntersectionObserver`-driven sites. The toggle grants no new Chrome permission at click time: the `debugger` permission is declared at install time (Chrome does not allow it as an optional permission), so the toggle only controls whether the extension actually uses it at runtime.
 
 ## Troubleshooting / FAQ
 

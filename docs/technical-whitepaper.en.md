@@ -684,6 +684,21 @@ Add a new template to the `STEP_TEMPLATES` array in `wizard-utils.js`:
 | AI repair retries at most 2 times | Prevents infinite retry loops | Complex errors may need manual repair |
 | No built-in login-state management | No cookie management feature | Pages requiring login need a manual login first |
 | Default API key is `dev-key` | Development convenience | Production must set `SCRAPEWRIGHT_API_KEY` |
+| IO-driven lazy-load stalls on background tabs | Chrome's renderer-level frame-production throttle for non-visible tabs suppresses compositor frames, so `IntersectionObserver` never fires | Lazy-load sites require `scrapewright throttle on` + Chrome restart (see [Scrape-tab throttling](#scrape-tab-throttling)) |
+
+### Scrape-tab throttling
+
+Scrape tabs are opened as background tabs (`chrome.tabs.create({active:false})`) so the user's keyboard focus is never stolen. For most sites this is fine. For `IntersectionObserver`-driven lazy-load sites (Facebook feeds, infinite scroll, virtualized lists), background tabs hit Chrome's renderer-level frame-production throttle. Three stacked layers address three distinct throttle mechanisms — they combine rather than replace:
+
+| Layer | Module / CLI | What it does | Does NOT fix |
+|-------|--------------|--------------|--------------|
+| 1. visibility-keepalive | `lib/visibility-keepalive.js` (default on) | Injects a MAIN-world override of `document.visibilityState='visible'` + rAF keep-alive. Fixes page-JS that gates further loading on its own visibility check. | Compositor frame production for non-visible tabs. |
+| 2. Enhanced Scraping Mode | `lib/renderer-activation.js` (opt-in via options-page toggle, backed by `chrome.storage.local` flag `enhancedModeEnabled`) | Transient `chrome.debugger` attach (sub-100ms) + `Page.setWebLifecycleState({state:'active'})`. Lifts Chrome's page-lifecycle freeze (JS execution, timers, rAF intensive throttling). | Compositor frame production. Empirically confirmed: CDP returns `ok:true` while IO-driven lazy-load still flatlines. Detection-risk minimized: only `Page.*` CDP commands, never `Runtime.*`/`Network.*`/`DOM.*`. |
+| 3. Chrome launch flags | `scrapewright throttle on\|off\|status` via `native-host/lib/throttle-config/` | Rewrites the Chrome launcher per-OS (Linux `.desktop`, macOS wrapper AppleScript app at `~/Applications/Chrome-Scrapewright.app`, Windows `.lnk` shortcuts) to add `--disable-background-timer-throttling`, `--disable-backgrounding-occluded-windows`, `--disable-renderer-backgrounding`, `--disable-features=CalculateNativeWinOcclusion`. | Requires Chrome restart and applies globally to all Chrome windows. |
+
+Critical implementation detail: Chrome silently strips `"debugger"` from `optional_permissions` (it lives in `kNonOptionalPermissions`). The `debugger` permission must be in required `permissions` and gated at runtime via the storage flag — the options-page toggle only controls whether the extension uses it, not whether Chrome will grant it.
+
+Popup-window path (`chrome.windows.create({type:'popup', focused:false})`) survives as opt-in via `{usePopup:true}` for rare cases needing physical visibility; mitigated with immediate focus restoration via `chrome.windows.update(prevWinId, {focused:true})` for GNOME/Windows focus-stealing. `closeScrapeTab(tab)` handles both popup-window and standalone-tab cleanup paths.
 
 ## 11. Development & Contributing
 

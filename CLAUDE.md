@@ -23,6 +23,7 @@ A **service** is a *step graph* (a small state machine of named steps), not a si
 ./bin/scrapewright restart              # restart service (picks up host.js changes)
 ./bin/scrapewright run [--port=N]       # foreground run (debugging, log-watching)
 ./bin/scrapewright logs -f              # tail host log
+./bin/scrapewright throttle on|off|status  # toggle Chrome launch flags that disable renderer throttling (lazy-load sites)
 ./bin/scrapewright uninstall            # stop + remove OS service
 
 # === Native host tests ===
@@ -77,6 +78,16 @@ Each service file embeds three things at install time: absolute node path (resol
 The host writes structured logs (ISO timestamp + level + message + JSON fields) to both stderr and the log file. The log file is the lifeline when the OS service supervisor launches the host — stderr goes to the journal/launchd log. A synchronous boot trap at the top of `host.js` catches crashes *before* the logger initializes and writes them to `startup-error.log`.
 
 The background service worker tracks `nativeState` (mode, lastError, connected/disconnected timestamps, reconnect attempts) in `chrome.storage.local`, updated at every connection transition. `mode` is `'polling'` (extension connected via long-poll) or `'disconnected'`; the legacy `'native'` value is migrated to `'polling'` on load. The options page polls `GET_NATIVE_STATUS` every 3 seconds. `RECONNECT_NATIVE` resets the polling flag and calls `initCommunication()` again.
+
+## Scrape-tab throttling (three-layer stack)
+
+Scrape tabs are opened as **background tabs** by default (`chrome.tabs.create({active:false})`) so the user's keyboard focus is never stolen. For most sites this is fine. For `IntersectionObserver`-driven lazy-load sites (Facebook feeds, infinite scroll, virtualized lists), background tabs hit Chrome's renderer-level frame-production throttle — no compositor frame means no IO callback means no lazy-load. Three stacked layers address three distinct throttle mechanisms:
+
+1. **visibility-keepalive** (`lib/visibility-keepalive.js`, default on): injects a MAIN-world override of `document.visibilityState='visible'` + rAF keep-alive. Fixes page-JS that gates further loading on its own visibility check. Does NOT cause Chrome to produce compositor frames.
+2. **Enhanced Scraping Mode** (`lib/renderer-activation.js`, opt-in via options-page toggle backed by `chrome.storage.local` flag `enhancedModeEnabled`): transiently attaches `chrome.debugger` to each scrape tab (sub-100ms) and issues `Page.setWebLifecycleState({state:'active'})` to lift Chrome's page-lifecycle freeze. Empirically confirmed INSUFFICIENT alone — CDP command reports `ok:true` while IO-driven lazy-load still flatlines. Detection-risk minimized: only `Page.*` CDP commands, never `Runtime.*`/`Network.*`/`DOM.*`. The `debugger` permission is in required `permissions` (Chrome silently strips it from `optional_permissions`).
+3. **Chrome launch flags** (the actual fix for IO-driven lazy-load): `scrapewright throttle on` (`native-host/lib/throttle-config/`) rewrites the Chrome launcher per-OS (Linux `.desktop`, macOS wrapper AppleScript app at `~/Applications/Chrome-Scrapewright.app`, Windows `.lnk` shortcuts) to add `--disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-features=CalculateNativeWinOcclusion`. Requires Chrome restart. Use temp dirs in tests, never live user files.
+
+Popup-window path (`chrome.windows.create({type:'popup', focused:false})`) survives as opt-in via `{usePopup:true}` for rare cases needing physical visibility; mitigated with immediate focus restoration via `chrome.windows.update(prevWinId, {focused:true})` for GNOME/Windows focus-stealing. `closeScrapeTab(tab)` handles both popup-window and standalone-tab cleanup paths.
 
 ## High-Level Architecture
 

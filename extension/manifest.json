@@ -11,7 +11,8 @@
     "scripting",
     "tabs",
     "windows",
-    "offscreen"
+    "offscreen",
+    "debugger"
   ],
   "host_permissions": [
     "<all_urls>"

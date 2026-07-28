@@ -683,6 +683,21 @@ MV3 的 Service Worker 会在 30s 无活动后休眠。通过 `chrome.alarms.cre
 | AI 修复最多重试 2 次 | 防止无限重试循环 | 复杂错误可能需要手动修复 |
 | 不支持登录态采集 | 无 Cookie 管理功能 | 需要登录的页面需手动登录后执行 |
 | 默认 API Key 为 dev-key | 开发便利性 | 生产环境必须设置 `SCRAPEWRIGHT_API_KEY` |
+| IO 驱动的懒加载在后台标签上会停住 | Chrome 对非可见标签的渲染端帧产出节流，导致合成器帧不产生，`IntersectionObserver` 永不触发 | 懒加载站点需要 `scrapewright throttle on` + 重启 Chrome（见 [采集标签节流](#采集标签节流)）|
+
+### 采集标签节流
+
+采集标签默认以后台标签方式打开（`chrome.tabs.create({active:false})`），保证不会偷走用户的键盘焦点。对大多数网站都没问题。但对 `IntersectionObserver` 驱动的懒加载站点（Facebook 信息流、无限滚动、虚拟化列表），后台标签会撞上 Chrome 的渲染端帧产出节流。三层叠加方案分别针对不同的节流机制——叠加而非替代：
+
+| 层 | 模块 / CLI | 做了什么 | 不能解决 |
+|----|-----------|---------|---------|
+| 1. visibility-keepalive | `lib/visibility-keepalive.js`（默认开启）| 往页面 MAIN world 注入 `document.visibilityState='visible'` 覆盖 + rAF 保活循环。修复那些**自己**检查可见性来决定是否继续加载的页面 JS。| 非可见标签的合成器帧产出。|
+| 2. Enhanced Scraping Mode | `lib/renderer-activation.js`（选项页开关，背后用 `chrome.storage.local` 的 `enhancedModeEnabled` 标志）| 瞬态挂载 `chrome.debugger`（<100ms）+ `Page.setWebLifecycleState({state:'active'})`。解除 Chrome 的页面级生命周期冻结（JS 执行、定时器、rAF 的强节流）。| 合成器帧产出。经实测确认：CDP 返回 `ok:true` 但 IO 驱动的懒加载依然停住。检测风险最小化：只发 `Page.*`，绝不发 `Runtime.*`/`Network.*`/`DOM.*`。|
+| 3. Chrome 启动参数 | `scrapewright throttle on\|off\|status`（`native-host/lib/throttle-config/`）| 按平台重写 Chrome 启动器（Linux `.desktop`、macOS 包装 AppleScript 应用 `~/Applications/Chrome-Scrapewright.app`、Windows `.lnk` 快捷方式），加入 `--disable-background-timer-throttling`、`--disable-backgrounding-occluded-windows`、`--disable-renderer-backgrounding`、`--disable-features=CalculateNativeWinOcclusion`。| 需要重启 Chrome，且对所有 Chrome 窗口全局生效。|
+
+关键实现细节：Chrome 会**静默**地把 `"debugger"` 从 `optional_permissions` 中剔除（它属于 `kNonOptionalPermissions` 集合）。`debugger` 权限必须放在必需的 `permissions` 中，运行时再用存储标志控制——选项页开关只决定扩展是否使用它，不会改变 Chrome 是否授予它的事实。
+
+弹窗窗口路径（`chrome.windows.create({type:'popup', focused:false})`）作为可选方案通过 `{usePopup:true}` 保留，用于少数确实需要物理可见性的场景；通过紧接其后的 `chrome.windows.update(prevWinId, {focused:true})` 缓解 GNOME/Windows 的焦点抢夺问题。`closeScrapeTab(tab)` 同时处理弹窗窗口和独立标签两种清理路径。
 
 ## 11. 开发与贡献
 

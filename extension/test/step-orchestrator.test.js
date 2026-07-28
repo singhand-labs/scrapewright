@@ -578,3 +578,73 @@ describe('StepOrchestrator onEvent callback', () => {
     assert.ok(skipMarker, 'expected at least one STEP_DONE with skipped marker; got events: ' + JSON.stringify(events.map(e => e.type)));
   });
 });
+
+// RC16 (console.log 2026-07-27 16:44): visibility-keepalive must be re-injected
+// AFTER waitForTabLoad completes. The early injection inside createScrapeTab
+// uses injectImmediately:true, which runs the function in a transient pre-load
+// context whose window writes are discarded. Without the post-load re-inject,
+// the verify probe (which waits for load) reads injected:false and FB-style
+// sites never see the visibilityState override.
+describe('StepOrchestrator — RC16 post-load visibility-keepalive re-injection', () => {
+  it('calls injectVisibilityKeepalive after waitForTabLoad resolves', async () => {
+    const calls = [];
+    global.injectVisibilityKeepalive = async (tabId) => {
+      calls.push({ fn: 'inject', tabId });
+      return { ok: true, frameCount: 1, returnValue: 'injected' };
+    };
+    global.verifyVisibilityKeepalive = async (tabId) => {
+      calls.push({ fn: 'verify', tabId });
+      return { ok: true, injected: true, visibilityState: 'visible' };
+    };
+    try {
+      const waitForTabLoadOrder = [];
+      const deps = makeMockDeps({
+        waitForTabLoad: async (tabId) => {
+          waitForTabLoadOrder.push('waitForTabLoad');
+          calls.push({ fn: 'waitForTabLoad', tabId });
+        }
+      });
+      const service = {
+        targetUrl: 'http://example.com',
+        steps: [
+          { id: 'a', name: 'A', script: 'return 1;', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }
+        ],
+        config: {}
+      };
+      await StepOrchestrator.execute(service, {}, deps);
+      // waitForTabLoad must run BEFORE the inject call
+      const wflIdx = calls.findIndex(c => c.fn === 'waitForTabLoad');
+      const injectIdx = calls.findIndex(c => c.fn === 'inject');
+      assert.ok(wflIdx !== -1, 'waitForTabLoad must be called');
+      assert.ok(injectIdx !== -1, 'injectVisibilityKeepalive must be called post-load');
+      assert.ok(injectIdx > wflIdx,
+        `inject must come AFTER waitForTabLoad (wflIdx=${wflIdx}, injectIdx=${injectIdx})`);
+      assert.ok(calls.some(c => c.fn === 'verify'),
+        'verifyVisibilityKeepalive must also be called for diagnostic logging');
+    } finally {
+      delete global.injectVisibilityKeepalive;
+      delete global.verifyVisibilityKeepalive;
+    }
+  });
+
+  it('does not throw when injectVisibilityKeepalive global is unavailable', async () => {
+    // In test sandboxes that don't load visibility-keepalive.js, the global
+    // won't exist. The orchestrator must skip the re-inject gracefully.
+    const original = global.injectVisibilityKeepalive;
+    delete global.injectVisibilityKeepalive;
+    try {
+      const deps = makeMockDeps();
+      const service = {
+        targetUrl: 'http://example.com',
+        steps: [
+          { id: 'a', name: 'A', script: 'return 1;', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }
+        ],
+        config: {}
+      };
+      const result = await StepOrchestrator.execute(service, {}, deps);
+      assert.equal(result.steps.length, 1, 'execution must complete normally');
+    } finally {
+      if (original) global.injectVisibilityKeepalive = original;
+    }
+  });
+});
