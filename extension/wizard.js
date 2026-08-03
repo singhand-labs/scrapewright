@@ -2921,9 +2921,9 @@ ${RETURN_FORMAT_FEEDBACK}`;
     // finish_reason=model_context_window_exceeded with prompt_tokens:0 — the
     // proxy rejected the prompt pre-emptively. Trimming here prevents overflow
     // on the FIRST attempt instead of relying on the post-overflow retry.
-    const historyForPrompt = isFailureFix
-      ? wizardState.llmHistory
-      : wizardState.llmHistory.slice(-2);
+    // C1: full history on both paths. Size control is delegated to trimLlmHistory
+    // (C4), which caps total chars without sacrificing multi-round memory.
+    const historyForPrompt = wizardState.llmHistory;
     const userMsg = { role: 'user', content: prompt };
     const messages = [systemMsg, ...historyForPrompt, userMsg];
     const promptSizeStats = {
