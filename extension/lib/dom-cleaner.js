@@ -471,7 +471,14 @@
     try {
       doc = new DOMParser().parseFromString(cleaned, 'text/html');
     } catch (e) {
-      return { mode: 'full', html: cleaned.slice(0, _budget), fingerprint: htmlFingerprint(cleaned), error: 'domparser-failed' };
+      // DOMParser failed — we cannot annotate or compress, so ask the LLM to
+      // pick a subtree from a near-empty preview. No substring cut.
+      return {
+        mode: 'needs_subtree_selection',
+        structureForSelection: '',
+        fingerprint: null,
+        error: 'domparser-failed'
+      };
     }
     const annotList = Array.isArray(annotations) ? annotations : [];
     const contexts = annotList
