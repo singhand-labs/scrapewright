@@ -1320,6 +1320,60 @@ function truncateSnapshotForLLM(snapshot, budget = 30000) {
   return snapshot;
 }
 
+// summarizeStepsGeneration: compact summary of the initial step-generation
+// prompt for the llmHistory. Replaces the old blunt-cut truncation of the
+// raw prompt. Captures the key signals an autoFix round might need:
+// URL, description, html fingerprint, confirmed selectors.
+function summarizeStepsGeneration({ url, description, htmlFingerprint, confirmedSelectors } = {}) {
+  const lines = [];
+  lines.push('[Script Generation]');
+  lines.push('URL: ' + (url || '(unknown)'));
+  lines.push('Description: ' + (description || '(none)'));
+  lines.push('Page HTML fingerprint: ' + (htmlFingerprint || '(unknown)'));
+  if (Array.isArray(confirmedSelectors) && confirmedSelectors.length > 0) {
+    lines.push('Confirmed selectors:');
+    for (const s of confirmedSelectors) {
+      const sel = s.status === 'revised' ? s.revisedSelector : s.selector;
+      lines.push('  - ' + (s.purpose || '(no purpose)') + ': ' + sel);
+    }
+  } else {
+    lines.push('Confirmed selectors: (none)');
+  }
+  return lines.join('\n');
+}
+
+// summarizeGeneratedSteps: compact summary of the LLM's step-generation
+// response. Strips script bodies (those live in wizardState.steps), keeps
+// topology (id/name/onSuccess/onFailure/maxIterations) + schemas.
+function summarizeGeneratedSteps(rawResult) {
+  if (!rawResult || typeof rawResult !== 'string') return '(no response)';
+  let parsed;
+  try {
+    parsed = JSON.parse(rawResult);
+  } catch (_) {
+    // Try to find a JSON object in code fences
+    const m = rawResult.match(/\{[\s\S]*\}/);
+    if (!m) return rawResult.slice(0, 1500);
+    try { parsed = JSON.parse(m[0]); } catch (__) { return rawResult.slice(0, 1500); }
+  }
+  const lines = [];
+  lines.push('[Generated Steps]');
+  if (Array.isArray(parsed.steps)) {
+    lines.push('Steps:');
+    for (const step of parsed.steps) {
+      const s = step || {};
+      const parts = ['  - id:' + (s.id || '?'), 'name:' + (s.name || '')];
+      if (s.onSuccess) parts.push('onSuccess:' + s.onSuccess);
+      if (s.onFailure) parts.push('onFailure:' + s.onFailure);
+      if (s.maxIterations) parts.push('maxIter:' + s.maxIterations);
+      lines.push(parts.join(' '));
+    }
+  }
+  if (parsed.inputSchema) lines.push('inputSchema: ' + JSON.stringify(parsed.inputSchema).slice(0, 500));
+  if (parsed.outputSchema) lines.push('outputSchema: ' + JSON.stringify(parsed.outputSchema).slice(0, 500));
+  return lines.join('\n');
+}
+
 function summarizeFixIteration({ stepId, stepName, script, annotations, userFeedback, error, result, htmlContext } = {}) {
   const lines = [];
   const safeStepId = stepId || '(unknown)';
@@ -2590,7 +2644,7 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, stripSnapshotsFromTestResult, stripPagesFromLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
@@ -2602,6 +2656,8 @@ if (typeof module !== 'undefined' && module.exports) {
   window.getOutputFieldOptions = getOutputFieldOptions;
   window.truncateSnapshotForLLM = truncateSnapshotForLLM;
   window.summarizeFixIteration = summarizeFixIteration;
+  window.summarizeStepsGeneration = summarizeStepsGeneration;
+  window.summarizeGeneratedSteps = summarizeGeneratedSteps;
   window.stripSnapshotsFromTestResult = stripSnapshotsFromTestResult;
   window.stripPagesFromLLMContext = stripPagesFromLLMContext;
   window.formatDomActivitySummary = formatDomActivitySummary;
@@ -2648,6 +2704,8 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.getOutputFieldOptions = getOutputFieldOptions;
   self.truncateSnapshotForLLM = truncateSnapshotForLLM;
   self.summarizeFixIteration = summarizeFixIteration;
+  self.summarizeStepsGeneration = summarizeStepsGeneration;
+  self.summarizeGeneratedSteps = summarizeGeneratedSteps;
   self.stripSnapshotsFromTestResult = stripSnapshotsFromTestResult;
   self.stripPagesFromLLMContext = stripPagesFromLLMContext;
   self.formatDomActivitySummary = formatDomActivitySummary;
