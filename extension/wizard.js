@@ -1201,9 +1201,9 @@ Do NOT use "SELF" — it is no longer supported and will be rejected. Do NOT poi
 
 AI CHAT COMPLETION DETECTION:
 For AI chat sites (submit question, wait for streaming response), the wait step MUST detect when generation finishes.
-Look at the page snapshot for specific loading/generating indicator class names (e.g., "cosd-markdown-loading", "my-spinner").
+Look at the page snapshot for specific loading/generating indicator class names (e.g., "generating-indicator", "my-spinner").
 The correct pattern is to wait for these indicators to DISAPPEAR:
-  const stillLoading = await $exists('.cosd-markdown-loading, .loading-spinner', 3000);
+  const stillLoading = await $exists('.generating-indicator, .loading-spinner', 3000);
   return { done: !stillLoading };
 DO NOT use "submit button exists" as a completion signal — the submit button is typically always visible on AI chat sites.
 DO NOT use wildcard selectors like [class*="loading"] — they match unrelated page elements and cause infinite loops. Use only specific class names from the page snapshot.
@@ -1217,10 +1217,10 @@ Return JSON with:
 JSON ESCAPING (CRITICAL — failures here abort the wizard):
 The "script" field is a JSON string. Any " character INSIDE the JS code must be escaped as \". This applies even when the " is inside a JS single-quoted string — JSON does not care that JS treats '...' as a string.
 CORRECT (note the backslashes before each inner "):
-"script": "const c = await $count('div[role=\\\"article\\\"]'); return { done: c > 0 };"
+"script": "const c = await $count('li[data-id=\\\"item-1\\\"]'); return { done: c > 0 };"
 WRONG (bare " inside the value — JSON.parse terminates the string at the first one):
-"script": "const c = await $count('div[role=\"article\"]');"
-Tip: when a CSS attribute value is a bare word (no spaces), prefer the unquoted form to sidestep the issue entirely — [role=article] instead of [role="article"].
+"script": "const c = await $count('li[data-id=\"item-1\"]');"
+Tip: when a CSS attribute value is a bare word (no spaces), prefer the unquoted form to sidestep the issue entirely — [data-id=item-1] instead of [data-id="item-1"].
 
 Use "TERMINATE" to end. Do NOT use "SELF" (no longer supported). For loops/waits, set maxIterations>1 and return { done: false } to retry the same step.
 
