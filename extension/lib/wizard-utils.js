@@ -1320,11 +1320,18 @@ function truncateSnapshotForLLM(snapshot, budget = 30000) {
   return snapshot;
 }
 
-function summarizeFixIteration({ stepId, stepName, script, annotations, userFeedback, error, result } = {}) {
+function summarizeFixIteration({ stepId, stepName, script, annotations, userFeedback, error, result, htmlContext } = {}) {
   const lines = [];
   const safeStepId = stepId || '(unknown)';
   const safeStepName = stepName || '(unknown)';
   lines.push(`[Attempt — step "${safeStepId}" ("${safeStepName}")]`);
+
+  // htmlContext is the HTML section (full body OR fingerprint reference) from
+  // the round this entry describes. Optional — old callers without it still work.
+  if (htmlContext && typeof htmlContext === 'string' && htmlContext.trim()) {
+    lines.push('Page context:');
+    lines.push(htmlContext);
+  }
 
   lines.push('Script tried:');
   lines.push(typeof script === 'string' && script.length ? script : '(none)');
