@@ -300,3 +300,49 @@ function makeHugeHtmlBodyOnly(elementCount) {
   }
   return s;
 }
+
+describe('requestSubtreeSelection helper', () => {
+  it('returns the subtree HTML when LLM returns a valid selector', async () => {
+    const DomCleaner = require('../lib/dom-cleaner.js');
+    const html = '<html><body><div class="noise">' + 'n'.repeat(30000) + '</div><main class="real-content"><h1>Title</h1></main></body></html>';
+    const cleaned = DomCleaner.cleanPageHtml(html);
+    // Parse the cleaned HTML to get the doc
+    const doc = new DOMParser().parseFromString(cleaned, 'text/html');
+    const fakeLlm = {
+      chat: async (messages) => {
+        return JSON.stringify({ subtreeSelector: 'main.real-content' });
+      }
+    };
+    const result = await DomCleaner.requestSubtreeSelection(doc, 'extract the main content', [], fakeLlm);
+    assert.ok(result !== null, 'should return a non-null result');
+    assert.match(result.subtreeHtml, /Title/);
+    assert.ok(!result.subtreeHtml.includes('noise'));
+  });
+
+  it('returns null when LLM returns an invalid CSS selector', async () => {
+    const DomCleaner = require('../lib/dom-cleaner.js');
+    const doc = new DOMParser().parseFromString('<html><body><div>x</div></body></html>', 'text/html');
+    const fakeLlm = {
+      chat: async () => JSON.stringify({ subtreeSelector: '<<<invalid>>>' })
+    };
+    const result = await DomCleaner.requestSubtreeSelection(doc, 'desc', [], fakeLlm);
+    assert.equal(result, null);
+  });
+
+  it('returns null when LLM selector matches zero elements', async () => {
+    const DomCleaner = require('../lib/dom-cleaner.js');
+    const doc = new DOMParser().parseFromString('<html><body><div>x</div></body></html>', 'text/html');
+    const fakeLlm = {
+      chat: async () => JSON.stringify({ subtreeSelector: '.does-not-exist' })
+    };
+    const result = await DomCleaner.requestSubtreeSelection(doc, 'desc', [], fakeLlm);
+    assert.equal(result, null);
+  });
+
+  it('returns null when LLM is unavailable', async () => {
+    const DomCleaner = require('../lib/dom-cleaner.js');
+    const doc = new DOMParser().parseFromString('<html><body><div>x</div></body></html>', 'text/html');
+    const result = await DomCleaner.requestSubtreeSelection(doc, 'desc', [], null);
+    assert.equal(result, null);
+  });
+});

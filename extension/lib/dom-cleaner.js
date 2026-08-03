@@ -511,6 +511,74 @@
     };
   }
 
+  // --- requestSubtreeSelection -------------------------------------------
+  // Last-tier degradation: ask the LLM to pick a CSS selector for the region
+  // containing the target data, then extract that subtree's HTML. Used when
+  // even compressed structure exceeds budget.
+  //
+  // Returns { subtreeSelector, subtreeHtml } on success, null on any failure
+  // (invalid selector, zero matches, LLM unavailable, LLM malformed response).
+  async function requestSubtreeSelection(doc, description, annotations, llmClient) {
+    if (!llmClient || typeof llmClient.chat !== 'function') return null;
+    if (!doc || !doc.querySelectorAll) return null;
+
+    // Build a shallow structure preview for the LLM
+    const selectors = (Array.isArray(annotations) ? annotations : [])
+      .map(a => a && a.selector).filter(Boolean);
+    const structurePreview = compressStructure(doc, selectors, { maxDepth: 2 });
+
+    const prompt = `You are identifying the smallest DOM subtree that contains the data to scrape.
+
+Page structure (shallow preview):
+${structurePreview}
+
+Data the user wants:
+${description || '(no description provided)'}
+
+Annotations (user-marked elements):
+${JSON.stringify(annotations || [])}
+
+Return ONLY a JSON object: {"subtreeSelector": "<css-selector>"}.
+The selector should target the smallest container that holds all the relevant data.`;
+
+    let rawResponse;
+    try {
+      const messages = [
+        { role: 'system', content: 'Return JSON only.' },
+        { role: 'user', content: prompt }
+      ];
+      rawResponse = await llmClient.chat(messages, { jsonMode: true, maxTokens: 500 });
+    } catch (_) {
+      return null;
+    }
+    if (!rawResponse || typeof rawResponse !== 'string') return null;
+
+    let parsed;
+    try {
+      parsed = JSON.parse(rawResponse);
+    } catch (_) {
+      // Try to extract a JSON object from a code fence
+      const m = rawResponse.match(/\{[^{}]*"subtreeSelector"[^{}]*\}/);
+      if (!m) return null;
+      try { parsed = JSON.parse(m[0]); } catch (__) { return null; }
+    }
+    const sel = parsed && typeof parsed.subtreeSelector === 'string' ? parsed.subtreeSelector.trim() : '';
+    if (!sel) return null;
+
+    let element;
+    try {
+      element = doc.querySelector(sel);
+    } catch (_) {
+      return null; // invalid CSS
+    }
+    if (!element) return null;
+
+    const subtreeHtml = element.outerHTML || '';
+    if (!subtreeHtml) return null;
+
+    return { subtreeSelector: sel, subtreeHtml };
+  }
+
   // --- getCompressedSnapshot ------------------------------------------------
   // Walk the live document.documentElement. Returns { structure, textSummary,
   // url, title }. Same-origin iframes are inlined as <iframe data-iframe-prefix="...">
@@ -647,6 +715,7 @@
     filterClasses, truncateText, truncateLongTextInNodes, shouldRemoveTag,
     buildIframePrefix, htmlFingerprint,
     cleanPageHtml, extractAnnotationContext, compressStructure, cleanHtmlForLLM,
+    requestSubtreeSelection,
     getCompressedSnapshot, getElementFullHtml, getElementsFullHtml,
   };
 
