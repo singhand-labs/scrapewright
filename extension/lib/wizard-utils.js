@@ -19,18 +19,18 @@ AVAILABLE API FUNCTIONS:
 - $list(selector): Get ALL matching elements across main document + same-origin iframes. Returns array of { tagName, id, className, textContent, value, href, src, checked, disabled }. Use this for iterating multiple elements. Same data-object limitation as $().
 - $extractList(containerSel, fieldMap, opts?): Extract a list of records in ONE call. fieldMap is { subField: subSelector | { selector, attr? } }; each sub-selector is evaluated INSIDE each container element and returns the FIRST match per container. Returns an array of objects in container order. Prefers this over $list-per-field for multi-field lists (avoids field-misalignment when fields are missing on some items). Throws 'empty list' if no container matches; set opts.allowEmpty=true to return [] instead.
 - $extractListMulti(containerSel, fieldMap, opts?): Like $extractList, but EACH FIELD VALUE IS AN ARRAY of ALL matches per container (in document order, as textContent/attr strings — NOT element objects), regardless of the field name. Use $extractList (single-value) by default; reach for $extractListMulti ONLY when CSS alone cannot disambiguate which match is the right one — e.g. a[role="link"] inside a post matches BOTH the author link (1st) AND the timestamp link (2nd). With $extractList you'd get only the author; with $extractListMulti you get both and can pick in JS by text/attribute regex. attr may be 'outerHTML' or 'innerHTML' to read raw HTML.
-  CRITICAL — every field value is Array<string|null>. Calling .trim(), .match(), .includes(), .replace() etc. DIRECTLY on a field value crashes with "X.trim is not a function" (Array has no such method). Always index into the array first, even when the field name is singular (author, content, publishTime):
+  CRITICAL — every field value is Array<string|null>. Calling .trim(), .match(), .includes(), .replace() etc. DIRECTLY on a field value crashes with "X.trim is not a function" (Array has no such method). Always index into the array first, even when the field name is singular (author, content, timestamp):
   // WRONG — r.author is an array; (r.author || '') short-circuits to the array (truthy), then .trim() crashes:
   const author = (r.author || '').trim();
   // RIGHT — index [0] for first match, or .map/.filter/.find/.join for multi:
   const author = (r.author[0] || '').trim();
   const allAuthors = (r.author || []).filter(Boolean).join(' ');
   // If you only need the first match for every field, use $extractList (not Multi) — fields are then plain strings.
-  const records = await $extractListMulti('div[role="article"]', { links: 'a[role="link"][aria-label]' }, { allowEmpty: true });
-  const posts = records.map(r => {
-    const time = r.links.find(t => /\\d+月\\d+日|^\\d+小时$|^\\d+天$/.test(t)) || '';
+  const records = await $extractListMulti('li.result-item', { links: 'a.action-link[data-act]' }, { allowEmpty: true });
+  const items = records.map(r => {
+    const time = r.links.find(t => /^\\d{1,2}:\\d{2}|^\\d+\\s+(?:hours?|days?)\\s+ago$|^yesterday$/i.test(t)) || '';
     const author = r.links[0] || '';
-    return { author, publishTime: time };
+    return { author, timestamp: time };
   });
 - $clickInList(containerSel, subSel, opts?): Click subSel INSIDE each container element. Default opts.delayMs=500 (waits between clicks for expand/animations to settle). Returns { clicked: N, errors: [...] }. Use for "click 展开 in every post before extracting full content" — see EXPAND PATTERN below.
 - $waitForStable(selector, opts?): Poll the element's textContent (or opts.attr) every opts.interval ms (default 1500); return true after opts.stableChecks (default 2) consecutive unchanged + non-empty samples; false after opts.maxMs (default 20000). Prefer this for streaming-content completion (AI answers, live feeds) instead of guessing fragile loading-class selectors.
@@ -38,47 +38,47 @@ AVAILABLE API FUNCTIONS:
 - $scrollToBottom(selector?): Scroll window (or element) to its bottom. Returns { scrolled, prevY, newY }. scrolled:false means the position did not change — the feed is exhausted. See SCROLLING below for the poll-load pattern.
 - $scrollIntoView(selector): Scroll element to the top of the viewport. Returns { found: true }. Use to reveal "See more" / "Load more" buttons before clicking them.
 
-CSS TRAP — Do NOT use :nth-of-type(N) on a compound selector. 'div[role=\'article\']:nth-of-type(5)' matches the 5th sibling *of that element type* (any 5th <div>), not the 5th matching div[role='article']. To get the Nth match, use $list and index into the returned array: const items = await $list('div[role="article"]'); const fifth = items[4]; If you need all items in a list, iterate the array — never emit per-index selectors. (Exception: if an ANNOTATION gives you a selector that already contains :nth-of-type, copy it verbatim per the SELECTOR FIDELITY RULE below — this trap applies only to selectors you compose yourself.)
+CSS TRAP — Do NOT use :nth-of-type(N) on a compound selector. 'li.result-item:nth-of-type(5)' matches the 5th sibling *of that element type* (any 5th <li>), not the 5th matching li.result-item. To get the Nth match, use $list and index into the returned array: const items = await $list('li.result-item'); const fifth = items[4]; If you need all items in a list, iterate the array — never emit per-index selectors. (Exception: if an ANNOTATION gives you a selector that already contains :nth-of-type, copy it verbatim per the SELECTOR FIDELITY RULE below — this trap applies only to selectors you compose yourself.)
 
-ANTI-PATTERN — Do NOT build selectors with template-literal indices in a loop. The following pattern is ALWAYS WRONG and fails on real DOMs (Facebook, Twitter, React apps) because :nth-of-type is resolved among SIBLINGS OF THE SAME TAG, not among prior compound-selector matches:
+ANTI-PATTERN — Do NOT build selectors with template-literal indices in a loop. The following pattern is ALWAYS WRONG and fails on real DOMs (modern component libraries, React/Vue apps, virtualized lists) because :nth-of-type is resolved among SIBLINGS OF THE SAME TAG, not among prior compound-selector matches:
   // WRONG — every one of these fails or matches the wrong element:
   for (let i = 0; i < n; i++) {
-    const author = await $extract(\`div[role="article"]:nth-of-type(\${i+1}) h3 a[role="link"]\`, null, 3000);
+    const author = await $extract(\`li.result-item:nth-of-type(\${i+1}) a.author-link\`, null, 3000);
   }
 Each failed $extract also burns its full timeoutMs (3s × items × fields = 30s+ of step budget wasted), which then triggers SCRIPT_TIMEOUT / POLL_EXHAUSTED. If you catch yourself writing \`:nth-of-type(\${i+1})\` or \`:nth-child(\${i+1})\` inside a loop, STOP — you want $extractList or $list instead.
 
 ANTI-PATTERN (global $extract inside a $list loop) — $extract, $click, $, $wait and all other DOM APIs query the WHOLE DOCUMENT, not the "current" list element. They take a selector string, not a container element. So iterating $list and calling $extract per item with the SAME selector produces N identical copies of the FIRST match in the document:
   // WRONG — every iteration extracts the same first-match author; the resulting
-  // posts array is N duplicates of the first post:
-  const items = await $list('div[role="article"]');
+  // items array is N duplicates of the first item:
+  const items = await $list('li.result-item');
   for (const item of items) {
-    const author = await $extract('div[data-ad-rendering-role="profile_name"] h3 a[role="link"]');
+    const author = await $extract('a.author-name');
     // ← item is ignored; $extract queries the whole document every time
   }
 $extract has no per-container overload. For per-container field reads, use $extractList(containerSel, fieldMap) — each sub-selector is evaluated INSIDE each container element, so the fields stay aligned per item. There is no correct "iterate $list + $extract per item" pattern.
 
 LIST EXTRACTION — When extracting multiple fields from a collection of list items, PREFER $extractList(containerSel, fieldMap). It runs ONE container query + per-item sub-queries and returns aligned records. This is the canonical pattern for blog rolls, search results, feed posts, product grids, comment threads — anywhere you have N sibling containers each with the same inner fields.
   // CORRECT — one call, all fields aligned, no per-index selectors:
-  const posts = await $extractList('div[role="article"]', {
-    author:  'div[data-ad-rendering-role="profile_name"] h3 a[role="link"]',
-    content: 'div[data-ad-rendering-role="story_message"] > div',
+  const items = await $extractList('li.result-item', {
+    author:  'a.author-name',
+    content: '.item-body',
     href:    { selector: 'a[href]', attr: 'href' }
   }, { allowEmpty: true });
-  return { posts };
+  return { items };
 Fall back to $list ONCE PER FIELD only for single-field extraction. NEVER zip independent $list arrays — if one field is missing on some items, the zip silently shifts every later field.
 
 SELECTOR GENERALIZATION — Annotation selectors the user clicked often embed specific values that only match ONE element on the page. Common traps:
-  - aria-label with text: a[role="link"][aria-label="3天"] — matches only the post whose aria-label is literally "3天"; other posts have aria-label="4月27日", "5月1日 10:30", etc. → GENERALIZE to a[role="link"][aria-label] (attribute presence).
-  - text-equality: a[text()='John Doe'] → GENERALIZE to a structural selector (a[href*="/user/"], h3 > a[role="link"], etc.).
+  - aria-label with text: a[data-act="view-profile"][aria-label="John Doe"] — matches only the item whose aria-label is literally "John Doe"; other items have aria-label="Jane Roe", "Sam Smith", etc. → GENERALIZE to a[data-act="view-profile"][aria-label] (attribute presence).
+  - text-equality: a[text()='John Doe'] → GENERALIZE to a structural selector (a[href*="/user/"], .author-name > a, etc.).
   - nth-child/Nth-of-type indices captured at annotation time → KEEP them only if the user explicitly annotated a specific item; otherwise drop and use the container selector alone.
 If a field returns data for some items but null/empty for others in the same list, the selector is too specific. Re-generalize by removing literal values from attribute matchers.
 
 
-FIELD COLLISION ON GENERALIZATION — After generalizing an annotation selector per the rule above, VERIFY that no two outputFields end up matching the SAME element. The most common collision is on sites where multiple semantic elements share the same attribute (Facebook example: BOTH the author link and the timestamp link carry aria-label). When two fields would collapse onto the same selector:
+FIELD COLLISION ON GENERALIZATION — After generalizing an annotation selector per the rule above, VERIFY that no two outputFields end up matching the SAME element. The most common collision is on sites where multiple semantic elements share the same attribute (e.g. BOTH the author link and the timestamp link carry aria-label). When two fields would collapse onto the same selector:
 - Add a STRUCTURAL discriminator to one of them. Patterns that work in practice:
   * href content: author links usually have href*="/user/" or href*="/profile.php"; timestamp links often have href*="/posts/" or no href at all.
   * ancestor tag: timestamp links are usually NOT inside <h3>; author links are.
-  * attribute value pattern: aria-label on a timestamp matches date/time regexes (e.g. /\\d+分钟|^\\d月|年\\d+月/); aria-label on an author is a person name.
+  * attribute value pattern: aria-label on a timestamp matches date/time regexes (e.g. /^\\d{1,2}:\\d{2}$|^\\d+\\s+(?:hours?|days?)\\s+ago$|^yesterday$/i); aria-label on an author is a person name.
 - Do NOT use bare attribute-presence selectors ([aria-label], [href]) for BOTH fields — that guarantees collision. Pick one field to make specific.
 - When unsure, run $list on each candidate selector separately and inspect the returned textContent/href arrays — they should differ field-by-field.
 
@@ -97,10 +97,10 @@ Many websites load content dynamically inside iframes. All $ APIs automatically 
 - For $openTab detail pages, the snapshot includes the detail page content including any same-origin iframe content
 
 TARGETING A SPECIFIC IFRAME (deterministic, multi-iframe pages):
-When a page has MULTIPLE iframes with similar markup (common on government / bid / portal sites — e.g. one iframe per tab, each with the same .ewb-info-main container), a plain selector like '.ewb-info-main > p > u' is ambiguous and $ APIs may match the wrong iframe. Pin the selector to a specific iframe with the iframe-prefix syntax:
+When a page has MULTIPLE iframes with similar markup (common on government / bid / portal sites — e.g. one iframe per tab, each with the same .detail-info-main container), a plain selector like '.detail-info-main > p > u' is ambiguous and $ APIs may match the wrong iframe. Pin the selector to a specific iframe with the iframe-prefix syntax:
   iframe<iframe-css>::<inner-css>
 Examples:
-- $('iframe#zbggframe1::u > font')                          — element inside iframe with id="zbggframe1"
+- $('iframe#content-frame1::u > font')                          — element inside iframe with id="content-frame1"
 - $('iframe[src="content.html"]::p.MsoNormal > u')          — element inside iframe with that src
 - $extract('iframe#iframe1::iframe#iframe2::#deep')         — nested iframes (chain the prefix)
 The <iframe-css> part is evaluated in the PARENT document and must match the <iframe> element itself (typically iframe#id or iframe[src="..."]). The <inner-css> part is a normal CSS selector evaluated inside that iframe's document. The prefix works in every $ API ($, $click, $type, $extract, $wait, $exists, $check, $list, $count, $waitForStable). Prefer this prefix whenever the snapshot shows the data lives inside an iframe element — the prefix is the only way to guarantee the right iframe is targeted.
@@ -112,7 +112,7 @@ INPUT DATA:
 STEP RESULTS (available in every step except the first):
 - __lastResult__: The return value of the immediately preceding step (any type). Use for simple sequential flows.
 - __stepResults__: Object mapping step IDs to their return values. Example: __stepResults__['2'] gives step 2's result. Use to access any prior step's data.
-- FIELD-NAME COHERENCE: when reading fields off __lastResult__ or __stepResults__['N'], use the EXACT property names the upstream step writes in its return statement. A renamed property silently becomes undefined (e.g. upstream returns {authorName, publishTime} but downstream reads __lastResult__.author / __lastResult__.time → both undefined). Before consuming any field, list the upstream step's actual property names verbatim.
+- FIELD-NAME COHERENCE: when reading fields off __lastResult__ or __stepResults__['N'], use the EXACT property names the upstream step writes in its return statement. A renamed property silently becomes undefined (e.g. upstream returns {authorName, timestamp} but downstream reads __lastResult__.author / __lastResult__.time → both undefined). Before consuming any field, list the upstream step's actual property names verbatim.
 
 RETURN VALUE:
 - Each step script must return a JSON-serializable value (string, number, boolean, object, array).
@@ -151,7 +151,7 @@ LIST ITEM ITERATION (use $list to get all matching elements):
   const results = items.map(el => ({ title: el.textContent, href: el.href }));
 
 ATTACHMENT ITERATION (use $list for elements that may be inside iframes):
-  const links = await $list('div#attach a.ewb-enclosure');
+  const links = await $list('div.attachments a.attachment-link');
   const attachments = links.map(el => ({ name: el.textContent, href: el.href }));
 
 DO NOT use $count + :nth-child() loop to iterate elements — it breaks when elements span multiple iframes because $count sums across all documents but :nth-child() searches one document at a time.
@@ -173,7 +173,7 @@ AI CHAT / STREAMING RESPONSE (wait for content to finish generating):
   The CORRECT approach is to check that a loading indicator DISAPPEARS (negative check):
     await new Promise(r => setTimeout(r, 3000));
     // Use ONLY specific class names from the page snapshot, NOT wildcard selectors
-    const stillLoading = await $exists('.cosd-markdown-loading', 3000);
+    const stillLoading = await $exists('.generating-indicator', 3000);
     return { done: !stillLoading };
 
   DO NOT check if the submit button EXISTS - on most AI chat sites the submit button is always visible regardless of generation state. Checking for submit button will cause premature {done: true}.
@@ -190,23 +190,23 @@ AI CHAT / STREAMING RESPONSE (wait for content to finish generating):
   IMPORTANT: Always use $exists() for polling - NEVER use $() in a loop. Use at least 3s delay between checks: await new Promise(r => setTimeout(r, 3000))
 
 
-EXPAND-THEN-EXTRACT (e.g. clicking 展开 / "see more" in each post before extracting full content):
+EXPAND-THEN-EXTRACT (e.g. clicking "See more" / "展开" / "Read full" in each post before extracting full content):
 
 When the user wants full content that requires clicking an expander inside EACH list item, split it across two steps:
 
   Step 2 (expand, maxIterations>1):
-    // "展开" text can't be matched in pure CSS — locate the expander by structural cues
-    // (role=button wrapping a span) and trust the click is idempotent if already expanded.
-    const r = await $clickInList('div[role="article"]', 'div[role="button"]:has(> span)', { delayMs: 600 });
+    // "See more" text can't be matched in pure CSS — locate the expander by structural cues
+    // (button wrapping a span) and trust the click is idempotent if already expanded.
+    const r = await $clickInList('li.result-item', 'button:has(> span)', { delayMs: 600 });
     if (r.errors.length) return { done: false };   // retry once — transient layout races
     return { done: true, expanded: r.clicked };
 
   Step 3 (extract):
-    return { posts: await $extractList('div[role="article"]', { content: '[data-ad-comet-preview="message"]', author: 'a strong' }) };
+    return { items: await $extractList('li.result-item', { content: '.message-body', author: '.author-name' }) };
 
 Why two steps: $clickInList's default 500ms delay × N posts can exceed the single-step 30s timeout for long lists; a poll-style Step 2 (return { done: false } on partial errors) lets the orchestrator retry safely. If the list is short (N<10) and total click time stays well under the step timeout, a single step combining $clickInList + $extractList is acceptable.
 
-SCROLLING (infinite feeds / load-more pages — Facebook, Twitter, LinkedIn, comment threads):
+SCROLLING (infinite feeds / load-more pages — feed streams, comment threads, search results):
 Three scroll APIs are available. All three scroll the TARGET PAGE (window or a matched scrollable element), never the sandbox. Use them to load more posts before $extractList runs.
 - $scrollBy(deltaY, selector?): Scroll window (or element matching selector) by deltaY pixels. Returns { scrolled: bool, prevY, newY }.
 - $scrollToBottom(selector?): Scroll window (or element) to its bottom. Returns { scrolled: bool, prevY, newY }.
@@ -214,10 +214,10 @@ Three scroll APIs are available. All three scroll the TARGET PAGE (window or a m
 
 POLL-LOAD PATTERN (the canonical "scroll until exhausted" loop):
 A scroll-to-load step is a poll step: maxIterations>1, onSuccess = the extraction step, onFailure = TERMINATE. Each iteration scrolls once, waits for new content to render, and returns { done: false } until the scroll position STOPS CHANGING (meaning the feed is exhausted).
-  // Step 2 (scroll_and_load_posts, maxIterations: 20, onSuccess: '3', onFailure: 'TERMINATE'):
+  // Step 2 (scroll_and_load, maxIterations: 20, onSuccess: '3', onFailure: 'TERMINATE'):
   const r = await $scrollToBottom();           // or $scrollBy(window.innerHeight * 2)
   await new Promise(resolve => setTimeout(resolve, 1500));  // let new posts render
-  const postCount = await $count('div[role="article"]');
+  const postCount = await $count('li.result-item');
   if (!r.scrolled && postCount >= 10) return { done: true, postCount };   // feed exhausted AND we have enough
   return { done: false, postCount };                                      // retry — more posts may load
 
@@ -226,19 +226,19 @@ CRITICAL: "position did not change" (r.scrolled === false) is the only reliable 
   const r = await $scrollToBottom();
   await new Promise(resolve => setTimeout(resolve, 1500));
   const stalled = (__lastResult__ && __lastResult__.stalled || 0) + (r.scrolled ? 0 : 1);
-  const postCount = await $count('div[role="article"]');
+  const postCount = await $count('li.result-item');
   if (stalled >= 3 && postCount > 0) return { done: true, postCount, exhausted: true };
   return { done: false, postCount, stalled };
 
 SCROLL CONTAINER (not the window): some sites scroll an inner element (overflow:auto/scroll), not the document. If $count returns 0 after $scrollToBottom() with no selector, find the scrollable container in the snapshot and pass its selector: await $scrollToBottom('div[data-scrollable-container]'). A quick heuristic: the element with the largest scrollHeight that is NOT document.body is usually the feed's scroll root.
 
-VIRTUALIZED FEEDS (Facebook search, Twitter, TikTok, Reddit infinite-scroll): these feeds UNMOUNT posts as you scroll past them — $count('div[role="article"]') STAYS AT 7 across iterations even though new posts are loading in. The stalled-counter pattern above will declare "exhausted" prematurely because postCount never grows past the visible-window size. Track UNIQUE post signatures across iterations via __lastResult__ instead:
-  // Step 2 (scroll_and_load_posts, maxIterations: 20, onSuccess: '3', onFailure: 'TERMINATE'):
+VIRTUALIZED FEEDS (search results, social feeds, infinite-scroll comment threads): these feeds UNMOUNT posts as you scroll past them — $count('li.result-item') STAYS AT 7 across iterations even though new posts are loading in. The stalled-counter pattern above will declare "exhausted" prematurely because postCount never grows past the visible-window size. Track UNIQUE post signatures across iterations via __lastResult__ instead:
+  // Step 2 (scroll_and_load, maxIterations: 20, onSuccess: '3', onFailure: 'TERMINATE'):
   const seen = new Set((__lastResult__ && __lastResult__.seenSignatures) || []);
   const r = await $scrollToBottom();
   await new Promise(resolve => setTimeout(resolve, 1500));
   // Snapshot current articles — use a STABLE signature (author + first 80 chars of content)
-  const articles = await $list('div[role="article"]');
+  const articles = await $list('li.result-item');
   for (const a of articles) {
     const sig = (a.textContent || '').slice(0, 100);   // stable across scroll position
     if (sig.trim()) seen.add(sig);
@@ -250,12 +250,12 @@ VIRTUALIZED FEEDS (Facebook search, Twitter, TikTok, Reddit infinite-scroll): th
   return { done: false, uniqueCount, stalled, seenSignatures: [...seen].slice(0, 50) };
 Key insight: $count(DOM) ≠ unique posts seen. The DOM is a sliding window; signatures accumulated across iterations are the truth. Cap seenSignatures at ~50 entries to avoid unbounded growth across long feeds.
 
-RAW HTML EXTRACTION (domHtml, full post HTML fields):
+RAW HTML EXTRACTION (domHtml, full record HTML fields):
 $extract(sel) and $extractList(sel, { field: { selector, attr } }) support attribute reads. outerHTML and innerHTML are DOM PROPERTIES (not HTML attributes) — historically getAttribute returned null for them. They are now supported: pass attr='outerHTML' or attr='innerHTML' and the runner reads the DOM property directly.
-  // Full HTML of the post container:
-  const html = await $extract('div[role="article"]', 'outerHTML');
-  // Per-post HTML inside a list:
-  const records = await $extractListMulti('div[role="article"]', {
+  // Full HTML of the record container:
+  const html = await $extract('li.result-item', 'outerHTML');
+  // Per-record HTML inside a list:
+  const records = await $extractListMulti('li.result-item', {
     html: { selector: '', attr: 'outerHTML' }    // empty selector → the container itself
   });
   // ^ Note: empty selector inside $extractListMulti returns the container's own outerHTML.
@@ -2528,7 +2528,7 @@ const STEP_TEMPLATES = [
       {
         id: '1',
         name: 'Wait for list',
-        script: `return { done: await $exists('div[role="article"]', 5000) };`,
+        script: `return { done: await $exists('li.result-item', 5000) };`,
         onSuccess: '2',
         onFailure: 'TERMINATE',
         maxIterations: 10
@@ -2536,7 +2536,7 @@ const STEP_TEMPLATES = [
       {
         id: '2',
         name: 'Expand each item',
-        script: `const r = await $clickInList('div[role="article"]', 'div[role="button"]:has(> span)', { delayMs: 500 });\nif (r.errors.length) return { done: false };\nreturn { done: true, expanded: r.clicked };`,
+        script: `const r = await $clickInList('li.result-item', 'button:has(> span)', { delayMs: 500 });\nif (r.errors.length) return { done: false };\nreturn { done: true, expanded: r.clicked };`,
         onSuccess: '3',
         onFailure: '3',
         maxIterations: 3
@@ -2544,7 +2544,7 @@ const STEP_TEMPLATES = [
       {
         id: '3',
         name: 'Extract fields',
-        script: `const posts = await $extractList('div[role="article"]', { content: 'div[dir="auto"]' });\nif (!posts.length) return { done: false };\nreturn { posts };`,
+        script: `const items = await $extractList('li.result-item', { content: '.item-body' });\nif (!items.length) return { done: false };\nreturn { items };`,
         onSuccess: 'TERMINATE',
         onFailure: 'TERMINATE',
         maxIterations: 3

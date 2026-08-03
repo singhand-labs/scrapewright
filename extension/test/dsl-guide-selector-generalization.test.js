@@ -8,6 +8,12 @@
 //   3. The DSL guide did not warn against these patterns.
 // These tests verify the new SELECTOR GENERALIZATION and MULTI-VALUE FIELDS
 // sections are present in SCRIPT_DSL_GUIDE so the LLM sees them.
+//
+// RC24 B (2026-08-03): the example text in the rule was de-specialized away
+// from the original FB-specific Chinese-date tokens. The audit now anchors on
+// the rule structure ("literal aria-label value only matches one item"),
+// not on the specific example value, so future re-de-specialization doesn't
+// silently break the guard.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -19,8 +25,12 @@ describe('SCRIPT_DSL_GUIDE — selector generalization + multi-value fields', ()
   });
 
   it('warns that aria-label="literal" only matches one element', () => {
-    assert.match(SCRIPT_DSL_GUIDE, /aria-label="3天"/);
-    assert.match(SCRIPT_DSL_GUIDE, /matches only the post whose aria-label is literally/i);
+    // RC24 B: de-specialized the example from `aria-label="3天"` (Chinese date)
+    // to `aria-label="John Doe"` (person name). The audit should anchor on the
+    // rule ("a literal aria-label value only matches one item") not on the
+    // specific example text — otherwise re-de-specialization breaks the guard.
+    assert.match(SCRIPT_DSL_GUIDE, /aria-label="[^"]+"/);  // some literal value
+    assert.match(SCRIPT_DSL_GUIDE, /matches only the .* whose aria-label is literally/i);
   });
 
   it('shows the generalized form (attribute presence, no value)', () => {
