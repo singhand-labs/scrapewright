@@ -1245,8 +1245,19 @@ Sample detail page URL (use as entryUrl for detail-page steps): ${detailPageInfo
   ], { jsonMode: true, maxTokens: 8192 });
 
   wizardState.llmHistory.push(
-    { role: 'user', content: '[Script Generation] Target: ' + wizardState.targetUrl + '\nDescription: ' + wizardState.description + '\n' + prompt.substring(0, 2000) },
-    { role: 'assistant', content: result.substring(0, 2000) }
+    { role: 'user', content: summarizeStepsGeneration({
+        url: wizardState.targetUrl,
+        description: wizardState.description,
+        htmlFingerprint: (() => {
+          const DomCleanerForFp = (typeof window !== 'undefined' && window.DomCleaner)
+            || (typeof global !== 'undefined' && global.DomCleaner)
+            || (typeof require === 'function' ? require('./lib/dom-cleaner.js') : null);
+          const struct = (pageInfo && pageInfo.structure) || (postPageInfo && postPageInfo.structure) || '';
+          return DomCleanerForFp && struct ? DomCleanerForFp.htmlFingerprint(struct) : '(unavailable)';
+        })(),
+        confirmedSelectors: confirmedSelectors || []
+      }) },
+    { role: 'assistant', content: summarizeGeneratedSteps(result) }
   );
   trimLlmHistory();
 
@@ -1343,8 +1354,26 @@ Only generate this step's script. Do not modify other steps.`;
   ], { jsonMode: true, maxTokens: 8192 });
 
   wizardState.llmHistory.push(
-    { role: 'user', content: '[Step Script Gen ' + step.id + '] ' + prompt.substring(0, 2000) },
-    { role: 'assistant', content: result.substring(0, 2000) }
+    { role: 'user', content: (() => {
+        const DomCleanerForFp = (typeof window !== 'undefined' && window.DomCleaner)
+          || (typeof global !== 'undefined' && global.DomCleaner)
+          || (typeof require === 'function' ? require('./lib/dom-cleaner.js') : null);
+        const struct = (pageInfo && pageInfo.structure) || '';
+        const fp = DomCleanerForFp && struct ? DomCleanerForFp.htmlFingerprint(struct) : '(unavailable)';
+        // Reuse summarizeStepsGeneration shape; carry step id/name in description.
+        return summarizeStepsGeneration({
+          url: wizardState.targetUrl,
+          description: '[Step Script Gen ' + step.id + '] ' + (step.name || '') + (stepContext && stepContext.globalDescription ? ' — ' + stepContext.globalDescription : ''),
+          htmlFingerprint: fp,
+          confirmedSelectors: (annotations || []).map(a => ({
+            purpose: a.purpose || a.type || '(annotation)',
+            selector: a.selector || a.revisedSelector || '',
+            status: a.status || 'confirmed',
+            revisedSelector: a.revisedSelector
+          }))
+        });
+      })() },
+    { role: 'assistant', content: summarizeGeneratedSteps(result) }
   );
   trimLlmHistory();
 
@@ -2097,8 +2126,26 @@ ${detailSnapshotSection}`;
     const result = await client.chat(messages, { maxTokens: 8192 });
 
     wizardState.llmHistory.push(
-      { role: 'user', content: '[Improve Step "' + step.name + '"] ' + prompt.substring(0, 2000) },
-      { role: 'assistant', content: result.substring(0, 2000) }
+      { role: 'user', content: (() => {
+          const DomCleanerForFp = (typeof window !== 'undefined' && window.DomCleaner)
+            || (typeof global !== 'undefined' && global.DomCleaner)
+            || (typeof require === 'function' ? require('./lib/dom-cleaner.js') : null);
+          const struct = (pageSnapshot && (pageSnapshot.structure || pageSnapshot.html)) || '';
+          const fp = DomCleanerForFp && struct ? DomCleanerForFp.htmlFingerprint(struct) : '(unavailable)';
+          // Reuse summarizeStepsGeneration shape; carry step name + user feedback.
+          return summarizeStepsGeneration({
+            url: wizardState.targetUrl,
+            description: '[Improve Step "' + step.name + '"] feedback: ' + (userFeedback || '(none)'),
+            htmlFingerprint: fp,
+            confirmedSelectors: (step.annotations || wizardState.confirmedSelectors || []).map(a => ({
+              purpose: a.purpose || a.type || '(annotation)',
+              selector: a.selector || a.revisedSelector || '',
+              status: a.status || 'confirmed',
+              revisedSelector: a.revisedSelector
+            }))
+          });
+        })() },
+      { role: 'assistant', content: summarizeGeneratedSteps(result) }
     );
     trimLlmHistory();
 
