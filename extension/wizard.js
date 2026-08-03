@@ -2576,7 +2576,58 @@ If your script does NOT use $openTab, $wait / $ / $extract will run against the 
   // still interpolate it).
   let compactedNote = '';
   const snapshotBudget = options.compact ? 15000 : 30000;
+  // A4: preserve the raw HTML before truncation so that if the cleaner returns
+  // mode:'needs_subtree_selection' (meaning the cleaned HTML still exceeds
+  // budget and the LLM must pick a subtree), we can re-parse the original HTML
+  // to find that subtree. After truncateSnapshotForLLM, pageSnapshot.html is
+  // undefined in that mode — only structureForSelection survives.
+  const rawPageHtml = (pageSnapshot && typeof pageSnapshot.html === 'string') ? pageSnapshot.html : '';
   pageSnapshot = truncateSnapshotForLLM(pageSnapshot, snapshotBudget);
+
+  // A4: if cleaning returned needs_subtree_selection, invoke the LLM to pick
+  // a subtree and re-clean it. Fall back to compressed mode on any failure.
+  // The subtree picker needs the original raw HTML (preserved above), NOT the
+  // truncated snapshot — the truncated snapshot has no .html in this mode.
+  if (pageSnapshot && pageSnapshot.mode === 'needs_subtree_selection') {
+    try {
+      const DomCleanerRef = (typeof window !== 'undefined' && window.DomCleaner)
+        || (typeof global !== 'undefined' && global.DomCleaner)
+        || (typeof require === 'function' ? require('./lib/dom-cleaner.js') : null);
+      const LLMClientRef = (typeof window !== 'undefined' && window.LLMClient)
+        || (typeof global !== 'undefined' && global.LLMClient)
+        || (typeof require === 'function' ? require('./lib/llm-client.js') : null);
+      const llmConfig = (config && config.config) ? config.config : config;
+      const llmClient = (llmConfig && LLMClientRef) ? new LLMClientRef(llmConfig) : null;
+      const doc = new DOMParser().parseFromString(rawPageHtml || '', 'text/html');
+      const subtreeResult = DomCleanerRef
+        ? await DomCleanerRef.requestSubtreeSelection(
+            doc,
+            wizardState.description || '',
+            wizardState.annotations || [],
+            llmClient
+          )
+        : null;
+      if (subtreeResult && subtreeResult.subtreeHtml) {
+        const reCleaned = DomCleanerRef.cleanHtmlForLLM(subtreeResult.subtreeHtml, wizardState.annotations || [], snapshotBudget);
+        pageSnapshot = { ...pageSnapshot, ...reCleaned, subtreeSelector: subtreeResult.subtreeSelector };
+        wizardState.subtreeSelector = subtreeResult.subtreeSelector;
+        console.log('[A4] subtree selection succeeded:', subtreeResult.subtreeSelector);
+      } else {
+        // Fallback to compressed structure (tier 2c output) so the prompt still
+        // gets something useful instead of an empty HTML block.
+        pageSnapshot = {
+          ...pageSnapshot,
+          mode: 'compressed',
+          html: '',
+          structure: pageSnapshot.structureForSelection || pageSnapshot.structure || '',
+          fingerprint: pageSnapshot.fingerprint || (DomCleanerRef ? DomCleanerRef.htmlFingerprint(pageSnapshot.structureForSelection || '') : '')
+        };
+        console.log('[A4] subtree selection failed — falling back to compressed structure');
+      }
+    } catch (e) {
+      console.warn('[A4] subtree selection error:', e.message);
+    }
+  }
 
   // Per-step timeout guidance is injected via buildTimeoutGuidance(DEPLOY_TIMEOUT_MS) in the prompts below.
 
