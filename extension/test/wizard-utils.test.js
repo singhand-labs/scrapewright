@@ -1,5 +1,13 @@
 const { describe, it, test } = require('node:test');
 const assert = require('node:assert/strict');
+// RC24 A3: truncateSnapshotForLLM now delegates to DomCleaner.cleanHtmlForLLM,
+// which uses DOMParser/NodeFilter internally. Set up jsdom so the delegation
+// path is exercised (without this, DomCleaner returns a parse-error fallback).
+const { JSDOM } = require('jsdom');
+const _dom = new JSDOM('<!DOCTYPE html><html><body></body></html>', { url: 'http://localhost/' });
+global.DOMParser = _dom.window.DOMParser;
+global.NodeFilter = _dom.window.NodeFilter;
+global.Node = _dom.window.Node;
 const { parseSchemaFields, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, buildRequirementsBlock, suggestServiceName, SCRIPT_DSL_GUIDE, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, scoreAnnotationBrittleness, scoreAnnotationChain, checkSelectorFidelity } = require('../lib/wizard-utils');
 
 describe('parseSchemaFields', () => {
@@ -993,52 +1001,69 @@ describe('SCRIPT_DSL_GUIDE regression', () => {
 });
 
 describe('truncateSnapshotForLLM', () => {
-  it('returns the snapshot unchanged when all fields are within budget', () => {
-    const snap = { html: 'a'.repeat(100), textContent: 'b'.repeat(50), structure: 'c'.repeat(50), textSummary: 'short' };
-    const out = truncateSnapshotForLLM(snap, 1000);
-    assert.equal(out.html, 'a'.repeat(100));
-    assert.equal(out.textContent, 'b'.repeat(50));
-    assert.equal(out.structure, 'c'.repeat(50));
-    assert.equal(out.textSummary, 'short');
-    assert.ok(!out.html.startsWith('[TRUNCATED'));
+  // RC24 A3: truncateSnapshotForLLM is now a thin wrapper around
+  // DomCleaner.cleanHtmlForLLM. The legacy substring(0, budget) blunt-cut
+  // and the [TRUNCATED original N chars] marker are abolished. Tests below
+  // verify the new tiered-degradation contract instead of the abolished
+  // blunt-cut behavior.
+
+  it('passes through snapshots that already carry a mode field (already tiered)', () => {
+    // Already-tiered snapshots produced upstream by DomCleaner.cleanHtmlForLLM
+    // must NOT be re-cut — their mode/fingerprint were chosen by the cleaner.
+    const tiered = { mode: 'annotated', html: 'preserved', structure: 'preserved', fingerprint: 'abc12345' };
+    const out = truncateSnapshotForLLM(tiered, 1000);
+    assert.equal(out.mode, 'annotated');
+    assert.equal(out.html, 'preserved');
+    assert.equal(out.structure, 'preserved');
+    assert.equal(out.fingerprint, 'abc12345');
   });
 
-  it('truncates html to budget chars and prepends the TRUNCATED marker', () => {
-    const big = 'x'.repeat(1000);
-    const out = truncateSnapshotForLLM({ html: big }, 100);
-    assert.equal(out.html.length, 100);
-    assert.ok(out.html.startsWith('[TRUNCATED'));
-    assert.ok(out.html.includes('original 1000 chars'));
-  });
-
-  it('allocates floor(budget/3) to textContent and structure independently', () => {
-    const out = truncateSnapshotForLLM(
-      { html: 'h'.repeat(1000), textContent: 't'.repeat(1000), structure: 's'.repeat(1000) },
-      300
-    );
-    assert.equal(out.html.length, 300);
-    assert.equal(out.textContent.length, 100);
-    assert.equal(out.structure.length, 100);
+  it('delegates raw .html snapshots to DomCleaner.cleanHtmlForLLM (no blunt cut)', () => {
+    // A small HTML within budget: cleaner chooses mode 'full', html is the
+    // cleaned form (NOT substring(0, N) of the raw input).
+    const out = truncateSnapshotForLLM({ html: '<div><p>hello</p></div>' }, 30000);
+    assert.equal(out.mode, 'full');
+    assert.ok(typeof out.html === 'string');
+    // The cleaned html reflects cleaner output (whitespace-normalized), not a
+    // substring cut of the raw input.
+    assert.ok(out.html.includes('hello'));
+    // A fingerprint is produced for full-mode output.
+    assert.ok(typeof out.fingerprint === 'string' && out.fingerprint.length > 0);
+    // The legacy blunt-cut marker MUST NOT appear.
+    assert.ok(!out.html.includes('[TRUNCATED original'));
   });
 
   it('does not mutate the input snapshot', () => {
-    const original = { html: 'h'.repeat(500), textContent: 't'.repeat(500) };
-    const originalHtmlLen = original.html.length;
-    const originalTextLen = original.textContent.length;
+    const original = { html: '<div>hi</div>' };
+    const originalHtml = original.html;
     const _out = truncateSnapshotForLLM(original, 100);
-    assert.equal(original.html.length, originalHtmlLen);
-    assert.equal(original.textContent.length, originalTextLen);
+    assert.equal(original.html, originalHtml);
   });
 
-  it('handles missing fields gracefully (no throw)', () => {
+  it('handles missing fields gracefully (no throw, returns snapshot as-is)', () => {
     const out = truncateSnapshotForLLM({}, 1000);
+    // No .html and no .mode → snapshot returned unchanged (shallow-equal {}).
     assert.deepEqual(out, {});
   });
 
-  it('honors a custom budget override', () => {
-    const out = truncateSnapshotForLLM({ html: 'h'.repeat(5000) }, 2000);
-    assert.equal(out.html.length, 2000);
-    assert.ok(out.html.startsWith('[TRUNCATED'));
+  it('returns non-object inputs unchanged', () => {
+    assert.equal(truncateSnapshotForLLM(null, 1000), null);
+    assert.equal(truncateSnapshotForLLM(undefined, 1000), undefined);
+    assert.equal(truncateSnapshotForLLM('string', 1000), 'string');
+  });
+
+  it('degrades tier choice based on budget (annotated → compressed when annotations provided)', () => {
+    // Small budget forces degradation past 'full' tier. With annotations
+    // present, the wrapper forwards snapshot.annotations to the cleaner, so
+    // the cleaner can use the 'annotated' tier when contexts fit the budget.
+    const html = '<div><article class="post">A</article><article class="post">B</article></div>';
+    const annotations = [{ selector: '.post', outputField: 'posts' }];
+    const out = truncateSnapshotForLLM({ html, annotations }, 50);
+    // Either annotated (if context fits) or compressed/needs_subtree_selection.
+    assert.ok(['annotated', 'compressed', 'needs_subtree_selection'].includes(out.mode),
+      `expected degraded mode, got ${out.mode}`);
+    // Must not be the legacy blunt-cut.
+    assert.ok(!JSON.stringify(out).includes('[TRUNCATED original'));
   });
 });
 

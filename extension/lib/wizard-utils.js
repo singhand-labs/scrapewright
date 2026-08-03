@@ -269,7 +269,18 @@ ROBUSTNESS RULES (MANDATORY — these prevent the most common silent failures):
 
 3. VERIFY AFTER INTERACTION: After a $click that is meant to change state (submit, toggle, expand, navigate), VERIFY the intended change happened before reporting done — read a distinguishing signal (results container appeared, attribute toggled, URL changed). If the change did not happen, return { done: false } so the step retries (requires maxIterations>1); do NOT proceed to extraction as if the click succeeded.
 
-4. EXTRACTION MUST NOT RETURN EMPTY AS SUCCESS: An extraction step whose output feeds the final result must treat EMPTY output ('', null, [], or a required field missing) as NOT done — return { done: false } (with maxIterations>1) and retry until the content is present. Returning empty as success is the most common silent failure (the job reports success:true with garbage data).
+4. DISTINGUISH TRANSIENT-EMPTY FROM EXTRACTION-COMPLETED-BUT-EMPTY (critical — misreading this is a top cause of multi-round autoFix failure):
+   - (a) TRANSIENT "CONTENT-NOT-YET-PRESENT": the page is still rendering, the list has not entered the DOM yet, or a network pipeline is still pending. SYMPTOMS: zero containers match the list selector, the surrounding page is still showing a spinner / "loading" / partial DOM, or other signals say the page is mid-load. CORRECT RESPONSE: { done: false } (requires maxIterations>1) — the next iteration may catch the content.
+   - (b) DETERMINISTIC "EXTRACTION-COMPLETED-BUT-EMPTY": the $extractList / $extractListMulti / $list / $extract call COMPLETED (it returned — possibly an empty array, possibly records whose fields are all empty strings/null because the sub-selectors did not match anything). The page is in steady state — the surrounding DOM is stable, the list container IS present, but the field selectors inside it don't match the page's actual structure. RETRYING IS HARMFUL HERE: the same selectors against the same steady-state DOM produce the same empty result every iteration. CORRECT RESPONSE: return { done: true, <field>: [], ... } (or whatever the (possibly empty) records resolved to). Let the framework's EMPTY_EXTRACTION / EMPTY_FIELDS detectors fire — they feed a data-driven signal into autoFix naming the exact empty fields, which is what allows selector repair.
+   WHY IT MATTERS: if you return { done: false } for case (b), the step burns its iteration budget retrying a deterministic outcome → the framework raises POLL_EXHAUSTED (a TIMING signal: "ran out of retries"). That MASKS the underlying EXTRACTION-QUALITY problem (empty fields → selector mismatch) — autoFix sees "poll exhausted, retry timing" instead of "fields empty, fix selector", and starts hallucinating causes (maxIterations too low, missing wait, etc.) instead of repairing selectors. The EMPTY_FIELDS signal (which names the actually-empty fields with contrastive non-empty samples) cannot fire because the step never returns { done: true, <field>:[] }.
+   ANTI-PATTERN (do NOT write this — it confuses case (b) for case (a)):
+     const records = await $extractList(container, fieldMap, { allowEmpty: true });
+     if (!records.length) return { done: false };   // ← WRONG: deterministic empty, masks EMPTY_EXTRACTION behind POLL_EXHAUSTED
+     return { done: true, posts: records };
+   CORRECT:
+     const records = await $extractList(container, fieldMap, { allowEmpty: true });
+     return { done: true, posts: records };   // ← empty list is a real signal, let it through
+   The same applies to records whose field values are all "" / null after extraction — that is also case (b). Return { done: true, <field>: records } and let the EMPTY_FIELDS detector report which fields are empty across the board. Use { done: false } ONLY when you have POSITIVE EVIDENCE that content is still arriving (spinner still visible, container count still climbing between iterations, etc.) — not as a panic response to empty fields.
 
 5. OUTPUT SCHEMA CONFORMANCE (field names): The final extraction step's return object MUST use the EXACT field names declared in outputSchema.properties, and MUST include every field listed in outputSchema.required. Do NOT invent or rename fields. EXAMPLE: if outputSchema declares a field named "thinking", return { thinking: "..." } — NOT { thinkingProcess: "..." } or { think: "..." }. A field-name mismatch causes the job to be marked FAILED (REQUIRED_OUTPUT_MISSING) even when data was extracted, because external callers read the result by the schema's field names. ECHO-BACK: if outputSchema.required includes a field with the same name as an input field (e.g., question, query), the final return MUST include that field echoing the original input value (e.g., { question: __input__.question, ... }) — do NOT omit it just because it is not "extracted" from the page. Before writing the final return, list outputSchema.required and verify each one is present with the exact name.
 
@@ -1266,33 +1277,44 @@ function getOutputFieldOptions(outputSchema) {
   return options;
 }
 
-// Pure, non-mutating helper that caps a DOM snapshot before it goes to the LLM.
-// HTML dominates token cost so it gets the full `budget` (default 30K chars);
-// textContent and structure each get floor(budget/3). textSummary is left
-// uncapped because it's already small by construction. When a field is cut, a
-// compact [TRUNCATED] marker is prepended so the model knows to choose
-// selectors from the visible head — structure typically repeats on list pages.
-// The marker is part of the capped total (marker + body == limit), so the
-// budget is a hard ceiling on what the LLM receives.
+// Module-scope helper: lazy-require dom-cleaner without throwing if the module
+// cannot be resolved in the current environment (e.g. some restricted test envs).
+// Kept at module scope so it is NOT redefined on every truncateSnapshotForLLM call.
+function safeRequireDomCleaner() {
+  try { return require('./dom-cleaner.js'); } catch (_) { return null; }
+}
+
+// Thin wrapper: delegates to DomCleaner.cleanHtmlForLLM for structure-preserving
+// tiered degradation. Abolished: substring(0, budget) blunt-cut. The function
+// preserves the same external signature so callers don't need changes.
+//
+// Behavior:
+// - Non-object / null input → returned as-is.
+// - Snapshot already carrying a `mode` field (already tiered by DomCleaner or
+//   by an upstream caller) → passed through unchanged. We do not re-cut.
+// - Snapshot with a raw `.html` field → DomCleaner.cleanHtmlForLLM chooses a
+//   tier (full / annotated / compressed / needs_subtree_selection) based on
+//   budget and annotations; the chosen fields are merged into the snapshot.
+// - DomCleaner unavailable (rare) → snapshot returned unchanged.
 function truncateSnapshotForLLM(snapshot, budget = 30000) {
   if (!snapshot || typeof snapshot !== 'object') return snapshot;
-  const out = { ...snapshot };
-  const subBudget = Math.floor(budget / 3);
-
-  const truncateField = (key, limit) => {
-    const val = out[key];
-    if (typeof val !== 'string') return;
-    if (val.length <= limit) return;
-    const marker = `[TRUNCATED original ${val.length} chars] `;
-    const keep = Math.max(0, limit - marker.length);
-    out[key] = marker + val.substring(0, keep);
-  };
-
-  truncateField('html', budget);
-  truncateField('textContent', subBudget);
-  truncateField('structure', subBudget);
-  // textSummary is left uncapped — it's already small by construction.
-  return out;
+  // Already-tiered snapshots (produced by DomCleaner.cleanHtmlForLLM) pass
+  // through. Their mode/fingerprint were chosen by the cleaner; we do not re-cut.
+  if (snapshot.mode) return snapshot;
+  // Legacy snapshot with raw .html field: delegate to DomCleaner.cleanHtmlForLLM
+  // for structure-preserving tiered degradation. Abolished: substring(0, budget).
+  if (snapshot.html) {
+    const DomCleaner = (typeof global !== 'undefined' && global.DomCleaner)
+      || (typeof window !== 'undefined' && window.DomCleaner)
+      || (typeof require === 'function' ? safeRequireDomCleaner() : null);
+    if (DomCleaner && typeof DomCleaner.cleanHtmlForLLM === 'function') {
+      const result = DomCleaner.cleanHtmlForLLM(snapshot.html, snapshot.annotations || [], budget);
+      return { ...snapshot, ...result };
+    }
+    // DomCleaner unavailable (rare, test env): leave snapshot unchanged.
+    return snapshot;
+  }
+  return snapshot;
 }
 
 function summarizeFixIteration({ stepId, stepName, script, annotations, userFeedback, error, result } = {}) {
