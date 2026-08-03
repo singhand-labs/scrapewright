@@ -30,12 +30,57 @@ let wizardState = {
   testAbortController: null,
   testAborted: false,
   bestAttempt: null,              // Spec 5: tracks highest-scoring attempt for restore-on-regression
-  dismissedInterventions: null    // Spec 5: Set<string> of intervention types dismissed this run
+  dismissedInterventions: null,   // Spec 5: Set<string> of intervention types dismissed this run
+  // RC24 C3: HTML fingerprint dedup. The autoFix prompt hashes the current
+  // page HTML and tracks fingerprints seen so far. When a fingerprint repeats
+  // across iterations (page did not change), the prompt sends only a reference
+  // marker instead of the full HTML body — saves substantial context tokens
+  // without losing information (the LLM looks back at the prior message that
+  // carried the full HTML). Annotations are ALWAYS sent fresh, tracked
+  // separately from the fingerprint (user direction: "annotations另外，不在html里").
+  htmlFingerprintsInHistory: new Set(),
+  lastHtmlFingerprint: null,
+  subtreeSelector: null
 };
 
 function buildSystemMessageWithGlobalContext(baseSystemContent) {
   const desc = (wizardState.userDescription || wizardState.description || '').trim();
   return appendGlobalContextBlock(baseSystemContent, desc);
+}
+
+// renderCleanedResult: produce the prompt-rendered form of whatever mode
+// DomCleaner.cleanHtmlForLLM returned. Used by autoFix prompt assembly to
+// stringify the cleaned-result object into a single text block for the LLM.
+// Each mode carries different fields:
+//   - 'full'         → just the cleaned HTML body
+//   - 'annotated'    → annotated element contexts joined by newlines
+//   - 'compressed'   → structure + optional annotated contexts
+//   - 'needs_subtree_selection' → structureForSelection preview (the A4
+//                       integration should normally have replaced this by
+//                       prompt-render time; we fall back to the shallow
+//                       structure if it somehow survives).
+// Returns '' for null/undefined/non-object inputs so prompt templates can
+// safely interpolate without extra guards.
+function renderCleanedResult(cleanedResult) {
+  if (!cleanedResult || typeof cleanedResult !== 'object') return '';
+  switch (cleanedResult.mode) {
+    case 'full':
+      return cleanedResult.html || '';
+    case 'annotated':
+      return (cleanedResult.contexts || []).map(c => c.context).join('\n');
+    case 'compressed':
+      return (cleanedResult.structure || '') + (
+        cleanedResult.contexts && cleanedResult.contexts.length
+          ? '\n\nAnnotated element contexts:\n' + cleanedResult.contexts.map(c => c.context).join('\n')
+          : ''
+      );
+    case 'needs_subtree_selection':
+      // After A4 integration runs, this should have been replaced. If we get
+      // here, fall back to the shallow structure preview.
+      return cleanedResult.structureForSelection || cleanedResult.structure || '';
+    default:
+      return cleanedResult.html || cleanedResult.structure || '';
+  }
 }
 
 // Parse LLM JSON output with lenient fallback. Tries strict JSON.parse first,
@@ -2629,6 +2674,29 @@ If your script does NOT use $openTab, $wait / $ / $extract will run against the 
     }
   }
 
+  // C3: HTML fingerprint dedup. If this fingerprint is already in history
+  // (page unchanged across iterations), omit the full HTML body — send only
+  // a reference marker so the LLM looks back at the prior message that
+  // carried this fingerprint. Annotations are tracked separately and are
+  // ALWAYS sent fresh in the prompt (user direction: "annotations另外").
+  // The fingerprint hashes ONLY the raw HTML/structure, never the annotations.
+  const DomCleanerRef = (typeof window !== 'undefined' && window.DomCleaner)
+    || (typeof global !== 'undefined' && global.DomCleaner)
+    || (typeof require === 'function' ? require('./lib/dom-cleaner.js') : null);
+  const rawHtmlForFp = (pageSnapshot && (pageSnapshot.html || pageSnapshot.structure)) || '';
+  const currentHtmlFp = (pageSnapshot && pageSnapshot.fingerprint)
+    || (DomCleanerRef ? DomCleanerRef.htmlFingerprint(rawHtmlForFp) : 'unknown');
+  const htmlInHistory = wizardState.htmlFingerprintsInHistory.has(currentHtmlFp);
+
+  let htmlSection;
+  if (htmlInHistory) {
+    htmlSection = `[Page HTML fingerprint: ${currentHtmlFp} — UNCHANGED from a prior round. Full HTML is in the prior message with this fingerprint.]`;
+  } else {
+    htmlSection = `[Page HTML fingerprint: ${currentHtmlFp}]\n` + renderCleanedResult(pageSnapshot);
+    wizardState.htmlFingerprintsInHistory.add(currentHtmlFp);
+  }
+  wizardState.lastHtmlFingerprint = currentHtmlFp;
+
   // Per-step timeout guidance is injected via buildTimeoutGuidance(DEPLOY_TIMEOUT_MS) in the prompts below.
 
   // Build full step workflow context so LLM understands the pipeline.
@@ -2735,11 +2803,7 @@ ${targetStep.script}
 
 ${buildTimeoutGuidance(DEPLOY_TIMEOUT_MS).text}
 
-${detailPageHint}Page HTML (cleaned, noise removed):
-${pageSnapshot.html || ''}
-
-Page compressed structure:
-${pageSnapshot.structure || ''}
+${detailPageHint}${htmlSection}
 
 Annotations: ${JSON.stringify(wizardState.annotations)}
 
@@ -2832,11 +2896,7 @@ ${summarizeAllStepDiagnostics(wizardState.lastExecutionEvents || [], wizardState
 Current output:
 ${currentOutput}
 ${regressionGuard}
-${detailPageHint}Page HTML (cleaned, noise removed):
-${pageSnapshot.html || ''}
-
-Page compressed structure:
-${pageSnapshot.structure || ''}
+${detailPageHint}${htmlSection}
 
 Annotations: ${JSON.stringify(wizardState.annotations)}
 
@@ -2887,7 +2947,8 @@ ${RETURN_FORMAT_FEEDBACK}`;
         annotations: wizardState.annotations || [],
         userFeedback: userFeedback,
         error: wizardState.lastError || null,
-        result: wizardState.testResult || null
+        result: wizardState.testResult || null,
+        htmlContext: htmlSection
       }) },
       { role: 'assistant', content: result }
     );
