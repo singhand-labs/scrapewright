@@ -63,6 +63,36 @@
     return t.slice(0, TEXT_THRESHOLD) + '...';
   }
 
+  // --- truncateLongTextInNodes ----------------------------------------------
+  // Walk all text nodes under `root`. Long prose (> LONG_TEXT_THRESHOLD) is
+  // truncated to the first N chars + '...'. Short text (titles, labels) stays
+  // full — these are what CSS-by-text-content matching needs. Dates, prices,
+  // and ID-like tokens are preserved verbatim regardless of length because
+  // extraction often keys on them.
+  const LONG_TEXT_THRESHOLD = 200;
+  const LONG_TEXT_KEEP_FULL_PATTERNS = [
+    /^[\d\s,.:$¥€£+-]{1,50}$/,                           // prices, pure numbers
+    /^\d{4}-\d{2}-\d{2}.*$/,                              // ISO dates
+    /^\d{1,2}\/\d{1,2}\/\d{2,4}.*$/,                      // slash dates
+    /^\d+\s*(min|hour|day|week|month|year)s?(\s*ago)?/i,  // relative time
+    /^[A-Z0-9][\w-]*\d[\w-]*$/,                           // ID-like
+  ];
+
+  function truncateLongTextInNodes(root) {
+    if (!root) return;
+    const ownerDoc = root.ownerDocument || (root.nodeType === 9 ? root : null);
+    if (!ownerDoc) return;
+    const walker = ownerDoc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    for (const node of nodes) {
+      const t = (node.nodeValue || '').trim();
+      if (t.length <= LONG_TEXT_THRESHOLD) continue;
+      if (LONG_TEXT_KEEP_FULL_PATTERNS.some(re => re.test(t))) continue;
+      node.nodeValue = t.slice(0, LONG_TEXT_THRESHOLD) + '...';
+    }
+  }
+
   // --- shouldRemoveTag ------------------------------------------------------
   // Tags that never help the LLM write selectors. Note: iframe is NOT in this
   // set — same-origin iframes are inlined with a prefix marker so the LLM
@@ -186,6 +216,9 @@
       } catch (_) { /* cross-origin: leave iframe as-is */ }
       if (marked) iframe.setAttribute('data-iframe-prefix', prefix);
     });
+
+    // Compress long prose text nodes — preserves structure, shortens content.
+    truncateLongTextInNodes(root);
 
     let result = root.outerHTML;
     result = result.replace(/\n\s*\n/g, '\n').replace(/>\s+</g, '><');

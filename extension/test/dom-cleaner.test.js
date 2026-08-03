@@ -200,12 +200,19 @@ describe('cleanPageHtml', () => {
     assert.ok(!cleaned.includes('sidebar'));
   });
 
-  it('does NOT truncate long output', () => {
-    const big = '<div>' + 'x'.repeat(100000) + '</div>';
+  it('truncates long prose text nodes (>200 chars) but preserves structure', () => {
+    // A single 100k-char text node used to flow through cleanPageHtml
+    // untouched. RC24 A1 changed this contract: long prose is now truncated
+    // to the first 200 chars + '...' to keep selector-relevant structure
+    // intact while compressing content.
+    const big = '<div><p>' + 'x'.repeat(100000) + '</p></div>';
     setupJSDOM(`<html><body>${big}</body></html>`);
     const cleaned = cleanPageHtml(document.documentElement.outerHTML);
-    assert.ok(cleaned.length > 90000);
-    assert.ok(!cleaned.includes('[truncated]'));
+    assert.ok(cleaned.includes('<p>'), 'structure preserved');
+    assert.ok(cleaned.includes('...'), 'truncation marker present');
+    assert.ok(!cleaned.includes('[truncated]'), 'no legacy marker');
+    // The full 100k string must NOT survive.
+    assert.ok(cleaned.length < 10000, 'long prose compressed');
   });
 
   it('NEW: filters framework-generated class hashes', () => {
@@ -338,7 +345,14 @@ describe('cleanHtmlForLLM', () => {
   });
 
   it('returns mode compressed for large pages with annotations', () => {
-    const big = '<div class="target">' + 'x'.repeat(100000) + '</div>';
+    // After RC24 A1, single-text-node padding gets truncated to ~200 chars,
+    // so the page never crosses the 80KB threshold. Use many distinct
+    // elements with realistic short content instead — this is the realistic
+    // shape of a large page anyway.
+    const many = Array.from({ length: 4000 }, (_, i) =>
+      `<div class="row" data-i="${i}"><span>row ${i} label</span><a href="/p/${i}">item ${i}</a></div>`
+    ).join('');
+    const big = `<div class="target">${many}</div>`;
     setupJSDOM(`<html><body>${big}</body></html>`);
     const result = cleanHtmlForLLM(document.documentElement.outerHTML, [{ selector: '.target' }]);
     assert.equal(result.mode, 'compressed');
@@ -349,7 +363,11 @@ describe('cleanHtmlForLLM', () => {
   });
 
   it('mode compressed preserves annotated element context', () => {
-    const big = '<div>' + 'z'.repeat(100000) + '</div>';
+    // Same A1 consideration: build volume from many distinct short elements.
+    const many = Array.from({ length: 4000 }, (_, i) =>
+      `<tr><td>row ${i}</td><td>val ${i}</td></tr>`
+    ).join('');
+    const big = `<table>${many}</table>`;
     setupJSDOM(`<html><body>${big}<table><tr><td class="key">注册资本</td><td class="val">100万美元</td></tr></table></body></html>`);
     const result = cleanHtmlForLLM(document.documentElement.outerHTML, [
       { selector: '.key' }, { selector: '.val' }
