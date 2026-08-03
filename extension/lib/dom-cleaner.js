@@ -71,11 +71,11 @@
   // extraction often keys on them.
   const LONG_TEXT_THRESHOLD = 200;
   const LONG_TEXT_KEEP_FULL_PATTERNS = [
-    /^[\d\s,.:$¥€£+-]{1,50}$/,                           // prices, pure numbers
-    /^\d{4}-\d{2}-\d{2}.*$/,                              // ISO dates
-    /^\d{1,2}\/\d{1,2}\/\d{2,4}.*$/,                      // slash dates
-    /^\d+\s*(min|hour|day|week|month|year)s?(\s*ago)?/i,  // relative time
-    /^[A-Z0-9][\w-]*\d[\w-]*$/,                           // ID-like
+    /^[\d\s,.:$¥€£+-]{1,50}$/,                                    // prices, pure numbers
+    /^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?(\.\d+)?Z?)?$/,   // ISO dates, optional time, no trailing prose
+    /^\d{1,2}\/\d{1,2}\/\d{2,4}([ T]\d{2}:\d{2}(:\d{2})?)?$/,     // slash dates, optional time
+    /^\d+\s*(min|hour|day|week|month|year)s?\s*(ago)?$/i,         // relative time, anchored at end
+    /^[A-Za-z0-9][\w-]*\d[\w-]*$/,                                // ID-like (also covers lowercase IDs like abc-123)
   ];
 
   function truncateLongTextInNodes(root) {
