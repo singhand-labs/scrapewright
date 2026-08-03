@@ -207,6 +207,38 @@ describe('cleanHtmlForLLM tiered degradation', () => {
     assert.equal(r1.mode, 'full');
     assert.equal(r2.mode, 'full');
   });
+
+  it('DOMParser-failure fallback does not use substring cut', () => {
+    // Even if DOMParser throws (extremely rare in practice), the fallback
+    // must honor the "no substring(0, budget)" invariant.
+    const origParse = global.DOMParser;
+    const origParseFromString = global.DOMParser.prototype.parseFromString;
+    let parseCalls = 0;
+    // The first parseFromString call serves cleanPageHtml (which produces the
+    // cleaned HTML). The second call is the tier-2b re-parse on `cleaned`.
+    // Mock: succeed the first call, throw on the second.
+    global.DOMParser.prototype.parseFromString = function (html, type) {
+      parseCalls++;
+      if (parseCalls === 1) {
+        return origParseFromString.call(this, html, type);
+      }
+      throw new Error('synthetic parse failure');
+    };
+    try {
+      // Build a string large enough that the small budget forces tier 2b
+      // (the path that calls DOMParser on the cleaned HTML).
+      let html = '<html><body>';
+      for (let i = 0; i < 6000; i++) html += `<div class="row-${i}">item ${i}</div>`;
+      html += '</body></html>';
+      const result = cleanHtmlForLLM(html, [], 5000);
+      assert.equal(result.mode, 'needs_subtree_selection', 'must not fall back to substring');
+      assert.equal(result.error, 'domparser-failed');
+      assert.equal(result.fingerprint, null);
+      assert.ok(parseCalls >= 2, 'DOMParser.parseFromString must have been invoked for tier 2b');
+    } finally {
+      global.DOMParser.prototype.parseFromString = origParseFromString;
+    }
+  });
 });
 
 describe('compressStructure opts.maxDepth', () => {
