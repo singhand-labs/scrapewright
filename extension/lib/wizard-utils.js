@@ -993,11 +993,14 @@ function resolveAutoFixTargets(patches, targetStepId, allSteps) {
 }
 
 function buildResearchPrompt(url, description, html, text) {
-  return `I need to create a web scraping script for this page.\n\nURL: ${url}\nRequirements: ${description}\n\nPage HTML (truncated):\n${html}\n\nPage text:\n${text}\n\nPlease analyze the page and return a JSON object with:\n- findings: string describing what you found\n- needsAnnotation: boolean, true if you need user to identify specific elements\n- draftScript: string with JavaScript code using $, $click, $type, $extract, $wait, $check, $openTab APIs\n- inputSchema: JSON Schema object describing the script's input parameters\n- outputSchema: JSON Schema object describing the script's output structure\n- sampleInput: a JSON object with example values matching inputSchema`;
+  // `text` argument kept for backward compatibility but no longer rendered —
+  // the cleaned HTML carries both structure and short text content.
+  return `I need to create a web scraping script for this page.\n\nURL: ${url}\nRequirements: ${description}\n\nPage HTML (cleaned):\n${html}\n\nPlease analyze the page and return a JSON object with:\n- findings: string describing what you found\n- needsAnnotation: boolean, true if you need user to identify specific elements\n- draftScript: string with JavaScript code using $, $click, $type, $extract, $wait, $check, $openTab APIs\n- inputSchema: JSON Schema object describing the script's input parameters\n- outputSchema: JSON Schema object describing the script's output structure\n- sampleInput: a JSON object with example values matching inputSchema`;
 }
 
 function buildFixPrompt(error, url, description, script, html, text, annotations, feedback) {
-  let prompt = `The following scraping script failed with error: ${error}\n\nTarget URL: ${url}\nOriginal requirement: ${description}\n\nCurrent script:\n${script}\n\nPage HTML (truncated):\n${html}\n\nPage text:\n${text}\n\nAnnotations: ${JSON.stringify(annotations)}`;
+  // `text` argument kept for backward compatibility but no longer rendered.
+  let prompt = `The following scraping script failed with error: ${error}\n\nTarget URL: ${url}\nOriginal requirement: ${description}\n\nCurrent script:\n${script}\n\nPage HTML (cleaned):\n${html}\n\nAnnotations: ${JSON.stringify(annotations)}`;
   if (feedback) prompt += '\n\nUser feedback: ' + feedback;
   prompt += '\n\nPlease fix the script. Return ONLY the fixed JavaScript code, no explanation.';
   return prompt;

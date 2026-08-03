@@ -1028,19 +1028,13 @@ URL: ${pageInfo.url}
 Requirements: ${pageInfo.description}
 
 Page compressed structure (initial state):
-${pageInfo.structure}
-
-Page text (initial state):
-${pageInfo.textSummary}`;
+${pageInfo.structure}`;
 
   if (postPageInfo) {
     prompt += `
 
 Page compressed structure (after interaction):
 ${postPageInfo.structure}
-
-Page text (after interaction):
-${postPageInfo.textSummary}
 
 Note: The page state changes after interaction. Identify elements needed for BOTH the interaction steps (from initial state) and the extraction steps (from post-interaction state).`;
   }
@@ -1116,19 +1110,13 @@ Confirmed element selectors:
 ${confirmedSelectors.map(s => `- ${s.purpose}: ${s.status === 'revised' ? s.revisedSelector : s.selector}`).join('\n')}
 
 Page compressed structure (initial state):
-${pageInfo.structure}
-
-Page text (initial state):
-${pageInfo.textSummary}`;
+${pageInfo.structure}`;
 
   if (postPageInfo) {
     prompt += `
 
 Page compressed structure (after interaction):
 ${postPageInfo.structure}
-
-Page text (after interaction):
-${postPageInfo.textSummary}
 
 IMPORTANT: The page changes after interaction. Generate steps that:
 1. Use the INITIAL state for input/interaction steps (typing, clicking submit buttons)
@@ -1338,9 +1326,6 @@ Requirements: ${pageInfo.description}
 
 Page compressed structure:
 ${pageInfo.structure}
-
-Page text:
-${pageInfo.textSummary}
 
 If the page requires interaction (typing input, clicking buttons, submitting forms, navigating, etc.) to reach the content the user wants to scrape, generate an exploration script.
 
@@ -2009,7 +1994,7 @@ async function improveStepWithAI(stepIndex, userFeedback) {
   }
 
   const snapshotSection = pageSnapshot
-    ? `Page structure:\n${pageSnapshot.structure || ''}\n\nPage text:\n${pageSnapshot.textContent || pageSnapshot.textSummary || ''}`
+    ? `Page structure:\n${pageSnapshot.structure || ''}`
     : '(page snapshot not available — target page may not be open)';
 
   // If improving a $openTab step, capture the detail page snapshot
@@ -2040,7 +2025,7 @@ async function improveStepWithAI(stepIndex, userFeedback) {
   }
 
   const detailSnapshotSection = pageSnapshot
-    ? `Page structure:\n${pageSnapshot.structure || ''}\n\nPage text:\n${pageSnapshot.textContent || pageSnapshot.textSummary || ''}`
+    ? `Page structure:\n${pageSnapshot.structure || ''}`
     : snapshotSection;
 
   const prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${SCRIPT_DSL_GUIDE}
@@ -2603,7 +2588,24 @@ If your script does NOT use $openTab, $wait / $ / $extract will run against the 
   // step 5 even though the root cause was in step 4).
   const allStepsContext = wizardState.steps.map(s => {
     const marker = (isFailureFix && s.id === targetStepId) ? ' <<< FAILING' : '';
-    return `Step ${s.id} (${s.name}):${marker}\n  onSuccess → ${s.onSuccess || 'TERMINATE'}\n  Script:\n${s.script}`;
+    // RC22 (console.log 2026-08-03 11:43–11:57): surface step.annotations
+    // alongside each step's script. Without this, the user-feedback autoFix
+    // path forced the LLM to guess selectors based on its training-data
+    // assumption of the site DOM — every round failed the same way on FB's
+    // username field despite the user having annotated it at author time.
+    // The failure-fix path already dumped top-level wizardState.annotations
+    // (line ~2694); the user-feedback path missed this entirely. Generic
+    // data-flow fix — works for any annotated field on any site.
+    let annBlock = '';
+    if (Array.isArray(s.annotations) && s.annotations.length > 0) {
+      const annText = buildAnnotationsText(s.annotations);
+      if (annText && typeof annText === 'string') {
+        // Indent each line so the block sits cleanly under the step's script.
+        const indented = annText.split('\n').filter(Boolean).map(l => '    ' + l).join('\n');
+        annBlock = '\n  User-annotated selectors (empirically verified at author time — PREFER these over your own guesses; if a field is missing, check here first):\n' + indented;
+      }
+    }
+    return `Step ${s.id} (${s.name}):${marker}\n  onSuccess → ${s.onSuccess || 'TERMINATE'}\n  Script:\n${s.script}${annBlock}`;
   }).join('\n\n');
 
   // Build test results context. Strip snapshots and cap field sizes —
@@ -2685,9 +2687,6 @@ ${buildTimeoutGuidance(DEPLOY_TIMEOUT_MS).text}
 ${detailPageHint}Page HTML (cleaned, noise removed):
 ${pageSnapshot.html || ''}
 
-Page text content:
-${pageSnapshot.textContent || pageSnapshot.textSummary || ''}
-
 Page compressed structure:
 ${pageSnapshot.structure || ''}
 
@@ -2761,7 +2760,7 @@ User's observation feedback:
 ${userFeedback}
 ${emptyFieldsSignal ? '\n' + emptyFieldsSignal + '\n' : ''}
 Identify EVERY step in the workflow below whose script contains a root cause for the reported problems, and return a fix for each. Do NOT anchor on any particular step — the bug may be in any of them. Typical patterns:
-- "field X is missing/wrong" → find the step whose $extractList / $extract call reads field X (usually the EXTRACT step, not the finalizer). Fix it there.
+- "field X is missing/wrong" → FIRST check whether the step has User-annotated selectors (listed under each step below as "User-annotated selectors"). Those were empirically verified by the user at author time and are the source of truth — copy them VERBATIM. If no annotation exists for field X, fall back to deriving from RECORD HTML in RUNTIME DIAGNOSTICS below. The most common cause of repeated extraction failure is the LLM inventing its own selector when a working annotation was available but ignored.
 - "only N items extracted" → the scroll/paginate step (under-loaded) OR the extract step (container selector too narrow).
 - "field X has wrong value" → the step that extracts that field — its selector matches the wrong element.
 - "image URLs incomplete" → if the field is declared array and the script uses $extract('img','src'), switch to $list('img') (one src vs array of srcs).
@@ -2784,9 +2783,6 @@ ${currentOutput}
 ${regressionGuard}
 ${detailPageHint}Page HTML (cleaned, noise removed):
 ${pageSnapshot.html || ''}
-
-Page text content:
-${pageSnapshot.textContent || pageSnapshot.textSummary || ''}
 
 Page compressed structure:
 ${pageSnapshot.structure || ''}
