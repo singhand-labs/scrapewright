@@ -371,7 +371,7 @@
     return false;
   }
 
-  function compressNode(node, depth, annotatedSelectors) {
+  function compressNode(node, depth, annotatedSelectors, overrideMaxDepthNormal) {
     if (node.nodeType === Node.TEXT_NODE) {
       return truncateText(node.textContent);
     }
@@ -391,7 +391,11 @@
     if (containsAnnotated) attrs += ' [ANNOTATED]';
 
     const childElementCount = node.children.length;
-    const maxDepth = containsAnnotated ? STRUCTURE_MAX_DEPTH_ANNOTATED : STRUCTURE_MAX_DEPTH_NORMAL;
+    const maxDepth = containsAnnotated
+      ? STRUCTURE_MAX_DEPTH_ANNOTATED
+      : (overrideMaxDepthNormal !== null && overrideMaxDepthNormal !== undefined
+          ? overrideMaxDepthNormal
+          : STRUCTURE_MAX_DEPTH_NORMAL);
 
     if (depth >= maxDepth) {
       if (childElementCount > 0) {
@@ -403,7 +407,7 @@
 
     const childParts = [];
     for (const child of node.childNodes) {
-      const c = compressNode(child, depth + 1, annotatedSelectors);
+      const c = compressNode(child, depth + 1, annotatedSelectors, overrideMaxDepthNormal);
       if (c) childParts.push(c);
     }
     const inner = childParts.join('');
@@ -417,34 +421,87 @@
     return `<${tag}${attrs}>${inner}</${tag}>`;
   }
 
-  function compressStructure(doc, annotatedSelectors) {
+  function compressStructure(doc, annotatedSelectors, opts) {
     const selectors = annotatedSelectors || [];
+    const overrideMaxDepthNormal = (opts && typeof opts.maxDepth === 'number') ? opts.maxDepth : null;
     if (!doc || !doc.body) return '';
     const parts = [];
     for (const child of doc.body.childNodes) {
-      const c = compressNode(child, 0, selectors);
+      const c = compressNode(child, 0, selectors, overrideMaxDepthNormal);
       if (c) parts.push(c);
     }
     return parts.join('\n');
   }
 
-  // --- cleanHtmlForLLM ------------------------------------------------------
-  const CLEAN_THRESHOLD = 80000;
-
-  function cleanHtmlForLLM(rawHtml, annotations) {
-    const cleaned = cleanPageHtml(rawHtml);
-    if (cleaned.length <= CLEAN_THRESHOLD) {
-      return { mode: 'full', html: cleaned };
+  // --- htmlFingerprint -------------------------------------------------------
+  // djb2 hash of whitespace-normalized HTML. Used by autoFix prompt assembly
+  // (Module C) to detect when the page hasn't changed across rounds, so the
+  // full HTML body is not re-sent. Not cryptographic — only needs collision
+  // resistance across realistic page variations.
+  function htmlFingerprint(rawHtml) {
+    const normalized = (rawHtml || '').replace(/\s+/g, ' ').trim();
+    if (!normalized) return 'empty';
+    let hash = 5381;
+    for (let i = 0; i < normalized.length; i++) {
+      hash = ((hash << 5) + hash + normalized.charCodeAt(i)) | 0;
     }
-    const doc = new DOMParser().parseFromString(cleaned, 'text/html');
-    const annotList = annotations || [];
-    const selectors = annotList.map(a => a.selector).filter(Boolean);
-    const contexts = annotList.map(a => {
-      if (!a.selector) return { selector: null, context: null };
-      return { selector: a.selector, context: extractAnnotationContext(doc, a.selector) };
-    });
+    return (hash >>> 0).toString(16).padStart(8, '0');
+  }
+
+  // --- cleanHtmlForLLM ------------------------------------------------------
+
+  function cleanHtmlForLLM(rawHtml, annotations, budget) {
+    const _budget = (typeof budget === 'number' && budget > 0) ? budget : 30000;
+    if (!rawHtml) return { mode: 'full', html: '', fingerprint: 'empty' };
+
+    let cleaned;
+    try {
+      cleaned = cleanPageHtml(rawHtml);
+    } catch (e) {
+      return { mode: 'full', html: '', fingerprint: 'parse-error', error: String(e) };
+    }
+
+    // Tier 2a: full cleaned HTML
+    if (cleaned.length <= _budget) {
+      return { mode: 'full', html: cleaned, fingerprint: htmlFingerprint(cleaned) };
+    }
+
+    // Tier 2b: annotated contexts only
+    let doc;
+    try {
+      doc = new DOMParser().parseFromString(cleaned, 'text/html');
+    } catch (e) {
+      return { mode: 'full', html: cleaned.slice(0, _budget), fingerprint: htmlFingerprint(cleaned), error: 'domparser-failed' };
+    }
+    const annotList = Array.isArray(annotations) ? annotations : [];
+    const contexts = annotList
+      .map(a => {
+        if (!a || !a.selector) return null;
+        try {
+          const ctx = extractAnnotationContext(doc, a.selector);
+          return ctx ? { selector: a.selector, context: ctx } : null;
+        } catch (_) { return null; }
+      })
+      .filter(Boolean);
+    const annotatedBundle = contexts.map(c => c.context).join('\n');
+    if (annotatedBundle.length > 0 && annotatedBundle.length <= _budget) {
+      return { mode: 'annotated', contexts, fingerprint: htmlFingerprint(annotatedBundle) };
+    }
+
+    // Tier 2c: compressed structure (default depth)
+    const selectors = annotList.map(a => a && a.selector).filter(Boolean);
     const structure = compressStructure(doc, selectors);
-    return { mode: 'compressed', contexts, structure };
+    if (structure.length <= _budget) {
+      return { mode: 'compressed', structure, contexts, fingerprint: htmlFingerprint(structure) };
+    }
+
+    // Tier 2d: needs LLM subtree selection
+    const structureForSelection = compressStructure(doc, selectors, { maxDepth: 2 });
+    return {
+      mode: 'needs_subtree_selection',
+      structureForSelection,
+      fingerprint: null
+    };
   }
 
   // --- getCompressedSnapshot ------------------------------------------------
@@ -580,7 +637,8 @@
   }
 
   const api = {
-    filterClasses, truncateText, shouldRemoveTag, buildIframePrefix,
+    filterClasses, truncateText, truncateLongTextInNodes, shouldRemoveTag,
+    buildIframePrefix, htmlFingerprint,
     cleanPageHtml, extractAnnotationContext, compressStructure, cleanHtmlForLLM,
     getCompressedSnapshot, getElementFullHtml, getElementsFullHtml,
   };

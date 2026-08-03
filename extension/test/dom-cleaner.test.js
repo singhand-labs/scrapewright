@@ -344,26 +344,33 @@ describe('cleanHtmlForLLM', () => {
     assert.ok(result.html.includes('small page'));
   });
 
-  it('returns mode compressed for large pages with annotations', () => {
+  it('returns mode needs_subtree_selection when target context itself overflows the budget', () => {
     // After RC24 A1, single-text-node padding gets truncated to ~200 chars,
     // so the page never crosses the 80KB threshold. Use many distinct
     // elements with realistic short content instead — this is the realistic
     // shape of a large page anyway.
+    //
+    // After RC24 A2, cleanHtmlForLLM degrades through 4 tiers. With a huge
+    // .target whose annotated context itself exceeds the default 30K budget,
+    // we land on tier 2d (needs_subtree_selection) — the LLM must narrow
+    // the selector before we re-send any HTML body.
     const many = Array.from({ length: 4000 }, (_, i) =>
       `<div class="row" data-i="${i}"><span>row ${i} label</span><a href="/p/${i}">item ${i}</a></div>`
     ).join('');
     const big = `<div class="target">${many}</div>`;
     setupJSDOM(`<html><body>${big}</body></html>`);
     const result = cleanHtmlForLLM(document.documentElement.outerHTML, [{ selector: '.target' }]);
-    assert.equal(result.mode, 'compressed');
-    assert.ok(Array.isArray(result.contexts));
-    assert.equal(result.contexts.length, 1);
-    assert.ok(result.contexts[0].context);
-    assert.ok(result.structure);
+    assert.equal(result.mode, 'needs_subtree_selection');
+    assert.ok(typeof result.structureForSelection === 'string');
+    assert.ok(result.structureForSelection.length > 0);
+    assert.equal(result.fingerprint, null);
   });
 
-  it('mode compressed preserves annotated element context', () => {
+  it('returns mode annotated when annotated contexts fit the budget', () => {
     // Same A1 consideration: build volume from many distinct short elements.
+    // The annotated .key/.val elements live in a small <table>; their
+    // contexts are ~100 chars each → annotated bundle fits the 30K budget
+    // → tier 2b (annotated) fires.
     const many = Array.from({ length: 4000 }, (_, i) =>
       `<tr><td>row ${i}</td><td>val ${i}</td></tr>`
     ).join('');
@@ -372,7 +379,8 @@ describe('cleanHtmlForLLM', () => {
     const result = cleanHtmlForLLM(document.documentElement.outerHTML, [
       { selector: '.key' }, { selector: '.val' }
     ]);
-    assert.equal(result.mode, 'compressed');
+    assert.equal(result.mode, 'annotated');
+    assert.ok(Array.isArray(result.contexts));
     const combined = result.contexts.map(c => c.context || '').join('');
     assert.ok(combined.includes('注册资本'));
     assert.ok(combined.includes('100万美元'));
