@@ -50,4 +50,22 @@ describe('truncateLongTextInNodes (via cleanPageHtml)', () => {
     assert.match(cleaned, /3 days ago/);
     assert.ok(!cleaned.includes('...'));
   });
+
+  it('truncates long prose that merely starts with a date', () => {
+    // Regression: anchored regexes prevent date-prefixed prose from escaping truncation.
+    const proseWithDatePrefix = '2026-08-03 ' + 'B'.repeat(400);
+    const cleaned = DomCleaner.cleanPageHtml(`<div><p>${proseWithDatePrefix}</p></div>`);
+    assert.match(cleaned, /\.\.\.<\/p>/, 'prose prefixed with a date MUST be truncated');
+    assert.ok(!cleaned.includes(proseWithDatePrefix), 'full prose must not survive');
+
+    const slashDateProse = '8/3/2026 ' + 'C'.repeat(400);
+    const cleaned2 = DomCleaner.cleanPageHtml(`<div><p>${slashDateProse}</p></div>`);
+    assert.match(cleaned2, /\.\.\.<\/p>/);
+    assert.ok(!cleaned2.includes(slashDateProse));
+
+    const relativeTimeProse = '3 days ago I went to the market and bought ' + 'D'.repeat(400);
+    const cleaned3 = DomCleaner.cleanPageHtml(`<div><p>${relativeTimeProse}</p></div>`);
+    assert.match(cleaned3, /\.\.\.<\/p>/);
+    assert.ok(!cleaned3.includes(relativeTimeProse));
+  });
 });
