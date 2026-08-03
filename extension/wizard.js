@@ -169,9 +169,24 @@ function parseLLMJson(cleaned, contextLabel, rawResult) {
   throw err;
 }
 
-function trimLlmHistory() {
-  if (wizardState.llmHistory.length > 6) {
-    wizardState.llmHistory = wizardState.llmHistory.slice(-6);
+function trimLlmHistory(maxChars) {
+  // C4: trim by total chars, not message count. Preserves multi-round memory
+  // for typical autoFix flows (which stay well under the limit) but caps
+  // pathological growth (many rounds with page changes).
+  const limit = (typeof maxChars === 'number' && maxChars > 0) ? maxChars : 150000;
+  let total = wizardState.llmHistory.reduce((n, m) => n + (m.content?.length || 0), 0);
+  let trimmed = false;
+  while (total > limit && wizardState.llmHistory.length > 4) {
+    const removed = wizardState.llmHistory.shift();
+    total -= (removed.content?.length || 0);
+    trimmed = true;
+  }
+  // If we dropped any entries, invalidate the fingerprint cache. A trimmed
+  // entry may have been the bearer of a fingerprint still in the set; if we
+  // left the set as-is, the next round would send a "see prior message with
+  // fingerprint X" reference to a message that no longer exists.
+  if (trimmed && wizardState.htmlFingerprintsInHistory) {
+    wizardState.htmlFingerprintsInHistory.clear();
   }
 }
 
