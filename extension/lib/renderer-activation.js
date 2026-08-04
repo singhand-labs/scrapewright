@@ -1,52 +1,44 @@
 // extension/lib/renderer-activation.js
 //
-// Transient chrome.debugger-based activation. Prevents Chrome's tab lifecycle
-// management from throttling/freezing scrape tabs beyond what popup-window
-// (RC17) + visibility-keepalive (RC13/RC16) already do.
+// Trusted-wheel fallback (RC19) — the ONLY remaining user of chrome.debugger
+// after RC20.
 //
-// WHY THIS EXISTS (RC17+ — console.log 2026-07-27 17:02):
-// Even with popup-window + visibility-keepalive override, some sites with
-// aggressive lazy-load still don't fully render because Chrome's renderer
-// process de-prioritizes tabs it considers hidden/inactive at the lifecycle
-// layer. CDP's Page.setWebLifecycleState({state:'active'}) tells Chrome's
-// lifecycle manager to treat the tab as actively used, preventing intensive
-// throttling after the 5-minute inactivity threshold.
+// === Current architecture (RC20) ===
 //
-// DETECTION-RISK MINIMIZATION (user requirement 2026-07-28):
-// Anti-bot systems (Cloudflare, DataDome, Akamai) detect CDP usage primarily
-// via Runtime.evaluate command traces. This module:
-//   1. Uses ONLY Page.* commands — never Runtime, Network, DOM, or Emulation
-//   2. Transient attach: attach → sendCommand → detach, target < 100ms total
-//      Anti-bot scans for CDP are typically periodic (per second/minute);
-//      transient attaches are mostly invisible to them.
-//   3. Detaches even on error — never leaves the yellow "extension is
-//      debugging this browser" banner visible (UX + minor detection signal).
-//   4. Requires explicit user opt-in via chrome.storage.local flag — never silent.
+// Enhanced Scraping Mode is the OPT-IN flag (chrome.storage.local
+// `enhancedModeEnabled`) that gates availability of the trusted-wheel
+// fallback. When a scrape tab's programmatic `scrollBy` stalls (no content
+// growth), `lib/scroll-ops.js` asks the content script to dispatch a trusted
+// wheel event. The content script sends TRUSTED_WHEEL_SCROLL_REQUEST to
+// background.js, which calls dispatchTrustedWheelScroll below.
+//
+// Brief tab activation (RC20, lib/tab-activation.js) handles Chrome's hard
+// rule that compositor frames are produced only for the active tab in the
+// focused window — that's a separate layer and lives in its own module.
+//
+// === Removed in RC20 ===
+//
+// activateTabViaDebugger (Page.setWebLifecycleState): was RC18 Plan A.
+// Empirically INSUFFICIENT — addresses page-lifecycle layer but not compositor
+// frame production. RC20's brief tab activation makes lifecycle naturally
+// ACTIVE during the brief window, so the call was pure overhead (yellow
+// debugger banner per scrape). Removed along with activateTabIfPermitted.
+//
+// ===
 //
 // WHY DEBUGGER IS A REQUIRED PERMISSION (not optional_permissions):
 // Chrome's optional_permissions allow-list excludes "debugger" — the manifest
 // entry is silently stripped at load, and chrome.permissions.request fails
 // with "Only permissions specified in the manifest may be requested". So the
-// install-time "may debug your browser" warning is unavoidable for users of
-// this extension. Trade-off accepted: enhanced scraping mode is opt-in at
-// runtime via a chrome.storage.local flag (the options-page toggle) so users
-// who don't toggle it on never actually use the debugger capability, even
-// though Chrome grants the permission at install time.
+// install-time "may debug your browser" warning is unavoidable. Enhanced
+// Mode is opt-in at runtime via the storage flag below, so users who never
+// toggle it on never actually use the debugger capability.
 //
-// FALLBACK CHAIN (when debugger flag not enabled or attach fails):
-//   1. Try chrome.debugger transient activation
-//   2. Fall back silently to RC17 popup-window + visibility-keepalive
-//   3. Log warn so operator knows activation didn't fire (but don't fail)
-//
-// WHY OPTIONAL_PERMISSION (not permissions):
-// Adding "debugger" to permissions triggers a scary install-time warning.
-// Using optional_permissions + chrome.permissions.request lets users install
-// normally, then decide whether to grant debugger access from the options
-// page when they need the enhanced scraping mode.
-// NOTE (2026-07-28): the optional_permissions approach DOES NOT WORK for
-// "debugger" — Chrome silently strips it from the manifest at load time.
-// The permission is now required at install. The runtime toggle below still
-// gates *usage* via a storage flag, so the toggle remains meaningful.
+// DETECTION-RISK MINIMIZATION:
+// Anti-bot systems (Cloudflare, DataDome, Akamai) detect CDP usage primarily
+// via Runtime.evaluate command traces. This module uses ONLY
+// Input.dispatchMouseEvent — never Runtime, Network, DOM, or Emulation.
+// Transient attach: attach → sendCommand → detach, target < 100ms total.
 
 (function (global) {
   const DEBUGGER_PROTOCOL_VERSION = '1.3';
@@ -115,72 +107,155 @@
     });
   }
 
-  // activateTabViaDebugger(tabId): the load-bearing operation. Transiently
-  // attaches chrome.debugger to the tab, sends Page.setWebLifecycleState to
-  // mark the tab as 'active' (preventing intensive throttling), then
-  // immediately detaches. Total attach window target: < 100ms.
+  // RC19 follow-up (console.log 2026-07-29): CDP sendCommand callbacks for
+  // Input.dispatchMouseEvent DO NOT fire on their own for background tabs in
+  // some throttled states — the callback only fires when Chrome eventually
+  // rejects the command (e.g. when the tab is closed, ~60s later via the
+  // orchestrator's timeout, surfacing as "Detached while handling command").
+  // Wrap each CDP step in a Promise.race with a hard cap so any hang unblocks
+  // within CDP_STEP_TIMEOUT_MS regardless of cause. Generic defense — works
+  // for any Chrome version / tab state.
+  const CDP_STEP_TIMEOUT_MS = 2000;
+  function withTimeout(promiseFactory, stepLabel) {
+    return new Promise(function (resolve, reject) {
+      let settled = false;
+      const timer = setTimeout(function () {
+        if (settled) return;
+        settled = true;
+        reject(new Error(stepLabel + ' timeout after ' + CDP_STEP_TIMEOUT_MS + 'ms'));
+      }, CDP_STEP_TIMEOUT_MS);
+      promiseFactory().then(
+        function (v) { if (settled) return; settled = true; clearTimeout(timer); resolve(v); },
+        function (e) { if (settled) return; settled = true; clearTimeout(timer); reject(e); }
+      );
+    });
+  }
+
+  // dispatchTrustedWheelScroll(tabId, opts): the RC19 fix for isTrusted-gated
+  // lazy-loaders (console.log 2026-07-28).
   //
-  // Returns { ok, reason?, attached?, sendCommand?, detached? } for
-  // diagnostic logging. Never throws — caller doesn't need to try/catch.
-  async function activateTabViaDebugger(tabId) {
+  // ROOT CAUSE THIS ADDRESSES:
+  // After RC12-RC18 fixed every visibility/lifecycle/frame-production layer,
+  // Facebook's feed lazy-load still flatlined on programmatic scroll. The
+  // user-confirmed disambiguator: manual mouse-wheel scroll DOES load more
+  // posts, programmatic el.scrollBy() does NOT. That split can only mean one
+  // thing — FB's loader filters on event.isTrusted, which is true only for
+  // OS-level input dispatched through Chrome's input pipeline. JS-only scroll
+  // produces isTrusted=false events and is ignored. No amount of visibility
+  // override or lifecycle activation changes that — it's a separate layer.
+  //
+  // CDP's Input.dispatchMouseEvent enters the renderer through the same input
+  // pipeline as real user input, so the resulting wheel event has
+  // isTrusted=true. This is the only programmatic mechanism that produces a
+  // trusted wheel event.
+  //
+  // WHY GENERIC, NOT FB-SPECIFIC:
+  // The fix lives entirely in infrastructure (renderer-activation + scroll-ops
+  // + content-script + background relay). No site names, no FB-specific DOM
+  // assumptions anywhere in the prompt or DSL. The LLM keeps writing
+  // `$scrollToBottom`; under the hood, when Enhanced Mode is enabled and the
+  // programmatic scroll stalls, we dispatch a trusted wheel event. Any site
+  // that gates lazy-load on isTrusted benefits; sites that don't filter are
+  // unaffected (programmatic scroll already works for them).
+  //
+  // NOTE (RC20): tab activation (lib/tab-activation.js) is now a separate
+  // prerequisite layer — Input.dispatchMouseEvent requires frame production
+  // which requires the tab to be active in the focused window. The content
+  // script's withTabActivation wrapper handles that; this function assumes
+  // the caller has already activated if needed.
+  //
+  // Returns { ok, dispatched, attached, detached, reason?, wheelX?, wheelY?,
+  //   deltaY? } for diagnostic logging. Never throws.
+  async function dispatchTrustedWheelScroll(tabId, opts) {
+    opts = opts || {};
+    var deltaY = (typeof opts.deltaY === 'number') ? opts.deltaY : 800;
+    var x = (typeof opts.x === 'number') ? opts.x : 400;
+    var y = (typeof opts.y === 'number') ? opts.y : 400;
+
     if (typeof chrome === 'undefined' || !chrome.debugger ||
         typeof chrome.debugger.attach !== 'function' ||
         typeof chrome.debugger.sendCommand !== 'function' ||
         typeof chrome.debugger.detach !== 'function') {
-      return { ok: false, reason: 'chrome.debugger unavailable' };
+      return { ok: false, dispatched: false, reason: 'chrome.debugger unavailable' };
     }
     if (typeof tabId !== 'number' || tabId <= 0) {
-      return { ok: false, reason: 'invalid tabId' };
+      return { ok: false, dispatched: false, reason: 'invalid tabId' };
     }
-    const target = { tabId };
-    const result = { ok: false, attached: false, sendCommand: false, detached: false };
+
+    // Reuse the same opt-in gate. If Enhanced Mode is off, fast-fail without
+    // touching the debugger.
+    var permitted = await hasDebuggerPermission();
+    if (!permitted) {
+      return { ok: false, dispatched: false, reason: 'debugger permission not granted' };
+    }
+
+    var target = { tabId: tabId };
+    var result = { ok: false, attached: false, dispatched: false, detached: false, wheelX: x, wheelY: y, deltaY: deltaY };
 
     // 1. Attach
     try {
-      await new Promise((resolve, reject) => {
-        chrome.debugger.attach(target, DEBUGGER_PROTOCOL_VERSION, () => {
-          const err = chrome.runtime && chrome.runtime.lastError;
-          if (err) reject(err);
-          else resolve();
+      await withTimeout(function () {
+        return new Promise(function (resolve, reject) {
+          chrome.debugger.attach(target, DEBUGGER_PROTOCOL_VERSION, function () {
+            var err = chrome.runtime && chrome.runtime.lastError;
+            if (err) reject(err); else resolve();
+          });
         });
-      });
+      }, 'wheel.attach');
       result.attached = true;
     } catch (e) {
-      // Most common failure: "Another debugger is already attached" (DevTools
-      // open, or another extension using chrome.debugger). Non-fatal — log
-      // and return; the existing popup-window path is still in effect.
-      return { ok: false, reason: 'attach failed: ' + (e && e.message || String(e)), attached: false };
+      return { ok: false, dispatched: false, reason: 'attach failed: ' + (e && e.message || String(e)) };
     }
 
-    // 2. Send the load-bearing command + 3. always detach in finally
+    // 2. mouseMoved + mouseWheel + 3. always detach in finally
     try {
-      // Page.setWebLifecycleState is a state-setting command; doesn't require
-      // prior Page.enable. It transitions the tab's lifecycle to 'active',
-      // which Chrome interprets as "user is using this tab right now" and
-      // lifts the 5-minute intensive-throttling freeze threshold.
-      await new Promise((resolve, reject) => {
-        chrome.debugger.sendCommand(target, 'Page.setWebLifecycleState', { state: 'active' }, () => {
-          const err = chrome.runtime && chrome.runtime.lastError;
-          if (err) reject(err);
-          else resolve();
+      // Position the cursor first. CDP requires a mouseMoved before mouseWheel
+      // so the renderer knows where the wheel event originates. Without this,
+      // some sites that read document:hover never see the wheel target change.
+      await withTimeout(function () {
+        return new Promise(function (resolve, reject) {
+          chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+            type: 'mouseMoved',
+            x: x, y: y,
+            modifier: 0
+          }, function () {
+            var err = chrome.runtime && chrome.runtime.lastError;
+            if (err) reject(err); else resolve();
+          });
         });
-      });
-      result.sendCommand = true;
+      }, 'wheel.mouseMoved');
+
+      // The actual wheel event. deltaY > 0 scrolls DOWN (toward end of page),
+      // matching user mouse-wheel-down gesture. Chrome converts deltaY in
+      // CSS-pixel-like units; ~100 is one wheel notch, ~800 is a fast scroll.
+      await withTimeout(function () {
+        return new Promise(function (resolve, reject) {
+          chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+            type: 'mouseWheel',
+            x: x, y: y,
+            deltaX: 0,
+            deltaY: deltaY,
+            modifier: 0
+          }, function () {
+            var err = chrome.runtime && chrome.runtime.lastError;
+            if (err) reject(err); else resolve();
+          });
+        });
+      }, 'wheel.mouseWheel');
+
+      result.dispatched = true;
       result.ok = true;
     } catch (e) {
-      result.reason = 'sendCommand failed: ' + (e && e.message || String(e));
+      result.reason = 'wheel dispatch failed: ' + (e && e.message || String(e));
     } finally {
-      // ALWAYS detach. Persistent attach leaves the yellow banner visible
-      // ("extension is debugging this browser"), which is both a UX cost
-      // and a (minor) detection signal that anti-bot could fingerprint.
       try {
-        await new Promise((resolve) => {
-          chrome.debugger.detach(target, () => { resolve(); });
-        });
+        await withTimeout(function () {
+          return new Promise(function (resolve) {
+            chrome.debugger.detach(target, function () { resolve(); });
+          });
+        }, 'wheel.detach');
         result.detached = true;
       } catch (e) {
-        // Detach failure is non-fatal — Chrome auto-detaches when the tab
-        // navigates/closes. Just note it in the result.
         result.detached = false;
         result.detachError = e && e.message || String(e);
       }
@@ -189,47 +264,101 @@
     return result;
   }
 
-  // activateTabIfPermitted(tabId): convenience wrapper used by scrape-tab.js.
-  // Checks permission first; if not granted, returns ok:false with a stable
-  // reason ('debugger permission not granted') that callers can suppress
-  // from logs (it's the expected state for users who didn't opt in).
-  async function activateTabIfPermitted(tabId) {
-    const permitted = await hasDebuggerPermission();
-    if (!permitted) {
-      return { ok: false, reason: 'debugger permission not granted' };
+  // createEnhancedModeCache({query}): lazy cache for the Enhanced Mode state.
+  // console.log 2026-08-04: every scroll stall in an Enhanced-Mode-off run
+  // was producing a full message round-trip (content-script → background →
+  // chrome.storage.local → response) just to learn "debugger permission not
+  // granted". Across a single FB scrape, dozens of wasted round-trips. This
+  // factory returns a cache object the content-script can hold at module
+  // scope: the first getState() queries via `opts.query`, subsequent calls
+  // return the cached value, invalidate() forces re-query (used when the
+  // user toggles Enhanced Mode mid-session).
+  //
+  // Concurrency-safe: if two getState() calls arrive before the first query
+  // resolves, they share the same underlying promise (one query, not two).
+  // Critical for the first scroll stall, where multiple in-flight fallbacks
+  // could otherwise each fire a round-trip.
+  //
+  // Failure-safe: if `query` throws or rejects, getState() resolves false
+  // (conservative — trusted-wheel just won't fire, scrape continues).
+  function createEnhancedModeCache(opts) {
+    opts = opts || {};
+    var queryFn = (typeof opts.query === 'function') ? opts.query : null;
+    var cachedState = null; // null = unknown, true/false = known
+    var inFlightPromise = null;
+
+    function resolveQuery() {
+      if (!queryFn) return Promise.resolve(false);
+      try {
+        var p = queryFn();
+        if (!p || typeof p.then !== 'function') p = Promise.resolve(p);
+        return p.then(
+          function (v) { return !!v; },
+          function () { return false; }
+        );
+      } catch (e) {
+        return Promise.resolve(false);
+      }
     }
-    return await activateTabViaDebugger(tabId);
+
+    return {
+      isKnown: function () { return cachedState !== null; },
+      getState: function () {
+        if (cachedState !== null) return Promise.resolve(cachedState);
+        if (!inFlightPromise) {
+          inFlightPromise = resolveQuery().then(function (v) {
+            cachedState = v;
+            inFlightPromise = null;
+            return v;
+          });
+        }
+        return inFlightPromise;
+      },
+      invalidate: function () {
+        cachedState = null;
+        // Leave inFlightPromise alone — if a query is mid-flight, let it
+        // settle (it will set cachedState, which invalidate() will have
+        // already cleared; the next getState() after settle will re-query
+        // only if cachedState is still null, but in the common case the
+        // user toggles Enhanced Mode between scrapes, not mid-stall).
+      },
+      _setForTest: function (v) { cachedState = !!v; inFlightPromise = null; }
+    };
   }
 
   const api = {
     hasDebuggerPermission: hasDebuggerPermission,
     requestDebuggerPermission: requestDebuggerPermission,
     removeDebuggerPermission: removeDebuggerPermission,
-    activateTabViaDebugger: activateTabViaDebugger,
-    activateTabIfPermitted: activateTabIfPermitted,
-    DEBUGGER_PROTOCOL_VERSION: DEBUGGER_PROTOCOL_VERSION
+    dispatchTrustedWheelScroll: dispatchTrustedWheelScroll,
+    createEnhancedModeCache: createEnhancedModeCache,
+    DEBUGGER_PROTOCOL_VERSION: DEBUGGER_PROTOCOL_VERSION,
+    CDP_STEP_TIMEOUT_MS: CDP_STEP_TIMEOUT_MS
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (typeof window !== 'undefined') {
     window.RendererActivation = api;
-    window.activateTabIfPermitted = activateTabIfPermitted;
+    window.dispatchTrustedWheelScroll = dispatchTrustedWheelScroll;
     window.hasDebuggerPermission = hasDebuggerPermission;
     window.requestDebuggerPermission = requestDebuggerPermission;
     window.removeDebuggerPermission = removeDebuggerPermission;
+    window.createEnhancedModeCache = createEnhancedModeCache;
   }
   if (typeof self !== 'undefined') {
     self.RendererActivation = api;
-    self.activateTabIfPermitted = activateTabIfPermitted;
+    self.dispatchTrustedWheelScroll = dispatchTrustedWheelScroll;
     self.hasDebuggerPermission = hasDebuggerPermission;
     self.requestDebuggerPermission = requestDebuggerPermission;
     self.removeDebuggerPermission = removeDebuggerPermission;
+    self.createEnhancedModeCache = createEnhancedModeCache;
   }
   if (typeof global !== 'undefined') {
     global.RendererActivation = api;
-    global.activateTabIfPermitted = activateTabIfPermitted;
+    global.dispatchTrustedWheelScroll = dispatchTrustedWheelScroll;
     global.hasDebuggerPermission = hasDebuggerPermission;
     global.requestDebuggerPermission = requestDebuggerPermission;
     global.removeDebuggerPermission = removeDebuggerPermission;
+    global.createEnhancedModeCache = createEnhancedModeCache;
   }
 })(typeof globalThis !== 'undefined' ? globalThis : this);

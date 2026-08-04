@@ -9,6 +9,7 @@ importScripts(
   'lib/visibility-keepalive.js',
   'lib/renderer-activation.js',
   'lib/scrape-tab.js',
+  'lib/tab-activation.js',
   'lib/debug-logger.js'
 );
 
@@ -65,13 +66,6 @@ let serverPort = 8765;
 // to record sub-tab snapshots into the same list. Cleared in a finally
 // block to avoid leaking references between executions.
 let currentExecutionTracker = null;
-
-// RC17: map of tabId → popupWindowId for tabs opened via createScrapeTab's
-// default popup path. Used by the removeTab callback so closing a scrape tab
-// also closes its host popup window — otherwise an empty popup would linger
-// on screen after every execution.
-const popupWindowsByTabId = new Map();
-
 
 // Native host connection state — surfaced to the options page UI.
 // Persisted to chrome.storage.local so SW restarts don't lose the last error.
@@ -380,24 +374,13 @@ async function handleStepDelete(message) {
   return { reqId: message.reqId, success: true, steps: service.steps };
 }
 
-// Strip heavy snapshot data from per-step results so job.steps is safe to expose
-// via GET /jobs/{id} for failure diagnosis (P2-3 observability).
-function sanitizeSteps(steps) {
-  if (!Array.isArray(steps)) return [];
-  return steps.map(s => ({
-    stepId: s.stepId,
-    stepName: s.stepName,
-    skipped: s.skipped || false,
-    skipReason: s.skipReason || null,
-    result: s.result === undefined ? null : s.result,
-    timestamp: s.timestamp || null
-  }));
-}
-
 async function createJob(serviceName, input) {
   debugLogger.log('info', 'background', 'Creating job', { serviceName, input });
   // pages[] carries every web page the scraper saw (RC16). pagesTruncated
   // counts captures dropped due to the per-job cap. Both optional for clients.
+  // Per-step execution trace is intentionally NOT exposed in the API response
+  // (users want extraction results, not framework telemetry). Internal logging
+  // via debugLogger and the orchestrator's own result.steps still cover diagnosis.
   const job = {
     id: crypto.randomUUID(),
     serviceName,
@@ -405,7 +388,6 @@ async function createJob(serviceName, input) {
     status: 'queued',
     result: null,
     error: null,
-    steps: [],
     pages: [],
     pagesTruncated: 0,
     createdAt: Date.now(),
@@ -462,7 +444,6 @@ async function processJob(jobId, serviceName, input) {
       status: result.success ? 'completed' : 'failed',
       result: result.data || null,
       error: result.error || null,
-      steps: result.steps || [],
       pages: result.pages || [],
       pagesTruncated: result.pagesTruncated || 0,
       completedAt: Date.now()
@@ -553,26 +534,17 @@ async function handleExecute(serviceName, input) {
       try {
         result = await StepOrchestrator.execute(service, input, {
           createTab: async (url) => {
-            // RC12→RC17: popup window, not background tab — see lib/scrape-tab.js
-            // for the why. Short version: only the active tab in a visible window
-            // gets renderer frame production, which IntersectionObserver-driven
-            // lazy-load feeds (FB/Twitter/infinite scroll) require. Background
-            // tabs get throttled at the renderer level — visibilityState override
-            // alone doesn't help.
+            // RC20: scrape tab is a background tab; lib/tab-activation.js
+            // handles brief activation during input-required DOM ops (scroll,
+            // click) so the renderer produces compositor frames on demand.
+            // See lib/scrape-tab.js for the architecture.
             const tab = await createScrapeTab(url);
-            // RC17: track popup window id by tab id so removeTab can close the
-            // whole window, not just the tab. Closing only the tab would leave
-            // an empty popup window on screen.
-            if (tab && tab._popupWindowId != null) {
-              popupWindowsByTabId.set(tab.id, tab._popupWindowId);
-            }
             await waitForTabLoad(tab.id, tabLoadTimeoutMs);
             // WS2.1: wait for the content-script to be listening before the first
             // DOM_REQUEST — prevents the RELAY_FAILED (tabId:null) race.
             const csReady = await waitForContentScript(tab.id);
             if (!csReady) {
               await closeScrapeTab(tab);
-              if (tab && tab._popupWindowId != null) popupWindowsByTabId.delete(tab.id);
               throw new Error('CONTENT_SCRIPT_NOT_READY');
             }
             return tab;
@@ -597,13 +569,7 @@ async function handleExecute(serviceName, input) {
           },
           removeTab: async (tabId) => {
             if (service.config.autoCloseTab !== false) {
-              const popupWinId = popupWindowsByTabId.get(tabId);
-              if (popupWinId != null) {
-                await chrome.windows.remove(popupWinId).catch(() => {});
-                popupWindowsByTabId.delete(tabId);
-              } else {
-                await chrome.tabs.remove(tabId).catch(() => {});
-              }
+              await chrome.tabs.remove(tabId).catch(() => {});
             }
           },
           evaluateCondition: async (tabId, conditionExpr) => {
@@ -641,8 +607,7 @@ async function handleExecute(serviceName, input) {
         stepOutputs: result.steps.map(s => ({ stepId: s.stepId, stepName: s.stepName, skipped: s.skipped, skipReason: s.skipReason }))
       });
 
-      // WS2.2 + P2-3: empty required output → failed; attach sanitized per-step trace for diagnosis.
-      const stepTrace = sanitizeSteps(result.steps);
+      // WS2.2: empty required output → failed.
       const oc = validateOutputAgainstSchema(result.finalResult, service.outputSchema);
       if (!oc.ok) {
         const gotKeys = (result.finalResult && typeof result.finalResult === 'object' && !Array.isArray(result.finalResult)) ? Object.keys(result.finalResult) : [];
@@ -653,7 +618,6 @@ async function handleExecute(serviceName, input) {
           success: false,
           error: outErr,
           data: result.finalResult,
-          steps: stepTrace,
           pages: result.pages || [],
           pagesTruncated: result.pagesTruncated || 0
         };
@@ -662,7 +626,6 @@ async function handleExecute(serviceName, input) {
       return {
         success: true,
         data: result.finalResult,
-        steps: stepTrace,
         pages: result.pages || [],
         pagesTruncated: result.pagesTruncated || 0
       };
@@ -678,15 +641,14 @@ async function handleExecute(serviceName, input) {
 
       if (error.message?.includes('LOGIN_REQUIRED')) {
         // This fires from the catch path where `error` is the orchestrator's
-        // thrown error — which carries the same pages[] / pagesTruncated /
-        // steps enrichment as the success path. Thread them so callers
+        // thrown error — which carries the same pages[] / pagesTruncated
+        // enrichment as the success path. Thread them so callers
         // investigating a login wall still get the trail of pages captured
         // before the failure. Shape-consistent with the other catch returns
         // (MISSING_URL_PARAM, POLL_EXHAUSTED) below.
         return {
           success: false,
           error: 'LOGIN_REQUIRED: Please log in and retry',
-          steps: error?.steps ? sanitizeSteps(error.steps) : [],
           pages: error?.pages || [],
           pagesTruncated: error?.pagesTruncated || 0
         };
@@ -699,7 +661,6 @@ async function handleExecute(serviceName, input) {
           error: error.message,
           code: error.code,
           paramName: error.paramName,
-          steps: [],
           pages: error.pages || [],
           pagesTruncated: error.pagesTruncated || 0
         };
@@ -713,14 +674,12 @@ async function handleExecute(serviceName, input) {
         // yields the same exhaustion. Surface the clear cause instead of
         // falling through to outputSchema validation, which would print a
         // misleading "missing required field" error.
-        const stepTrace = sanitizeSteps(error.steps);
         await logExecution(service, input, null, error.message, attempt);
         return {
           success: false,
           error: error.message,
           code: error.code,
           stepId: error.stepId,
-          steps: stepTrace,
           pages: error.pages || [],
           pagesTruncated: error.pagesTruncated || 0
         };
@@ -750,7 +709,6 @@ async function handleExecute(serviceName, input) {
   return {
     success: false,
     error: lastError?.message || 'Execution failed',
-    steps: sanitizeSteps(lastError?.steps),
     pages: lastError?.pages || [],
     pagesTruncated: lastError?.pagesTruncated || 0
   };
@@ -1078,7 +1036,204 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })();
     return true;
   }
+  if (message.type === 'TRUSTED_WHEEL_SCROLL_REQUEST') {
+    // RC19 (console.log 2026-07-28): content-script's scroll-ops stalled and
+    // is asking us to dispatch a trusted wheel event via CDP. Only available
+    // when Enhanced Mode is opt-in; dispatchTrustedWheelScroll fast-fails
+    // otherwise (no attach attempt, no yellow banner flicker).
+    //
+    // RC25 (console.log 2026-08-04): content-script now consults an
+    // Enhanced Mode cache BEFORE sending this message (see
+    // GET_ENHANCED_MODE_STATE below). When Enhanced Mode is known-off, this
+    // handler is never reached — saves N×(round-trip + storage read) per
+    // $scrollToBottom.
+    const tabId = sender.tab && sender.tab.id;
+    if (!tabId) {
+      sendResponse({ dispatched: false, reason: 'no sender.tab.id' });
+      return false;
+    }
+    (async () => {
+      try {
+        const result = await RendererActivation.dispatchTrustedWheelScroll(tabId, {
+          deltaY: (typeof message.deltaY === 'number') ? message.deltaY : 800
+        });
+        debugLogger.log('info', 'background', 'Trusted wheel dispatch', {
+          tabId,
+          attempt: message.attempt,
+          ok: result.ok,
+          dispatched: result.dispatched,
+          reason: result.reason
+        });
+        sendResponse(result);
+      } catch (e) {
+        debugLogger.log('error', 'background', 'Trusted wheel dispatcher threw', {
+          tabId, error: e && e.message
+        });
+        sendResponse({ dispatched: false, reason: 'error: ' + (e && e.message || String(e)) });
+      }
+    })();
+    return true;
+  }
+  if (message.type === 'GET_ENHANCED_MODE_STATE') {
+    // RC25 (console.log 2026-08-04): content-script's enhancedModeCache asks
+    // for the current Enhanced Mode state once (lazy), then short-circuits
+    // subsequent trustedWheelFallback calls when known-disabled. Without this,
+    // every scroll stall in an Enhanced-Mode-off run did a full round-trip
+    // (TRUSTED_WHEEL_SCROLL_REQUEST) just to learn "debugger permission not
+    // granted". See content-script.js enhancedModeCache + renderer-activation.js
+    // hasDebuggerPermission.
+    (async () => {
+      try {
+        const enabled = (typeof RendererActivation !== 'undefined' &&
+          typeof RendererActivation.hasDebuggerPermission === 'function')
+          ? await RendererActivation.hasDebuggerPermission()
+          : false;
+        sendResponse({ enabled: !!enabled });
+      } catch (e) {
+        sendResponse({ enabled: false, error: e && e.message });
+      }
+    })();
+    return true;
+  }
+  if (message.type === 'CONTENT_SCRIPT_DIAGNOSTIC') {
+    // RC19 follow-up (console.log 2026-07-28): content-script mirror channel.
+    // Content-script's sendDebugLog only reaches the PAGE's DevTools, but the
+    // user captures logs from the background SW DevTools — so content-script
+    // behavior was invisible. This relay fixes that without changing the
+    // existing sendDebugLog API. Fire-and-forget; no response. Do not echo
+    // payload back to avoid log amplification.
+    const tabId = sender.tab && sender.tab.id;
+    const cat = message.category || 'unknown';
+    try {
+      debugLogger.log('info', 'content-script-via-bg', cat + ' [' + cat + ']', Object.assign({ tabId: tabId }, message.payload || {}));
+    } catch (e) {
+      // Never let diagnostic formatting throw into the message handler.
+    }
+    // RC25 (console.log 2026-08-04): forward trustedWheel_skipped markers to
+    // extension pages (wizard/options) so the wizard UI can surface a tip
+    // after testScript — "Enable Enhanced Mode for trusted-wheel fallback".
+    // Without this surfacing, the skip was silent: the only visible signal
+    // was a (faint) console log line that the user rarely sees. Broadcast
+    // is fire-and-forget; receivers that don't care ignore it.
+    if (cat === 'trustedWheel_skipped') {
+      try {
+        // Use callback form (not Promise) so test sandboxes with stubbed
+        // sendMessage that doesn't return a Promise don't blow up. The
+        // callback swallows the "no receiver" error silently.
+        chrome.runtime.sendMessage({
+          type: 'TRUSTED_WHEEL_SKIPPED',
+          tabId: tabId,
+          payload: message.payload || {}
+        }, function () {
+          // Receiving end may not exist (no wizard/options open) — fine.
+          void chrome.runtime.lastError;
+        });
+      } catch (e) {
+        // Test sandbox or sendMessage unavailable — ignore.
+      }
+    }
+    return false;
+  }
+  if (message.type === 'TAB_ACTIVATION_REQUEST') {
+    // RC20 (console.log 2026-07-30): content-script is about to perform an
+    // input-required DOM op (scroll, trusted-wheel) on a background tab.
+    // Briefly activate the tab so Chrome's renderer produces compositor frames,
+    // without which IntersectionObserver + CDP Input both fail. The caller
+    // MUST later send TAB_ACTIVATION_RELEASE to restore the user's previous
+    // active tab. Background-tab path is the default, so this is the
+    // disambiguating layer that visibility-keepalive + launch flags + Enhanced
+    // Mode could not be (necessary but not sufficient — frame production
+    // requires active-tab state, not just lifecycle/throttle adjustments).
+    const tabId = sender.tab && sender.tab.id;
+    if (!tabId) {
+      sendResponse({ ok: false, reason: 'no sender.tab.id' });
+      return false;
+    }
+    (async () => {
+      try {
+        const result = await TabActivation.requestActivation(tabId);
+        debugLogger.log('info', 'background', 'Tab activation request', {
+          tabId, ok: result.ok, activated: result.activated,
+          crossWindow: result.crossWindow, reason: result.reason
+        });
+        sendResponse(result);
+      } catch (e) {
+        debugLogger.log('error', 'background', 'Tab activation threw', {
+          tabId, error: e && e.message
+        });
+        sendResponse({ ok: false, reason: 'error: ' + (e && e.message || String(e)) });
+      }
+    })();
+    return true;
+  }
+  if (message.type === 'TAB_ACTIVATION_RELEASE') {
+    // RC20: counterpart to TAB_ACTIVATION_REQUEST. Restores the user's
+    // previous active tab unless they manually changed tabs during the op
+    // (don't fight the user — see lib/tab-activation.js releaseActivation).
+    const tabId = sender.tab && sender.tab.id;
+    if (!tabId) {
+      sendResponse({ ok: false, reason: 'no sender.tab.id' });
+      return false;
+    }
+    (async () => {
+      try {
+        const result = await TabActivation.releaseActivation(tabId);
+        debugLogger.log('info', 'background', 'Tab activation release', {
+          tabId, ok: result.ok, restored: result.restored, reason: result.reason
+        });
+        sendResponse(result);
+      } catch (e) {
+        debugLogger.log('error', 'background', 'Tab activation release threw', {
+          tabId, error: e && e.message
+        });
+        sendResponse({ ok: false, reason: 'error: ' + (e && e.message || String(e)) });
+      }
+    })();
+    return true;
+  }
 });
+
+// RC25 (console.log 2026-08-04): broadcast Enhanced Mode state changes to all
+// content scripts so their enhancedModeCache invalidates. Without this, a
+// user who toggles Enhanced Mode mid-session has a stale "false" cache on
+// every already-open scrape tab until the tab reloads — the next scroll
+// stall would silently skip the trusted-wheel fallback even though the user
+// just enabled it. Tabs send GET_ENHANCED_MODE_STATE on next stall anyway,
+// but the broadcast is fire-and-forget and avoids one round-trip per tab.
+try {
+  if (typeof chrome !== 'undefined' && chrome.storage &&
+      chrome.storage.onChanged && typeof chrome.storage.onChanged.addListener === 'function') {
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName !== 'local') return;
+      if (!changes || !('enhancedModeEnabled' in changes)) return;
+      // Notify every tab's content script. chrome.tabs.query + sendMessage is
+      // the standard pattern; failures (no permission for tab, tab gone) are
+      // silently ignored — content-script will lazy-query on next stall anyway.
+      try {
+        if (!chrome.tabs || typeof chrome.tabs.query !== 'function') return;
+        chrome.tabs.query({}, (tabs) => {
+          if (!Array.isArray(tabs)) return;
+          for (const tab of tabs) {
+            if (!tab || typeof tab.id !== 'number') continue;
+            try {
+              chrome.tabs.sendMessage(tab.id, { type: 'ENHANCED_MODE_STATE_CHANGED', enabled: !!changes.enhancedModeEnabled.newValue }, () => {
+                void chrome.runtime.lastError;
+              });
+            } catch (e) {
+              // Tab gone or no content script — ignore.
+            }
+          }
+        });
+      } catch (e) {
+        // Defensive: test sandbox has no chrome.tabs.query — this is fine, the
+        // content-script cache will just lazy-query on next stall.
+      }
+    });
+  }
+} catch (e) {
+  // Test sandbox or missing chrome APIs — feature degrades gracefully;
+  // content-script lazy-queries on next stall.
+}
 
 async function waitForContentScript(tabId, maxAttempts = 20, interval = 300) {
   for (let i = 0; i < maxAttempts; i++) {

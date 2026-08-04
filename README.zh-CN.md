@@ -208,13 +208,14 @@ Options 页底部显示 **Execution History**（最近 20 条执行记录），�
 
 Scrapewright 驱动的是一个真实的 Chrome 标签页，默认以**后台标签**方式打开（`chrome.tabs.create({active:false})`），保证你的键盘焦点不会离开当前编辑器。对大多数网站来说都没问题。但对那些依赖 `IntersectionObserver` 懒加载的站点——Facebook 信息流、无限滚动列表、虚拟化表格——后台标签会撞上 Chrome 的渲染端帧产出节流：非可见标签不会触发合成器帧，`IntersectionObserver` 回调永远不会触发，懒加载自然就停了。
 
-Scrapewright 通过三层叠加方案来应对（每一层针对一种不同的节流机制，所以是叠加而非替代）：
+Scrapewright 通过四层叠加方案来应对（每一层针对一种不同的节流或过滤机制，所以是叠加而非替代）：
 
 | 层 | 做了什么 | 不能解决什么 |
 |----|---------|-------------|
 | **visibility-keepalive**（默认开启）| 往页面 MAIN world 注入一段覆盖：让 `document.visibilityState='visible'`、`document.hidden=false`、`document.hasFocus()=true`，再跑一个 `requestAnimationFrame` 保活循环。修复那些**自己**检查可见性来决定是否继续加载的页面 JS。 | 并不能让 Chrome 合成器为非可见标签产生帧。 |
 | **Enhanced Scraping Mode**（选项页可开启）| 给每个采集标签瞬态挂载 `chrome.debugger`（<100ms），发送 `Page.setWebLifecycleState({state:'active'})`，解除 Chrome 的页面级生命周期冻结（JS 执行、定时器、rAF 的"强节流"）。 | 并不能让 Chrome 合成器为非可见标签产生帧。经实测确认：CDP 命令返回 `ok:true`，但 `IntersectionObserver` 驱动的懒加载依然不工作。 |
-| **Chrome 启动参数**（IO 类懒加载的真正解决方案）| `scrapewright throttle on` 重写你的 Chrome 启动器（Linux `.desktop`、macOS 包装 AppleScript 应用、Windows `.lnk` 快捷方式），加入 `--disable-background-timer-throttling`、`--disable-backgrounding-occluded-windows`、`--disable-renderer-backgrounding`、`--disable-features=CalculateNativeWinOcclusion`。然后重启 Chrome。 | 需要重启 Chrome，且对所有 Chrome 窗口全局生效。 |
+| **Chrome 启动参数**（IO 类懒加载的必要前提）| `scrapewright throttle on` 重写你的 Chrome 启动器（Linux `.desktop`、macOS 包装 AppleScript 应用、Windows `.lnk` 快捷方式），加入 `--disable-background-timer-throttling`、`--disable-backgrounding-occluded-windows`、`--disable-renderer-backgrounding`、`--disable-features=CalculateNativeWinOcclusion`。然后重启 Chrome。 | 需要重启 Chrome，且对所有 Chrome 窗口全局生效。**单独并不能**解决那些懒加载 loader 过滤 `event.isTrusted` 的站点。|
+| **可信滚轮事件兜底**（通过 Enhanced Scraping Mode 开启）| 当程序化 `scrollBy` 卡住（内容不再增长）时，通过同一个瞬态 `chrome.debugger` 通道发送 CDP `Input.dispatchMouseEvent({type:'mouseWheel'})`。CDP 输入走的是和真实 OS 输入相同的管线，产生的事件 `event.isTrusted=true`——这是程序化产生可信滚轮事件的**唯一**途径。`$scrollToBottom` 在卡住时自动触发，绕过那些拒绝 JS 滚动的站点 loader。 | 需要 Enhanced Scraping Mode 处于开启状态。只在"卡住"时触发，对响应程序化滚动的站点无副作用。|
 
 **IO 驱动的懒加载站点推荐配置：**
 
@@ -230,7 +231,7 @@ Scrapewright 通过三层叠加方案来应对（每一层针对一种不同的�
 ./bin/scrapewright throttle off      # 从备份恢复原始启动器
 ```
 
-选项页上的 Enhanced Scraping Mode 开关是一个**补充层**——对那些把 JS 执行挂在页面生命周期状态上的站点可以开启，但**不要**单独依赖它处理 `IntersectionObserver` 驱动的站点。开关点击时不会申请新的 Chrome 权限：`debugger` 权限在安装时已声明（Chrome 不允许把它作为可选权限），这个开关只控制扩展在运行时是否实际使用它。
+选项页上的 Enhanced Scraping Mode 开关会同时启用两个机制（都走 `chrome.debugger`）：上面描述的**页面生命周期激活**（第 2 层）**以及可信滚轮事件兜底**（第 4 层）——当滚动卡住时，这一层会通过 CDP 发送真实的滚轮事件，让那些过滤 `event.isTrusted` 的站点（程序化 `scrollBy` 是 non-trusted 的）也能继续加载。对任何 IO 驱动的懒加载站点都应该开启。开关点击时不会申请新的 Chrome 权限：`debugger` 权限在安装时已声明（Chrome 不允许把它作为可选权限），这个开关只控制扩展在运行时是否实际使用它。
 
 ## 故障排查 / 常见问题
 
@@ -345,7 +346,6 @@ GET /api/v1/jobs/{jobId}/wait?timeout=120
       }
     ],
     "pagesTruncated": 0,
-    "steps": [...],
     "error": null,
     "queuePosition": 0,
     "createdAt": 1717700000000,

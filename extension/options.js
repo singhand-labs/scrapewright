@@ -27,9 +27,19 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('enhancedModeToggle')?.addEventListener('change', toggleEnhancedMode);
   loadEnhancedModeState();
 
-  document.getElementById('openSettings')?.addEventListener('click', () => {
-    document.getElementById('settingsModal').classList.remove('hidden');
-  });
+  const settingsOpener = document.getElementById('openSettings');
+  if (settingsOpener) {
+    settingsOpener.addEventListener('click', () => {
+      document.getElementById('settingsModal').classList.remove('hidden');
+    });
+    // Keyboard a11y for the div[role=button] — Enter or Space opens the modal.
+    settingsOpener.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        document.getElementById('settingsModal').classList.remove('hidden');
+      }
+    });
+  }
 
   // Close any modal via the × button or ESC (not backdrop click — mis-clicks
   // would discard in-progress form edits).
@@ -351,10 +361,28 @@ async function loadServices() {
     stepInfo.textContent = stepCount + ' step' + (stepCount !== 1 ? 's' : '');
     div.appendChild(stepInfo);
 
+    // Action buttons — grouped in a flex container with consistent styling.
+    // Order: Edit (primary) → API Doc / Export (btn-secondary reference/state)
+    // → Disable → Delete (btn-danger, destructive).
+    const actions = document.createElement('div');
+    actions.className = 'service-actions';
+
     const editBtn = document.createElement('button');
     editBtn.textContent = 'Edit';
     editBtn.addEventListener('click', () => editService(svc.id));
-    div.appendChild(editBtn);
+    actions.appendChild(editBtn);
+
+    const apiDocBtn = document.createElement('button');
+    apiDocBtn.textContent = 'API Doc';
+    apiDocBtn.className = 'btn-secondary';
+    apiDocBtn.addEventListener('click', () => showApiDoc(svc));
+    actions.appendChild(apiDocBtn);
+
+    const exportBtn = document.createElement('button');
+    exportBtn.textContent = 'Export';
+    exportBtn.className = 'btn-secondary';
+    exportBtn.addEventListener('click', () => exportService(svc));
+    actions.appendChild(exportBtn);
 
     const toggleBtn = document.createElement('button');
     toggleBtn.textContent = enabled ? 'Disable' : 'Enable';
@@ -365,23 +393,15 @@ async function loadServices() {
       showToast(svc.displayName + (svc.config.enabled ? ' enabled' : ' disabled'), 'success');
       await loadServices();
     });
-    div.appendChild(toggleBtn);
-
-    const exportBtn = document.createElement('button');
-    exportBtn.textContent = 'Export';
-    exportBtn.addEventListener('click', () => exportService(svc));
-    div.appendChild(exportBtn);
-
-    const apiDocBtn = document.createElement('button');
-    apiDocBtn.textContent = 'API Doc';
-    apiDocBtn.className = 'btn-api-doc';
-    apiDocBtn.addEventListener('click', () => showApiDoc(svc));
-    div.appendChild(apiDocBtn);
+    actions.appendChild(toggleBtn);
 
     const deleteBtn = document.createElement('button');
     deleteBtn.textContent = 'Delete';
+    deleteBtn.className = 'btn-danger';
     deleteBtn.addEventListener('click', () => deleteService(svc.id));
-    div.appendChild(deleteBtn);
+    actions.appendChild(deleteBtn);
+
+    div.appendChild(actions);
 
     list.appendChild(div);
   }

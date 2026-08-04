@@ -4,20 +4,64 @@ h1 { font-size: 24px; margin-bottom: 20px; }
 .hidden { display: none !important; }
 .section-head { display: flex; justify-content: space-between; align-items: center; }
 .section-head h2 { margin: 0; }
-.settings-btn {
-  display: inline-flex;
+
+/* === Settings entry card (top of page) =====================================
+   Promoted out of the Services section-head so users can actually find it.
+   Clicking opens #settingsModal. */
+.settings-card {
+  display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 12px;
+  padding: 12px 16px;
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.settings-card:hover { background: #e0f2fe; border-color: #7dd3fc; }
+.settings-card:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: 2px;
+}
+.settings-card .settings-icon {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: #6366f1;
   color: white;
-  border: none;
-  padding: 6px 12px;
   border-radius: 6px;
-  font-size: 13px;
-  cursor: pointer;
 }
-.settings-btn:hover { background: #4f46e5; }
-.settings-btn .icon { width: 16px; height: 16px; }
+.settings-card .settings-icon svg { width: 18px; height: 18px; }
+.settings-card .settings-title {
+  font-weight: 600;
+  font-size: 15px;
+  color: #1e40af;
+}
+.settings-card .settings-desc {
+  font-size: 12px;
+  color: #475569;
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
+/* === Service row action buttons ============================================ */
+/* All buttons in a service card share consistent styling; API Doc used to
+   have its own .btn-api-doc class with different size + indigo background,
+   which made it visually inconsistent and awkwardly wedged between Export
+   and Delete. It now uses btn-secondary like other supplementary actions. */
+.service-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.service-actions button {
+  margin: 0;
+}
 section { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
 input, select { display: block; width: 100%; margin: 8px 0; padding: 8px; box-sizing: border-box; }
 button { padding: 8px 16px; cursor: pointer; }
@@ -123,17 +167,6 @@ button { padding: 8px 16px; cursor: pointer; }
   margin-top: 4px;
 }
 
-.btn-api-doc {
-  padding: 4px 10px;
-  font-size: 12px;
-  background: #6366f1;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  margin-right: 8px;
-}
-
 /* === Native Host Status card ============================================== */
 
 .native-host-status .native-status-row {
@@ -212,14 +245,22 @@ button { padding: 8px 16px; cursor: pointer; }
   border: 1px solid #d1d5db;
 }
 
+.btn-danger {
+  background: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+}
+.btn-danger:hover {
+  background: #fee2e2;
+  border-color: #fca5a5;
+}
+
 .connection-result { margin-left: 8px; font-weight: 600; }
 .connection-result.ok { color: #166534; }
 .connection-result.fail { color: #991b1b; }
 
-/* Enhanced scraping mode toggle */
-.enhanced-mode { background: #fff; padding: 16px; border-radius: 6px; margin-bottom: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
-.enhanced-mode h2 { margin-top: 0; }
-.enhanced-mode-row { display: flex; align-items: flex-start; gap: 12px; }
+/* Enhanced scraping mode toggle — now lives inside #settingsModal */
+.enhanced-mode-row { display: flex; align-items: flex-start; gap: 12px; margin: 8px 0; }
 .enhanced-mode-desc { color: #555; font-size: 13px; line-height: 1.5; margin-top: 2px; }
 #enhancedModeStatus { font-weight: 600; }
 

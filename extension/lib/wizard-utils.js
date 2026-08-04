@@ -284,6 +284,44 @@ ROBUSTNESS RULES (MANDATORY — these prevent the most common silent failures):
 
 5. OUTPUT SCHEMA CONFORMANCE (field names): The final extraction step's return object MUST use the EXACT field names declared in outputSchema.properties, and MUST include every field listed in outputSchema.required. Do NOT invent or rename fields. EXAMPLE: if outputSchema declares a field named "thinking", return { thinking: "..." } — NOT { thinkingProcess: "..." } or { think: "..." }. A field-name mismatch causes the job to be marked FAILED (REQUIRED_OUTPUT_MISSING) even when data was extracted, because external callers read the result by the schema's field names. ECHO-BACK: if outputSchema.required includes a field with the same name as an input field (e.g., question, query), the final return MUST include that field echoing the original input value (e.g., { question: __input__.question, ... }) — do NOT omit it just because it is not "extracted" from the page. Before writing the final return, list outputSchema.required and verify each one is present with the exact name.
 
+6. PER-RECORD SUB-SELECTORS MUST BE SCOPED TO THE CURRENT RECORD (critical — violating this is a top cause of N identical records silently shipped as success):
+When iterating a list of records (a for-loop over \`$list(container)\`, or any per-record extraction), each per-field lookup MUST be scoped to the current record element, NOT the whole document. A GLOBAL sub-selector inside a per-record loop returns the SAME first-match on every iteration → every record is populated with the SAME values → the framework's DUPLICATE_RECORDS detector fires and the result is rejected.
+ANTI-PATTERN (do NOT write this — produces N IDENTICAL records):
+   const articles = await $list('div[role="article"]');
+   for (const article of articles) {
+     // WRONG: this $list is GLOBAL — returns the same first-match every iteration
+     const groupEls = await \$list('div[role="article"] h3 a[href*="/groups/"] span');
+     if (groupEls.length > 0) group = groupEls[0].textContent;   // always same first match
+     const userEls  = await \$list('div[role="article"] h3 a[href*="/user/"] span');     // WRONG
+     const contEls  = await \$list('div[role="article"] div[data-field="content"]');      // WRONG
+     posts.push({ group, username, content, ... });   // every post ends up identical
+   }
+RIGHT (preferred) — use \$extractListMulti with sub-selectors RELATIVE to each container; the framework scopes them per-record automatically:
+   const records = await \$extractListMulti('div[role="article"]', {
+     group:    'h3 a[href*="/groups/"] span',      // scoped per-article
+     username: 'h3 a[href*="/user/"] span',         // scoped per-article
+     content:  'div[data-field="content"]'          // scoped per-article
+   });
+   return { posts: records };
+RIGHT (fallback) — if you must hand-roll a loop, the \$ API is document-global, so use the element's own querySelector to scope sub-queries to the current record:
+   const articles = await \$list('div[role="article"]');
+   const posts = [];
+   for (const article of articles) {
+     // article is a DOM element handle from \$list — use its querySelector
+     const groupEl = article.querySelector('h3 a[href*="/groups/"] span');
+     const userEl  = article.querySelector('h3 a[href*="/user/"] span');
+     const contEl  = article.querySelector('div[data-field="content"]');
+     posts.push({
+       group:    groupEl ? groupEl.textContent.trim() : '',
+       username: userEl  ? userEl.textContent.trim()  : '',
+       content:  contEl  ? contEl.textContent.trim()  : ''
+     });
+   }
+   return { posts };
+Prefer \$extractListMulti — it handles per-record scoping, attribute reads, and empty-value defaults correctly without per-iteration bookkeeping. Hand-rolled loops are a common source of DUPLICATE_RECORDS, FIELD-NAME-COLLISION, and silent-empty-field bugs that autoFix then has to repair round after round.
+
+7. NEVER RETURN THE SAME SCRIPT (autoFix no-op rule): When you receive a fix request (after ACK), your response MUST actually change the code. Do NOT ACK the hint and then return the same script char-for-char — the framework detects this via isNoOpAutoFixPatch and rejects the response as a no-op. A no-op fix wastes an autoFix attempt and produces the SAME wrong output again. If you genuinely cannot see how to fix the problem after inspecting the script, the snapshot, and the annotations, use NACK with specifics (e.g., "// NACK: cannot determine username field — the page's profile_name area has no element matching 'Mamur Obaid' in the snapshot I was given; need an annotation on the username element") instead of faking a fix. A NACK surfaces a concrete question to the user; a no-op ACK wastes everyone's time.
+
 ANNOTATION INTENT (use these hints verbatim — do not re-derive):
 
 !!! SELECTOR FIDELITY RULE (CRITICAL — violating this is the #1 cause of broken scripts) !!!
@@ -1253,6 +1291,200 @@ function formatEmptyOutputFieldsSignal(fields) {
     lines.push(`  - ${f.path}: empty in ${f.emptyCount}/${f.totalCount} records (${pct}%).${tail}`);
   }
   return lines.join('\n');
+}
+
+// detectDuplicateRecords(data, outputSchema, options?) → array of
+// { field, totalRecords, uniqueSignatures, duplicateRatio, sampleDuplicate }
+//
+// Surfaces the all-identical-records antipattern: when N≥minRecords records in
+// an array-of-objects output share the SAME signature (stable JSON of declared
+// sub-field values), the extraction is broken — almost always because the
+// script wrote a per-record loop with GLOBAL sub-queries (so every iteration
+// captures the same first-match values).
+//
+// console.log 2026-08-04 04:30:09 incident: FB search step 4 produced 10
+// IDENTICAL posts because the LLM-generated loop was:
+//
+//   const articles = await $list('div[role="article"]');
+//   for (const article of articles) {
+//     const groupEls = await $list('div[role="article"] h3 a[href*="/groups/"] span'); // ← GLOBAL
+//     if (groupEls.length > 0) group = groupEls[0].textContent;  // always same first match
+//     // ...same global pattern for username, content, likes, comments, shares
+//     posts.push({ group, username, content, ... });
+//   }
+//
+// findEmptyExtractionFields returned [] (no field is empty — they're all set
+// to the SAME first-match value). detectEmptyOutputFieldsByRatio returned []
+// (no field is empty in >50% of records — they're all populated). The
+// framework's EMPTY_EXTRACTION / EMPTY_FIELDS detectors couldn't fire, so
+// testScript reported SUCCESS and 10 identical records nearly shipped. The
+// detector below closes that gap.
+//
+// SIGNATURE: we hash the JSON serialization of the record's declared sub-field
+// values (per outputSchema). Records with the same field values produce the
+// same signature. Only declared fields participate — incidental key
+// differences (e.g. one record has a debugging key another lacks) don't
+// fragment the signature.
+//
+// THRESHOLDS (default conservative — block deploy only on the unambiguous case):
+//   - minRecords (default 3): can't establish a "duplicate pattern" with <3.
+//   - duplicateRatioThreshold (default 1.0 = 100%): only flag when EVERY
+//     record is identical. Caller can lower this (e.g. 0.8) for partial
+//     detection, but the framework's THROW path uses the default — anything
+//     less strict risks blocking deploy when the script produced real
+//     diversity alongside a few duplicates.
+//
+// RETURN SHAPE mirrors detectEmptyOutputFieldsByRatio so the autoFix prompt
+// builder can consume either uniformly.
+function detectDuplicateRecords(data, outputSchema, options) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return [];
+  if (!outputSchema || typeof outputSchema !== 'object') return [];
+  const opts = options || {};
+  const threshold = typeof opts.duplicateRatioThreshold === 'number'
+    ? opts.duplicateRatioThreshold
+    : 1.0;
+  const minRecords = typeof opts.minRecords === 'number' ? opts.minRecords : 3;
+
+  const isEmptyValue = (v) =>
+    v === '' || v === null || v === undefined ||
+    (Array.isArray(v) && v.length === 0) ||
+    (typeof v === 'string' && v.trim() === '');
+
+  const signatureFor = (rec, fieldKeys) => {
+    if (!rec || typeof rec !== 'object' || Array.isArray(rec)) return null;
+    const parts = [];
+    for (const fk of fieldKeys) {
+      const v = rec[fk];
+      // Normalize: empty → '' so that records differing only in WHICH empty
+      // representation they used (null vs '' vs undefined) still collide.
+      const norm = isEmptyValue(v) ? '' : v;
+      parts.push(fk + ':' + (typeof norm === 'string' ? norm : JSON.stringify(norm)));
+    }
+    return parts.join('||');
+  };
+
+  const props = outputSchema.properties && typeof outputSchema.properties === 'object'
+    ? outputSchema.properties
+    : {};
+  const result = [];
+  for (const key of Object.keys(props)) {
+    const prop = props[key];
+    if (!prop || prop.type !== 'array' || !prop.items || prop.items.type !== 'object') continue;
+    const arr = data[key];
+    if (!Array.isArray(arr) || arr.length < minRecords) continue;
+    const itemSchema = prop.items.properties && typeof prop.items.properties === 'object'
+      ? prop.items.properties
+      : {};
+    const itemRequired = Array.isArray(prop.items.required) ? prop.items.required : null;
+    const fieldKeys = itemRequired && itemRequired.length > 0
+      ? itemRequired
+      : Object.keys(itemSchema);
+    if (fieldKeys.length === 0) continue;
+
+    // Count signatures. We don't break early because the caller may want
+    // partial-duplicate stats (lower threshold).
+    const sigCounts = new Map();
+    let firstSig = null;
+    for (let i = 0; i < arr.length; i++) {
+      const sig = signatureFor(arr[i], fieldKeys);
+      if (sig === null) continue;
+      if (i === 0 || firstSig === null) firstSig = sig;
+      sigCounts.set(sig, (sigCounts.get(sig) || 0) + 1);
+    }
+    if (sigCounts.size === 0) continue;
+    // largest signature count
+    let maxCount = 0;
+    let maxSig = null;
+    for (const [sig, cnt] of sigCounts) {
+      if (cnt > maxCount) { maxCount = cnt; maxSig = sig; }
+    }
+    const dupRatio = maxCount / arr.length;
+    if (dupRatio < threshold) continue;
+
+    // Render a sample duplicate for display. Truncate long values so the
+    // autoFix prompt doesn't balloon.
+    const renderSample = (sig) => {
+      const parts = sig.split('||');
+      const truncated = parts.map(p => {
+        const idx = p.indexOf(':');
+        if (idx < 0) return p;
+        const k = p.slice(0, idx);
+        let v = p.slice(idx + 1);
+        if (v.length > 80) v = v.slice(0, 77) + '...';
+        return `${k}=${v}`;
+      });
+      return '{ ' + truncated.join(', ') + ' }';
+    };
+
+    result.push({
+      field: key,
+      totalRecords: arr.length,
+      uniqueSignatures: sigCounts.size,
+      duplicateRatio: dupRatio,
+      sampleDuplicate: renderSample(maxSig)
+    });
+  }
+  return result;
+}
+
+// formatDuplicateRecordsSignal(dupes) → string
+//
+// Renders the output of detectDuplicateRecords into a prompt-ready
+// "DUPLICATE RECORDS IN OUTPUT" block. Returns '' when there's nothing to
+// surface (so the caller can unconditionally interpolate).
+//
+// The block names the failing field, the count of identical records, and
+// tells the LLM the most likely cause (global sub-selector inside a per-record
+// loop) and the fix (use $extractListMulti or scope querySelector).
+function formatDuplicateRecordsSignal(dupes) {
+  if (!Array.isArray(dupes) || dupes.length === 0) return '';
+  const lines = [];
+  lines.push('DUPLICATE RECORDS IN OUTPUT (data-driven — these array-of-objects outputs contain');
+  lines.push('multiple identical records; the script almost certainly uses a global sub-selector');
+  lines.push('inside a per-record loop, capturing the same first-match values on every iteration.');
+  lines.push('Fix the step using $extractListMulti with per-record sub-selectors, or scope queries');
+  lines.push('to the current record element via element.querySelector):');
+  for (const d of dupes) {
+    const pct = Math.round((d.duplicateRatio || 0) * 100);
+    lines.push(`  - ${d.field}: ${d.totalRecords} records, only ${d.uniqueSignatures} unique signature(s); ${pct}% identical.`);
+    if (d.sampleDuplicate) {
+      lines.push(`    Sample duplicate: ${d.sampleDuplicate}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+// Returns true when EVERY resolved autoFix patch leaves its step unchanged
+// (same script + same flow fields, modulo trailing whitespace). Used by
+// runFixIteration to detect the ACK-without-fixing antipattern where the LLM
+// says "I'll fix it" but returns char-for-char the same code (console.log
+// 2026-08-04 04:50-04:52 FB username loop: LLM ACK'd "I'll distinguish group
+// from user links", returned identical scriptLength:2640, testScript produced
+// identical wrong output, autoFix burned an attempt with zero progress).
+//
+// Whitespace-tolerant: LLMs routinely append trailing newlines. A real fix
+// changes more than whitespace, so trim-compare avoids false negatives (which
+// would cause the detector to miss real no-ops and waste a testScript run).
+//
+// Conservative: empty/malformed inputs return false (NOT a no-op) so the
+// caller falls through to normal patch handling rather than misclassifying.
+function isNoOpAutoFixPatch(resolved, patchedById) {
+  if (!Array.isArray(resolved) || resolved.length === 0) return false;
+  if (!patchedById || typeof patchedById.get !== 'function') return false;
+  for (const r of resolved) {
+    if (!r || !r.step || !r.step.id) return false;
+    const entry = patchedById.get(r.step.id);
+    if (!entry || !entry.proposed) return false;
+    const cur = r.step;
+    const next = entry.proposed;
+    const scriptSame = (cur.script || '') === (next.script || '')
+      || (cur.script || '').trim() === (next.script || '').trim();
+    if (!scriptSame) return false;
+    if ((cur.onSuccess || '') !== (next.onSuccess || '')) return false;
+    if ((cur.onFailure || '') !== (next.onFailure || '')) return false;
+    if ((cur.maxIterations || 1) !== (next.maxIterations || 1)) return false;
+  }
+  return true;
 }
 
 // Enumerate the output fields a user can map an annotated selector to.
@@ -2644,7 +2876,7 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
@@ -2653,6 +2885,9 @@ if (typeof module !== 'undefined' && module.exports) {
   window.findEmptyExtractionFields = findEmptyExtractionFields;
   window.detectEmptyOutputFieldsByRatio = detectEmptyOutputFieldsByRatio;
   window.formatEmptyOutputFieldsSignal = formatEmptyOutputFieldsSignal;
+  window.detectDuplicateRecords = detectDuplicateRecords;
+  window.formatDuplicateRecordsSignal = formatDuplicateRecordsSignal;
+  window.isNoOpAutoFixPatch = isNoOpAutoFixPatch;
   window.getOutputFieldOptions = getOutputFieldOptions;
   window.truncateSnapshotForLLM = truncateSnapshotForLLM;
   window.summarizeFixIteration = summarizeFixIteration;
@@ -2701,6 +2936,9 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.findEmptyExtractionFields = findEmptyExtractionFields;
   self.detectEmptyOutputFieldsByRatio = detectEmptyOutputFieldsByRatio;
   self.formatEmptyOutputFieldsSignal = formatEmptyOutputFieldsSignal;
+  self.detectDuplicateRecords = detectDuplicateRecords;
+  self.formatDuplicateRecordsSignal = formatDuplicateRecordsSignal;
+  self.isNoOpAutoFixPatch = isNoOpAutoFixPatch;
   self.getOutputFieldOptions = getOutputFieldOptions;
   self.truncateSnapshotForLLM = truncateSnapshotForLLM;
   self.summarizeFixIteration = summarizeFixIteration;
