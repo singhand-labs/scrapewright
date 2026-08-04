@@ -367,6 +367,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (message.type === 'EXECUTION_LOG') {
       appendLog(message.message, message.level || 'info');
     }
+    // RC25 (console.log 2026-08-04): count trusted-wheel skips during the
+    // current testScript run. Background broadcasts TRUSTED_WHEEL_SKIPPED
+    // whenever a content-script emits a trustedWheel_skipped diagnostic
+    // (Enhanced Mode off + scroll stall). After testScript, if count > 0,
+    // surface a tip so the user knows to enable Enhanced Mode — without
+    // this surfacing, the failure is silent (only visible in console logs).
+    if (message.type === 'TRUSTED_WHEEL_SKIPPED') {
+      wizardState.trustedWheelSkipCount = (wizardState.trustedWheelSkipCount || 0) + 1;
+    }
   });
 });
 
@@ -1827,6 +1836,10 @@ async function testScript() {
   wizardState.lastErrorSnapshot = null;
   wizardState.lastExecutionEvents = [];
   wizardState.testAbortController = new AbortController();
+  // RC25 (console.log 2026-08-04): reset trusted-wheel skip counter at the
+  // start of each testScript run. Counter is incremented by the
+  // TRUSTED_WHEEL_SKIPPED broadcast listener; surfaced as a tip after run.
+  wizardState.trustedWheelSkipCount = 0;
   // RC11: only clear bestAttempt when the user explicitly re-runs the test
   // (btnRetryTest). When testScript is invoked from INSIDE autoFix (via
   // runFixIteration → line ~2866), clearing bestAttempt here would wipe the
@@ -1992,6 +2005,24 @@ async function testScript() {
       debugLogger.log('warn', 'wizard', 'Empty extraction detected — treating as failure', { emptyFields, extractionStepId });
       throw err;
     }
+    // Duplicate-records check: catches the per-record-loop-with-global-sub-selector
+    // antipattern (console.log 2026-08-04 04:30:09: 10 identical FB posts reported
+    // as SUCCESS because fields weren't empty — they were duplicated). Without
+    // this check, the user only discovers the bug by manual inspection. Strict
+    // 100% threshold (every record identical) — partial duplicates are surfaced
+    // via the user-feedback autoFix path instead.
+    const duplicateFields = detectDuplicateRecords(finalData, wizardState.outputSchema);
+    if (duplicateFields.length > 0) {
+      const lastStepEntry = result.steps[result.steps.length - 1];
+      const extractionStepId = lastStepEntry?.stepId || (wizardState.steps[wizardState.steps.length - 1] && wizardState.steps[wizardState.steps.length - 1].id);
+      const summary = duplicateFields.map(d => `${d.field} (${d.totalRecords} records, ${d.uniqueSignatures} unique)`).join('; ');
+      const err = new Error('DUPLICATE_RECORDS: array-of-objects output(s) [' + summary + '] are entirely identical across records. The script almost certainly uses a global sub-selector inside a per-record loop — every iteration captured the same first-match values. Use $extractListMulti with per-record sub-selectors (or scope queries via element.querySelector inside the loop).');
+      err.stepId = extractionStepId;
+      err.snapshot = lastStepEntry?.snapshot || null;
+      err.duplicateFields = duplicateFields;
+      debugLogger.log('warn', 'wizard', 'Duplicate records detected — treating as failure', { duplicateFields, extractionStepId });
+      throw err;
+    }
     const oc = validateOutputAgainstSchema(finalData, wizardState.outputSchema);
     if (!oc.ok) {
       updatePhaseUI('empty-result');
@@ -2050,6 +2081,18 @@ async function testScript() {
       await chrome.runtime.sendMessage({ type: 'RELEASE_EXEC_LOCK' });
     } catch (e) { /* background may be unavailable */ }
     wizardState.testAbortController = null;
+  }
+
+  // RC25 (console.log 2026-08-04): surface trusted-wheel skip tip after the
+  // run completes (success OR failure — the skip is orthogonal to outcome).
+  // The skip means Enhanced Mode is off AND scroll stalled at least once;
+  // the user can act on this by enabling Enhanced Mode in the options page.
+  if ((wizardState.trustedWheelSkipCount || 0) > 0 && !wizardState.testAborted) {
+    const count = wizardState.trustedWheelSkipCount;
+    const tip = `Scrolling stalled ${count}× on this page; Enhanced Mode (trusted-wheel fallback) is off — enable it under Settings → Enhanced scraping mode for sites that gate lazy-load on isTrusted scroll events.`;
+    appendLog(tip, 'warn');
+    showToast(tip, 'info', 8000);
+    debugLogger.log('info', 'wizard', 'Surfaced trusted-wheel skip tip', { count });
   }
 
   if (!wizardState.testAborted) {
@@ -3069,6 +3112,25 @@ ${RETURN_FORMAT_FEEDBACK}`;
       if (typeof r.patch.onFailure === 'string' && r.patch.onFailure.trim()) proposed.onFailure = r.patch.onFailure.trim();
       if (Number.isInteger(r.patch.maxIterations) && r.patch.maxIterations >= 1) proposed.maxIterations = r.patch.maxIterations;
       patchedById.set(r.step.id, { proposed, resolved: r });
+    }
+    // Detect no-op ACK: LLM said "I'll fix it" but every patch leaves its step
+    // unchanged (same script + flow fields). console.log 2026-08-04 FB username
+    // loop: ACK "I'll distinguish group from user links" + identical script
+    // char-for-char → testScript produced identical wrong output → wasted attempt.
+    // Skip the testScript re-run; inject an explicit [NO-OP] directive into
+    // llmHistory so the next iteration's prompt carries "you must change code".
+    if (isNoOpAutoFixPatch(target.resolved, patchedById)) {
+      const stepIds = target.resolved.map(r => r.step.id).join(',');
+      appendLog((isFailureFix ? 'Auto-fix' : 'AI improve') + ' returned the same script(s) as the current step(s) — no change was made. Prompting the LLM to actually modify the code.', 'warn');
+      debugLogger.log('warn', 'wizard', 'autoFix no-op fix detected', {
+        targetStepId, attemptNum, totalAttempts, stepIds
+      });
+      wizardState.llmHistory.push({
+        role: 'user',
+        content: '[NO-OP DETECTED] Your previous response proposed the same script(s) as the current step(s) — no change was made, and a re-run would produce the same wrong output. You MUST modify the script this time. Inspect the current script, identify the specific line that produces the wrong output, and rewrite THAT line. If you genuinely cannot see a fix, respond with "// NACK: <specific reason>" instead of faking a fix.'
+      });
+      trimLlmHistory();
+      return false;
     }
     // Validate the WHOLE chain after applying every patch atomically. A
     // topology change that orphans a step or dangles a pointer rejects ALL

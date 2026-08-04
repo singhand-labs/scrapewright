@@ -1,14 +1,26 @@
-// Regression test for lib/renderer-activation.js (RC17+ chrome.debugger
-// transient activation — the "Plan A" framework-level anti-throttling layer).
+// Regression test for lib/renderer-activation.js (RC19 trusted-wheel fallback).
+//
+// === Current architecture (RC20) ===
+//
+// This module's ONLY remaining user of chrome.debugger is
+// dispatchTrustedWheelScroll — the RC19 fix for sites whose lazy-load loader
+// filters on event.isTrusted=true. Enhanced Mode (chrome.storage.local flag
+// `enhancedModeEnabled`) gates availability of the trusted-wheel fallback.
+//
+// activateTabViaDebugger / activateTabIfPermitted (RC18 Plan A —
+// Page.setWebLifecycleState) were removed in RC20 because brief tab
+// activation (lib/tab-activation.js) makes lifecycle naturally ACTIVE during
+// the brief window, making the call pure overhead.
 //
 // What this test guards:
-//   1. The module loads cleanly + exposes the expected API
-//   2. activateTabViaDebugger performs attach → sendCommand → detach in order
+//   1. The module loads cleanly + exposes the expected API surface
+//   2. dispatchTrustedWheelScroll performs attach → mouseMoved → mouseWheel → detach
 //   3. Detach happens even if sendCommand fails (no lingering yellow banner)
-//   4. Only Page.setWebLifecycleState command is sent (detection-risk guard)
-//   5. hasDebuggerPermission / requestDebuggerPermission use chrome.permissions
+//   4. Only Input.dispatchMouseEvent command is sent (detection-risk guard)
+//   5. hasDebuggerPermission / requestDebuggerPermission use chrome.storage
 //   6. Falls back gracefully when chrome.debugger is unavailable (test sandbox)
-//   7. activateTabIfPermitted suppresses silently when permission not granted
+//   7. Enhanced Mode opt-in gate: skip attach entirely when flag is unset
+//   8. Each CDP step is wrapped in a 2s timeout (RC19 follow-up)
 //
 // Detection-risk guard (the user-stated priority):
 // The test asserts that NO Runtime.* commands are issued. Runtime.evaluate
@@ -92,6 +104,8 @@ function loadModuleInSandbox(sandboxOverrides) {
   const sandbox = {
     chrome: chromeOverride || defaultChrome,
     console: { log: () => {}, warn: () => {}, error: () => {} },
+    setTimeout: setTimeout,
+    clearTimeout: clearTimeout,
     module: { exports: {} }
   };
   if (sandboxOverrides) {
@@ -113,9 +127,9 @@ describe('lib/renderer-activation.js — module shape', () => {
     assert.equal(typeof api.hasDebuggerPermission, 'function');
     assert.equal(typeof api.requestDebuggerPermission, 'function');
     assert.equal(typeof api.removeDebuggerPermission, 'function');
-    assert.equal(typeof api.activateTabViaDebugger, 'function');
-    assert.equal(typeof api.activateTabIfPermitted, 'function');
+    assert.equal(typeof api.dispatchTrustedWheelScroll, 'function');
     assert.equal(api.DEBUGGER_PROTOCOL_VERSION, '1.3');
+    assert.equal(api.CDP_STEP_TIMEOUT_MS, 2000);
   });
 
   it('IIFE-wrapped — leading comment then (function', () => {
@@ -131,135 +145,6 @@ describe('lib/renderer-activation.js — module shape', () => {
     // Easiest check: there should be no top-level `module.exports = api`
     // (it's inside the IIFE).
     assert.match(src, /if \(typeof module[^)]+\) module\.exports = api/);
-  });
-});
-
-describe('lib/renderer-activation.js — activateTabViaDebugger operation order', () => {
-  it('attaches → sends Page.setWebLifecycleState(active) → detaches', async () => {
-    const { api, calls } = loadModuleInSandbox();
-    const result = await api.activateTabViaDebugger(123);
-    assert.equal(calls.attach.length, 1);
-    assert.equal(calls.attach[0].target.tabId, 123);
-    assert.equal(calls.sendCommand.length, 1);
-    assert.equal(calls.sendCommand[0].method, 'Page.setWebLifecycleState');
-    assert.equal(calls.sendCommand[0].params.state, 'active');
-    assert.equal(calls.sendCommand[0].target.tabId, 123);
-    assert.equal(calls.detach.length, 1);
-    assert.equal(calls.detach[0].target.tabId, 123);
-    assert.equal(result.ok, true);
-    assert.equal(result.attached, true);
-    assert.equal(result.sendCommand, true);
-    assert.equal(result.detached, true);
-  });
-
-  it('uses protocol version 1.3 for attach', async () => {
-    const { api, calls } = loadModuleInSandbox();
-    await api.activateTabViaDebugger(1);
-    assert.equal(calls.attach[0].version, '1.3',
-      'protocol version must be 1.3 — matches modern Chrome');
-  });
-
-  it('NEVER sends Runtime.* commands (detection-risk guard)', async () => {
-    // Detection-risk minimization: Runtime.evaluate is the most-detected CDP
-    // command per scrappey/scrapfly documentation. This module MUST only use
-    // Page.* commands. If a future edit adds Runtime calls, this test fails.
-    const { api, calls } = loadModuleInSandbox();
-    await api.activateTabViaDebugger(42);
-    const runtimeCalls = calls.sendCommand.filter(c => c.method.startsWith('Runtime.'));
-    assert.equal(runtimeCalls.length, 0,
-      `Runtime.* commands are forbidden (detection-risk guard). Found: ${JSON.stringify(runtimeCalls)}`);
-  });
-
-  it('NEVER sends Network.* or DOM.* commands (detection-risk guard)', async () => {
-    const { api, calls } = loadModuleInSandbox();
-    await api.activateTabViaDebugger(42);
-    const forbidden = calls.sendCommand.filter(c =>
-      c.method.startsWith('Network.') || c.method.startsWith('DOM.'));
-    assert.equal(forbidden.length, 0,
-      `Network.*/DOM.* commands are forbidden. Found: ${JSON.stringify(forbidden)}`);
-  });
-
-  it('sends exactly one sendCommand per activation (minimize attach window)', async () => {
-    const { api, calls } = loadModuleInSandbox();
-    await api.activateTabViaDebugger(1);
-    assert.equal(calls.sendCommand.length, 1,
-      'exactly one sendCommand — extras would extend the attach window');
-  });
-});
-
-describe('lib/renderer-activation.js — error recovery (always detach)', () => {
-  it('detaches even when sendCommand fails', async () => {
-    // Simulate sendCommand failing via chrome.runtime.lastError. Override
-    // ONLY sendCommand; keep default attach/detach (which record to calls.*)
-    // so we can assert detach was still invoked. The override writes the
-    // error onto the sandbox's chrome.runtime.lastError so the module reads
-    // it at the sendCommand callback boundary.
-    const { api, calls, sandbox } = loadModuleInSandbox({
-      debuggerMethods: {
-        sendCommand: (target, method, params, cb) => {
-          sandbox.chrome.runtime.lastError = { message: 'tab closed' };
-          cb();
-        }
-      }
-    });
-    const result = await api.activateTabViaDebugger(7);
-    assert.equal(result.ok, false);
-    assert.equal(result.attached, true, 'attach succeeded');
-    assert.equal(result.sendCommand, false, 'sendCommand failed');
-    assert.equal(result.detached, true, 'detach MUST still run — never leave banner visible');
-    assert.equal(calls.detach.length, 1, 'detach called exactly once');
-  });
-
-  it('returns ok:false (no throw) when attach fails (e.g., another debugger attached)', async () => {
-    const overrides = {
-      chrome: {
-        debugger: {
-          attach: (target, v, cb) => {
-            chrome.runtime.lastError = { message: 'Another debugger is already attached' };
-            cb();
-          },
-          sendCommand: () => { throw new Error('sendCommand should NOT be called when attach failed'); },
-          detach: (target, cb) => cb()
-        },
-        runtime: { lastError: undefined }
-      }
-    };
-    const { api, calls } = loadModuleInSandbox(overrides);
-    const result = await api.activateTabViaDebugger(7);
-    assert.equal(result.ok, false);
-    assert.equal(result.attached, false);
-    assert.equal(calls.sendCommand.length, 0);
-    assert.equal(calls.detach.length, 0,
-      'detach must NOT be called when attach failed — would error');
-    assert.match(result.reason, /attach failed/);
-  });
-
-  it('returns ok:false when chrome.debugger is unavailable (test sandbox / older Chrome)', async () => {
-    // Pass a chrome with no debugger property. The merge logic shallow-
-    // merges overrides.chrome over defaultChrome, so to test "no debugger"
-    // we use a separate code path: bypass the merge by directly using a
-    // custom sandbox.
-    const src = fs.readFileSync(MODULE_PATH, 'utf8');
-    const sandbox = {
-      chrome: { runtime: {} }, // no debugger
-      console: { log: () => {}, warn: () => {}, error: () => {} },
-      module: { exports: {} }
-    };
-    vm.createContext(sandbox);
-    vm.runInContext(src, sandbox, { filename: 'renderer-activation.js' });
-    const result = await sandbox.module.exports.activateTabViaDebugger(7);
-    assert.equal(result.ok, false);
-    assert.match(result.reason, /chrome\.debugger unavailable/);
-  });
-
-  it('returns ok:false for invalid tabId', async () => {
-    const { api } = loadModuleInSandbox();
-    const r1 = await api.activateTabViaDebugger(undefined);
-    const r2 = await api.activateTabViaDebugger(-1);
-    const r3 = await api.activateTabViaDebugger('not-a-number');
-    assert.equal(r1.ok, false);
-    assert.equal(r2.ok, false);
-    assert.equal(r3.ok, false);
   });
 });
 
@@ -327,41 +212,297 @@ describe('lib/renderer-activation.js — permission helpers', () => {
   });
 });
 
-describe('lib/renderer-activation.js — activateTabIfPermitted fallback', () => {
-  it('skips activation silently when storage flag not set', async () => {
-    const { api, calls } = loadModuleInSandbox();
-    // Default sandbox has storage.local.get returning {} → flag unset
-    const result = await api.activateTabIfPermitted(99);
-    assert.equal(result.ok, false);
-    assert.equal(result.reason, 'debugger permission not granted');
-    assert.equal(calls.attach.length, 0, 'must NOT attach without flag set');
-  });
-
-  it('runs activation when storage flag IS set', async () => {
-    // Seed the storage flag so hasDebuggerPermission returns true, and let
-    // the default recording mocks for chrome.debugger populate calls.*.
-    const { api, calls } = loadModuleInSandbox({
-      seedStore: { enhancedModeEnabled: true }
-    });
-    const result = await api.activateTabIfPermitted(99);
-    assert.equal(result.ok, true);
-    assert.equal(calls.attach.length, 1);
-    assert.equal(calls.detach.length, 1);
-  });
-});
-
 describe('lib/renderer-activation.js — global free-variable exposure', () => {
-  it('exposes activateTabIfPermitted as a free variable for scrape-tab.js', () => {
+  it('exposes dispatchTrustedWheelScroll + permission helpers as free variables', () => {
     const { sandbox } = loadModuleInSandbox();
-    assert.equal(typeof sandbox.activateTabIfPermitted, 'function',
-      'activateTabIfPermitted must be a global free variable — scrape-tab.js references it unqualified');
+    assert.equal(typeof sandbox.dispatchTrustedWheelScroll, 'function',
+      'dispatchTrustedWheelScroll must be a global free variable — background.js references it');
     assert.equal(typeof sandbox.hasDebuggerPermission, 'function');
     assert.equal(typeof sandbox.requestDebuggerPermission, 'function');
+    assert.equal(typeof sandbox.removeDebuggerPermission, 'function');
   });
 
   it('exposes RendererActivation module object', () => {
     const { sandbox } = loadModuleInSandbox();
     assert.equal(typeof sandbox.RendererActivation, 'object');
-    assert.equal(typeof sandbox.RendererActivation.activateTabViaDebugger, 'function');
+    assert.equal(typeof sandbox.RendererActivation.dispatchTrustedWheelScroll, 'function');
+    assert.equal(typeof sandbox.RendererActivation.hasDebuggerPermission, 'function');
+  });
+
+  it('does NOT expose removed RC18-Plan-A functions (activateTabViaDebugger / activateTabIfPermitted)', () => {
+    // RC20 removed these — guard against re-introduction.
+    const { sandbox } = loadModuleInSandbox();
+    assert.equal(sandbox.activateTabViaDebugger, undefined);
+    assert.equal(sandbox.activateTabIfPermitted, undefined);
+    assert.equal(sandbox.RendererActivation.activateTabViaDebugger, undefined);
+    assert.equal(sandbox.RendererActivation.activateTabIfPermitted, undefined);
+  });
+});
+
+// ============================================================================
+// RC19 (console.log 2026-07-28): dispatchTrustedWheelScroll — CDP wheel event
+//
+// Tests guard:
+//   1. Attach → mouseMoved → mouseWheel → detach in order
+//   2. Detach always runs even if a sendCommand fails
+//   3. Enhanced Mode opt-in gate: skip attach entirely when flag is unset
+//   4. NEVER sends Runtime/Network/DOM commands (detection-risk guard)
+//   5. Wheel params (x, y, deltaY) forwarded correctly
+//   6. Invalid tabId / missing chrome.debugger fast-fail
+// ============================================================================
+
+describe('lib/renderer-activation.js — dispatchTrustedWheelScroll operation order', () => {
+  it('attaches → mouseMoved → mouseWheel → detaches (Enhanced Mode on)', async () => {
+    const { api, calls } = loadModuleInSandbox({ seedStore: { enhancedModeEnabled: true } });
+    const result = await api.dispatchTrustedWheelScroll(123, { deltaY: 600, x: 250, y: 300 });
+    assert.equal(calls.attach.length, 1);
+    assert.equal(calls.attach[0].target.tabId, 123);
+    assert.equal(calls.sendCommand.length, 2, 'exactly two sendCommands — mouseMoved then mouseWheel');
+    assert.equal(calls.sendCommand[0].method, 'Input.dispatchMouseEvent');
+    assert.equal(calls.sendCommand[0].params.type, 'mouseMoved');
+    assert.equal(calls.sendCommand[0].params.x, 250);
+    assert.equal(calls.sendCommand[0].params.y, 300);
+    assert.equal(calls.sendCommand[1].method, 'Input.dispatchMouseEvent');
+    assert.equal(calls.sendCommand[1].params.type, 'mouseWheel');
+    assert.equal(calls.sendCommand[1].params.deltaX, 0);
+    assert.equal(calls.sendCommand[1].params.deltaY, 600);
+    assert.equal(calls.detach.length, 1);
+    assert.equal(result.ok, true);
+    assert.equal(result.attached, true);
+    assert.equal(result.dispatched, true);
+    assert.equal(result.detached, true);
+    assert.equal(result.deltaY, 600);
+  });
+
+  it('defaults deltaY=800, x=400, y=400 when opts omitted', async () => {
+    const { api, calls } = loadModuleInSandbox({ seedStore: { enhancedModeEnabled: true } });
+    await api.dispatchTrustedWheelScroll(1);
+    assert.equal(calls.sendCommand[0].params.x, 400);
+    assert.equal(calls.sendCommand[0].params.y, 400);
+    assert.equal(calls.sendCommand[1].params.deltaY, 800);
+  });
+
+  it('NEVER sends Runtime/Network/DOM commands (detection-risk guard)', async () => {
+    const { api, calls } = loadModuleInSandbox({ seedStore: { enhancedModeEnabled: true } });
+    await api.dispatchTrustedWheelScroll(42);
+    const forbidden = calls.sendCommand.filter(c =>
+      c.method.startsWith('Runtime.') ||
+      c.method.startsWith('Network.') ||
+      c.method.startsWith('DOM.'));
+    assert.equal(forbidden.length, 0,
+      `Runtime/Network/DOM commands forbidden in wheel path. Found: ${JSON.stringify(forbidden)}`);
+  });
+
+  it('only sends Input.dispatchMouseEvent (single command family)', async () => {
+    const { api, calls } = loadModuleInSandbox({ seedStore: { enhancedModeEnabled: true } });
+    await api.dispatchTrustedWheelScroll(42);
+    const methods = new Set(calls.sendCommand.map(c => c.method));
+    assert.deepEqual([...methods], ['Input.dispatchMouseEvent']);
+  });
+});
+
+describe('lib/renderer-activation.js — dispatchTrustedWheelScroll error recovery', () => {
+  it('detaches even when mouseMoved sendCommand fails', async () => {
+    let ctx;
+    ctx = loadModuleInSandbox({
+      seedStore: { enhancedModeEnabled: true },
+      debuggerMethods: {
+        sendCommand: (target, method, params, cb) => {
+          if (params.type === 'mouseMoved') {
+            ctx.sandbox.chrome.runtime.lastError = { message: 'mouseMoved failed' };
+          }
+          cb();
+        }
+      }
+    });
+    const result = await ctx.api.dispatchTrustedWheelScroll(7);
+    assert.equal(result.ok, false);
+    assert.equal(result.dispatched, false);
+    assert.equal(result.attached, true);
+    assert.equal(result.detached, true, 'detach MUST still run even if wheel dispatch failed');
+    assert.equal(ctx.calls.detach.length, 1);
+    assert.match(result.reason, /wheel dispatch failed/);
+  });
+
+  it('detaches even when mouseWheel sendCommand fails (after mouseMoved succeeded)', async () => {
+    let ctx;
+    ctx = loadModuleInSandbox({
+      seedStore: { enhancedModeEnabled: true },
+      debuggerMethods: {
+        sendCommand: (target, method, params, cb) => {
+          if (params.type === 'mouseWheel') {
+            ctx.sandbox.chrome.runtime.lastError = { message: 'mouseWheel failed' };
+          }
+          cb();
+        }
+      }
+    });
+    const result = await ctx.api.dispatchTrustedWheelScroll(7);
+    assert.equal(result.ok, false);
+    assert.equal(result.dispatched, false);
+    assert.equal(result.detached, true);
+    assert.match(result.reason, /wheel dispatch failed/);
+  });
+
+  it('returns ok:false (no attach) when Enhanced Mode flag is unset', async () => {
+    const { api, calls } = loadModuleInSandbox();
+    const result = await api.dispatchTrustedWheelScroll(7);
+    assert.equal(result.ok, false);
+    assert.equal(result.dispatched, false);
+    assert.equal(calls.attach.length, 0, 'must NOT attach without flag — fast-fail to avoid banner flicker');
+    assert.equal(calls.sendCommand.length, 0);
+    assert.equal(calls.detach.length, 0);
+    assert.match(result.reason, /debugger permission not granted/);
+  });
+
+  it('returns ok:false when attach fails (e.g., another debugger attached)', async () => {
+    // dispatchTrustedWheelScroll checks hasDebuggerPermission BEFORE attach,
+    // so the chrome override must include storage.local with the flag set —
+    // otherwise the test fast-fails with "permission not granted" instead of
+    // reaching the attach attempt.
+    const overrides = {
+      chrome: {
+        debugger: {
+          attach: (target, v, cb) => {
+            chrome.runtime.lastError = { message: 'Another debugger is already attached' };
+            cb();
+          },
+          sendCommand: () => { throw new Error('sendCommand must NOT be called when attach failed'); },
+          detach: (target, cb) => cb()
+        },
+        storage: {
+          local: {
+            get: (keys, cb) => cb({ enhancedModeEnabled: true }),
+            set: (items, cb) => { if (cb) cb(); },
+            remove: (keys, cb) => { if (cb) cb(); }
+          }
+        },
+        runtime: { lastError: undefined }
+      }
+    };
+    const { api, calls } = loadModuleInSandbox(overrides);
+    const result = await api.dispatchTrustedWheelScroll(7);
+    assert.equal(result.ok, false);
+    assert.equal(result.dispatched, false);
+    assert.equal(calls.sendCommand.length, 0);
+    assert.equal(calls.detach.length, 0);
+    assert.match(result.reason, /attach failed/);
+  });
+
+  it('returns ok:false when chrome.debugger is unavailable', async () => {
+    const src = fs.readFileSync(MODULE_PATH, 'utf8');
+    const sandbox = {
+      chrome: { runtime: {} }, // no debugger
+      console: { log: () => {}, warn: () => {}, error: () => {} },
+      module: { exports: {} }
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(src, sandbox, { filename: 'renderer-activation.js' });
+    const result = await sandbox.module.exports.dispatchTrustedWheelScroll(7);
+    assert.equal(result.ok, false);
+    assert.equal(result.dispatched, false);
+    assert.match(result.reason, /chrome\.debugger unavailable/);
+  });
+
+  it('returns ok:false for invalid tabId', async () => {
+    const { api } = loadModuleInSandbox({ seedStore: { enhancedModeEnabled: true } });
+    const r1 = await api.dispatchTrustedWheelScroll(undefined);
+    const r2 = await api.dispatchTrustedWheelScroll(-1);
+    const r3 = await api.dispatchTrustedWheelScroll('not-a-number');
+    assert.equal(r1.ok, false);
+    assert.equal(r2.ok, false);
+    assert.equal(r3.ok, false);
+    assert.equal(r1.dispatched, false);
+  });
+});
+
+describe('lib/renderer-activation.js — RC19 follow-up: CDP step timeout (2026-07-29)', () => {
+  // console.log 2026-07-29: every trusted-wheel dispatch took exactly 60s
+  // (matching the orchestrator's tab timeout) and returned "Detached while
+  // handling command" — meaning the sendCommand callback NEVER fired on its
+  // own; only the tab-close reject finally invoked it. For background tabs in
+  // some throttled states, Chrome's input pipeline accepts Input.dispatch-
+  // MouseEvent but never responds. Without a defensive timeout, the entire
+  // 60s budget is wasted on a single hung dispatch.
+  //
+  // Each CDP step (attach / sendCommand / detach) is now wrapped in a 2s
+  // Promise.race. These tests verify the dispatch returns within that cap
+  // even when the underlying chrome.debugger callback never fires.
+
+  it('returns within ~2s when sendCommand(mouseMoved) never calls back', async () => {
+    const ctx = loadModuleInSandbox({
+      seedStore: { enhancedModeEnabled: true },
+      debuggerMethods: {
+        sendCommand: (target, method, params, cb) => {
+          if (params.type === 'mouseMoved') {
+            // Intentionally never call cb() — simulates hung CDP callback on
+            // a throttled background tab.
+            return;
+          }
+          ctx.calls.sendCommand.push({ target, method, params });
+          cb();
+        }
+      }
+    });
+    const t0 = Date.now();
+    const result = await ctx.api.dispatchTrustedWheelScroll(42);
+    const elapsed = Date.now() - t0;
+    assert.ok(elapsed < 3000, 'dispatch must return within ~2s timeout, took ' + elapsed + 'ms');
+    assert.equal(result.ok, false);
+    assert.equal(result.dispatched, false);
+    assert.match(result.reason, /wheel dispatch failed/);
+    assert.match(result.reason, /timeout/);
+    assert.equal(result.detached, true, 'detach MUST still run (it has its own timeout, but the default chrome.debugger.detach in the test harness calls back immediately)');
+  });
+
+  it('returns within ~2s when sendCommand(mouseWheel) never calls back', async () => {
+    const ctx = loadModuleInSandbox({
+      seedStore: { enhancedModeEnabled: true },
+      debuggerMethods: {
+        sendCommand: (target, method, params, cb) => {
+          if (params.type === 'mouseWheel') {
+            return; // never calls back
+          }
+          ctx.calls.sendCommand.push({ target, method, params });
+          cb();
+        }
+      }
+    });
+    const t0 = Date.now();
+    const result = await ctx.api.dispatchTrustedWheelScroll(42);
+    const elapsed = Date.now() - t0;
+    assert.ok(elapsed < 3000, 'dispatch must return within ~2s timeout, took ' + elapsed + 'ms');
+    assert.equal(result.ok, false);
+    assert.equal(result.dispatched, false, 'mouseWheel timed out — dispatched must be false');
+    assert.match(result.reason, /timeout/);
+  });
+
+  it('returns within ~2s when attach never calls back', async () => {
+    const overrides = {
+      chrome: {
+        debugger: {
+          attach: (target, v, cb) => { /* never calls cb */ },
+          sendCommand: () => { throw new Error('sendCommand must NOT be called when attach hung'); },
+          detach: (target, cb) => cb()
+        },
+        storage: {
+          local: {
+            get: (keys, cb) => cb({ enhancedModeEnabled: true }),
+            set: (items, cb) => { if (cb) cb(); },
+            remove: (keys, cb) => { if (cb) cb(); }
+          }
+        },
+        runtime: { lastError: undefined }
+      }
+    };
+    const { api } = loadModuleInSandbox(overrides);
+    const t0 = Date.now();
+    const result = await api.dispatchTrustedWheelScroll(42);
+    const elapsed = Date.now() - t0;
+    assert.ok(elapsed < 3000, 'dispatch must return within ~2s timeout, took ' + elapsed + 'ms');
+    assert.equal(result.ok, false);
+    assert.equal(result.dispatched, false);
+    assert.match(result.reason, /attach failed/);
+    assert.match(result.reason, /timeout/);
   });
 });

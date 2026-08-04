@@ -148,6 +148,86 @@ describe('background.js DOM_RESPONSE relay preserves _diagnostics (RC2)', () => 
   });
 });
 
+// RC25 (console.log 2026-08-04): background should broadcast
+// TRUSTED_WHEEL_SKIPPED to extension pages when a content-script emits a
+// trustedWheel_skipped diagnostic. Without this surfacing, the user has no
+// visible signal that scroll stalls + Enhanced Mode is off — only console
+// logs (which they rarely check). The wizard listens for this broadcast and
+// surfaces a post-run tip.
+describe('background.js CONTENT_SCRIPT_DIAGNOSTIC broadcasts TRUSTED_WHEEL_SKIPPED (RC25)', () => {
+  it('emits TRUSTED_WHEEL_SKIPPED broadcast when cat is trustedWheel_skipped', () => {
+    const stub = makeChromeStub();
+    const noop = function() {};
+    const sandbox = {
+      chrome: stub.chrome,
+      ServiceRegistry: stub.classes.ServiceRegistry,
+      LLMClient: stub.classes.LLMClient,
+      OffscreenExecutor: stub.classes.OffscreenExecutor,
+      UrlTemplate: stub.classes.UrlTemplate,
+      StepOrchestrator: stub.classes.StepOrchestrator,
+      debugLogger: { log: noop },
+      importScripts: noop,
+      console: { log: noop, error: noop, warn: noop },
+      Date, JSON, URL, Promise, Error, Object, Array, Math,
+      String, Number, Boolean, Map, Set, Symbol, parseInt, parseFloat,
+      setTimeout, clearTimeout,
+      AbortSignal: { timeout: () => ({}) },
+      fetch: () => Promise.resolve({ ok: true, json: () => Promise.resolve({ type: 'HEARTBEAT' }) })
+    };
+
+    const src = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
+    vm.createContext(sandbox);
+    vm.runInContext(src, sandbox);
+
+    // Emit a trustedWheel_skipped diagnostic from a content-script.
+    stub._emit({
+      type: 'CONTENT_SCRIPT_DIAGNOSTIC',
+      category: 'trustedWheel_skipped',
+      payload: { selector: 'div[role="main"]', reason: 'enhanced mode disabled' }
+    });
+
+    const broadcast = stub._sentMessages.find(m => m.type === 'TRUSTED_WHEEL_SKIPPED');
+    assert.ok(broadcast, 'background must broadcast TRUSTED_WHEEL_SKIPPED');
+    assert.equal(broadcast.payload.reason, 'enhanced mode disabled');
+  });
+
+  it('does NOT broadcast TRUSTED_WHEEL_SKIPPED for unrelated diagnostics', () => {
+    const stub = makeChromeStub();
+    const noop = function() {};
+    const sandbox = {
+      chrome: stub.chrome,
+      ServiceRegistry: stub.classes.ServiceRegistry,
+      LLMClient: stub.classes.LLMClient,
+      OffscreenExecutor: stub.classes.OffscreenExecutor,
+      UrlTemplate: stub.classes.UrlTemplate,
+      StepOrchestrator: stub.classes.StepOrchestrator,
+      debugLogger: { log: noop },
+      importScripts: noop,
+      console: { log: noop, error: noop, warn: noop },
+      Date, JSON, URL, Promise, Error, Object, Array, Math,
+      String, Number, Boolean, Map, Set, Symbol, parseInt, parseFloat,
+      setTimeout, clearTimeout,
+      AbortSignal: { timeout: () => ({}) },
+      fetch: () => Promise.resolve({ ok: true, json: () => Promise.resolve({ type: 'HEARTBEAT' }) })
+    };
+
+    const src = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
+    vm.createContext(sandbox);
+    vm.runInContext(src, sandbox);
+
+    // Emit a normal diagnostic (not trustedWheel_skipped).
+    stub._emit({
+      type: 'CONTENT_SCRIPT_DIAGNOSTIC',
+      category: 'scrollToBottom_iter',
+      payload: { attempt: 1, newY: 100 }
+    });
+
+    const broadcast = stub._sentMessages.find(m => m.type === 'TRUSTED_WHEEL_SKIPPED');
+    assert.equal(broadcast, undefined,
+      'unrelated diagnostics must not trigger TRUSTED_WHEEL_SKIPPED broadcast');
+  });
+});
+
 describe('offscreen.js DOM_RESPONSE forward preserves _diagnostics (RC3)', () => {
   it('buildSandboxForwardPayload carries _diagnostics from background to sandbox', () => {
     // Set up JSDOM and chrome stubs so offscreen.js can be loaded into a

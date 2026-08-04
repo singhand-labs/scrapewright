@@ -687,17 +687,19 @@ MV3 的 Service Worker 会在 30s 无活动后休眠。通过 `chrome.alarms.cre
 
 ### 采集标签节流
 
-采集标签默认以后台标签方式打开（`chrome.tabs.create({active:false})`），保证不会偷走用户的键盘焦点。对大多数网站都没问题。但对 `IntersectionObserver` 驱动的懒加载站点（Facebook 信息流、无限滚动、虚拟化列表），后台标签会撞上 Chrome 的渲染端帧产出节流。三层叠加方案分别针对不同的节流机制——叠加而非替代：
+采集标签默认以后台标签方式打开（`chrome.tabs.create({active:false})`），保证不会偷走用户的键盘焦点。对大多数网站都没问题。但对 `IntersectionObserver` 驱动的懒加载站点（Facebook 信息流、无限滚动、虚拟化列表），后台标签会撞上 Chrome 的渲染端帧产出节流。五层叠加方案分别针对不同的节流 / 过滤机制——叠加而非替代：
 
 | 层 | 模块 / CLI | 做了什么 | 不能解决 |
 |----|-----------|---------|---------|
 | 1. visibility-keepalive | `lib/visibility-keepalive.js`（默认开启）| 往页面 MAIN world 注入 `document.visibilityState='visible'` 覆盖 + rAF 保活循环。修复那些**自己**检查可见性来决定是否继续加载的页面 JS。| 非可见标签的合成器帧产出。|
-| 2. Enhanced Scraping Mode | `lib/renderer-activation.js`（选项页开关，背后用 `chrome.storage.local` 的 `enhancedModeEnabled` 标志）| 瞬态挂载 `chrome.debugger`（<100ms）+ `Page.setWebLifecycleState({state:'active'})`。解除 Chrome 的页面级生命周期冻结（JS 执行、定时器、rAF 的强节流）。| 合成器帧产出。经实测确认：CDP 返回 `ok:true` 但 IO 驱动的懒加载依然停住。检测风险最小化：只发 `Page.*`，绝不发 `Runtime.*`/`Network.*`/`DOM.*`。|
-| 3. Chrome 启动参数 | `scrapewright throttle on\|off\|status`（`native-host/lib/throttle-config/`）| 按平台重写 Chrome 启动器（Linux `.desktop`、macOS 包装 AppleScript 应用 `~/Applications/Chrome-Scrapewright.app`、Windows `.lnk` 快捷方式），加入 `--disable-background-timer-throttling`、`--disable-backgrounding-occluded-windows`、`--disable-renderer-backgrounding`、`--disable-features=CalculateNativeWinOcclusion`。| 需要重启 Chrome，且对所有 Chrome 窗口全局生效。|
+| 2. Enhanced Scraping Mode | `lib/renderer-activation.js`（选项页开关，背后用 `chrome.storage.local` 的 `enhancedModeEnabled` 标志）| 门控可信滚轮兜底（第 4 层）的可用性。RC20 之前还跑 `Page.setWebLifecycleState`（RC18 Plan A），RC20 删除——短暂激活（第 5 层）会让生命周期在输入窗口内自然 ACTIVE，调用变成纯开销。| 合成器帧产出。检测风险最小化：标志开启时只发 `Input.*` CDP 命令，绝不发 `Runtime.*`/`Network.*`/`DOM.*`。|
+| 3. Chrome 启动参数 | `scrapewright throttle on\|off\|status`（`native-host/lib/throttle-config/`）| 按平台重写 Chrome 启动器（Linux `.desktop`、macOS 包装 AppleScript 应用 `~/Applications/Chrome-Scrapewright.app`、Windows `.lnk` 快捷方式），加入 `--disable-background-timer-throttling`、`--disable-backgrounding-occluded-windows`、`--disable-renderer-backgrounding`、`--disable-features=CalculateNativeWinOcclusion`。| 需要重启 Chrome，且对所有 Chrome 窗口全局生效。**单独并不能**解决那些懒加载 loader 过滤 `event.isTrusted` 的站点。|
+| 4. 可信滚轮事件兜底（RC19）| `lib/renderer-activation.js:dispatchTrustedWheelScroll` + `lib/scroll-ops.js:scrollToBottomIncremental` 的 `trustedWheelFallback` 选项（与第 2 层共用 `enhancedModeEnabled` 标志）| 当程序化 `scrollBy` 卡住（scrollHeight 不再增长），scroll-ops 调用 `dispatchTrustedWheelScroll`：瞬态挂载 `chrome.debugger`，发 `Input.dispatchMouseEvent({type:'mouseMoved'})` + `Input.dispatchMouseEvent({type:'mouseWheel', deltaY})`。CDP 输入走 Chrome 的真实输入管线，产生的事件 `event.isTrusted=true`——这是程序化产生可信滚轮事件的**唯一**途径。中继链：`content-script.js` → `chrome.runtime.sendMessage(TRUSTED_WHEEL_SCROLL_REQUEST)` → `background.js` → `RendererActivation.dispatchTrustedWheelScroll(sender.tab.id)`。检测风险：只新增 `Input.*` CDP 命令（无 `Runtime.*`/`Network.*`/`DOM.*`）。`DEFAULT_MAX_TRUSTED_WHEEL_ATTEMPTS=3`。通用性：prompt 和 DSL 中无任何站点特定逻辑——LLM 仍写 `$scrollToBottom`，基础设施在卡住时透明地分派可信滚轮事件。| 需要 Enhanced Scraping Mode 开启。仅在"卡住"时触发，对响应程序化滚动的站点无副作用。|
+| 5. 短暂标签激活（RC20）| `lib/tab-activation.js`（默认开启）| 包装需要输入的 DOM 操作（`$scrollToBottom`，未来：`$click`），让采集标签在操作期间短暂成为焦点窗口中的活动标签，操作结束后恢复用户之前的活动标签。这是**唯一**针对 Chrome 硬性架构规则的层——合成器帧只为焦点窗口中的活动标签产出，所以 IO 回调和 CDP `Input.dispatchMouseEvent` 都需要激活。中继链：`content-script.js withTabActivation(fn)` → `chrome.runtime.sendMessage(TAB_ACTIVATION_REQUEST)` → `background.js` → `TabActivation.requestActivation(tabId)`（调用 `chrome.tabs.update({active:true})`，保存恢复目标）；`fn` 结束后 `TAB_ACTIVATION_RELEASE` 恢复之前的标签，除非用户中途切换了标签。安全：已激活时 no-op；拒绝跨窗口激活；用户中途切走则跳过恢复（不与用户争抢）。| 无——这是架构层结论。前四层都是必要但不足：它们解决节流 / 生命周期 / 输入可信，但不解决帧产出。|
 
 关键实现细节：Chrome 会**静默**地把 `"debugger"` 从 `optional_permissions` 中剔除（它属于 `kNonOptionalPermissions` 集合）。`debugger` 权限必须放在必需的 `permissions` 中，运行时再用存储标志控制——选项页开关只决定扩展是否使用它，不会改变 Chrome 是否授予它的事实。
 
-弹窗窗口路径（`chrome.windows.create({type:'popup', focused:false})`）作为可选方案通过 `{usePopup:true}` 保留，用于少数确实需要物理可见性的场景；通过紧接其后的 `chrome.windows.update(prevWinId, {focused:true})` 缓解 GNOME/Windows 的焦点抢夺问题。`closeScrapeTab(tab)` 同时处理弹窗窗口和独立标签两种清理路径。
+弹窗窗口路径（`chrome.windows.create({type:'popup', focused:false})`，RC12/RC17 的方案）已在 RC20 删除——短暂标签激活（第 5 层）让后台标签无需弹窗即可工作，避免了弹窗的焦点抢夺代价。`closeScrapeTab(tab)` 现在只是 `chrome.tabs.remove` 的幂等薄包装。
 
 ## 11. 开发与贡献
 

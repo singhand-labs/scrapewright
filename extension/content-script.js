@@ -235,6 +235,197 @@
     return g.__inlineListExtractOps;
   }
 
+  // RC19 follow-up (console.log 2026-07-29): same MV3 injection glitch hits
+  // lib/scroll-ops.js — diagnostic `scrollToBottom_entry {hasScrollOps:false}`
+  // confirmed it in production on Windows. Mirror the inline-fallback pattern
+  // from ListExtractOps so the trusted-wheel stack still runs when the lib
+  // doesn't attach. lib/scroll-ops.js remains the source of truth for Node
+  // tests; this fallback is a defensive duplicate.
+  // ⚠️ DRIFT GUARD: This inline object MUST mirror the public `api` export
+  // of lib/scroll-ops.js exactly (function names + property keys). The drift
+  // guard test (test/inline-scroll-ops-drift.test.js) parses both files as
+  // text and asserts key parity. If you add a function to one, add it to the
+  // other in the same commit — otherwise the inline fallback silently loses
+  // capabilities (e.g. trusted-wheel resets) when the MV3 glitch fires it.
+  function createInlineScrollOps() {
+    var SCROLL_INCREMENT_RATIO = 0.85;
+    var DEFAULT_MAX_ATTEMPTS = 8;
+    var DEFAULT_NO_PROGRESS_LIMIT = 3;
+    var DEFAULT_SETTLE_MS = 350;
+    var DEFAULT_MAX_TRUSTED_WHEEL_ATTEMPTS = 3;
+
+    function defaultSleep(ms) {
+      return new Promise(function (resolve) { setTimeout(resolve, ms); });
+    }
+
+    // Inline copy of scrollToBottomIncremental from lib/scroll-ops.js.
+    // RC19 trusted-wheel handling preserved — without it the stall-recovery
+    // path silently breaks under the injection glitch.
+    function scrollToBottomIncremental(root, opts) {
+      opts = opts || {};
+      var sleep = opts.sleep || defaultSleep;
+      var maxAttempts = (typeof opts.maxAttempts === 'number') ? opts.maxAttempts : DEFAULT_MAX_ATTEMPTS;
+      var noProgressLimit = (typeof opts.noProgressLimit === 'number') ? opts.noProgressLimit : DEFAULT_NO_PROGRESS_LIMIT;
+      var settleMs = (typeof opts.settleMs === 'number') ? opts.settleMs : DEFAULT_SETTLE_MS;
+      var scrollRootLabel = opts.scrollRootLabel || 'window';
+      var trustedWheelFallback = (typeof opts.trustedWheelFallback === 'function') ? opts.trustedWheelFallback : null;
+      var maxTrustedWheelAttempts = (typeof opts.maxTrustedWheelAttempts === 'number')
+        ? opts.maxTrustedWheelAttempts : DEFAULT_MAX_TRUSTED_WHEEL_ATTEMPTS;
+      var onIter = (typeof opts.onIter === 'function') ? opts.onIter : function () {};
+
+      var prevY = root.scrollTop || 0;
+      var prevScrollHeight = root.scrollHeight || 0;
+      var noProgress = 0;
+      var attempts = 0;
+      var trustedWheelAttempts = 0;
+      var lastScrollTop = prevY;
+      var lastScrollHeight = prevScrollHeight;
+
+      // RC19 follow-up (console.log 2026-07-29): mirror lib/scroll-ops.js's
+      // no-overflow early-exit. If the chosen root has no scroll range, exit
+      // immediately so the caller's inner-container probe can find the real
+      // scroll root. Without this, we'd spin noProgressLimit times then call
+      // trustedWheelFallback, which for background tabs hangs ~60s.
+      var rootClientHeight = root.clientHeight || (typeof window !== 'undefined' ? window.innerHeight : 800);
+      if (prevScrollHeight <= rootClientHeight) {
+        return {
+          scrolled: false,
+          prevY: prevY,
+          newY: prevY,
+          prevScrollHeight: prevScrollHeight,
+          newScrollHeight: prevScrollHeight,
+          scrollRoot: scrollRootLabel,
+          stalled: true,
+          attempts: 0,
+          noOverflow: true
+        };
+      }
+
+      return (async function loop() {
+        for (var i = 0; i < maxAttempts; i++) {
+          attempts += 1;
+          var delta = Math.round((root.clientHeight || (typeof window !== 'undefined' ? window.innerHeight : 800)) * SCROLL_INCREMENT_RATIO);
+          if (root.scrollBy) {
+            root.scrollBy(0, delta);
+          } else {
+            root.scrollTop = (root.scrollTop || 0) + delta;
+          }
+          if (settleMs > 0) await sleep(settleMs);
+
+          var curTop = root.scrollTop || 0;
+          var curHeight = root.scrollHeight || 0;
+          var heightGrew = curHeight > lastScrollHeight;
+          var posChanged = curTop !== lastScrollTop;
+          lastScrollTop = curTop;
+          lastScrollHeight = curHeight;
+
+          try {
+            onIter({
+              root: scrollRootLabel, iter: i, delta: delta,
+              curTop: curTop, curHeight: curHeight,
+              heightGrew: heightGrew, posChanged: posChanged,
+              noProgress: noProgress + (heightGrew || posChanged ? 0 : 1),
+              settleMs: settleMs
+            });
+          } catch (e) { /* diagnostic must not break the loop */ }
+
+          if (heightGrew || posChanged) {
+            noProgress = 0;
+          } else {
+            noProgress += 1;
+            if (noProgress >= noProgressLimit) {
+              if (trustedWheelFallback && trustedWheelAttempts < maxTrustedWheelAttempts) {
+                var wheelResult = null;
+                try {
+                  wheelResult = await trustedWheelFallback({
+                    deltaY: delta,
+                    attempt: trustedWheelAttempts + 1,
+                    scrollRoot: scrollRootLabel
+                  });
+                } catch (e) {
+                  wheelResult = { dispatched: false, reason: 'fallback threw: ' + (e && e.message || String(e)) };
+                }
+                trustedWheelAttempts += 1;
+                if (wheelResult && wheelResult.dispatched) {
+                  if (settleMs > 0) await sleep(settleMs);
+                  noProgress = 0;
+                  continue;
+                }
+              }
+              break;
+            }
+          }
+        }
+
+        var newY = root.scrollTop || 0;
+        var newScrollHeight = root.scrollHeight || 0;
+        var result = {
+          scrolled: newY !== prevY,
+          prevY: prevY,
+          newY: newY,
+          prevScrollHeight: prevScrollHeight,
+          newScrollHeight: newScrollHeight,
+          scrollRoot: scrollRootLabel,
+          stalled: noProgress >= noProgressLimit,
+          attempts: attempts
+        };
+        if (trustedWheelFallback) result.trustedWheelAttempts = trustedWheelAttempts;
+        return result;
+      })();
+    }
+
+    function findScrollableContainer(doc) {
+      if (!doc || !doc.defaultView) return null;
+      var view = doc.defaultView;
+      var all;
+      try {
+        all = doc.querySelectorAll('*');
+      } catch (e) {
+        return null;
+      }
+      var best = null;
+      var bestHeight = 0;
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        var style;
+        try { style = view.getComputedStyle(el); } catch (e) { continue; }
+        if (!style) continue;
+        var ov = style.overflowY;
+        if (ov !== 'auto' && ov !== 'scroll') continue;
+        var sh = el.scrollHeight || 0;
+        var ch = el.clientHeight || 0;
+        if (sh <= ch * 1.5) continue;
+        if (sh > bestHeight) {
+          bestHeight = sh;
+          best = el;
+        }
+      }
+      return best;
+    }
+
+    return {
+      scrollToBottomIncremental: scrollToBottomIncremental,
+      findScrollableContainer: findScrollableContainer,
+      DEFAULT_MAX_ATTEMPTS: DEFAULT_MAX_ATTEMPTS,
+      DEFAULT_NO_PROGRESS_LIMIT: DEFAULT_NO_PROGRESS_LIMIT,
+      DEFAULT_SETTLE_MS: DEFAULT_SETTLE_MS,
+      DEFAULT_MAX_TRUSTED_WHEEL_ATTEMPTS: DEFAULT_MAX_TRUSTED_WHEEL_ATTEMPTS,
+      SCROLL_INCREMENT_RATIO: SCROLL_INCREMENT_RATIO
+    };
+  }
+
+  let __scrollOpsFallbackWarned = false;
+  function getScrollOps() {
+    const g = typeof window !== 'undefined' ? window : self;
+    if (g && g.ScrollOps) return g.ScrollOps;
+    if (!g.__inlineScrollOps) g.__inlineScrollOps = createInlineScrollOps();
+    if (!__scrollOpsFallbackWarned) {
+      __scrollOpsFallbackWarned = true;
+      console.warn('[content-script] Using inline ScrollOps fallback — lib/scroll-ops.js did not attach window.ScrollOps at call time. Reload the extension to investigate.');
+    }
+    return g.__inlineScrollOps;
+  }
+
   let isAnnotationMode = false;
   let selectedAnnotations = [];
   let annotationSchemas = { inputSchema: {}, outputSchema: {} };
@@ -278,6 +469,165 @@
     if (level === 'error') console.error(prefix, data || '');
     else if (level === 'warn') console.warn(prefix, data || '');
     else console.log(prefix, data || '');
+  }
+
+  // RC19 follow-up (console.log 2026-07-28): mirrors a content-script diagnostic
+  // up to the background service worker so it lands in the SAME log capture the
+  // user already takes from background SW DevTools. Content-script's own
+  // console.log only shows in the page's DevTools, which the user wasn't watching.
+  // Fire-and-forget; no response needed. Wrapped so any failure is silent —
+  // diagnostics must never break the scrape path they're observing.
+  function notifyBackgroundDiagnostic(category, payload) {
+    try {
+      chrome.runtime.sendMessage({
+        type: 'CONTENT_SCRIPT_DIAGNOSTIC',
+        category: category,
+        payload: payload,
+        tabUrl: (typeof location !== 'undefined' && location.href) || null
+      }, function () {
+        // Swallow: chrome.runtime.lastError is expected when the SW is asleep.
+        void chrome.runtime.lastError;
+      });
+    } catch (e) {
+      // Diagnostic must never throw into the scrape path.
+    }
+  }
+
+  // RC25 (console.log 2026-08-04): inline copy of createEnhancedModeCache from
+  // lib/renderer-activation.js. Content-script can't load renderer-activation.js
+  // (it's background-only — chrome.debugger territory). The cache lazy-queries
+  // background for Enhanced Mode state on first stall, then short-circuits
+  // subsequent stalls when known-disabled. Eliminates N×(request+response)
+  // wasted messages per $scrollToBottom when Enhanced Mode is off.
+  // ⚠️ DRIFT GUARD: test/enhanced-mode-cache-inline-drift.test.js asserts this
+  // inline copy matches lib/renderer-activation.js's createEnhancedModeCache
+  // behaviorally. If you change one, change the other in the same commit.
+  function createInlineEnhancedModeCache(opts) {
+    opts = opts || {};
+    var queryFn = (typeof opts.query === 'function') ? opts.query : null;
+    var cachedState = null; // null = unknown, true/false = known
+    var inFlightPromise = null;
+
+    function resolveQuery() {
+      if (!queryFn) return Promise.resolve(false);
+      try {
+        var p = queryFn();
+        if (!p || typeof p.then !== 'function') p = Promise.resolve(p);
+        return p.then(
+          function (v) { return !!v; },
+          function () { return false; }
+        );
+      } catch (e) {
+        return Promise.resolve(false);
+      }
+    }
+
+    return {
+      isKnown: function () { return cachedState !== null; },
+      getState: function () {
+        if (cachedState !== null) return Promise.resolve(cachedState);
+        if (!inFlightPromise) {
+          inFlightPromise = resolveQuery().then(function (v) {
+            cachedState = v;
+            inFlightPromise = null;
+            return v;
+          });
+        }
+        return inFlightPromise;
+      },
+      invalidate: function () { cachedState = null; },
+      _setForTest: function (v) { cachedState = !!v; inFlightPromise = null; }
+    };
+  }
+
+  // Module-scope singleton. Query asks background via the same message channel
+  // trustedWheelFallback used to use, so no new infrastructure needed.
+  var enhancedModeCache = createInlineEnhancedModeCache({
+    query: function () {
+      return new Promise(function (resolve) {
+        try {
+          chrome.runtime.sendMessage({ type: 'GET_ENHANCED_MODE_STATE' }, function (resp) {
+            // Swallow: lastError is expected when SW is asleep.
+            void chrome.runtime.lastError;
+            resolve(!!(resp && resp.enabled));
+          });
+        } catch (e) {
+          resolve(false);
+        }
+      });
+    }
+  });
+
+  // Listen for Enhanced Mode state changes broadcast by background (fired
+  // when the user toggles the option). Without this, a user who enables
+  // Enhanced Mode mid-session would have a stale "false" cache until the
+  // tab reloads. The invalidate() forces re-query on the next stall.
+  try {
+    chrome.runtime.onMessage.addListener(function (message) {
+      if (message && message.type === 'ENHANCED_MODE_STATE_CHANGED') {
+        enhancedModeCache.invalidate();
+      }
+    });
+  } catch (e) {
+    // Test sandbox or no chrome.runtime — cache still works (just won't
+    // auto-invalidate on toggle, which is fine for tests).
+  }
+
+  // RC20 (console.log 2026-07-30): wrap input-required DOM ops so the scrape
+  // tab is briefly the active tab during the op. Chrome's renderer only
+  // produces compositor frames for the active tab in the focused window, and
+  // both IntersectionObserver callbacks AND CDP Input.dispatchMouseEvent
+  // require frame production. This is the one layer that visibility-keepalive,
+  // launch flags, and Enhanced Mode could not be (necessary but not
+  // sufficient). See lib/tab-activation.js for the rationale and the
+  // background TAB_ACTIVATION_REQUEST / _RELEASE handlers.
+  //
+  // Content scripts can't call chrome.tabs.* — this helper uses message-
+  // passing to ask background to do it. It runs `fn` regardless of whether
+  // activation succeeded (graceful degradation — fgPath already active,
+  // cross-window refusals, missing chrome.tabs, etc.). Errors in the message
+  // channel do NOT abort `fn`; we just skip release if request never
+  // activated.
+  async function withTabActivation(label, fn) {
+    let activated = false;
+    try {
+      const req = await chrome.runtime.sendMessage({ type: 'TAB_ACTIVATION_REQUEST' });
+      activated = !!(req && req.ok && req.activated);
+      notifyBackgroundDiagnostic('tabActivation_request', {
+        label: label,
+        ok: !!(req && req.ok),
+        activated: activated,
+        crossWindow: !!(req && req.crossWindow),
+        reason: (req && req.reason) || null
+      });
+    } catch (e) {
+      notifyBackgroundDiagnostic('tabActivation_request', {
+        label: label,
+        ok: false,
+        reason: 'sendMessage error: ' + (e && e.message || String(e))
+      });
+    }
+    try {
+      return await fn();
+    } finally {
+      if (activated) {
+        try {
+          const rel = await chrome.runtime.sendMessage({ type: 'TAB_ACTIVATION_RELEASE' });
+          notifyBackgroundDiagnostic('tabActivation_release', {
+            label: label,
+            ok: !!(rel && rel.ok),
+            restored: !!(rel && rel.restored),
+            reason: (rel && rel.reason) || null
+          });
+        } catch (e) {
+          notifyBackgroundDiagnostic('tabActivation_release', {
+            label: label,
+            ok: false,
+            reason: 'sendMessage error: ' + (e && e.message || String(e))
+          });
+        }
+      }
+    }
   }
 
   sendDebugLog('info', 'content-script', 'Content script loaded', { url: location.href, readyState: document.readyState });
@@ -990,52 +1340,204 @@
   async function domScrollToBottom(sel) {
     const target = resolveScrollTarget(sel);
     const initialRoot = target || document.scrollingElement || document.documentElement;
-    const ops = (typeof window !== 'undefined' && window.ScrollOps)
-      || (typeof self !== 'undefined' && self.ScrollOps);
+    // RC19 follow-up (console.log 2026-07-29): use getScrollOps() instead of
+    // direct window.ScrollOps lookup. Diagnostic proved Chrome's MV3 injection
+    // glitch leaves window.ScrollOps unset after mid-session reloads — without
+    // this, $scrollToBottom silently degrades to the legacy one-shot path and
+    // the trusted-wheel stack never fires.
+    const ops = getScrollOps();
+    const t0 = (typeof Date !== 'undefined') ? Date.now() : 0;
+    notifyBackgroundDiagnostic('scrollToBottom_entry', {
+      selector: sel || null,
+      hasScrollOps: !!ops,
+      hasIncremental: !!(ops && typeof ops.scrollToBottomIncremental === 'function'),
+      initialRootTag: initialRoot && initialRoot.tagName,
+      initialScrollTop: (initialRoot && initialRoot.scrollTop) || 0,
+      initialScrollHeight: (initialRoot && initialRoot.scrollHeight) || 0,
+      initialClientHeight: (initialRoot && initialRoot.clientHeight) || 0
+    });
     // Defensive: if the lib helper didn't load, fall back to the legacy one-shot
     // behavior so the API still functions (older bug logs show this matters).
     if (!ops || typeof ops.scrollToBottomIncremental !== 'function') {
       const prevY = initialRoot.scrollTop || 0;
       const bottom = initialRoot.scrollHeight || 0;
       initialRoot.scrollTo ? initialRoot.scrollTo(0, bottom) : (initialRoot.scrollTop = bottom);
+      const legacyResult = {
+        scrolled: (initialRoot.scrollTop || 0) !== prevY,
+        prevY, newY: initialRoot.scrollTop || 0,
+        path: 'legacy'
+      };
+      notifyBackgroundDiagnostic('scrollToBottom_legacy', {
+        selector: sel || null,
+        prevY: legacyResult.prevY,
+        targetBottom: bottom,
+        newY: legacyResult.newY,
+        scrolled: legacyResult.scrolled,
+        elapsedMs: Date.now() - t0
+      });
       sendDebugLog('warn', 'content-script', 'domScrollToBottom', {
         selector: sel || '(window)',
         note: 'ScrollOps helper missing — used legacy one-shot scroll',
         prevY, targetBottom: bottom, newY: initialRoot.scrollTop || 0
       });
-      return { scrolled: (initialRoot.scrollTop || 0) !== prevY, prevY, newY: initialRoot.scrollTop || 0 };
+      return legacyResult;
     }
 
-    // First attempt: incremental scroll on the resolved root.
-    const r1 = await ops.scrollToBottomIncremental(initialRoot, {
-      scrollRootLabel: target ? ('selector:' + sel) : 'window'
-    });
-
-    // Fallback: if the resolved root made zero position progress AND the user
-    // didn't pass a selector (meaning we guessed window), probe for an inner
-    // scrollable container and try again. This catches FB-style pages whose
-    // scroll root is an inner overflow:auto element, not the document.
-    if (!target && !r1.scrolled && r1.attempts > 0) {
-      const inner = typeof ops.findScrollableContainer === 'function'
-        ? ops.findScrollableContainer(document)
-        : null;
-      if (inner && inner !== initialRoot) {
-        const r2 = await ops.scrollToBottomIncremental(inner, { scrollRootLabel: 'inner' });
-        sendDebugLog('info', 'content-script', 'domScrollToBottom', {
-          selector: sel || '(window)',
-          fallback: 'inner-container',
-          attempt1: r1,
-          attempt2: r2
-        });
-        return r2;
+    // RC19 (console.log 2026-07-28): trusted-wheel fallback.
+    // When programmatic scrollBy stalls (no growth, no position change), ask
+    // background to dispatch a CDP Input.dispatchMouseEvent mouseWheel — the
+    // only programmatic mechanism that produces an isTrusted=true wheel event.
+    // Background fast-fails if Enhanced Mode is off, so this is a no-op for
+    // users who haven't opted in. The fallback is generic; no site-specific
+    // logic here.
+    //
+    // RC25 (console.log 2026-08-04): consult enhancedModeCache BEFORE sending
+    // the TRUSTED_WHEEL_SCROLL_REQUEST message. Without the cache, every stall
+    // in an Enhanced-Mode-off run produced a full round-trip just to learn
+    // "debugger permission not granted" — dozens of wasted messages per FB
+    // scrape. Now: first stall queries the cache (one round-trip to read
+    // chrome.storage.local via background), subsequent stalls short-circuit
+    // when known-disabled. Per-invocation flag ensures we emit ONE
+    // trustedWheel_skipped marker per $scrollToBottom (not per stall) so the
+    // log stays readable.
+    let trustedWheelSkipLoggedThisInvocation = false;
+    const trustedWheelFallback = async (info) => {
+      // Short-circuit when Enhanced Mode is known-disabled.
+      const enabled = await enhancedModeCache.getState();
+      if (!enabled) {
+        if (!trustedWheelSkipLoggedThisInvocation) {
+          trustedWheelSkipLoggedThisInvocation = true;
+          notifyBackgroundDiagnostic('trustedWheel_skipped', {
+            selector: sel || null,
+            reason: 'enhanced mode disabled',
+            attempt: info && info.attempt
+          });
+        }
+        return { dispatched: false, ok: false, reason: 'enhanced mode disabled' };
       }
-    }
+      notifyBackgroundDiagnostic('trustedWheel_request', {
+        selector: sel || null,
+        attempt: info && info.attempt,
+        deltaY: info && info.deltaY,
+        scrollRoot: info && info.scrollRoot
+      });
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: 'TRUSTED_WHEEL_SCROLL_REQUEST',
+          deltaY: info && info.deltaY,
+          attempt: info && info.attempt
+        });
+        const wrapped = response || { dispatched: false, reason: 'no response from background' };
+        notifyBackgroundDiagnostic('trustedWheel_response', {
+          selector: sel || null,
+          attempt: info && info.attempt,
+          dispatched: !!wrapped.dispatched,
+          ok: !!wrapped.ok,
+          reason: wrapped.reason || null
+        });
+        return wrapped;
+      } catch (e) {
+        notifyBackgroundDiagnostic('trustedWheel_response', {
+          selector: sel || null,
+          attempt: info && info.attempt,
+          dispatched: false,
+          ok: false,
+          reason: 'sendMessage error: ' + (e && e.message || String(e))
+        });
+        return { dispatched: false, reason: 'sendMessage error: ' + (e && e.message || String(e)) };
+      }
+    };
 
-    sendDebugLog('info', 'content-script', 'domScrollToBottom', {
-      selector: sel || '(window)',
-      result: r1
+    // Per-iter progress reporter — mirrors into background SW via the same
+    // diagnostic relay used by entry/exit logging. Bounded by maxAttempts (8),
+    // so at most 8 messages per $scrollToBottom invocation — well under any
+    // rate-limit concern. The receiver is the background SW which is awake
+    // for the duration of the scrape.
+    const onIter = (info) => {
+      notifyBackgroundDiagnostic('scrollToBottom_iter', info);
+    };
+
+    // RC20 (console.log 2026-07-30): wrap the scroll work in withTabActivation
+    // so the scrape tab is briefly the active tab during the op. Chrome's
+    // renderer only produces compositor frames for the active tab; both the
+    // IntersectionObserver-based growth probe AND the CDP trusted-wheel
+    // fallback depend on frame production. This is the one layer that the
+    // four-layer throttle stack (visibility-keepalive, Enhanced Mode, launch
+    // flags, trusted-wheel) could not be — they address throttle/lifecycle
+    // but not the underlying frame-production rule. Generic; no FB-specific
+    // logic here. degrades gracefully if activation fails (cross-window,
+    // missing chrome.tabs, etc.) — the scroll still runs, it just may not
+    // trigger lazy-load on throttled renderers.
+    return await withTabActivation('scrollToBottom', async () => {
+      // First attempt: incremental scroll on the resolved root.
+      const r1 = await ops.scrollToBottomIncremental(initialRoot, {
+        scrollRootLabel: target ? ('selector:' + sel) : 'window',
+        trustedWheelFallback: trustedWheelFallback,
+        onIter: onIter
+      });
+
+      // Fallback: if the resolved root made zero position progress, probe for
+      // an inner scrollable container and try again. This catches pages whose
+      // scroll root is an inner overflow:auto element, not the document OR not
+      // the element the LLM guessed (e.g. FB wraps the real scrollable feed
+      // inside a non-scrolling div[role=main]; the LLM picks the wrapper).
+      // Probing whenever r1.scrolled is false — selector or not — is the
+      // generic fix and matches what a human would do: if the obvious scroll
+      // root doesn't move, look for a real scrollable element. Site-agnostic.
+      //
+      // RC19 follow-up (console.log 2026-07-29): the no-overflow early-exit in
+      // scroll-ops.js returns attempts:0, so the old `r1.attempts > 0` gate
+      // would have skipped this probe exactly when we need it most. Accept
+      // either signal: attempts > 0 (loop ran but stalled) OR noOverflow (loop
+      // refused to run because the root has no scroll range).
+      if (!r1.scrolled && (r1.attempts > 0 || r1.noOverflow)) {
+        const inner = typeof ops.findScrollableContainer === 'function'
+          ? ops.findScrollableContainer(document)
+          : null;
+        if (inner && inner !== initialRoot) {
+          notifyBackgroundDiagnostic('scrollToBottom_innerFallback', {
+            selector: sel || null,
+            innerTag: inner.tagName,
+            innerScrollHeight: inner.scrollHeight || 0,
+            innerClientHeight: inner.clientHeight || 0,
+            r1: r1
+          });
+          const r2 = await ops.scrollToBottomIncremental(inner, {
+            scrollRootLabel: 'inner',
+            trustedWheelFallback: trustedWheelFallback,
+            onIter: onIter
+          });
+          sendDebugLog('info', 'content-script', 'domScrollToBottom', {
+            selector: sel || '(window)',
+            fallback: 'inner-container',
+            attempt1: r1,
+            attempt2: r2
+          });
+          r2.path = 'inner';
+          notifyBackgroundDiagnostic('scrollToBottom_done', {
+            selector: sel || null,
+            path: 'inner',
+            r1: r1,
+            r2: r2,
+            elapsedMs: Date.now() - t0
+          });
+          return r2;
+        }
+      }
+
+      sendDebugLog('info', 'content-script', 'domScrollToBottom', {
+        selector: sel || '(window)',
+        result: r1
+      });
+      r1.path = 'incremental';
+      notifyBackgroundDiagnostic('scrollToBottom_done', {
+        selector: sel || null,
+        path: 'incremental',
+        r1: r1,
+        elapsedMs: Date.now() - t0
+      });
+      return r1;
     });
-    return r1;
   }
 
   async function domScrollIntoView(sel) {
