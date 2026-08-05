@@ -51,6 +51,35 @@ function normalizeSegment(seg) {
   return s;
 }
 
+// Semantic confirmation that a branching segment looks "list-item-like".
+// Used after structural branching analysis to assign HIGH vs LOW confidence.
+// HIGH confidence patterns are universal across feed/search/e-commerce sites:
+//   - semantic role attribute
+//   - aria-posinset or data-* positioning attrs
+//   - list/table/option tag
+//   - numeric-suffix class names common in component libraries
+// LOW confidence = clusters but flags the LLM/user that grouping may be off.
+const HIGH_CONFIDENCE_ATTRS = [
+  /\[role=/i,
+  /\[aria-posinset\b/i,
+  /\[data-item/i,
+  /\[data-index/i,
+  /\[data-row/i,
+  /\[data-testid/i,
+  /\[data-cid/i,
+  /\[data-id/i,
+];
+const HIGH_CONFIDENCE_TAGS = /^(li|tr|option)\b/i;
+const HIGH_CONFIDENCE_CLASS = /(?:^|[\s'.])(?:item|post|card|row|entry|result|product)-?\d/i;
+
+function isHighConfidence(seg) {
+  if (!seg || typeof seg !== 'string') return false;
+  if (HIGH_CONFIDENCE_ATTRS.some(re => re.test(seg))) return true;
+  if (HIGH_CONFIDENCE_TAGS.test(seg)) return true;
+  if (HIGH_CONFIDENCE_CLASS.test(seg)) return true;
+  return false;
+}
+
 function clusterAnnotationsByContainer(annotations) {
   const list = Array.isArray(annotations) ? annotations : [];
   if (!list.length) return { samples: [], supplemental: [] };
@@ -58,7 +87,7 @@ function clusterAnnotationsByContainer(annotations) {
   return { samples: [], supplemental: list };
 }
 
-const api = { clusterAnnotationsByContainer, parseDomPathSegments, normalizeSegment };
+const api = { clusterAnnotationsByContainer, parseDomPathSegments, normalizeSegment, isHighConfidence };
 
 if (typeof module !== 'undefined' && module.exports) module.exports = api;
 if (typeof window !== 'undefined') window.AnnotationCluster = api;

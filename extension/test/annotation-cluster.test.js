@@ -89,3 +89,51 @@ describe('normalizeSegment', () => {
     assert.equal(normalizeSegment(null), '');
   });
 });
+
+const { isHighConfidence } = require('../lib/annotation-cluster');
+
+describe('isHighConfidence', () => {
+  it('returns true for [role="..."]', () => {
+    assert.equal(isHighConfidence("div[role='article']"), true);
+  });
+
+  it('returns true for [aria-posinset] (value stripped or not)', () => {
+    assert.equal(isHighConfidence("div[aria-posinset='3']"), true);
+    assert.equal(isHighConfidence('div[aria-posinset]'), true);
+  });
+
+  it('returns true for [data-index], [data-item], [data-testid], [data-row], [data-cid], [data-id]', () => {
+    assert.equal(isHighConfidence('div[data-index="42"]'), true);
+    assert.equal(isHighConfidence('div[data-item="1"]'), true);
+    assert.equal(isHighConfidence('div[data-testid="result"]'), true);
+    assert.equal(isHighConfidence('div[data-row="7"]'), true);
+    assert.equal(isHighConfidence('div[data-cid="abc"]'), true);
+    assert.equal(isHighConfidence('div[data-id="x"]'), true);
+  });
+
+  it('returns true for li / tr / option tag', () => {
+    assert.equal(isHighConfidence('li'), true);
+    assert.equal(isHighConfidence('tr.item'), true);
+    assert.equal(isHighConfidence('option[value="a"]'), true);
+  });
+
+  it('returns true for item-/post-/card-/row-/entry-/result-/product-N class patterns', () => {
+    assert.equal(isHighConfidence('div.item-3'), true);
+    assert.equal(isHighConfidence('div.post-7'), true);
+    assert.equal(isHighConfidence("div.card-42[x='1']"), true);
+    assert.equal(isHighConfidence('div.row7'), true);
+    assert.equal(isHighConfidence('div.entry-1'), true);
+    assert.equal(isHighConfidence('div.result-99'), true);
+    assert.equal(isHighConfidence('div.product-5'), true);
+  });
+
+  it('returns false for a generic section without signals', () => {
+    assert.equal(isHighConfidence('section'), false);
+    assert.equal(isHighConfidence('div.wrapper'), false);
+  });
+
+  it('returns false for empty input', () => {
+    assert.equal(isHighConfidence(''), false);
+    assert.equal(isHighConfidence(null), false);
+  });
+});
