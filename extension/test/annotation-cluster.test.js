@@ -17,3 +17,35 @@ describe('annotation-cluster bootstrap', () => {
     assert.deepEqual(r.supplemental, []);
   });
 });
+
+const { parseDomPathSegments } = require('../lib/annotation-cluster');
+
+describe('parseDomPathSegments', () => {
+  it('splits a simple child-combinator path', () => {
+    assert.deepEqual(parseDomPathSegments('div > div > span'), ['div', 'div', 'span']);
+  });
+
+  it('does not split on spaces inside attribute brackets', () => {
+    const p = "div > div[role='article'][aria-posinset='3'] > h3 > a";
+    assert.deepEqual(parseDomPathSegments(p), [
+      'div',
+      "div[role='article'][aria-posinset='3']",
+      'h3',
+      'a',
+    ]);
+  });
+
+  it('returns [] for non-string input', () => {
+    assert.deepEqual(parseDomPathSegments(null), []);
+    assert.deepEqual(parseDomPathSegments(undefined), []);
+    assert.deepEqual(parseDomPathSegments(42), []);
+  });
+
+  it('trims whitespace around segments', () => {
+    assert.deepEqual(parseDomPathSegments('  div  >  span  '), ['div', 'span']);
+  });
+
+  it('handles single-segment path (no combinator)', () => {
+    assert.deepEqual(parseDomPathSegments('div'), ['div']);
+  });
+});
