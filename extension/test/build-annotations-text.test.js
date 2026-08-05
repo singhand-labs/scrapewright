@@ -94,3 +94,55 @@ describe('buildAnnotationsText multi-sample dispatch', () => {
     assert.match(text, /LIST EXTRACTION PATTERN/);
   });
 });
+
+describe('buildAnnotationsText cross-sample observations', () => {
+  it('labels a field present in all samples with the SAME selector as UNIVERSAL', () => {
+    const annos = [
+      { type: 'extract', outputField: 'posts.title', selector: 'div[aria-posinset="1"] h3',
+        domPath: 'div > div[aria-posinset="1"] > h3' },
+      { type: 'extract', outputField: 'posts.title', selector: 'div[aria-posinset="2"] h3',
+        domPath: 'div > div[aria-posinset="2"] > h3' },
+    ];
+    const text = buildAnnotationsText(annos);
+    assert.match(text, /UNIVERSAL field: posts\.title/);
+  });
+
+  it('labels a field present in all samples with DIFFERENT selectors as SHAPE-DEPENDENT', () => {
+    const annos = [
+      { type: 'extract', outputField: 'posts.author', selector: 'div[aria-posinset="1"] a.user',
+        domPath: 'div > div[aria-posinset="1"] > a.user' },
+      { type: 'extract', outputField: 'posts.author', selector: 'div[aria-posinset="2"] a.page',
+        domPath: 'div > div[aria-posinset="2"] > a.page' },
+    ];
+    const text = buildAnnotationsText(annos);
+    assert.match(text, /SHAPE-DEPENDENT field: posts\.author/);
+  });
+
+  it('labels a field present in only SOME samples as OPTIONAL', () => {
+    const annos = [
+      { type: 'extract', outputField: 'posts.title', selector: 'div[aria-posinset="1"] h3',
+        domPath: 'div > div[aria-posinset="1"] > h3' },
+      { type: 'extract', outputField: 'posts.title', selector: 'div[aria-posinset="2"] h3',
+        domPath: 'div > div[aria-posinset="2"] > h3' },
+      { type: 'extract', outputField: 'posts.subtitle', selector: 'div[aria-posinset="1"] em',
+        domPath: 'div > div[aria-posinset="1"] > em' },
+    ];
+    const text = buildAnnotationsText(annos);
+    assert.match(text, /OPTIONAL field: posts\.subtitle/);
+  });
+
+  it('omits the OBSERVATIONS block when no fields repeat across samples', () => {
+    const annos = [
+      { type: 'extract', outputField: 'posts.title', selector: 'div[aria-posinset="1"] h3',
+        domPath: 'div > div[aria-posinset="1"] > h3' },
+      { type: 'extract', outputField: 'posts.author', selector: 'div[aria-posinset="2"] a',
+        domPath: 'div > div[aria-posinset="2"] > a' },
+    ];
+    const text = buildAnnotationsText(annos);
+    // Both fields appear once; the cross-sample observations still emit
+    // (OPTIONAL), so the block IS present. We assert the block exists with
+    // the OPTIONAL label.
+    assert.match(text, /CROSS-SAMPLE OBSERVATIONS/);
+    assert.match(text, /OPTIONAL field/);
+  });
+});

@@ -474,7 +474,44 @@ function buildMultiSampleText(clustered) {
     }
     blocks.push('');
   });
+  const observations = deriveCrossSampleObservations(clustered.samples);
+  if (observations.length) {
+    blocks.push('CROSS-SAMPLE OBSERVATIONS (framework-derived):');
+    for (const line of observations) blocks.push('- ' + line);
+    blocks.push('');
+  }
   return blocks.join('\n');
+}
+
+// Classify each outputField that appears in the samples:
+//   UNIVERSAL: appears in all samples with the SAME (cleaned) selector
+//   SHAPE-DEPENDENT: appears in all samples with DIFFERENT selectors
+//   OPTIONAL: appears in only some samples
+// Returns an array of human-readable lines for the prompt.
+function deriveCrossSampleObservations(samples) {
+  const fieldMap = new Map(); // field -> [{ sampleIdx, selector }]
+  samples.forEach((s, idx) => {
+    for (const a of s.annotations) {
+      if (!a || !a.outputField) continue;
+      if (!fieldMap.has(a.outputField)) fieldMap.set(a.outputField, []);
+      fieldMap.get(a.outputField).push({ sampleIdx: idx, selector: a.selector || '' });
+    }
+  });
+  const lines = [];
+  for (const [field, entries] of fieldMap) {
+    const sampleCount = new Set(entries.map(e => e.sampleIdx)).size;
+    if (sampleCount === samples.length) {
+      const selectors = new Set(entries.map(e => e.selector));
+      if (selectors.size === 1) {
+        lines.push(`UNIVERSAL field: ${field} (same selector in all ${samples.length} samples)`);
+      } else {
+        lines.push(`SHAPE-DEPENDENT field: ${field} (present in all samples but selectors differ)`);
+      }
+    } else {
+      lines.push(`OPTIONAL field: ${field} (only in ${sampleCount} of ${samples.length} samples)`);
+    }
+  }
+  return lines;
 }
 
 // Format one annotation as a single line (no leading ANNOTATION[N] tag —
