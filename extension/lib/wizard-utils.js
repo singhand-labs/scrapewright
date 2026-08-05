@@ -2286,6 +2286,71 @@ function buildFeedbackSection(feedback, attemptNum, totalAttempts, llmHistory) {
   return lines.join('\n');
 }
 
+// ============================================================================
+// No-op escalation (console.log 2026-08-05 07:13–07:22)
+//
+// When the user submits the same feedback twice and autoFix rejects both
+// responses as no-ops, the LLM has shown it cannot produce a different fix
+// without an explicit signal. The [NO-OP DETECTED] message pushed into
+// llmHistory alone was insufficient — the LLM returned byte-identical
+// responses across iterations (3785 bytes × 3 iterations, identical ACK text),
+// proving it either ignored history or hit an upstream proxy cache.
+//
+// These helpers add a CURRENT-prompt warning with a unique iteration counter.
+// The counter both (a) tells the LLM this is a retry and (b) busts any
+// upstream cache that keys on identical request bodies.
+//
+// Universality: no FB/site-specific terms. The strategies listed are generic
+// (record comparison, selector anchoring, NACK escape hatch).
+// ============================================================================
+
+// Returns the escalation block to inject into the current autoFix prompt when
+// the same user feedback has been rejected as a no-op one or more times.
+// Returns empty string when consecutiveNoOpCount is 0 (first-time feedback).
+function buildNoOpEscalationSection(consecutiveNoOpCount) {
+  if (!Number.isFinite(consecutiveNoOpCount) || consecutiveNoOpCount <= 0) return '';
+  const n = Math.floor(consecutiveNoOpCount);
+  return [
+    `=== PREVIOUS FIX REJECTED (NO-OP) — ITERATION ${n} ===`,
+    `Your previous response for this exact user feedback was rejected because the proposed script was byte-identical to the current script — no change was applied, and the user is submitting the same feedback again. This is iteration ${n} of the same complaint.`,
+    '',
+    'You MUST produce a DIFFERENT script this time. Strategies that may help break out of the anchor:',
+    '- Read the Current output block carefully. Find the specific record(s) the user is complaining about by matching their description (e.g. position, value, content snippet).',
+    '- Compare a WORKING record vs a BROKEN record in the same output — what field value differs, and what DOM difference would cause it?',
+    '- Try a different selector anchor: if your current selector uses one attribute (href, class, role, aria-label), try a different attribute or a different ancestor container.',
+    '- If the field name in the output is ambiguous (e.g. the same DOM element is being read for two different output fields), distinguish them by reading from DIFFERENT sub-elements rather than the same one.',
+    '- If you genuinely cannot fix this after reading the script + output + diagnostics, respond with "// NACK: <specific reason>" — DO NOT return the same script.',
+    '',
+    'DO NOT return the same script. The framework will detect it and reject again.',
+    '=== END PREVIOUS FIX REJECTED ===',
+    ''
+  ].join('\n');
+}
+
+// Mutates `state` (wizardState or test fixture) to register a no-op for the
+// given feedback. Increments consecutiveNoOpCount when the feedback matches
+// the prior registration; resets to 1 when it differs. Trims feedback before
+// comparison so whitespace-only differences don't reset the counter.
+function registerNoOpForFeedback(state, feedback) {
+  if (!state || typeof state !== 'object') return;
+  const safe = typeof feedback === 'string' ? feedback.trim() : '';
+  const prev = typeof state.lastNoOpFeedback === 'string' ? state.lastNoOpFeedback.trim() : '';
+  if (safe && safe === prev) {
+    state.consecutiveNoOpCount = (state.consecutiveNoOpCount || 0) + 1;
+  } else {
+    state.consecutiveNoOpCount = 1;
+    state.lastNoOpFeedback = safe;
+  }
+}
+
+// Mutates `state` to clear the no-op escalation signal. Called on successful
+// fix application (any patch that passes isNoOpAutoFixPatch).
+function resetNoOpEscalation(state) {
+  if (!state || typeof state !== 'object') return;
+  state.consecutiveNoOpCount = 0;
+  state.lastNoOpFeedback = null;
+}
+
 // Pure planning helper: decide what to patch + how to truncate llmHistory when
 // restoring the best attempt. Returns null if no patches apply.
 // wizard.js applies the returned plan (mutates wizardState + syncs DOM).
@@ -2920,7 +2985,7 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
@@ -2946,6 +3011,9 @@ if (typeof module !== 'undefined' && module.exports) {
   window.scoreAttemptResult = scoreAttemptResult;
   window.classifyIntervention = classifyIntervention;
   window.buildFeedbackSection = buildFeedbackSection;
+  window.buildNoOpEscalationSection = buildNoOpEscalationSection;
+  window.registerNoOpForFeedback = registerNoOpForFeedback;
+  window.resetNoOpEscalation = resetNoOpEscalation;
   window.planRestoreBestAttempt = planRestoreBestAttempt;
   window.renderInterventionBanner = renderInterventionBanner;
   window.getStepTemplates = getStepTemplates;
@@ -2998,6 +3066,9 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.scoreAttemptResult = scoreAttemptResult;
   self.classifyIntervention = classifyIntervention;
   self.buildFeedbackSection = buildFeedbackSection;
+  self.buildNoOpEscalationSection = buildNoOpEscalationSection;
+  self.registerNoOpForFeedback = registerNoOpForFeedback;
+  self.resetNoOpEscalation = resetNoOpEscalation;
   self.planRestoreBestAttempt = planRestoreBestAttempt;
   self.renderInterventionBanner = renderInterventionBanner;
   self.appendStepWithChainLink = appendStepWithChainLink;

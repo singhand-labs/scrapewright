@@ -40,7 +40,14 @@ let wizardState = {
   // separately from the fingerprint (user direction: "annotations另外，不在html里").
   htmlFingerprintsInHistory: new Set(),
   lastHtmlFingerprint: null,
-  subtreeSelector: null
+  subtreeSelector: null,
+  // No-op escalation (console.log 2026-08-05 07:13–07:22): the LLM returned
+  // byte-identical responses across 3 iterations for similar feedback, and
+  // [NO-OP DETECTED] in llmHistory alone wasn't enough to break the loop.
+  // Track consecutive no-ops per feedback text so the CURRENT prompt can
+  // carry a strong, cache-busting warning when the user repeats themselves.
+  consecutiveNoOpCount: 0,
+  lastNoOpFeedback: null
 };
 
 function buildSystemMessageWithGlobalContext(baseSystemContent) {
@@ -3002,6 +3009,15 @@ ${RETURN_FORMAT}`;
       detectEmptyOutputFieldsByRatio(wafeFallbackFinalResult(wizardState), wizardState.outputSchema)
     );
 
+    // No-op escalation (console.log 2026-08-05): when the user submits the
+    // same feedback that was just rejected as a no-op, inject a strong,
+    // cache-busting warning into the CURRENT prompt. llmHistory's
+    // [NO-OP DETECTED] alone proved insufficient — glm-5.1 returned
+    // byte-identical responses across 3 iterations because the current
+    // prompt was textually identical. The iteration counter both (a) tells
+    // the LLM this is a retry and (b) busts any upstream proxy cache.
+    const noOpEscalation = buildNoOpEscalationSection(wizardState.consecutiveNoOpCount || 0);
+
     prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${buildFeedbackSection(userFeedback, attemptNum, totalAttempts, wizardState.llmHistory)}${SCRIPT_DSL_GUIDE}
 
 CONTEXT — read carefully:
@@ -3011,7 +3027,7 @@ CONTEXT — read carefully:
 
 User's observation feedback:
 ${userFeedback}
-${emptyFieldsSignal ? '\n' + emptyFieldsSignal + '\n' : ''}
+${noOpEscalation}${emptyFieldsSignal ? '\n' + emptyFieldsSignal + '\n' : ''}
 Identify EVERY step in the workflow below whose script contains a root cause for the reported problems, and return a fix for each. Do NOT anchor on any particular step — the bug may be in any of them. Typical patterns:
 - "field X is missing/wrong" → FIRST check whether the step has User-annotated selectors (listed under each step below as "User-annotated selectors"). Those were empirically verified by the user at author time and are the source of truth — copy them VERBATIM. If no annotation exists for field X, fall back to deriving from RECORD HTML in RUNTIME DIAGNOSTICS below. The most common cause of repeated extraction failure is the LLM inventing its own selector when a working annotation was available but ignored.
 - "only N items extracted" → the scroll/paginate step (under-loaded) OR the extract step (container selector too narrow).
@@ -3163,6 +3179,23 @@ ${RETURN_FORMAT_FEEDBACK}`;
         content: '[NO-OP DETECTED] Your previous response proposed the same script(s) as the current step(s) — no change was made, and a re-run would produce the same wrong output. You MUST modify the script this time. Inspect the current script, identify the specific line that produces the wrong output, and rewrite THAT line. If you genuinely cannot see a fix, respond with "// NACK: <specific reason>" instead of faking a fix.'
       });
       trimLlmHistory();
+      // No-op escalation (console.log 2026-08-05): the [NO-OP DETECTED]
+      // message pushed to llmHistory above wasn't enough — the LLM/proxy
+      // returned byte-identical responses across iterations because the
+      // CURRENT prompt was textually identical. Track consecutive no-ops
+      // per feedback so the next iteration's CURRENT prompt can carry a
+      // strong cache-busting warning. After 2+ repeats, also surface a
+      // user-visible toast so the user knows their submission had no effect
+      // and can decide whether to rephrase, annotate, or switch provider.
+      registerNoOpForFeedback(wizardState, userFeedback || '');
+      if (wizardState.consecutiveNoOpCount >= 2) {
+        showToast(
+          'The AI has produced no change for this feedback ' + wizardState.consecutiveNoOpCount + ' times in a row. ' +
+          'Try one of: rephrase the feedback more specifically, annotate the exact element on the page, or switch LLM provider (the current provider may be caching responses).',
+          'warn',
+          9000
+        );
+      }
       return false;
     }
     // Validate the WHOLE chain after applying every patch atomically. A
@@ -3192,6 +3225,9 @@ ${RETURN_FORMAT_FEEDBACK}`;
     // Commit. For each patched step: write script + (if changed) flow fields,
     // and sync the wizard's editor inputs so a later confirmDeploy picks up
     // the fix instead of being overwritten by stale textarea values.
+    // No-op escalation: a real patch means the loop is broken — clear the
+    // consecutive no-op counter so the next feedback starts fresh.
+    resetNoOpEscalation(wizardState);
     for (const [stepId, entry] of patchedById) {
       const step = wizardState.steps.find(s => s.id === stepId);
       if (!step) continue;
