@@ -143,9 +143,14 @@ function clusterAnnotationsByContainer(annotations) {
 
     const rawSegments = Array.from(groups.keys());
     const allHighConf = rawSegments.every(seg => isHighConfidence(seg));
-    const anyGroupMulti = Array.from(groups.values()).some(g => g.length >= 2);
+    // Multi-group signal: ≥2 groups each with 2+ annotations. Requiring TWO
+    // multi-groups (rather than just one) avoids false positives where
+    // multiple annotations share a common root ancestor (e.g. all list items
+    // descend from `body`); the shared root would otherwise mask the real
+    // deeper branching and lift outlier annotations into samples.
+    const multiGroupCount = Array.from(groups.values()).filter(g => g.length >= 2).length;
 
-    if (allHighConf || anyGroupMulti) {
+    if (allHighConf || multiGroupCount >= 2) {
       branchingDepth = d;
       break; // FIRST item-level divergence = container level
     }
