@@ -3009,6 +3009,19 @@ ${RETURN_FORMAT}`;
       detectEmptyOutputFieldsByRatio(wafeFallbackFinalResult(wizardState), wizardState.outputSchema)
     );
 
+    // Empirical shape distribution (2026-08-05 architectural pivot):
+    // surface ACTUAL shape variance observed in the extracted records, so the
+    // LLM can write genuine shape-switching logic instead of conflating
+    // distinct entity types in the same list (e.g., some records have group.*
+    // populated while others have account.* — those are different shapes and
+    // need conditional extraction, not a single flat extractor). This is a
+    // test-driven signal derived from real output — does not depend on user
+    // annotation, which is the fallback path. Stays empty when all records
+    // share one signature (no variance to surface).
+    const shapeDistributionSignal = typeof formatShapeDistributionFromData === 'function'
+      ? formatShapeDistributionFromData(wafeFallbackFinalResult(wizardState), wizardState.outputSchema)
+      : '';
+
     // No-op escalation (console.log 2026-08-05): when the user submits the
     // same feedback that was just rejected as a no-op, inject a strong,
     // cache-busting warning into the CURRENT prompt. llmHistory's
@@ -3027,13 +3040,14 @@ CONTEXT — read carefully:
 
 User's observation feedback:
 ${userFeedback}
-${noOpEscalation}${emptyFieldsSignal ? '\n' + emptyFieldsSignal + '\n' : ''}
+${noOpEscalation}${emptyFieldsSignal ? '\n' + emptyFieldsSignal + '\n' : ''}${shapeDistributionSignal ? '\n' + shapeDistributionSignal + '\n' : ''}
 Identify EVERY step in the workflow below whose script contains a root cause for the reported problems, and return a fix for each. Do NOT anchor on any particular step — the bug may be in any of them. Typical patterns:
 - "field X is missing/wrong" → FIRST check whether the step has User-annotated selectors (listed under each step below as "User-annotated selectors"). Those were empirically verified by the user at author time and are the source of truth — copy them VERBATIM. If no annotation exists for field X, fall back to deriving from RECORD HTML in RUNTIME DIAGNOSTICS below. The most common cause of repeated extraction failure is the LLM inventing its own selector when a working annotation was available but ignored.
 - "only N items extracted" → the scroll/paginate step (under-loaded) OR the extract step (container selector too narrow).
 - "field X has wrong value" → the step that extracts that field — its selector matches the wrong element.
 - "image URLs incomplete" → if the field is declared array and the script uses $extract('img','src'), switch to $list('img') (one src vs array of srcs).
 - "field X populated in an earlier step but empty in final output" → INTER-STEP FIELD-NAME DRIFT. When a step consumes another step's result via __lastResult__ / __stepResults__, it MUST use the EXACT property names the upstream step writes. Cross-check the upstream step's return statement before reading any field off its output — a single renamed property silently erases the field (e.g. upstream returns {authorName, publishTime} but downstream reads p.author / p.time → both become undefined).
+- "RECORD SHAPE DISTRIBUTION shows fields appearing in SOME shapes only" → SHAPE-SWITCHING. Multiple distinct entity types coexist in the same list (e.g. records with group.* vs records with account.* vs records with both — these are different real-world shapes, not extraction failures). Detect which marker field is present per record and conditionally populate the shape-specific fields, rather than forcing every record into one flat schema or conflating one shape's value into another shape's field. The conflation pattern (logical-or fallback like "x || y") is WRONG when x and y belong to different shapes — write explicit shape detection instead.
 ${compactedNote}
 
 Target URL: ${wizardState.targetUrl}

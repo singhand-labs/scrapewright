@@ -1565,6 +1565,67 @@ describe('buildAnnotationsText prompt-text audit (universality)', () => {
   });
 });
 
+describe('RECORD SHAPE DISTRIBUTION prompt-text audit', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const distSrc = fs.readFileSync(
+    path.join(__dirname, '..', 'lib', 'record-shape-distribution.js'),
+    'utf8'
+  );
+  const wizardSrc = fs.readFileSync(
+    path.join(__dirname, '..', 'wizard.js'),
+    'utf8'
+  );
+
+  it('record-shape-distribution source emits the RECORD SHAPE DISTRIBUTION header', () => {
+    assert.ok(distSrc.includes('RECORD SHAPE DISTRIBUTION'),
+      'RECORD SHAPE DISTRIBUTION header missing from primitive');
+  });
+
+  it('record-shape-distribution source emits SHAPE A/B/C per-shape lines', () => {
+    assert.ok(distSrc.includes('SHAPE '), 'per-shape label missing');
+    assert.ok(distSrc.includes('SHAPE ${s.id}'),
+      'SHAPE label must use s.id variable so A/B/C... are assigned by count rank');
+  });
+
+  it('record-shape-distribution source emits ALL/SOME shapes observation', () => {
+    assert.ok(distSrc.includes('ALL shapes'), 'ALL shapes label missing');
+    assert.ok(distSrc.includes('SOME shapes'), 'SOME shapes label missing');
+  });
+
+  it('wizard.js autoFix prompt consumes the shape-distribution signal', () => {
+    assert.ok(wizardSrc.includes('formatShapeDistributionFromData'),
+      'wizard.js must call formatShapeDistributionFromData to surface empirical shape variance');
+    assert.ok(wizardSrc.includes('shapeDistributionSignal'),
+      'wizard.js must bind the shape-distribution output to a prompt variable');
+  });
+
+  it('wizard.js teaches the LLM how to use the signal (SHAPE-SWITCHING pattern)', () => {
+    assert.ok(/SHAPE-SWITCHING/.test(wizardSrc),
+      'wizard.js must include a SHAPE-SWITCHING instruction in the autoFix patterns list');
+  });
+
+  it('record-shape-distribution source contains NO site-specific terms', () => {
+    const forbidden = ['facebook', 'twitter', 'linkedin', 'tiktok', 'reddit', 'fb'];
+    for (const term of forbidden) {
+      const re = new RegExp(term, 'i');
+      assert.ok(!re.test(distSrc), `site-specific term "${term}" present in record-shape-distribution.js`);
+    }
+  });
+
+  it('wizard.html loads record-shape-distribution.js before wizard.js', () => {
+    const html = fs.readFileSync(
+      path.join(__dirname, '..', 'wizard.html'),
+      'utf8'
+    );
+    const distIdx = html.indexOf('record-shape-distribution.js');
+    const wizardIdx = html.indexOf('wizard.js');
+    assert.ok(distIdx > 0, 'record-shape-distribution.js not loaded in wizard.html');
+    assert.ok(wizardIdx > 0, 'wizard.js not loaded in wizard.html');
+    assert.ok(distIdx < wizardIdx,
+      'record-shape-distribution.js must load before wizard.js so its globals are available');
+  });
+});
 describe('buildAnnotationsText prompt-text audit (universality)', () => {
   const fs = require('fs');
   const path = require('path');
@@ -1593,5 +1654,67 @@ describe('buildAnnotationsText prompt-text audit (universality)', () => {
       const re = new RegExp(term, 'i');
       assert.ok(!re.test(src), `site-specific term "${term}" present in wizard-utils.js`);
     }
+  });
+});
+
+describe('RECORD SHAPE DISTRIBUTION prompt-text audit', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const distSrc = fs.readFileSync(
+    path.join(__dirname, '..', 'lib', 'record-shape-distribution.js'),
+    'utf8'
+  );
+  const wizardSrc = fs.readFileSync(
+    path.join(__dirname, '..', 'wizard.js'),
+    'utf8'
+  );
+
+  it('record-shape-distribution source emits the RECORD SHAPE DISTRIBUTION header', () => {
+    assert.ok(distSrc.includes('RECORD SHAPE DISTRIBUTION'),
+      'RECORD SHAPE DISTRIBUTION header missing from primitive');
+  });
+
+  it('record-shape-distribution source emits SHAPE A/B/C per-shape lines', () => {
+    assert.ok(distSrc.includes('SHAPE '), 'per-shape label missing');
+    assert.ok(distSrc.includes('SHAPE ${s.id}'),
+      'SHAPE label must use s.id variable so A/B/C... are assigned by count rank');
+  });
+
+  it('record-shape-distribution source emits ALL/SOME shapes observation', () => {
+    assert.ok(distSrc.includes('ALL shapes'), 'ALL shapes label missing');
+    assert.ok(distSrc.includes('SOME shapes'), 'SOME shapes label missing');
+  });
+
+  it('wizard.js autoFix prompt consumes the shape-distribution signal', () => {
+    assert.ok(wizardSrc.includes('formatShapeDistributionFromData'),
+      'wizard.js must call formatShapeDistributionFromData to surface empirical shape variance');
+    assert.ok(wizardSrc.includes('shapeDistributionSignal'),
+      'wizard.js must bind the shape-distribution output to a prompt variable');
+  });
+
+  it('wizard.js teaches the LLM how to use the signal (SHAPE-SWITCHING pattern)', () => {
+    assert.ok(/SHAPE-SWITCHING/.test(wizardSrc),
+      'wizard.js must include a SHAPE-SWITCHING instruction in the autoFix patterns list');
+  });
+
+  it('record-shape-distribution source contains NO site-specific terms', () => {
+    const forbidden = ['facebook', 'twitter', 'linkedin', 'tiktok', 'reddit', 'fb'];
+    for (const term of forbidden) {
+      const re = new RegExp(term, 'i');
+      assert.ok(!re.test(distSrc), `site-specific term "${term}" present in record-shape-distribution.js`);
+    }
+  });
+
+  it('wizard.html loads record-shape-distribution.js before wizard.js', () => {
+    const html = fs.readFileSync(
+      path.join(__dirname, '..', 'wizard.html'),
+      'utf8'
+    );
+    const distIdx = html.indexOf('record-shape-distribution.js');
+    const wizardIdx = html.indexOf('wizard.js');
+    assert.ok(distIdx > 0, 'record-shape-distribution.js not loaded in wizard.html');
+    assert.ok(wizardIdx > 0, 'wizard.js not loaded in wizard.html');
+    assert.ok(distIdx < wizardIdx,
+      'record-shape-distribution.js must load before wizard.js so its globals are available');
   });
 });
