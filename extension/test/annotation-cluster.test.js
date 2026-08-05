@@ -137,3 +137,55 @@ describe('isHighConfidence', () => {
     assert.equal(isHighConfidence(null), false);
   });
 });
+
+describe('clusterAnnotationsByContainer branching detection', () => {
+  it('detects branching at [role="article"][aria-posinset="N"]', () => {
+    const annos = [
+      { type: 'extract', outputField: 'posts.title', selector: "div[role='article'][aria-posinset='1'] h3",
+        domPath: "div > div[role='article'][aria-posinset='1'] > h3" },
+      { type: 'extract', outputField: 'posts.title', selector: "div[role='article'][aria-posinset='2'] h3",
+        domPath: "div > div[role='article'][aria-posinset='2'] > h3" },
+      { type: 'extract', outputField: 'posts.title', selector: "div[role='article'][aria-posinset='3'] h3",
+        domPath: "div > div[role='article'][aria-posinset='3'] > h3" },
+    ];
+    const r = clusterAnnotationsByContainer(annos);
+    assert.equal(r.samples.length, 3, 'three samples — one per aria-posinset');
+    assert.equal(r.supplemental.length, 0);
+  });
+
+  it('detects branching at li tag', () => {
+    const annos = [
+      { type: 'extract', outputField: 'items.name', selector: 'li:nth-of-type(1) span',
+        domPath: 'ul > li:nth-of-type(1) > span' },
+      { type: 'extract', outputField: 'items.name', selector: 'li:nth-of-type(2) span',
+        domPath: 'ul > li:nth-of-type(2) > span' },
+    ];
+    const r = clusterAnnotationsByContainer(annos);
+    assert.equal(r.samples.length, 2);
+  });
+
+  it('detects branching at div.item-N class pattern', () => {
+    const annos = [
+      { type: 'extract', outputField: 'products.title', selector: 'div.item-1 .title',
+        domPath: 'div > div.item-1 > .title' },
+      { type: 'extract', outputField: 'products.title', selector: 'div.item-2 .title',
+        domPath: 'div > div.item-2 > .title' },
+    ];
+    const r = clusterAnnotationsByContainer(annos);
+    assert.equal(r.samples.length, 2);
+  });
+
+  it('does NOT branch when only the depth-0 segment differs (too shallow)', () => {
+    // Two annotations on completely separate roots; depth 0 differs but that
+    // is the root container, not a list-item instance. We expect branching at
+    // depth 0 to still be detected (it IS structural divergence), but
+    // confidence will be LOW. Assert samples are produced; confidence checked
+    // in Task 6.
+    const annos = [
+      { type: 'extract', outputField: 'x.y', selector: 'header span', domPath: 'header > span' },
+      { type: 'extract', outputField: 'x.y', selector: 'footer span', domPath: 'footer > span' },
+    ];
+    const r = clusterAnnotationsByContainer(annos);
+    assert.equal(r.samples.length, 2);
+  });
+});

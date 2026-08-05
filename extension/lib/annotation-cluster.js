@@ -83,8 +83,68 @@ function isHighConfidence(seg) {
 function clusterAnnotationsByContainer(annotations) {
   const list = Array.isArray(annotations) ? annotations : [];
   if (!list.length) return { samples: [], supplemental: [] };
-  // Placeholder — subsequent tasks fill in the real algorithm.
-  return { samples: [], supplemental: list };
+
+  // Parse all domPaths up front.
+  const parsed = list.map(a => ({
+    anno: a,
+    segs: parseDomPathSegments(a && a.domPath),
+  }));
+
+  // STAGE 1 — find first depth where annotations diverge.
+  const maxDepth = Math.max(...parsed.map(p => p.segs.length));
+  let branchingDepth = -1;
+  for (let d = 0; d < maxDepth; d++) {
+    const at = parsed.filter(p => p.segs.length > d);
+    if (at.length < 2) break; // need ≥2 annotations reaching this depth to branch
+    const rawValues = new Set(at.map(p => p.segs[d]));
+    const normValues = new Set(at.map(p => normalizeSegment(p.segs[d])));
+    // Branching condition: distinct raw segments at this depth.
+    // NOTE: the plan spec'd `rawValues.size > 1 && normValues.size > 1`, but
+    // that rejects the canonical list-item case (e.g. aria-posinset='1' vs '2'
+    // both normalize to [aria-posinset], so normValues.size === 1). The tests
+    // (TDD contract, binding) require branching in exactly that case, so the
+    // rule is just `rawValues.size > 1`. normValues is still computed for
+    // future diagnostic use.
+    void normValues;
+    if (rawValues.size > 1) {
+      branchingDepth = d;
+      break; // FIRST divergence = container level
+    }
+  }
+
+  // STAGE 2 — group by RAW segment at the branching depth.
+  if (branchingDepth < 0) {
+    return {
+      samples: [{ containerSelector: null, containerTag: null, confidence: 'low', annotations: list.slice() }],
+      supplemental: [],
+    };
+  }
+
+  const groups = new Map(); // rawSeg -> annotations[]
+  const supplemental = [];
+  for (const p of parsed) {
+    if (p.segs.length <= branchingDepth) {
+      supplemental.push(p.anno);
+      continue;
+    }
+    const key = p.segs[branchingDepth];
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(p.anno);
+  }
+
+  const samples = [];
+  for (const [rawSeg, annos] of groups) {
+    const normSeg = normalizeSegment(rawSeg);
+    const confidence = isHighConfidence(rawSeg) ? 'high' : 'low';
+    samples.push({
+      containerSelector: rawSeg,
+      containerTag: normSeg,
+      confidence,
+      annotations: annos.slice(), // Task 7 will generalize selectors
+    });
+  }
+
+  return { samples, supplemental };
 }
 
 const api = { clusterAnnotationsByContainer, parseDomPathSegments, normalizeSegment, isHighConfidence };
