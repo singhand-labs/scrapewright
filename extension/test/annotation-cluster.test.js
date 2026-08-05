@@ -189,3 +189,57 @@ describe('clusterAnnotationsByContainer branching detection', () => {
     assert.equal(r.samples.length, 2);
   });
 });
+
+describe('clusterAnnotationsByContainer confidence assignment', () => {
+  it('assigns HIGH confidence to [role="article"][aria-posinset]', () => {
+    const annos = [
+      { type: 'extract', outputField: 'x.y', selector: "div[role='article'][aria-posinset='1'] h3",
+        domPath: "div > div[role='article'][aria-posinset='1'] > h3" },
+      { type: 'extract', outputField: 'x.y', selector: "div[role='article'][aria-posinset='2'] h3",
+        domPath: "div > div[role='article'][aria-posinset='2'] > h3" },
+    ];
+    const r = clusterAnnotationsByContainer(annos);
+    assert.equal(r.samples[0].confidence, 'high');
+    assert.equal(r.samples[1].confidence, 'high');
+  });
+
+  it('assigns HIGH confidence to li', () => {
+    const annos = [
+      { type: 'extract', outputField: 'x.y', selector: 'li:nth-of-type(1) span', domPath: 'ul > li:nth-of-type(1) > span' },
+      { type: 'extract', outputField: 'x.y', selector: 'li:nth-of-type(2) span', domPath: 'ul > li:nth-of-type(2) > span' },
+    ];
+    const r = clusterAnnotationsByContainer(annos);
+    assert.equal(r.samples[0].confidence, 'high');
+  });
+
+  it('assigns HIGH confidence to div.item-N class pattern', () => {
+    const annos = [
+      { type: 'extract', outputField: 'x.y', selector: 'div.item-1 .t', domPath: 'div > div.item-1 > .t' },
+      { type: 'extract', outputField: 'x.y', selector: 'div.item-2 .t', domPath: 'div > div.item-2 > .t' },
+    ];
+    const r = clusterAnnotationsByContainer(annos);
+    assert.equal(r.samples[0].confidence, 'high');
+  });
+
+  it('assigns LOW confidence to a non-list-item branching segment', () => {
+    const annos = [
+      { type: 'extract', outputField: 'x.y', selector: 'header span', domPath: 'header > span' },
+      { type: 'extract', outputField: 'x.y', selector: 'footer span', domPath: 'footer > span' },
+    ];
+    const r = clusterAnnotationsByContainer(annos);
+    assert.equal(r.samples[0].confidence, 'low');
+    assert.equal(r.samples[1].confidence, 'low');
+  });
+
+  it('records containerSelector (raw) and containerTag (normalized) per sample', () => {
+    const annos = [
+      { type: 'extract', outputField: 'x.y', selector: "div[role='article'][aria-posinset='1'] h3",
+        domPath: "div > div[role='article'][aria-posinset='1'] > h3" },
+      { type: 'extract', outputField: 'x.y', selector: "div[role='article'][aria-posinset='2'] h3",
+        domPath: "div > div[role='article'][aria-posinset='2'] > h3" },
+    ];
+    const r = clusterAnnotationsByContainer(annos);
+    assert.equal(r.samples[0].containerSelector, "div[role='article'][aria-posinset='1']");
+    assert.equal(r.samples[0].containerTag, 'div[role][aria-posinset]');
+  });
+});
