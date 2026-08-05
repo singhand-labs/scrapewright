@@ -329,3 +329,29 @@ describe('clusterAnnotationsByContainer selector cleanup', () => {
     assert.equal(orig.selector, "div[aria-posinset='1'] h3", 'input not mutated');
   });
 });
+
+describe('clusterAnnotationsByContainer single-sample fallback', () => {
+  it('returns one sample when all annotations share the same domPath (no branching)', () => {
+    const annos = [
+      { type: 'extract', outputField: 'posts.title', selector: 'div h3', domPath: 'div > h3' },
+      { type: 'extract', outputField: 'posts.author', selector: 'div span', domPath: 'div > span' },
+    ];
+    const r = clusterAnnotationsByContainer(annos);
+    assert.equal(r.samples.length, 1);
+    assert.equal(r.samples[0].annotations.length, 2);
+    assert.equal(r.supplemental.length, 0);
+    assert.equal(r.samples[0].containerSelector, null);
+    assert.equal(r.samples[0].containerTag, null);
+    assert.equal(r.samples[0].confidence, 'low');
+  });
+
+  it('returns one sample when annotations all branch at depth 0 but only ONE branch has annotations', () => {
+    const annos = [
+      { type: 'extract', outputField: 'x.y', selector: 'a span', domPath: 'a > span' },
+      { type: 'extract', outputField: 'x.z', selector: 'a em', domPath: 'a > em' },
+    ];
+    const r = clusterAnnotationsByContainer(annos);
+    assert.equal(r.samples.length, 1);
+    assert.equal(r.samples[0].annotations.length, 2);
+  });
+});
