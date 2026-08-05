@@ -243,3 +243,47 @@ describe('clusterAnnotationsByContainer confidence assignment', () => {
     assert.equal(r.samples[0].containerTag, 'div[role][aria-posinset]');
   });
 });
+
+describe('clusterAnnotationsByContainer selector cleanup', () => {
+  it('strips aria-posinset value from per-annotation selectors', () => {
+    const annos = [
+      { type: 'extract', outputField: 'x.y', selector: "div[aria-posinset='1'] h3 a",
+        domPath: "div > div[aria-posinset='1'] > h3 > a" },
+      { type: 'extract', outputField: 'x.y', selector: "div[aria-posinset='2'] h3 a",
+        domPath: "div > div[aria-posinset='2'] > h3 > a" },
+    ];
+    const r = clusterAnnotationsByContainer(annos);
+    assert.equal(r.samples[0].annotations[0].selector, 'div[aria-posinset] h3 a');
+    assert.equal(r.samples[1].annotations[0].selector, 'div[aria-posinset] h3 a');
+  });
+
+  it('drops :nth-of-type(N) from per-annotation selectors', () => {
+    const annos = [
+      { type: 'extract', outputField: 'x.y', selector: 'li:nth-of-type(1) span',
+        domPath: 'ul > li:nth-of-type(1) > span' },
+      { type: 'extract', outputField: 'x.y', selector: 'li:nth-of-type(2) span',
+        domPath: 'ul > li:nth-of-type(2) > span' },
+    ];
+    const r = clusterAnnotationsByContainer(annos);
+    assert.equal(r.samples[0].annotations[0].selector, 'li span');
+  });
+
+  it('collapses numeric-suffix id to [id] marker', () => {
+    const annos = [
+      { type: 'extract', outputField: 'x.y', selector: 'div#post-1 .t', domPath: 'div > div#post-1 > .t' },
+      { type: 'extract', outputField: 'x.y', selector: 'div#post-2 .t', domPath: 'div > div#post-2 > .t' },
+    ];
+    const r = clusterAnnotationsByContainer(annos);
+    assert.equal(r.samples[0].annotations[0].selector, 'div[id] .t');
+  });
+
+  it('preserves the original annotation object except selector (no mutation of input)', () => {
+    const orig = { type: 'extract', outputField: 'x.y', selector: "div[aria-posinset='1'] h3",
+      domPath: "div > div[aria-posinset='1'] > h3" };
+    const annos = [orig,
+      { type: 'extract', outputField: 'x.y', selector: "div[aria-posinset='2'] h3",
+        domPath: "div > div[aria-posinset='2'] > h3" }];
+    clusterAnnotationsByContainer(annos);
+    assert.equal(orig.selector, "div[aria-posinset='1'] h3", 'input not mutated');
+  });
+});

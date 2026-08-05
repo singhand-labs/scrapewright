@@ -80,6 +80,24 @@ function isHighConfidence(seg) {
   return false;
 }
 
+// Return a shallow copy of `a` with `selector` generalized: positional
+// values stripped so the LLM sees a reusable selector instead of one
+// pinned to a specific list-item instance. The input annotation is NOT
+// mutated. Selectors with no positionals pass through unchanged.
+function cleanupAnnotationSelector(a) {
+  if (!a || !a.selector || typeof a.selector !== 'string') return a;
+  let s = a.selector;
+  s = s.replace(/\[([a-zA-Z-]+)=(?:"[^"]*"|'[^']*'|[^\]]+)\]/g, '[$1]');
+  // #id-with-digits → [id] marker (numeric suffix is positional). Matches
+  // normalizeSegment's collapse so the LLM sees the same shape on container
+  // tags and per-annotation selectors.
+  s = s.replace(/#[a-zA-Z_-]*\d[\w-]*/g, '[id]');
+  s = s.replace(/:nth-(?:of-type|child)\(\d+\)/g, '');
+  // Tidy accidental double spaces from the above replacements.
+  s = s.replace(/  +/g, ' ').trim();
+  return { ...a, selector: s };
+}
+
 function clusterAnnotationsByContainer(annotations) {
   const list = Array.isArray(annotations) ? annotations : [];
   if (!list.length) return { samples: [], supplemental: [] };
@@ -140,14 +158,14 @@ function clusterAnnotationsByContainer(annotations) {
       containerSelector: rawSeg,
       containerTag: normSeg,
       confidence,
-      annotations: annos.slice(), // Task 7 will generalize selectors
+      annotations: annos.map(cleanupAnnotationSelector),
     });
   }
 
   return { samples, supplemental };
 }
 
-const api = { clusterAnnotationsByContainer, parseDomPathSegments, normalizeSegment, isHighConfidence };
+const api = { clusterAnnotationsByContainer, parseDomPathSegments, normalizeSegment, isHighConfidence, cleanupAnnotationSelector };
 
 if (typeof module !== 'undefined' && module.exports) module.exports = api;
 if (typeof window !== 'undefined') window.AnnotationCluster = api;
