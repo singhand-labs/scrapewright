@@ -175,18 +175,50 @@ describe('clusterAnnotationsByContainer branching detection', () => {
     assert.equal(r.samples.length, 2);
   });
 
-  it('does NOT branch when only the depth-0 segment differs (too shallow)', () => {
-    // Two annotations on completely separate roots; depth 0 differs but that
-    // is the root container, not a list-item instance. We expect branching at
-    // depth 0 to still be detected (it IS structural divergence), but
-    // confidence will be LOW. Assert samples are produced; confidence checked
-    // in Task 6.
+  it('does NOT branch on depth-0 header/footer divergence (not list items)', () => {
+    // Two annotations on completely separate roots (header, footer). Neither
+    // is a list-item signal (no role, no positional attr, not li/tr/option,
+    // no numeric-suffix class), and each "group" has only 1 annotation.
+    // Correct behavior: do not branch — treat as a single sample.
     const annos = [
       { type: 'extract', outputField: 'x.y', selector: 'header span', domPath: 'header > span' },
       { type: 'extract', outputField: 'x.y', selector: 'footer span', domPath: 'footer > span' },
     ];
     const r = clusterAnnotationsByContainer(annos);
-    assert.equal(r.samples.length, 2);
+    assert.equal(r.samples.length, 1, 'header/footer is not item-level divergence');
+    assert.equal(r.samples[0].annotations.length, 2);
+  });
+
+  it('does NOT branch on sibling-leaf divergence (h3 vs span under same parent)', () => {
+    // Two annotations on sibling leaves of the SAME parent. Not item-level
+    // divergence — this is the canonical "2 fields on 1 item" authoring
+    // pattern. Should produce 1 sample with 2 annotations.
+    const annos = [
+      { type: 'extract', outputField: 'posts.title', selector: 'div h3', domPath: 'div > h3' },
+      { type: 'extract', outputField: 'posts.author', selector: 'div span', domPath: 'div > span' },
+    ];
+    const r = clusterAnnotationsByContainer(annos);
+    assert.equal(r.samples.length, 1, 'sibling leaves on same parent = same sample');
+    assert.equal(r.samples[0].annotations.length, 2);
+  });
+
+  it('branches when a custom (LOW-conf) segment has 2+ annotations per group', () => {
+    // Two custom <section data-foo='a/b'> containers, each with 2 annotated
+    // fields. Neither segment is HIGH confidence, but the multi-field-per-
+    // group signal proves the user treated each as a container.
+    const annos = [
+      { type: 'extract', outputField: 'x.y', selector: "section[data-foo='a'] h3",
+        domPath: "section[data-foo='a'] > h3" },
+      { type: 'extract', outputField: 'x.z', selector: "section[data-foo='a'] p",
+        domPath: "section[data-foo='a'] > p" },
+      { type: 'extract', outputField: 'x.y', selector: "section[data-foo='b'] h3",
+        domPath: "section[data-foo='b'] > h3" },
+      { type: 'extract', outputField: 'x.z', selector: "section[data-foo='b'] p",
+        domPath: "section[data-foo='b'] > p" },
+    ];
+    const r = clusterAnnotationsByContainer(annos);
+    assert.equal(r.samples.length, 2, 'multi-field-per-group triggers branching');
+    assert.equal(r.samples[0].confidence, 'low');
   });
 });
 
@@ -221,10 +253,20 @@ describe('clusterAnnotationsByContainer confidence assignment', () => {
     assert.equal(r.samples[0].confidence, 'high');
   });
 
-  it('assigns LOW confidence to a non-list-item branching segment', () => {
+  it('assigns LOW confidence to a custom branching segment with multi-field groups', () => {
+    // section[data-foo='a/b'] is not in the HIGH-confidence list (no role,
+    // no aria-posinset, no data-item/index/row/testid/cid/id, not li/tr/option,
+    // no numeric-suffix class or id). But each branch has 2 annotations, so
+    // branching fires and confidence is LOW.
     const annos = [
-      { type: 'extract', outputField: 'x.y', selector: 'header span', domPath: 'header > span' },
-      { type: 'extract', outputField: 'x.y', selector: 'footer span', domPath: 'footer > span' },
+      { type: 'extract', outputField: 'x.y', selector: "section[data-foo='a'] h3",
+        domPath: "section[data-foo='a'] > h3" },
+      { type: 'extract', outputField: 'x.z', selector: "section[data-foo='a'] p",
+        domPath: "section[data-foo='a'] > p" },
+      { type: 'extract', outputField: 'x.y', selector: "section[data-foo='b'] h3",
+        domPath: "section[data-foo='b'] > h3" },
+      { type: 'extract', outputField: 'x.z', selector: "section[data-foo='b'] p",
+        domPath: "section[data-foo='b'] > p" },
     ];
     const r = clusterAnnotationsByContainer(annos);
     assert.equal(r.samples[0].confidence, 'low');

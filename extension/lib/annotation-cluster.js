@@ -77,6 +77,9 @@ function isHighConfidence(seg) {
   if (HIGH_CONFIDENCE_ATTRS.some(re => re.test(seg))) return true;
   if (HIGH_CONFIDENCE_TAGS.test(seg)) return true;
   if (HIGH_CONFIDENCE_CLASS.test(seg)) return true;
+  // id with numeric suffix (#post-7, #item-42) is a positioning signal
+  // analogous to data-id — list-item instances in many component libraries.
+  if (/#[a-zA-Z_-]*\d/.test(seg)) return true;
   return false;
 }
 
@@ -108,25 +111,43 @@ function clusterAnnotationsByContainer(annotations) {
     segs: parseDomPathSegments(a && a.domPath),
   }));
 
-  // STAGE 1 — find first depth where annotations diverge.
+  // STAGE 1 — find first depth where annotations diverge into ITEM-LEVEL groups.
+  //
+  // Divergence alone is not enough — sibling fields on the same item also
+  // diverge (h3 vs span at the leaf). We branch only when the divergence
+  // looks like DIFFERENT ITEM INSTANCES:
+  //   - every raw segment at this depth looks list-item-like (HIGH confidence)
+  //     — the canonical signal: [role], aria-posinset, data-* positioning,
+  //     li/tr/option tag, numeric-suffix class
+  //   - OR at least one branch has 2+ annotations beneath it — the user
+  //     treated that branch as a container by labeling multiple fields on it
+  //
+  // If neither holds (e.g. header vs footer, or 2 sibling leaves on one item),
+  // we don't branch at this depth and either descend deeper or fall back to
+  // a single sample. This prevents falsely splitting sibling fields into
+  // separate samples.
   const maxDepth = Math.max(...parsed.map(p => p.segs.length));
   let branchingDepth = -1;
   for (let d = 0; d < maxDepth; d++) {
     const at = parsed.filter(p => p.segs.length > d);
     if (at.length < 2) break; // need ≥2 annotations reaching this depth to branch
-    const rawValues = new Set(at.map(p => p.segs[d]));
-    const normValues = new Set(at.map(p => normalizeSegment(p.segs[d])));
-    // Branching condition: distinct raw segments at this depth.
-    // NOTE: the plan spec'd `rawValues.size > 1 && normValues.size > 1`, but
-    // that rejects the canonical list-item case (e.g. aria-posinset='1' vs '2'
-    // both normalize to [aria-posinset], so normValues.size === 1). The tests
-    // (TDD contract, binding) require branching in exactly that case, so the
-    // rule is just `rawValues.size > 1`. normValues is still computed for
-    // future diagnostic use.
-    void normValues;
-    if (rawValues.size > 1) {
+
+    // Group by raw segment at this depth.
+    const groups = new Map();
+    for (const p of at) {
+      const key = p.segs[d];
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(p);
+    }
+    if (groups.size < 2) continue; // no divergence at this depth
+
+    const rawSegments = Array.from(groups.keys());
+    const allHighConf = rawSegments.every(seg => isHighConfidence(seg));
+    const anyGroupMulti = Array.from(groups.values()).some(g => g.length >= 2);
+
+    if (allHighConf || anyGroupMulti) {
       branchingDepth = d;
-      break; // FIRST divergence = container level
+      break; // FIRST item-level divergence = container level
     }
   }
 
