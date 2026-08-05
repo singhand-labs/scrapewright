@@ -927,6 +927,109 @@ describe('getOutputFieldOptions', () => {
     assert.deepEqual(getOutputFieldOptions({}), []);
     assert.deepEqual(getOutputFieldOptions({ properties: 'not-an-object' }), []);
   });
+
+  // 2026-08-05 regression: console.log shows schema has posts.groupInfo.groupName
+  // (groupInfo is type:['object','null'] with its own properties) and
+  // posts.accountInfo.username (accountInfo is type:'object'). The dropdown
+  // only offered posts.groupInfo / posts.accountInfo — user could NOT label
+  // inner fields. Lacking per-inner-field annotations, the LLM conflated
+  // groupName/username in fallback JS like `username || groupName`.
+  it('recurses into nested object properties inside array items', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        posts: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              groupInfo: {
+                type: ['object', 'null'],
+                properties: {
+                  groupName: { type: 'string' },
+                  groupNature: { type: 'string' },
+                  memberCount: { type: 'string' },
+                  groupIcon: { type: 'string' }
+                }
+              },
+              accountInfo: {
+                type: 'object',
+                properties: {
+                  username: { type: 'string' },
+                  avatar: { type: 'string' },
+                  followerCount: { type: 'string' }
+                }
+              },
+              postTime: { type: 'string' }
+            }
+          }
+        }
+      }
+    };
+    const options = getOutputFieldOptions(schema);
+    assert.deepEqual(options, [
+      { value: 'posts.groupInfo.groupName', label: 'posts → groupInfo → groupName' },
+      { value: 'posts.groupInfo.groupNature', label: 'posts → groupInfo → groupNature' },
+      { value: 'posts.groupInfo.memberCount', label: 'posts → groupInfo → memberCount' },
+      { value: 'posts.groupInfo.groupIcon', label: 'posts → groupInfo → groupIcon' },
+      { value: 'posts.accountInfo.username', label: 'posts → accountInfo → username' },
+      { value: 'posts.accountInfo.avatar', label: 'posts → accountInfo → avatar' },
+      { value: 'posts.accountInfo.followerCount', label: 'posts → accountInfo → followerCount' },
+      { value: 'posts.postTime', label: 'posts → postTime' }
+    ]);
+  });
+
+  it('recurses into a top-level nested object (not wrapped in an array)', () => {
+    // Defensive: some schemas may have a top-level object field whose
+    // properties themselves need labeling.
+    const schema = {
+      type: 'object',
+      properties: {
+        author: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            bio: { type: 'string' }
+          }
+        }
+      }
+    };
+    const options = getOutputFieldOptions(schema);
+    assert.deepEqual(options, [
+      { value: 'author.name', label: 'author → name' },
+      { value: 'author.bio', label: 'author → bio' }
+    ]);
+  });
+
+  it('treats array-of-scalars inside nested object as a leaf (no further descent)', () => {
+    // accountInfo.attributes is array-of-string — should emit as a leaf,
+    // not try to descend into string items.
+    const schema = {
+      type: 'object',
+      properties: {
+        posts: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              accountInfo: {
+                type: 'object',
+                properties: {
+                  username: { type: 'string' },
+                  attributes: { type: 'array', items: { type: 'string' } }
+                }
+              }
+            }
+          }
+        }
+      }
+    };
+    const options = getOutputFieldOptions(schema);
+    assert.deepEqual(options, [
+      { value: 'posts.accountInfo.username', label: 'posts → accountInfo → username' },
+      { value: 'posts.accountInfo.attributes', label: 'posts → accountInfo → attributes' }
+    ]);
+  });
 });
 
 describe('buildAnnotationsText dotted outputField', () => {
@@ -946,6 +1049,31 @@ describe('buildAnnotationsText dotted outputField', () => {
       { type: 'extract', selector: '.answer', outputField: 'answer' }
     ]);
     assert.match(text, /outputField: answer \(extract using the selector above into this field\)/);
+  });
+
+  // 2026-08-05: annotations can now reference deeply nested fields like
+  // posts.groupInfo.groupName (after getOutputFieldOptions recursion landed).
+  // The LLM guidance must make the nested path explicit so the LLM does not
+  // interpret the dotted string as a literal property name.
+  it('emits clear nested-path guidance for multi-dot outputField', () => {
+    const text = buildAnnotationsText([
+      { type: 'extract', selector: '.group-name', outputField: 'posts.groupInfo.groupName' }
+    ]);
+    assert.match(text, /posts\.groupInfo\.groupName/);
+    assert.match(text, /"groupName" field/);
+    assert.match(text, /"groupInfo" object/);
+    assert.match(text, /"posts" array/);
+    assert.match(text, /NOT into a literal dotted key/);
+  });
+
+  it('emits nested-path guidance for 4-level dotted outputField', () => {
+    // Defensive: deeply nested schemas (e.g. posts[].author.profile.name).
+    const text = buildAnnotationsText([
+      { type: 'extract', selector: '.author-name', outputField: 'posts.author.profile.name' }
+    ]);
+    assert.match(text, /posts\.author\.profile\.name/);
+    assert.match(text, /"name" field/);
+    assert.match(text, /"posts" array/);
   });
 });
 
@@ -997,6 +1125,22 @@ describe('SCRIPT_DSL_GUIDE regression', () => {
     assert.match(SCRIPT_DSL_GUIDE, /location\.replace\(\)/);
     assert.match(SCRIPT_DSL_GUIDE, /FORBIDDEN_NAVIGATION/);
     assert.match(SCRIPT_DSL_GUIDE, /the SANDBOX/);
+  });
+
+  it('forbids cross-entity fallbacks (conflation bug)', () => {
+    // 2026-08-05 console.log: LLM wrote `username: username || groupName`
+    // because the schema's accountInfo was non-nullable, so for group-only
+    // posts it copied groupName into username to satisfy the schema. Result:
+    // accountInfo.username === groupInfo.groupName for every group post, and
+    // the user complained "区分不清楚 group 和 account".
+    // Rule must be generic (no FB/site terms), naming the abstract pattern.
+    assert.match(SCRIPT_DSL_GUIDE, /CROSS-ENTITY FALLBACK/);
+    assert.match(SCRIPT_DSL_GUIDE, /do not copy/i);
+    assert.match(SCRIPT_DSL_GUIDE, /sibling/i);
+    // Must NOT name site-specific entities — universality per CLAUDE.md.
+    assert.ok(!/facebook/i.test(SCRIPT_DSL_GUIDE), 'SCRIPT_DSL_GUIDE must not mention facebook');
+    assert.ok(!/twitter/i.test(SCRIPT_DSL_GUIDE), 'SCRIPT_DSL_GUIDE must not mention twitter');
+    assert.ok(!/tiktok/i.test(SCRIPT_DSL_GUIDE), 'SCRIPT_DSL_GUIDE must not mention tiktok');
   });
 });
 
@@ -1387,5 +1531,67 @@ describe('checkSelectorFidelity (deprecated)', () => {
   it('does not throw on null inputs', () => {
     assert.doesNotThrow(() => checkSelectorFidelity(null, null));
     assert.doesNotThrow(() => checkSelectorFidelity(undefined, undefined));
+  });
+});
+
+describe('buildAnnotationsText prompt-text audit (universality)', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'lib', 'wizard-utils.js'),
+    'utf8'
+  );
+
+  it('contains the ANNOTATION SAMPLES header in source', () => {
+    assert.ok(src.includes('ANNOTATION SAMPLES'), 'ANNOTATION SAMPLES header missing');
+  });
+
+  it('contains the CROSS-SAMPLE OBSERVATIONS header in source', () => {
+    assert.ok(src.includes('CROSS-SAMPLE OBSERVATIONS'), 'cross-sample header missing');
+  });
+
+  it('contains UNIVERSAL / SHAPE-DEPENDENT / OPTIONAL classification labels', () => {
+    assert.ok(src.includes('UNIVERSAL field'), 'UNIVERSAL label missing');
+    assert.ok(src.includes('SHAPE-DEPENDENT field'), 'SHAPE-DEPENDENT label missing');
+    assert.ok(src.includes('OPTIONAL field'), 'OPTIONAL label missing');
+  });
+
+  it('does NOT contain site-specific names anywhere in source', () => {
+    const forbidden = ['facebook', 'twitter', 'linkedin', 'tiktok', 'reddit', 'fb'];
+    for (const term of forbidden) {
+      const re = new RegExp(term, 'i');
+      assert.ok(!re.test(src), `site-specific term "${term}" present in wizard-utils.js`);
+    }
+  });
+});
+
+describe('buildAnnotationsText prompt-text audit (universality)', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'lib', 'wizard-utils.js'),
+    'utf8'
+  );
+
+  it('contains the ANNOTATION SAMPLES header in source', () => {
+    assert.ok(src.includes('ANNOTATION SAMPLES'), 'ANNOTATION SAMPLES header missing');
+  });
+
+  it('contains the CROSS-SAMPLE OBSERVATIONS header in source', () => {
+    assert.ok(src.includes('CROSS-SAMPLE OBSERVATIONS'), 'cross-sample header missing');
+  });
+
+  it('contains UNIVERSAL / SHAPE-DEPENDENT / OPTIONAL classification labels', () => {
+    assert.ok(src.includes('UNIVERSAL field'), 'UNIVERSAL label missing');
+    assert.ok(src.includes('SHAPE-DEPENDENT field'), 'SHAPE-DEPENDENT label missing');
+    assert.ok(src.includes('OPTIONAL field'), 'OPTIONAL label missing');
+  });
+
+  it('does NOT contain site-specific names anywhere in source', () => {
+    const forbidden = ['facebook', 'twitter', 'linkedin', 'tiktok', 'reddit', 'fb'];
+    for (const term of forbidden) {
+      const re = new RegExp(term, 'i');
+      assert.ok(!re.test(src), `site-specific term "${term}" present in wizard-utils.js`);
+    }
   });
 });
