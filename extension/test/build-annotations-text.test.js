@@ -146,3 +146,30 @@ describe('buildAnnotationsText cross-sample observations', () => {
     assert.match(text, /OPTIONAL field/);
   });
 });
+
+describe('buildAnnotationsText supplemental block', () => {
+  it('emits a SUPPLEMENTAL ANNOTATIONS block when annotations fall outside list items', () => {
+    const annos = [
+      { type: 'extract', outputField: 'posts.title', selector: 'div[aria-posinset="1"] h3',
+        domPath: 'div > div[aria-posinset="1"] > h3' },
+      { type: 'extract', outputField: 'posts.title', selector: 'div[aria-posinset="2"] h3',
+        domPath: 'div > div[aria-posinset="2"] > h3' },
+      { type: 'extract', outputField: 'global.tooltipCount', selector: 'div[role="tooltip"] span',
+        domPath: 'div[role="tooltip"]' }, // 1 segment — too short to reach branching depth 1
+    ];
+    const text = buildAnnotationsText(annos);
+    assert.match(text, /SUPPLEMENTAL ANNOTATIONS/);
+    assert.match(text, /global\.tooltipCount/);
+  });
+
+  it('omits the SUPPLEMENTAL block when no supplemental annotations exist', () => {
+    const annos = [
+      { type: 'extract', outputField: 'posts.title', selector: 'div[aria-posinset="1"] h3',
+        domPath: 'div > div[aria-posinset="1"] > h3' },
+      { type: 'extract', outputField: 'posts.title', selector: 'div[aria-posinset="2"] h3',
+        domPath: 'div > div[aria-posinset="2"] > h3' },
+    ];
+    const text = buildAnnotationsText(annos);
+    assert.doesNotMatch(text, /SUPPLEMENTAL ANNOTATIONS/);
+  });
+});
