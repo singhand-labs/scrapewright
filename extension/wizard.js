@@ -872,7 +872,7 @@ async function _completeStepAnnotationInner(stepIndex, step) {
       nextStepsDescription: wizardState.steps.slice(stepIndex + 1).map(s => `${s.id} (${s.name})`).join(', ') || '(none, terminal)'
     };
 
-    const result = await generateStepScript(config.config, step, pageInfo, captured.annotations, stepContext);
+    const result = await generateStepScript(config.config, step, pageInfo, captured.annotations, stepContext, step.script);
 
     if (result && result.script) {
       step.script = result.script;
