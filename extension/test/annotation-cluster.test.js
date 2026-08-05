@@ -49,3 +49,43 @@ describe('parseDomPathSegments', () => {
     assert.deepEqual(parseDomPathSegments('div'), ['div']);
   });
 });
+
+const { normalizeSegment } = require('../lib/annotation-cluster');
+
+describe('normalizeSegment', () => {
+  it('strips the value from [attr="N"] (double-quote form)', () => {
+    assert.equal(normalizeSegment('div[aria-posinset="3"]'), 'div[aria-posinset]');
+  });
+
+  it('strips the value from [attr=\'N\'] (single-quote form)', () => {
+    assert.equal(normalizeSegment("div[aria-posinset='3']"), 'div[aria-posinset]');
+  });
+
+  it('strips the value from [data-index="42"]', () => {
+    assert.equal(normalizeSegment('div[data-index="42"]'), 'div[data-index]');
+  });
+
+  it('collapses numeric-suffix ids to a stable marker', () => {
+    assert.equal(normalizeSegment('div#post-7'), 'div[id]');
+    assert.equal(normalizeSegment('div#item-42'), 'div[id]');
+  });
+
+  it('strips class numeric suffixes to a prefix pattern', () => {
+    assert.equal(normalizeSegment('div.item-3'), 'div.item-');
+    assert.equal(normalizeSegment('div.card7'), 'div.card');
+  });
+
+  it('drops :nth-of-type(N) and :nth-child(N)', () => {
+    assert.equal(normalizeSegment('div:nth-of-type(3)'), 'div');
+    assert.equal(normalizeSegment('li:nth-child(2)'), 'li');
+  });
+
+  it('preserves semantic attributes like role', () => {
+    assert.equal(normalizeSegment("div[role='article']"), 'div[role]');
+  });
+
+  it('returns empty string for falsy input', () => {
+    assert.equal(normalizeSegment(''), '');
+    assert.equal(normalizeSegment(null), '');
+  });
+});
