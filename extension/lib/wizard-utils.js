@@ -1283,7 +1283,7 @@ function findEmptyExtractionFields(data, outputSchema) {
 //
 // Surfaces PARTIAL-EMPTY fields: fields declared in the schema that are empty
 // in a significant fraction of records but NOT all (which findEmptyExtractionFields
-// already handles as a separate case). The FB-comments-shares incident
+// already handles as a separate case). A past feed-extraction incident
 // (console.log 2026-07-27 RC15): finalResult had 3 posts with `likes` populated
 // ("4","1","294") but `comments` and `shares` empty ("") across ALL records.
 // findEmptyExtractionFields returned [] because the records had other non-empty
@@ -1418,7 +1418,7 @@ function formatEmptyOutputFieldsSignal(fields) {
 // script wrote a per-record loop with GLOBAL sub-queries (so every iteration
 // captures the same first-match values).
 //
-// console.log 2026-08-04 04:30:09 incident: FB search step 4 produced 10
+// console.log 2026-08-04 04:30:09 incident: feed search step 4 produced 10
 // IDENTICAL posts because the LLM-generated loop was:
 //
 //   const articles = await $list('div[role="article"]');
@@ -1574,7 +1574,7 @@ function formatDuplicateRecordsSignal(dupes) {
 // (same script + same flow fields, modulo trailing whitespace). Used by
 // runFixIteration to detect the ACK-without-fixing antipattern where the LLM
 // says "I'll fix it" but returns char-for-char the same code (console.log
-// 2026-08-04 04:50-04:52 FB username loop: LLM ACK'd "I'll distinguish group
+// 2026-08-04 04:50-04:52 username-conflation loop: LLM ACK'd "I'll distinguish group
 // from user links", returned identical scriptLength:2640, testScript produced
 // identical wrong output, autoFix burned an attempt with zero progress).
 //
@@ -1784,7 +1784,7 @@ function summarizeFixIteration({ stepId, stepName, script, annotations, userFeed
   } else {
     try {
       // Strip snapshots + strip pages[]/sourcePageId + cap field sizes — without
-      // this, a 5-step FB test result carries ~750K chars of per-step HTML and
+      // this, a 5-step feed-style test result carries ~750K chars of per-step HTML and
       // overflows the LLM context. The failing step's DOM is already supplied
       // separately via the truncated `pageSnapshot` (30K budget). Also drop
       // pages[] (~4MB) and sourcePageId (meaningless provenance). console.log
@@ -1809,7 +1809,7 @@ function summarizeFixIteration({ stepId, stepName, script, annotations, userFeed
 // stripSnapshotsFromTestResult(testResult) — defensive shape-cleanup before
 // serializing a testResult into any LLM-bound string. Removes the per-step
 // `snapshot` field (which carries ~150K chars of full-page HTML per step on
-// FB-like feeds) and caps every remaining string field at FIELD_CHAR_CAP so
+// feed-style sites) and caps every remaining string field at FIELD_CHAR_CAP so
 // a single huge result value can't blow up the prompt either. Returns a deep
 // clone — never mutates the input (the wizard needs the unsimplified
 // testResult for the result-summary pane, diagnostics, etc.).
@@ -2063,7 +2063,7 @@ function summarizeAllStepDiagnostics(events, steps) {
     // These are empirical records of what each $extractList / $list / $extract
     // / $count call actually matched — surfaced to give the LLM concrete
     // evidence instead of forcing analytical guessing (bugx.log 2026-07-24
-    // FB publishTime incident: the proposed selector excluded the very
+    // bugx.log 2026-07-24 publishTime incident: the proposed selector excluded the very
     // element it was trying to match, but no signal exposed that).
     const allDiags = [];
     for (const evt of iterEvents) {
@@ -2441,7 +2441,7 @@ function buildFeedbackSection(feedback, attemptNum, totalAttempts, llmHistory) {
 // The counter both (a) tells the LLM this is a retry and (b) busts any
 // upstream cache that keys on identical request bodies.
 //
-// Universality: no FB/site-specific terms. The strategies listed are generic
+// Universality: no site-specific terms. The strategies listed are generic
 // (record comparison, selector anchoring, NACK escape hatch).
 // ============================================================================
 
@@ -2645,7 +2645,7 @@ function renderInterventionBanner(classification) {
 // Detection rules:
 //   +35 per :nth-of-type occurrence (positional, does not generalize)
 //   +25 if chain has >12 segments; +15 if >8 (depends on fixed DOM structure)
-//   +20 if selector contains auto-generated React/Facebook className
+//   +20 if selector contains auto-generated className (framework hash)
 //   +10 if selector has no stable anchor anywhere ([role], [aria-*], [data-*], id)
 //   +5  per bare structural segment (tag>tag with no attributes between)
 function scoreAnnotationBrittleness(selector) {
@@ -2673,7 +2673,7 @@ function scoreAnnotationBrittleness(selector) {
     reasons.push(`Long chain (${segments.length} segments)`);
   }
 
-  // 3. Auto-generated className (React/Facebook hash)
+  // 3. Auto-generated className (framework hash)
   if (/\.x[0-9a-f]+\b/i.test(selector) || /\._[a-z0-9]+\b/i.test(selector)) {
     score += 20;
     reasons.push('Auto-generated className (likely unstable across page loads)');
