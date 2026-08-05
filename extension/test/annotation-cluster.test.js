@@ -355,3 +355,32 @@ describe('clusterAnnotationsByContainer single-sample fallback', () => {
     assert.equal(r.samples[0].annotations.length, 2);
   });
 });
+
+describe('clusterAnnotationsByContainer supplemental separation', () => {
+  it('pushes annotations whose domPath is shorter than branching depth to supplemental', () => {
+    const annos = [
+      { type: 'extract', outputField: 'posts.title', selector: "div[aria-posinset='1'] h3",
+        domPath: "div > div[aria-posinset='1'] > h3" },
+      { type: 'extract', outputField: 'posts.title', selector: "div[aria-posinset='2'] h3",
+        domPath: "div > div[aria-posinset='2'] > h3" },
+      { type: 'extract', outputField: 'global.subtitle', selector: 'header h2',
+        domPath: 'header' }, // only 1 segment — too short to reach branching depth 1
+    ];
+    const r = clusterAnnotationsByContainer(annos);
+    assert.equal(r.samples.length, 2);
+    assert.equal(r.supplemental.length, 1);
+    assert.equal(r.supplemental[0].outputField, 'global.subtitle');
+  });
+
+  it('includes all annotations in supplemental when none have domPath', () => {
+    const annos = [
+      { type: 'extract', outputField: 'x.y', selector: 'a' },
+      { type: 'extract', outputField: 'x.z', selector: 'b' },
+    ];
+    const r = clusterAnnotationsByContainer(annos);
+    // No domPaths → parsed segs are empty → branchingDepth stays -1 →
+    // single-sample fallback applies (not supplemental).
+    assert.equal(r.samples.length, 1);
+    assert.equal(r.samples[0].annotations.length, 2);
+  });
+});
