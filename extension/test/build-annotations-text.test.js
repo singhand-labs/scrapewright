@@ -60,3 +60,37 @@ describe('buildAnnotationsText derived-pattern emission', () => {
     assert.equal(typeof clusterAnnotationsByContainer, 'function');
   });
 });
+
+describe('buildAnnotationsText multi-sample dispatch', () => {
+  it('emits ANNOTATION SAMPLES block when ≥2 samples cluster', () => {
+    const annos = [
+      { type: 'extract', outputField: 'posts.title', selector: "div[aria-posinset='1'] h3",
+        domPath: "div > div[aria-posinset='1'] > h3" },
+      { type: 'extract', outputField: 'posts.title', selector: "div[aria-posinset='2'] h3",
+        domPath: "div > div[aria-posinset='2'] > h3" },
+    ];
+    const text = buildAnnotationsText(annos);
+    assert.match(text, /ANNOTATION SAMPLES/);
+  });
+
+  it('falls back to flat format when annotations have no domPath divergence (single sample)', () => {
+    const annos = [
+      { type: 'extract', outputField: 'title', selector: 'h1' },
+    ];
+    const text = buildAnnotationsText(annos);
+    assert.doesNotMatch(text, /ANNOTATION SAMPLES/);
+    assert.match(text, /ANNOTATION\[0\]/);
+  });
+
+  it('preserves LIST EXTRACTION PATTERN block for dotted-output single-sample annotations', () => {
+    // Two annotations with same dotted outputField but same domPath — single
+    // sample → existing flat path → LIST EXTRACTION PATTERN still emits.
+    const annos = [
+      { type: 'extract', outputField: 'posts.author', selector: 'div[role="article"] a' },
+      { type: 'extract', outputField: 'posts.body', selector: 'div[role="article"] p' },
+    ];
+    const text = buildAnnotationsText(annos);
+    assert.doesNotMatch(text, /ANNOTATION SAMPLES/);
+    assert.match(text, /LIST EXTRACTION PATTERN/);
+  });
+});
