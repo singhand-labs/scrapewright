@@ -143,7 +143,47 @@ function generateSelector(el, ownerDoc) {
   return path.length > 0 ? path.join(' > ') : el.tagName.toLowerCase();
 }
 
-const api = { generateSelector, buildSegment, STABLE_ATTRS, AUTO_CLASS_RE, AUTO_ID_RE };
+// Full ancestry walk — same segment construction as generateSelector, but
+// WITHOUT the early-stop heuristic. Always returns the deepest available
+// structural chain back to body.
+//
+// Why this exists: generateSelector stops walking as soon as the partial
+// selector is unique in the document. For elements with a globally-unique
+// aria-label (e.g. a person's name link), the leaf segment alone is unique
+// and the walk stops at depth 1 — discarding the parent list-item context
+// (div[role="article"][aria-posinset="..."]). That context is what
+// clusterAnnotationsByContainer needs to detect multi-sample structure
+// (console.log 2026-08-05: Phase 1 clustering silently fell through to
+// single-sample for every unique-label annotation, defeating the feature).
+//
+// Contract:
+//   - annotation.selector = generateSelector(el) — short, optimized for execution
+//   - annotation.domPath   = generateFullDomPath(el) — full chain for context analysis
+//
+// No `:nth-of-type` disambiguation is appended: the full path is structural
+// context for the clusterer, not an execution selector.
+function generateFullDomPath(el, ownerDoc) {
+  if (!el || !el.tagName) return 'body';
+
+  const doc = ownerDoc || (typeof document !== 'undefined' ? document : null);
+  if (!doc) return 'body';
+
+  const ownerBody = doc.body || doc.documentElement;
+  if (!ownerBody) return el.tagName.toLowerCase();
+
+  const path = [];
+  let current = el;
+  while (current && current !== ownerBody && current.tagName) {
+    const segment = buildSegment(current);
+    if (!segment) break;
+    path.unshift(segment);
+    current = current.parentNode;
+  }
+
+  return path.length > 0 ? path.join(' > ') : el.tagName.toLowerCase();
+}
+
+const api = { generateSelector, generateFullDomPath, buildSegment, STABLE_ATTRS, AUTO_CLASS_RE, AUTO_ID_RE };
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = api;

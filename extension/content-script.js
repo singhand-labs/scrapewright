@@ -2320,10 +2320,20 @@
   }
 
   function getDomPath(el) {
-    // Unified with generateSelector — previously a duplicate implementation
-    // that drifted from the main one. Both annotation.selector and
-    // annotation.domPath now contain the same stable selector string.
-    return generateSelector(el);
+    // Full ancestry walk WITHOUT early-stop. annotation.domPath needs to
+    // carry the parent list-item context (e.g. div[role="article"][aria-posinset="3"])
+    // so clusterAnnotationsByContainer can detect multi-sample structure.
+    // generateSelector's early-stop short-circuits at unique aria-labels and
+    // loses that context (console.log 2026-08-05). The two diverge by design:
+    // selector = short-optimized for execution, domPath = full chain for
+    // context analysis.
+    const inner = (typeof SelectorGenerator !== 'undefined' && SelectorGenerator && SelectorGenerator.generateFullDomPath)
+      ? SelectorGenerator.generateFullDomPath(el, el.ownerDocument || document)
+      : (el && el.tagName ? el.tagName.toLowerCase() : 'body');
+    if (!el || typeof IframeSelectorLib === 'undefined' || !IframeSelectorLib) return inner;
+    const iframeChain = IframeSelectorLib.buildIframeChain(el, document);
+    if (iframeChain.length === 0) return inner;
+    return IframeSelectorLib.formatIframeSelector(iframeChain, inner);
   }
 
   // ===== DOM Snapshot =====
