@@ -1649,7 +1649,14 @@ function summarizeFixIteration({ stepId, stepName, script, annotations, userFeed
       // pages[] (~4MB) and sourcePageId (meaningless provenance). console.log
       // 2026-07-26: testResultSection + summarizeFixIteration were the two bloat
       // sources; the pages[] leak was caught in code review on T7.
-      lines.push('Result: ' + JSON.stringify(stripPagesFromLLMContext(stripSnapshotsFromTestResult(result))));
+      //
+      // dedupeStepIterations (console.log 2026-08-05): collapse polling-step
+      // iteration entries to the LAST per stepId BEFORE strip/cap. A 9-iteration
+      // step-5 with growing updatedPosts bloated the history entry to ~290K
+      // even after the 5K-per-field cap; the accumulator arrays bypassed the
+      // cap because each individual field was small. The LLM timed out 4× then
+      // hit model_context_window_exceeded.
+      lines.push('Result: ' + JSON.stringify(stripPagesFromLLMContext(stripSnapshotsFromTestResult(dedupeStepIterations(result)))));
     } catch {
       lines.push('Result: (unserializable)');
     }
@@ -1718,6 +1725,43 @@ function stripPagesFromLLMContext(testResult) {
     return node;
   };
   return walk(testResult);
+}
+
+// dedupeStepIterations(testResult) — framework-level shape cleanup before
+// serializing a testResult into any LLM-bound string. When a step polls
+// (maxIterations>1), step-orchestrator emits one stepOutput entry PER
+// iteration, all sharing the same stepId. Intermediate entries typically
+// carry growing accumulators (updatedPosts, seenSignatures, etc.) that
+// bloat the autoFix prompt without adding signal: the LLM only needs the
+// FINAL per-step state to diagnose extraction-quality issues.
+//
+// console.log 2026-08-05 04:32: a 9-iteration step-5 carried updatedPosts
+// growing 1→9 posts × ~100K each (capped to 5K by stripSnapshotsFromTestResult).
+// Stripped+capped testResult was 885K; autoFix prompt hit 1.83MB; LLM
+// timed out 4× then returned finish_reason:model_context_window_exceeded.
+// After dedupe: stripped+capped testResult is ~200K.
+//
+// Per-iteration traces still survive via summarizeAllStepDiagnostics (which
+// reads wizardState.lastExecutionEvents, not testResult.steps), so no signal
+// is lost — only the redundant intermediate result snapshots are dropped.
+//
+// Returns a deep clone of testResult with steps[] collapsed to one entry
+// per stepId (the LAST entry). Preserves ordering, finalResult, and all
+// other top-level fields.
+function dedupeStepIterations(testResult) {
+  if (!testResult || typeof testResult !== 'object') return testResult;
+  if (!Array.isArray(testResult.steps) || testResult.steps.length === 0) {
+    // No steps to dedupe — shallow-clone top-level so caller still gets a
+    // fresh object (consistent with the with-steps path).
+    return { ...testResult };
+  }
+  const seen = new Map();
+  for (const entry of testResult.steps) {
+    if (!entry || typeof entry !== 'object') continue;
+    const key = entry.stepId != null ? String(entry.stepId) : '__no_step_id__';
+    seen.set(key, entry);  // last-write-wins preserves the final iteration
+  }
+  return { ...testResult, steps: [...seen.values()] };
 }
 
 function formatDomActivitySummary(activities) {
@@ -2876,7 +2920,7 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
@@ -2895,6 +2939,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.summarizeGeneratedSteps = summarizeGeneratedSteps;
   window.stripSnapshotsFromTestResult = stripSnapshotsFromTestResult;
   window.stripPagesFromLLMContext = stripPagesFromLLMContext;
+  window.dedupeStepIterations = dedupeStepIterations;
   window.formatDomActivitySummary = formatDomActivitySummary;
   window.summarizeExecutionDiagnostics = summarizeExecutionDiagnostics;
   window.summarizeAllStepDiagnostics = summarizeAllStepDiagnostics;
@@ -2946,6 +2991,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.summarizeGeneratedSteps = summarizeGeneratedSteps;
   self.stripSnapshotsFromTestResult = stripSnapshotsFromTestResult;
   self.stripPagesFromLLMContext = stripPagesFromLLMContext;
+  self.dedupeStepIterations = dedupeStepIterations;
   self.formatDomActivitySummary = formatDomActivitySummary;
   self.summarizeExecutionDiagnostics = summarizeExecutionDiagnostics;
   self.summarizeAllStepDiagnostics = summarizeAllStepDiagnostics;

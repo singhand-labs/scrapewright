@@ -2860,8 +2860,13 @@ If your script does NOT use $openTab, $wait / $ / $extract will run against the 
   // model_context_window_exceeded with prompt_tokens:0 even after the
   // compactMode retry path fired). The failing step's DOM is supplied
   // separately via the truncated `pageSnapshot` above.
+  //
+  // dedupeStepIterations (console.log 2026-08-05): collapse polling-step
+  // iteration entries to the LAST per stepId. Without this, a 9-iteration
+  // step-5 with growing updatedPosts bloated the prompt to 1.83MB even
+  // after the 5K-per-field cap. Order: dedupe → strip pages → strip snapshots.
   const testResultSection = wizardState.testResult
-    ? '\n\nPREVIOUS TEST RESULT:\n' + JSON.stringify(stripPagesFromLLMContext(stripSnapshotsFromTestResult(wizardState.testResult)), null, 2)
+    ? '\n\nPREVIOUS TEST RESULT:\n' + JSON.stringify(stripPagesFromLLMContext(stripSnapshotsFromTestResult(dedupeStepIterations(wizardState.testResult))), null, 2)
     : '';
 
   const RETURN_FORMAT = `RETURN FORMAT — choose ONE:
@@ -2963,8 +2968,14 @@ ${RETURN_FORMAT}`;
     // element(s)" diagnostic signal that would have told the LLM to broaden its
     // selector. The LLM then iterated on more hallucinated restrictive selectors
     // and stayed at 0 matches.
+    //
+    // dedupeStepIterations (console.log 2026-08-05): added AFTER the 2026-07-26
+    // strip-snapshots fix — polling-step iteration entries with growing
+    // accumulators (updatedPosts etc.) bypassed the per-field cap and ballooned
+    // the prompt to 1.83MB on a 9-iteration step-5. See testResultSection above
+    // for ordering rationale.
     const currentOutput = wizardState.testResult
-      ? JSON.stringify(stripPagesFromLLMContext(stripSnapshotsFromTestResult(wizardState.testResult)), null, 2)
+      ? JSON.stringify(stripPagesFromLLMContext(stripSnapshotsFromTestResult(dedupeStepIterations(wizardState.testResult))), null, 2)
       : '(no output)';
 
     // RC11 regression guard. The user-feedback path runs MAX_ATTEMPTS=1 per
