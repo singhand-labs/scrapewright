@@ -367,15 +367,21 @@ const WAIT_CONDITIONS = [
   { value: 'attributeChange', label: 'Attribute Changes' }
 ];
 
-// Build the annotations block fed to the LLM. When the annotations describe a
-// repeating list (multiple entries sharing a dotted outputField like
+// Build the annotations block fed to the LLM (flat path). When the annotations
+// describe a repeating list (multiple entries sharing a dotted outputField like
 // "posts.author"), we first derive generalized $extractList / $clickInList
 // templates from the shared selector prefix and emit those ABOVE the raw
 // per-annotation lines. The LLM is instructed to copy the derived templates
 // verbatim — this is the Spec 4 fix for the "flat-zip 18 lines" failure mode
 // where the model emits one record per annotation instead of a loop.
 // The per-annotation lines always remain (as a fallback / source of truth).
-function buildAnnotationsText(annotations) {
+//
+// This is the FLAT emitter — it does NOT cluster annotations by container.
+// buildAnnotationsText (below) dispatches between multi-sample (≥2 cluster
+// samples) and this flat path. Body preserved verbatim from the previous
+// buildAnnotationsText so existing LIST EXTRACTION PATTERN + per-annotation
+// line tests continue to pass unchanged.
+function buildFlatAnnotationsText(annotations) {
   const list = annotations || [];
   const pattern = (typeof deriveListPattern === 'function') ? deriveListPattern(list) : null;
   const blocks = [];
@@ -430,6 +436,55 @@ function buildAnnotationsText(annotations) {
     return parts.join(', ');
   }));
   return blocks.join('\n');
+}
+
+// Build the annotations block fed to the LLM. Dispatches on
+// clusterAnnotationsByContainer's sample count:
+//   - ≥2 samples → multi-sample block (buildMultiSampleText) so the LLM
+//     sees that the user annotated multiple list-item shapes and reasons
+//     about per-shape selector differences.
+//   - ≤1 sample → flat format (buildFlatAnnotationsText, the previous
+//     implementation) so existing LIST EXTRACTION PATTERN + per-annotation
+//     lines continue working for backward compatibility.
+function buildAnnotationsText(annotations) {
+  const list = annotations || [];
+  const clustered = (typeof clusterAnnotationsByContainer === 'function')
+    ? clusterAnnotationsByContainer(list)
+    : { samples: [], supplemental: list };
+
+  if (clustered.samples.length >= 2) {
+    return buildMultiSampleText(clustered);
+  }
+  return buildFlatAnnotationsText(list);
+}
+
+// Multi-sample annotation text emitter. Implemented in subsequent tasks
+// (header + per-sample blocks, cross-sample observations, supplemental block).
+function buildMultiSampleText(clustered) {
+  const blocks = [];
+  blocks.push(`ANNOTATION SAMPLES (${clustered.samples.length} distinct list items annotated — fields may differ across shapes; account for per-shape selector differences):`);
+  blocks.push('');
+  clustered.samples.forEach((sample, idx) => {
+    const confTag = sample.confidence === 'low'
+      ? ' [LOW CONFIDENCE — branching segment does not match known list-item patterns]'
+      : '';
+    blocks.push(`[SAMPLE ${idx + 1} — annotations on one list item (${sample.containerTag || 'unknown'})${confTag}]`);
+    for (const a of sample.annotations) {
+      blocks.push(formatAnnotationLine(a));
+    }
+    blocks.push('');
+  });
+  return blocks.join('\n');
+}
+
+// Format one annotation as a single line (no leading ANNOTATION[N] tag —
+// the multi-sample block already provides sample context).
+function formatAnnotationLine(a) {
+  const parts = ['- type: ' + (a.type || 'extract')];
+  if (a.outputField) parts.push('outputField: ' + a.outputField);
+  if (a.selector) parts.push('selector: ' + a.selector);
+  if (a.purpose) parts.push('purpose: ' + a.purpose);
+  return parts.join(', ');
 }
 
 // DEPRECATED — kept as a no-op for backward compatibility with older tests.
