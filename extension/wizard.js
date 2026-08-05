@@ -1298,7 +1298,7 @@ Sample detail page URL (use as entryUrl for detail-page steps): ${detailPageInfo
   return parsed;
 }
 
-async function generateStepScript(config, step, pageInfo, annotations, stepContext) {
+async function generateStepScript(config, step, pageInfo, annotations, stepContext, currentScript = '') {
   // TRUST BOUNDARY: pageInfo (cleaned page HTML) and annotations are untrusted
   // data — they come from the target page. They are concatenated into the LLM
   // prompt below, and the LLM's response is run via new Function() in the
@@ -1341,6 +1341,29 @@ Do NOT assume linear pairing. Infer key-value pairs using BOTH:
 Do not blindly pair nth key with nth value — verify via dual signals above.
 ` : '';
 
+  // Re-annotation refinement (2026-08-05). When currentScript is non-empty,
+  // the user is re-annotating a step that already has a script (possibly
+  // refined via autoFix). Include it as a baseline so refinements are
+  // preserved instead of silently overwritten. Empty (first-time annotation)
+  // leaves the prompt unchanged.
+  const currentScriptSection = currentScript
+    ? `[CURRENT SCRIPT] (previous version — refine, don't blindly copy)
+${currentScript}
+
+`
+    : '';
+
+  const refinementGuide = currentScript
+    ? `
+Refine the current script:
+- For fields the user did NOT re-annotate: keep existing extraction logic
+- For fields the user DID re-annotate: update selectors to match new annotations
+- For NEW annotations (no matching field in current script): ADD extraction
+- If a current-script selector conflicts with a new annotation, the annotation wins
+
+`
+    : '';
+
   const prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${SCRIPT_DSL_GUIDE}
 
 Generate the script for a SINGLE step in an existing scraping workflow.
@@ -1354,12 +1377,11 @@ Position in workflow:
 - Previous steps: ${stepContext.previousStepsSchema}
 - Next steps depend on this step's output: ${stepContext.nextStepsDescription}
 
-[ANNOTATIONS]
+${currentScriptSection}[ANNOTATIONS]
 User annotated the following elements on the current page:
 ${annotationsText}
 ${keyValueGuidance}
-
-[CURRENT PAGE]
+${refinementGuide}[CURRENT PAGE]
 ${pageInfoBlock}
 
 Return JSON with:
