@@ -1,3 +1,11 @@
+// Globals: this module relies on two free variables defined by sibling modules
+// loaded as globals (browser pattern, mirrored in Node tests via require order):
+//   - deriveListPattern (from lib/list-pattern.js)
+//   - clusterAnnotationsByContainer (from lib/annotation-cluster.js)
+// annotation-cluster.js defines clusterAnnotationsByContainer, used by
+// buildAnnotationsText. Loaded as a global (browser pattern); the typeof
+// guard inside buildAnnotationsText handles the legacy/non-loaded case.
+
 const SCRIPT_DSL_GUIDE = `You are writing JavaScript code for Scrapewright, a web scraping agent.
 
 CRITICAL RULES:
@@ -81,6 +89,8 @@ FIELD COLLISION ON GENERALIZATION — After generalizing an annotation selector 
   * attribute value pattern: aria-label on a timestamp matches date/time regexes (e.g. /^\\d{1,2}:\\d{2}$|^\\d+\\s+(?:hours?|days?)\\s+ago$|^yesterday$/i); aria-label on an author is a person name.
 - Do NOT use bare attribute-presence selectors ([aria-label], [href]) for BOTH fields — that guarantees collision. Pick one field to make specific.
 - When unsure, run $list on each candidate selector separately and inspect the returned textContent/href arrays — they should differ field-by-field.
+
+CROSS-ENTITY FALLBACK — When a record has multiple sub-entities (e.g. an "owner" object AND an "author" object, each with its own name field), DO NOT copy values from one sub-entity into another to "fill in" empty fields. Each sub-entity is independent: if its own selector found nothing on a given record, its fields stay EMPTY (empty string, empty array, or null per the schema's nullability) — they do NOT inherit from a sibling sub-entity. Anti-pattern: \`username: username || groupName\` (or \`profileHref: userHref || groupHref\`) makes the owner's name identical to the author's name whenever the owner is missing, permanently erasing the distinction between the two entities. Correct: \`username: username || ''\` and let the schema's nullability express "no owner on this record". If the schema declares a sub-entity as nullable (type:['object','null']), return null when its selector found nothing, NOT an object populated with another entity's data. If the schema declares it as non-nullable, still keep its primitive fields empty rather than copying sibling data — empty strings are honest signals the framework's EMPTY_FIELDS detector can act on; copied values are silent corruption.
 
 MULTI-VALUE FIELDS (e.g., images[], attachments[], tags[]) — When the output schema declares an array field inside each list item (e.g. posts.images: array of URLs), do NOT use $extract('img', 'src') inside the container — that returns ONE src. Use $list('img') (returns array of data objects) and map to .src, OR use $extractList with a sub-selector that aggregates. The "field" in $extractList's fieldMap is a single match per container; for multi-value fields, post-process the container via a separate $list call.
 
@@ -398,10 +408,19 @@ function buildAnnotationsText(annotations) {
     if (a.purpose) parts.push('purpose: ' + a.purpose);
     if (a.waitCondition) parts.push('waitCondition: ' + a.waitCondition + ' (USER-MARKED completion signal — use THIS selector, not a different loading indicator)');
     if (a.outputField) {
-      const dot = a.outputField.indexOf('.');
-      if (dot > 0) {
-        const arrName = a.outputField.slice(0, dot);
-        const subField = a.outputField.slice(dot + 1);
+      const parts2 = a.outputField.split('.');
+      if (parts2.length >= 3) {
+        // Multi-dot path: arrayName.objectField.leafField (e.g.
+        // posts.groupInfo.groupName). Build explicit nested guidance so the
+        // LLM places the value at item.objectField.leafField, not at a
+        // literal "a.b.c" key.
+        const arrName = parts2[0];
+        const leaf = parts2[parts2.length - 1];
+        const middle = parts2.slice(1, -1).join('.');
+        parts.push('outputField: ' + a.outputField + ' (extract using the selector above into the "' + leaf + '" field of the "' + middle + '" object inside EACH item in the "' + arrName + '" array — NOT into a literal dotted key)');
+      } else if (parts2.length === 2) {
+        const arrName = parts2[0];
+        const subField = parts2[1];
         parts.push('outputField: ' + a.outputField + ' (extract using the selector above into the "' + subField + '" field of EACH item in the "' + arrName + '" array — NOT into a literal dotted key)');
       } else {
         parts.push('outputField: ' + a.outputField + ' (extract using the selector above into this field)');
@@ -1494,22 +1513,47 @@ function isNoOpAutoFixPatch(resolved, patchedById) {
 // without this, the dropdown only shows "posts" and the user has no way to
 // indicate which sub-field each selector extracts. Dotted value (posts.group)
 // preserves the array context for downstream LLM guidance.
+//
+// 2026-08-05: recurse into NESTED object properties too. The prior version
+// only descended one level (array.items.properties.<key>), so schemas like
+// posts[].groupInfo.groupName exposed only "posts.groupInfo" in the dropdown
+// — the user could not label inner fields. With recursion, the dropdown
+// offers "posts → groupInfo → groupName" so each inner field can be
+// annotated with its own selector. Handles `type:'object'` AND nullable
+// variants like `type:['object','null']`.
 function getOutputFieldOptions(outputSchema) {
   if (!outputSchema || !outputSchema.properties || typeof outputSchema.properties !== 'object') return [];
   const options = [];
-  const props = outputSchema.properties;
-  for (const key of Object.keys(props)) {
-    const prop = props[key];
-    if (!prop || typeof prop !== 'object') continue;
-    if (prop.type === 'array' && prop.items && prop.items.type === 'object' && prop.items.properties) {
-      for (const innerKey of Object.keys(prop.items.properties)) {
-        options.push({ value: `${key}.${innerKey}`, label: `${key} → ${innerKey}` });
-      }
-    } else {
-      options.push({ value: key, label: key });
-    }
+  for (const key of Object.keys(outputSchema.properties)) {
+    collectFieldOptions(outputSchema.properties[key], key, options, 0);
   }
   return options;
+}
+
+// Recursive helper for getOutputFieldOptions. Walks object/array-of-object
+// properties depth-first, emitting a {value,label} option for each LEAF
+// (scalars and arrays-of-scalars). Depth cap is defensive against
+// accidentally-cyclic schemas.
+function collectFieldOptions(prop, prefix, options, depth) {
+  if (!prop || typeof prop !== 'object' || depth > 8) return;
+  const types = Array.isArray(prop.type) ? prop.type : [prop.type];
+  const isObject = types.includes('object');
+  const isArray = types.includes('array');
+
+  if (isArray && prop.items && prop.items.properties) {
+    // Array of objects: descend into each item property.
+    for (const innerKey of Object.keys(prop.items.properties)) {
+      collectFieldOptions(prop.items.properties[innerKey], `${prefix}.${innerKey}`, options, depth + 1);
+    }
+  } else if (isObject && prop.properties) {
+    // Nested object (incl. ['object','null']): descend into its properties.
+    for (const innerKey of Object.keys(prop.properties)) {
+      collectFieldOptions(prop.properties[innerKey], `${prefix}.${innerKey}`, options, depth + 1);
+    }
+  } else {
+    // Leaf (scalar, array-of-scalars, or scalar array): emit.
+    options.push({ value: prefix, label: prefix.split('.').join(' → ') });
+  }
 }
 
 // Module-scope helper: lazy-require dom-cleaner without throwing if the module

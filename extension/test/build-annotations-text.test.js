@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 // list-pattern.js defines deriveListPattern, which buildAnnotationsText calls.
 // Load it first so the function is defined as a global when wizard-utils loads.
 require('../lib/list-pattern');
+require('../lib/annotation-cluster');
 require('../lib/wizard-utils');
 const { buildAnnotationsText } = require('../lib/wizard-utils');
 
@@ -51,5 +52,11 @@ describe('buildAnnotationsText derived-pattern emission', () => {
     assert.match(text, /- ANNOTATION\[0\] type: extract/);
     assert.match(text, /text: "Heading"/);
     assert.match(text, /selector: h1/);
+  });
+
+  it('clusterAnnotationsByContainer is available as a global when wizard-utils loads', () => {
+    // The wiring test: buildAnnotationsText will need clusterAnnotationsByContainer
+    // to be defined as a free variable (browser globals pattern).
+    assert.equal(typeof clusterAnnotationsByContainer, 'function');
   });
 });
