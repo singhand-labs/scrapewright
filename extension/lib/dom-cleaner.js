@@ -149,7 +149,13 @@
   // rewrites same-origin iframes to inline their content with a prefix marker.
   const NOISE_SELECTORS = 'nav, footer, header, aside, [role="navigation"], [role="banner"], [role="contentinfo"], [role="complementary"], [class*="sidebar"], [class*="side-bar"], [class*="Sidebar"], [class*="toast"], [class*="modal-backdrop"], [class*="overlay"], [class*="cookie"], [class*="banner"], [class*="popup"], [class*="tooltip"], [class*="dropdown-menu"]';
 
-  const REMOVE_SELECTORS = 'script, style, link[rel="stylesheet"], link[rel="preload"], link[rel="icon"], video, audio, canvas, svg, noscript, template, meta, path, g, defs, use';
+  // RC25 (console.log 2026-08-05): plain 'link' replaces the narrow
+  // link[rel="stylesheet"|"preload"|"icon"] list. Pages like FB search have
+  // 30-50 prefetch/preconnect/dns-prefetch links with ~200-char hashed URLs
+  // that survived the narrow list and ate 5-15K of the 30K LLM budget.
+  // Matches REMOVE_TAG_SET (line 100) which already strips all link tags.
+  // A <link> tag never helps the LLM write extraction selectors.
+  const REMOVE_SELECTORS = 'script, style, link, video, audio, canvas, svg, noscript, template, meta, path, g, defs, use';
 
   const HIDDEN_SELECTORS = '[hidden], [aria-hidden="true"], [style*="display: none"], [style*="display:none"], [style*="visibility: hidden"]';
 

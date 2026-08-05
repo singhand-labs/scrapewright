@@ -233,6 +233,33 @@ describe('cleanPageHtml', () => {
     assert.ok(!cleaned.includes('class='));
   });
 
+  it('NEW: strips ALL link tags regardless of rel attribute', () => {
+    // RC25 (console.log 2026-08-05): autoFix on FB search ran 3 iterations
+    // producing broken extraction scripts. Root cause: cleanPageHtml's
+    // REMOVE_SELECTORS stripped only link[rel="stylesheet"|"preload"|"icon"]
+    // while FB's <head> has 30-50 prefetch/preconnect/dns-prefetch links with
+    // ~200-char hashed URLs. These survived cleaning, ate 5-15K of the 30K LLM
+    // budget, and crowded out the body article HTML where selectors must be
+    // discovered. REMOVE_TAG_SET (line 100, used by compressStructure) already
+    // strips ALL link tags — cleanPageHtml must match that behavior. Universal
+    // fix: a <link> tag in <head> never helps the LLM write selectors.
+    setupJSDOM(`<html><head>
+      <link rel="prefetch" href="https://static.xx.fbcdn.net/rsrc-3948572938475/x.js">
+      <link rel="preconnect" href="https://fbcdn.net">
+      <link rel="dns-prefetch" href="//sprite.tiktokcdn.com">
+      <link rel="manifest" href="/manifest.json">
+      <link rel="shortcut icon" href="/favicon.ico">
+      <link rel="alternate" hreflang="x-default" href="https://example.com/">
+      <link rel="canonical" href="https://example.com/page">
+    </head><body><article><h3>real content</h3></article></body></html>`);
+    const cleaned = cleanPageHtml(document.documentElement.outerHTML);
+    assert.ok(!cleaned.includes('<link'), 'ALL link tags must be stripped, got: ' + cleaned);
+    assert.ok(!cleaned.includes('fbcdn'), 'no link href URLs should survive');
+    assert.ok(!cleaned.includes('dns-prefetch'));
+    assert.ok(!cleaned.includes('manifest'));
+    assert.ok(cleaned.includes('real content'), 'body content preserved');
+  });
+
   it('NEW: marks same-origin iframes with data-iframe-prefix and inlines children', () => {
     // jsdom does not serialize an iframe's contentDocument into the parent
     // document's outerHTML, so populate the iframe's element children instead
