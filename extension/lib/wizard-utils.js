@@ -480,6 +480,11 @@ function buildMultiSampleText(clustered) {
     for (const line of observations) blocks.push('- ' + line);
     blocks.push('');
   }
+  if (clustered.supplemental && clustered.supplemental.length) {
+    blocks.push('SUPPLEMENTAL ANNOTATIONS (outside list items — likely interaction-triggered; treat as enrichment hints):');
+    clustered.supplemental.forEach(a => blocks.push(formatAnnotationLine(a)));
+    blocks.push('');
+  }
   return blocks.join('\n');
 }
 
