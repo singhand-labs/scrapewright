@@ -232,3 +232,147 @@ describe('generateSelector', () => {
     assert.ok(sel.includes('#post-list'), `should anchor on semantic id, got "${sel}"`);
   });
 });
+
+const { generateFullDomPath } = require('../lib/selector-generator');
+
+describe('generateFullDomPath', () => {
+  it('returns "body" for null input', () => {
+    assert.equal(generateFullDomPath(null, document), 'body');
+  });
+
+  it('returns the tag name when element is detached from body', () => {
+    setupDOM('<!DOCTYPE html><html><body><div id="x"></div></body></html>');
+    const el = document.createElement('span');
+    assert.equal(generateFullDomPath(el, document), 'span');
+  });
+
+  it('returns the full ancestry chain for a deeply nested element', () => {
+    setupDOM(
+      '<!DOCTYPE html><html><body>' +
+      '<div role="main">' +
+        '<div role="feed">' +
+          '<div role="article" aria-posinset="1">' +
+            '<h3><span><a aria-label="alice" href="/user/alice">Alice</a></span></h3>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      '</body></html>'
+    );
+    const el = document.querySelector('a[aria-label="alice"]');
+    const full = generateFullDomPath(el, document);
+    // Full path must include the parent article container — that's the whole
+    // point of generateFullDomPath (vs generateSelector which early-stops).
+    assert.ok(full.includes('div[role="article"][aria-posinset="1"]'),
+      `full domPath should include parent article context, got "${full}"`);
+    assert.ok(full.includes('a[aria-label="alice"]'),
+      `full domPath should include the leaf, got "${full}"`);
+    // Sanity: must be longer than the early-stop selector.
+    const short = generateSelector(el, document);
+    assert.ok(full.split(' > ').length >= short.split(' > ').length,
+      `full path (${full.split(' > ').length} segs) should be >= short (${short.split(' > ').length} segs)`);
+  });
+
+  it('does NOT early-stop at a globally-unique aria-label (the regression case)', () => {
+    // Mirrors the FB "group name link" case from console.log 2026-08-05:
+    // each post has a unique aria-label on its author link, so generateSelector
+    // returns just 'a[role="link"][aria-label="..."]' (1 segment). The clusterer
+    // then sees no item-level marker and falls through to single-sample.
+    // generateFullDomPath must NOT short-circuit — it must walk to the article.
+    setupDOM(
+      '<!DOCTYPE html><html><body>' +
+      '<div role="main">' +
+        '<div role="feed">' +
+          '<div role="article" aria-posinset="1">' +
+            '<h3><a role="link" aria-label="alice" href="/user/alice">Alice</a></h3>' +
+          '</div>' +
+          '<div role="article" aria-posinset="2">' +
+            '<h3><a role="link" aria-label="bob" href="/user/bob">Bob</a></h3>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      '</body></html>'
+    );
+    const aliceLink = document.querySelector('a[aria-label="alice"]');
+    const short = generateSelector(aliceLink, document);
+    const full = generateFullDomPath(aliceLink, document);
+    // Confirm the test setup actually triggers the early-stop on the short side.
+    assert.equal(short.split(' > ').length, 1,
+      `expected short selector to early-stop at depth 1, got "${short}"`);
+    // Confirm the full path walks past the early-stop.
+    assert.ok(full.includes('div[role="article"][aria-posinset="1"]'),
+      `full domPath must include article context despite unique aria-label, got "${full}"`);
+  });
+
+  it('does not append :nth-of-type(N) disambiguation (full path is for context, not execution)', () => {
+    setupDOM(
+      '<!DOCTYPE html><html><body>' +
+      '<div role="feed">' +
+        '<div role="article" aria-posinset="1"><span class="title">A</span></div>' +
+        '<div role="article" aria-posinset="2"><span class="title">B</span></div>' +
+      '</div>' +
+      '</body></html>'
+    );
+    const el = document.querySelectorAll('span.title')[0];
+    const full = generateFullDomPath(el, document);
+    assert.ok(!/:nth-of-type/.test(full),
+      `full domPath should not contain :nth-of-type, got "${full}"`);
+  });
+});
+
+describe('generateFullDomPath + clusterAnnotationsByContainer integration', () => {
+  // The actual user scenario: clicking unique-label links inside multiple
+  // list items. Phase 1 clustering fell through to single-sample because
+  // annotation.domPath aliased annotation.selector (early-stop). With
+  // generateFullDomPath, the clusterer should now correctly branch.
+  beforeEach(() => {
+    setupDOM(
+      '<!DOCTYPE html><html><body>' +
+      '<div role="main">' +
+        '<div role="feed">' +
+          '<div role="article" aria-posinset="1">' +
+            '<h3><a role="link" aria-label="groupA" href="/groups/1">Group A</a></h3>' +
+            '<div><a role="link" aria-label="userA" href="/user/1">User A</a></div>' +
+          '</div>' +
+          '<div role="article" aria-posinset="2">' +
+            '<h3><a role="link" aria-label="groupB" href="/groups/2">Group B</a></h3>' +
+            '<div><a role="link" aria-label="userB" href="/user/2">User B</a></div>' +
+          '</div>' +
+          '<div role="article" aria-posinset="3">' +
+            '<h3><a role="link" aria-label="userC" href="/user/3">User C</a></h3>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      '</body></html>'
+    );
+  });
+
+  it('clusters unique-label annotations into separate samples when given full domPaths', () => {
+    const { clusterAnnotationsByContainer } = require('../lib/annotation-cluster');
+    // Simulate the user's clicks: 3 group/user annotations across 3 posts.
+    // Each annotation.selector is short (early-stopped), but each .domPath
+    // is the full chain (from generateFullDomPath).
+    const targets = [
+      { label: 'groupA', field: 'posts.group.name' },
+      { label: 'groupB', field: 'posts.group.name' },
+      { label: 'userC', field: 'posts.account.username' },
+    ];
+    const annotations = targets.map(t => {
+      const el = document.querySelector(`a[aria-label="${t.label}"]`);
+      return {
+        type: 'extract',
+        outputField: t.field,
+        selector: generateSelector(el, document),
+        domPath: generateFullDomPath(el, document),
+      };
+    });
+    // Sanity: confirm selectors are short (early-stop fired).
+    assert.ok(annotations.every(a => a.selector.split(' > ').length === 1),
+      'test setup: selectors should be 1 segment each');
+    // The fix: domPaths are long enough to include the article-posinset context.
+    const r = clusterAnnotationsByContainer(annotations);
+    assert.equal(r.samples.length, 3,
+      `should branch into 3 samples (one per aria-posinset), got ${r.samples.length}`);
+    assert.ok(r.samples.every(s => s.confidence === 'high'),
+      'all samples should be HIGH confidence (article-posinset is item-level)');
+  });
+});
