@@ -2980,9 +2980,51 @@ Rules (READ ALL):
   let noOpEscalation = '';
   let emptyFieldsSignal = '';
   let shapeDistributionSignal = '';
+  let fieldCandidatesSignal = '';
 
   let prompt;
   if (isFailureFix) {
+    // Field candidate discovery (2026-08-07): mirror of user-feedback branch.
+    // When chronic-empty fields are detected AND no annotations exist AND
+    // this is iteration 1 of the current autoFix run, scan the normalized
+    // record HTML and surface up to K candidate leaf elements per field.
+    // Suppress on iterations 2+ to avoid LLM locking onto the same wrong
+    // candidate repeatedly.
+    if (attemptNum === 1) {
+      try {
+        const chronicEmpty2 = (typeof detectEmptyOutputFieldsByRatio === 'function')
+          ? detectEmptyOutputFieldsByRatio(wafeFallbackFinalResult(wizardState), wizardState.outputSchema, { emptyRatioThreshold: 1.0, minRecords: 2 })
+          : [];
+        const hasAnnotations = Array.isArray(wizardState.annotations) && wizardState.annotations.length > 0;
+        if (chronicEmpty2.length > 0 && !hasAnnotations) {
+          const lastStepId2 = wizardState.steps[wizardState.steps.length - 1] && wizardState.steps[wizardState.steps.length - 1].id;
+          const extractionStepId2 = (typeof findUpstreamExtractionStepId === 'function')
+            ? findUpstreamExtractionStepId(wizardState.steps, lastStepId2)
+            : lastStepId2;
+          if (extractionStepId2) {
+            const finalData2 = wafeFallbackFinalResult(wizardState);
+            const records2 = Array.isArray(finalData2) ? finalData2
+              : (finalData2 && Array.isArray(finalData2.records)) ? finalData2.records
+              : [];
+            const representative2 = records2[0];
+            const DomCleanerRef2 = (typeof window !== 'undefined' && window.DomCleaner)
+              || (typeof global !== 'undefined' && global.DomCleaner);
+            if (representative2 && DomCleanerRef2 && DomCleanerRef2.normalizeRecordStructure) {
+              const recordHtml2 = representative2._html || representative2.outerHTML || '';
+              if (recordHtml2) {
+                const normalized2 = DomCleanerRef2.normalizeRecordStructure(recordHtml2);
+                const discoveryResult2 = (typeof discoverFieldCandidates === 'function')
+                  ? discoverFieldCandidates(normalized2, chronicEmpty2.map(f => f.path || f.field))
+                  : { fields: [] };
+                fieldCandidatesSignal = (typeof formatFieldCandidatesBlock === 'function')
+                  ? formatFieldCandidatesBlock(discoveryResult2)
+                  : '';
+              }
+            }
+          }
+        }
+      } catch (_) { /* defensive: discovery must never break the prompt */ }
+    }
     prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${buildFeedbackSection(userFeedback, attemptNum, totalAttempts, wizardState.llmHistory)}${SCRIPT_DSL_GUIDE}
 
 The following step failed. Fix it — primarily its script, but you MAY also adjust THIS step's onSuccess / onFailure / maxIterations if the runtime shows the step flow itself is wrong (the steps were generated before seeing this page state, so the topology can be a best guess). Do NOT add or remove steps; only edit this step's own fields.
@@ -3016,7 +3058,7 @@ IMPORTANT SELECTOR RULES:
 FULL STEP WORKFLOW:
 ${allStepsContext}
 ${testResultSection}
-
+${fieldCandidatesSignal ? '\n' + fieldCandidatesSignal + '\n' : ''}
 ${RETURN_FORMAT}`;
   } else {
     // Success but user wants different results.
@@ -3092,6 +3134,47 @@ ${RETURN_FORMAT}`;
     // the LLM this is a retry and (b) busts any upstream proxy cache.
     noOpEscalation = buildNoOpEscalationSection(wizardState.consecutiveNoOpCount || 0);
 
+    // Field candidate discovery (2026-08-07): when chronic-empty fields are
+    // detected AND no annotations exist AND this is iteration 1 of the
+    // current autoFix run, scan the normalized record HTML and surface up to
+    // K candidate leaf elements per field. Suppress on iterations 2+ to
+    // avoid LLM locking onto the same wrong candidate repeatedly.
+    if (attemptNum === 1) {
+      try {
+        const chronicEmpty2 = (typeof detectEmptyOutputFieldsByRatio === 'function')
+          ? detectEmptyOutputFieldsByRatio(wafeFallbackFinalResult(wizardState), wizardState.outputSchema, { emptyRatioThreshold: 1.0, minRecords: 2 })
+          : [];
+        const hasAnnotations = Array.isArray(wizardState.annotations) && wizardState.annotations.length > 0;
+        if (chronicEmpty2.length > 0 && !hasAnnotations) {
+          const lastStepId2 = wizardState.steps[wizardState.steps.length - 1] && wizardState.steps[wizardState.steps.length - 1].id;
+          const extractionStepId2 = (typeof findUpstreamExtractionStepId === 'function')
+            ? findUpstreamExtractionStepId(wizardState.steps, lastStepId2)
+            : lastStepId2;
+          if (extractionStepId2) {
+            const finalData2 = wafeFallbackFinalResult(wizardState);
+            const records2 = Array.isArray(finalData2) ? finalData2
+              : (finalData2 && Array.isArray(finalData2.records)) ? finalData2.records
+              : [];
+            const representative2 = records2[0];
+            const DomCleanerRef2 = (typeof window !== 'undefined' && window.DomCleaner)
+              || (typeof global !== 'undefined' && global.DomCleaner);
+            if (representative2 && DomCleanerRef2 && DomCleanerRef2.normalizeRecordStructure) {
+              const recordHtml2 = representative2._html || representative2.outerHTML || '';
+              if (recordHtml2) {
+                const normalized2 = DomCleanerRef2.normalizeRecordStructure(recordHtml2);
+                const discoveryResult2 = (typeof discoverFieldCandidates === 'function')
+                  ? discoverFieldCandidates(normalized2, chronicEmpty2.map(f => f.path || f.field))
+                  : { fields: [] };
+                fieldCandidatesSignal = (typeof formatFieldCandidatesBlock === 'function')
+                  ? formatFieldCandidatesBlock(discoveryResult2)
+                  : '';
+              }
+            }
+          }
+        }
+      } catch (_) { /* defensive: discovery must never break the prompt */ }
+    }
+
     prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${buildFeedbackSection(userFeedback, attemptNum, totalAttempts, wizardState.llmHistory)}${SCRIPT_DSL_GUIDE}
 
 CONTEXT — read carefully:
@@ -3101,7 +3184,7 @@ CONTEXT — read carefully:
 
 User's observation feedback:
 ${userFeedback}
-${noOpEscalation}${emptyFieldsSignal ? '\n' + emptyFieldsSignal + '\n' : ''}${shapeDistributionSignal ? '\n' + shapeDistributionSignal + '\n' : ''}
+${noOpEscalation}${emptyFieldsSignal ? '\n' + emptyFieldsSignal + '\n' : ''}${shapeDistributionSignal ? '\n' + shapeDistributionSignal + '\n' : ''}${fieldCandidatesSignal ? '\n' + fieldCandidatesSignal + '\n' : ''}
 Identify EVERY step in the workflow below whose script contains a root cause for the reported problems, and return a fix for each. Do NOT anchor on any particular step — the bug may be in any of them. Typical patterns:
 - "field X is missing/wrong" → FIRST check whether the step has User-annotated selectors (listed under each step below as "User-annotated selectors"). Those were empirically verified by the user at author time and are the source of truth — copy them VERBATIM. If no annotation exists for field X, fall back to deriving from RECORD HTML in RUNTIME DIAGNOSTICS below. The most common cause of repeated extraction failure is the LLM inventing its own selector when a working annotation was available but ignored.
 - "only N items extracted" → the scroll/paginate step (under-loaded) OR the extract step (container selector too narrow).
