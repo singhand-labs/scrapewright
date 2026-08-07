@@ -77,3 +77,111 @@ test('inferFieldType: id-like does not shadow url-like', () => {
   // boundary doesn't trigger. 'videoId' → id-like; 'URLId' → url-like wins by priority.
   assert.strictEqual(inferFieldType('videoId'), 'id-like');
 });
+
+const { findFieldCandidates } = FieldCandidateDiscovery;
+
+test('findFieldCandidates time-like: strong match via <time> tag', () => {
+  const html = '<div><time datetime="2026-08-07">2h</time></div>';
+  const c = findFieldCandidates(html, 'time-like');
+  assert.ok(c.length >= 1);
+  assert.strictEqual(c[0].tag, 'time');
+  assert.strictEqual(c[0].strength, 'strong');
+});
+
+test('findFieldCandidates time-like: strong match via text pattern', () => {
+  const html = '<div><span>5 hours ago</span></div>';
+  const c = findFieldCandidates(html, 'time-like');
+  assert.ok(c.length >= 1);
+  assert.strictEqual(c[0].strength, 'strong');
+  assert.ok(/5 hours ago/.test(c[0].text));
+});
+
+test('findFieldCandidates time-like: yesterday text matches', () => {
+  const html = '<div><span>Yesterday</span></div>';
+  const c = findFieldCandidates(html, 'time-like');
+  assert.ok(c.length >= 1);
+  assert.strictEqual(c[0].strength, 'strong');
+});
+
+test('findFieldCandidates time-like: medium for ISO date', () => {
+  const html = '<div><span>2026-08-07</span></div>';
+  const c = findFieldCandidates(html, 'time-like');
+  assert.ok(c.length >= 1);
+  assert.strictEqual(c[0].strength, 'medium');
+});
+
+test('findFieldCandidates time-like: no match returns empty', () => {
+  const html = '<div><span>John Doe</span></div>';
+  const c = findFieldCandidates(html, 'time-like');
+  assert.strictEqual(c.length, 0);
+});
+
+test('findFieldCandidates count-like: strong for plain integer with K/M suffix', () => {
+  const html = '<div><span>1.2K</span></div>';
+  const c = findFieldCandidates(html, 'count-like');
+  assert.ok(c.length >= 1);
+  assert.strictEqual(c[0].strength, 'strong');
+});
+
+test('findFieldCandidates count-like: strong for plain integer', () => {
+  const html = '<div><span>42</span></div>';
+  const c = findFieldCandidates(html, 'count-like');
+  assert.ok(c.length >= 1);
+  assert.strictEqual(c[0].strength, 'strong');
+});
+
+test('findFieldCandidates count-like: medium for non-numeric span', () => {
+  // span with aria-label containing a count word AND a digit
+  const html = '<div><span aria-label="12 comments">Comments</span></div>';
+  const c = findFieldCandidates(html, 'count-like');
+  assert.ok(c.length >= 1);
+});
+
+test('findFieldCandidates url-like: strong for <a> with href', () => {
+  const html = '<div><a href="/user/123">Profile</a></div>';
+  const c = findFieldCandidates(html, 'url-like');
+  assert.ok(c.length >= 1);
+  assert.strictEqual(c[0].tag, 'a');
+  assert.strictEqual(c[0].strength, 'strong');
+});
+
+test('findFieldCandidates url-like: medium for <a> with empty href and role=link', () => {
+  const html = '<div><a href="#" role="link">Profile</a></div>';
+  const c = findFieldCandidates(html, 'url-like');
+  assert.ok(c.length >= 1);
+});
+
+test('findFieldCandidates id-like: strong for numeric ID', () => {
+  const html = '<div><span>1234567</span></div>';
+  const c = findFieldCandidates(html, 'id-like');
+  assert.ok(c.length >= 1);
+  assert.strictEqual(c[0].strength, 'strong');
+});
+
+test('findFieldCandidates id-like: strong for hash ID', () => {
+  const html = '<div><span>abc123def4</span></div>';
+  const c = findFieldCandidates(html, 'id-like');
+  assert.ok(c.length >= 1);
+  assert.strictEqual(c[0].strength, 'strong');
+});
+
+test('findFieldCandidates text-like: matches any non-empty leaf', () => {
+  const html = '<div><span>John Doe</span><p>Some text</p></div>';
+  const c = findFieldCandidates(html, 'text-like');
+  assert.ok(c.length >= 2);
+});
+
+test('findFieldCandidates: ranks strong before medium before weak', () => {
+  // Strong (time text), medium (date-only), weak (no time content but is <span>)
+  const html = '<div><span>John</span><time>2h</time><span>2026-08-07</span></div>';
+  const c = findFieldCandidates(html, 'time-like', { maxCandidates: 5 });
+  // Strong (<time>) first
+  assert.strictEqual(c[0].tag, 'time');
+  assert.strictEqual(c[0].strength, 'strong');
+});
+
+test('findFieldCandidates: respects maxCandidates option', () => {
+  const html = '<div><span>A</span><span>B</span><span>C</span><span>D</span><span>E</span><span>F</span></div>';
+  const c = findFieldCandidates(html, 'text-like', { maxCandidates: 3 });
+  assert.strictEqual(c.length, 3);
+});
