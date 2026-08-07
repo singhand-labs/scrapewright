@@ -185,3 +185,54 @@ test('findFieldCandidates: respects maxCandidates option', () => {
   const c = findFieldCandidates(html, 'text-like', { maxCandidates: 3 });
   assert.strictEqual(c.length, 3);
 });
+
+const { discoverFieldCandidates } = FieldCandidateDiscovery;
+
+test('discoverFieldCandidates: happy path with two fields', () => {
+  const html = '<div><time>2h</time><a href="/u/1">Jane</a></div>';
+  const r = discoverFieldCandidates(html, ['postTime', 'profileUrl']);
+  assert.strictEqual(r.fields.length, 2);
+  assert.strictEqual(r.fields[0].fieldName, 'postTime');
+  assert.strictEqual(r.fields[0].fieldType, 'time-like');
+  assert.ok(r.fields[0].candidates.length >= 1);
+  assert.strictEqual(r.fields[1].fieldName, 'profileUrl');
+  assert.strictEqual(r.fields[1].fieldType, 'url-like');
+});
+
+test('discoverFieldCandidates: empty html returns skipped=no_html', () => {
+  const r = discoverFieldCandidates('', ['postTime']);
+  assert.strictEqual(r.fields.length, 0);
+  assert.strictEqual(r.skipped, 'no_html');
+});
+
+test('discoverFieldCandidates: too many leaves returns skipped=too_many_leaves', () => {
+  // Build > 50 leaves.
+  const leaves = Array.from({ length: 55 }, (_, i) => '<span>x' + i + '</span>').join('');
+  const html = '<div>' + leaves + '</div>';
+  const r = discoverFieldCandidates(html, ['content'], { maxLeavesToScan: 50 });
+  assert.strictEqual(r.fields.length, 0);
+  assert.strictEqual(r.skipped, 'too_many_leaves');
+});
+
+test('discoverFieldCandidates: field with 0 candidates emits fallbackReason', () => {
+  // 'postTime' but html has no time-like leaves.
+  const html = '<div><span>John Doe</span></div>';
+  const r = discoverFieldCandidates(html, ['postTime']);
+  assert.strictEqual(r.fields.length, 1);
+  assert.strictEqual(r.fields[0].candidates.length, 0);
+  assert.strictEqual(r.fields[0].fallbackReason, 'no_match');
+});
+
+test('discoverFieldCandidates: field name without type match uses text-like + nameMismatch flag', () => {
+  const html = '<div><span>John Doe</span></div>';
+  const r = discoverFieldCandidates(html, ['account.username']);
+  assert.strictEqual(r.fields.length, 1);
+  assert.strictEqual(r.fields[0].fieldType, 'text-like');
+  assert.strictEqual(r.fields[0].nameMismatch, true);
+});
+
+test('discoverFieldCandidates: respects options.maxCandidatesPerField', () => {
+  const html = '<div><span>A</span><span>B</span><span>C</span></div>';
+  const r = discoverFieldCandidates(html, ['content'], { maxCandidatesPerField: 2 });
+  assert.strictEqual(r.fields[0].candidates.length, 2);
+});
