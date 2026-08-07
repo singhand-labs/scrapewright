@@ -1512,6 +1512,52 @@ function formatEmptyOutputFieldsSignal(fields) {
 // THRESHOLDS (default conservative — block deploy only on the unambiguous case):
 //   - minRecords (default 3): can't establish a "duplicate pattern" with <3.
 //   - duplicateRatioThreshold (default 1.0 = 100%): only flag when EVERY
+// getFirstRecordHtmlFromExecution(events, stepId) → string
+//
+// Scans executionEvents for STEP_ITERATION events matching stepId, walks each
+// event's selectorDiagnostics array, and returns the first non-empty
+// firstContainerHtml string found. Returns '' when no matching event or no
+// diagnostic carries firstContainerHtml.
+//
+// Why this exists (2026-08-07 RC32 followup): the initial FIELD CANDIDATES
+// wiring tried to read record HTML from `finalData[0]._html` /
+// `finalData[0].outerHTML`, but output records are FLAT LLM-extracted values
+// (strings, arrays) — they don't carry source HTML. The actual per-record
+// HTML is captured at extraction time by computeExtractListDiagnostics (see
+// lib/list-extract-ops.js) as `firstContainerHtml`, and surfaced in the
+// autoFix prompt via summarizeAllStepDiagnostics as the RECORD HTML block.
+// That same source is what discovery needs to scan for leaf candidates.
+//
+// Generic — works for any site, any extraction step that uses $extractList /
+// $extractListMulti / $list with diagnostics instrumentation.
+function getFirstRecordHtmlFromExecution(events, stepId) {
+  if (!Array.isArray(events) || events.length === 0) return '';
+  if (!stepId) return '';
+  for (const evt of events) {
+    if (!evt || evt.type !== 'STEP_ITERATION') continue;
+    if (evt.stepId !== stepId) continue;
+    const diags = Array.isArray(evt.selectorDiagnostics) ? evt.selectorDiagnostics : [];
+    for (const d of diags) {
+      if (d && typeof d.firstContainerHtml === 'string' && d.firstContainerHtml.length > 0) {
+        return d.firstContainerHtml;
+      }
+    }
+  }
+  return '';
+}
+
+// detectDuplicateRecords(data, outputSchema, options) → array
+//
+// Schema-aware duplicate detector. Locates the first array-of-objects field
+// declared in outputSchema (mirrors detectEmptyOutputFieldsByRatio's lookup)
+// and emits one entry per pair of records whose non-empty field values are
+// ALL identical. Used by the autoFix prompt builder to surface duplicate-
+// record scenarios (e.g. a step accidentally returning the same record N
+// times because its selector matches a wrapper that contains all entries).
+//
+// Options:
+//   - duplicateRatioThreshold (default 1.0): fraction of NON-EMPTY fields
+//     that must be identical for two records to count as duplicates. Each
 //     record is identical. Caller can lower this (e.g. 0.8) for partial
 //     detection, but the framework's THROW path uses the default — anything
 //     less strict risks blocking deploy when the script produced real
@@ -3193,7 +3239,7 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
@@ -3201,6 +3247,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.validateOutputAgainstSchema = validateOutputAgainstSchema;
   window.findEmptyExtractionFields = findEmptyExtractionFields;
   window.findUpstreamExtractionStepId = findUpstreamExtractionStepId;
+  window.getFirstRecordHtmlFromExecution = getFirstRecordHtmlFromExecution;
   window.detectEmptyOutputFieldsByRatio = detectEmptyOutputFieldsByRatio;
   window.formatEmptyOutputFieldsSignal = formatEmptyOutputFieldsSignal;
   window.detectDuplicateRecords = detectDuplicateRecords;
@@ -3257,6 +3304,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.validateOutputAgainstSchema = validateOutputAgainstSchema;
   self.findEmptyExtractionFields = findEmptyExtractionFields;
   self.findUpstreamExtractionStepId = findUpstreamExtractionStepId;
+  self.getFirstRecordHtmlFromExecution = getFirstRecordHtmlFromExecution;
   self.detectEmptyOutputFieldsByRatio = detectEmptyOutputFieldsByRatio;
   self.formatEmptyOutputFieldsSignal = formatEmptyOutputFieldsSignal;
   self.detectDuplicateRecords = detectDuplicateRecords;

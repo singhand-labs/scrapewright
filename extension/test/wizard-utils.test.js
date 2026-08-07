@@ -1931,3 +1931,92 @@ describe('wizard.html module-load collision audit (RC30 lexical-scope guard)', (
     dom.window.close();
   });
 });
+
+describe('getFirstRecordHtmlFromExecution', () => {
+  const { getFirstRecordHtmlFromExecution } = require('../lib/wizard-utils');
+
+  it('returns the firstContainerHtml from the matching step iteration event', () => {
+    // Realistic shape: executionEvents carry STEP_ITERATION entries with
+    // selectorDiagnostics arrays. computeExtractListDiagnostics attaches
+    // firstContainerHtml to each $extractList call's diagnostic.
+    const events = [
+      { type: 'STEP_ITERATION', stepId: '4', iteration: 1, resultPreview: '{posts:[]}',
+        selectorDiagnostics: [
+          { api: 'extractList', containerSelector: 'div[role="article"]', containerMatches: 4,
+            firstContainerHtml: '<div class="post"><time>2h</time><a href="/u/1">Jane</a></div>' },
+        ] },
+    ];
+    const html = getFirstRecordHtmlFromExecution(events, '4');
+    assert.ok(html.includes('<time>2h</time>'), 'should return the firstContainerHtml content');
+  });
+
+  it('returns empty string when stepId has no matching event', () => {
+    const events = [
+      { type: 'STEP_ITERATION', stepId: '4', iteration: 1,
+        selectorDiagnostics: [{ api: 'extractList', firstContainerHtml: '<div>x</div>' }] },
+    ];
+    assert.strictEqual(getFirstRecordHtmlFromExecution(events, '9'), '');
+  });
+
+  it('returns empty string when the matching event has no selectorDiagnostics', () => {
+    const events = [
+      { type: 'STEP_ITERATION', stepId: '4', iteration: 1, resultPreview: '{}' },
+    ];
+    assert.strictEqual(getFirstRecordHtmlFromExecution(events, '4'), '');
+  });
+
+  it('returns empty string when firstContainerHtml is empty across all diagnostics', () => {
+    const events = [
+      { type: 'STEP_ITERATION', stepId: '4', iteration: 1,
+        selectorDiagnostics: [
+          { api: 'list', selector: 'a', matchCount: 0 },  // no firstContainerHtml (list api)
+          { api: 'extractList', containerSelector: 'div', containerMatches: 0, firstContainerHtml: '' },
+        ] },
+    ];
+    assert.strictEqual(getFirstRecordHtmlFromExecution(events, '4'), '');
+  });
+
+  it('skips non-STEP_ITERATION events (e.g. STEP_COMPLETE, TAB_OPENED)', () => {
+    const events = [
+      { type: 'STEP_COMPLETE', stepId: '4', selectorDiagnostics: [{ firstContainerHtml: '<div>should-skip</div>' }] },
+      { type: 'TAB_OPENED', tabId: 99 },
+      { type: 'STEP_ITERATION', stepId: '4', iteration: 1,
+        selectorDiagnostics: [{ api: 'extractList', firstContainerHtml: '<div>real</div>' }] },
+    ];
+    const html = getFirstRecordHtmlFromExecution(events, '4');
+    assert.ok(html.includes('real') && !html.includes('should-skip'));
+  });
+
+  it('returns empty string for empty events array', () => {
+    assert.strictEqual(getFirstRecordHtmlFromExecution([], '4'), '');
+  });
+
+  it('returns empty string for missing stepId', () => {
+    const events = [
+      { type: 'STEP_ITERATION', stepId: '4', selectorDiagnostics: [{ firstContainerHtml: '<div>x</div>' }] },
+    ];
+    assert.strictEqual(getFirstRecordHtmlFromExecution(events, ''), '');
+    assert.strictEqual(getFirstRecordHtmlFromExecution(events, null), '');
+  });
+
+  it('returns empty string when events is not an array', () => {
+    assert.strictEqual(getFirstRecordHtmlFromExecution(null, '4'), '');
+    assert.strictEqual(getFirstRecordHtmlFromExecution(undefined, '4'), '');
+  });
+
+  it('scans multiple iterations of the same step and returns the first non-empty HTML', () => {
+    // First iteration's diagnostic may have no HTML (container match 0);
+    // later iteration captures the loaded HTML.
+    const events = [
+      { type: 'STEP_ITERATION', stepId: '4', iteration: 1,
+        selectorDiagnostics: [{ api: 'extractList', firstContainerHtml: '' }] },
+      { type: 'STEP_ITERATION', stepId: '4', iteration: 2,
+        selectorDiagnostics: [
+          { api: 'extractList', firstContainerHtml: '' },
+          { api: 'extractList', firstContainerHtml: '<div>found-it</div>' },
+        ] },
+    ];
+    const html = getFirstRecordHtmlFromExecution(events, '4');
+    assert.ok(html.includes('found-it'));
+  });
+});
