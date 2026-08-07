@@ -318,3 +318,35 @@ test('formatFieldCandidatesBlock: no site-specific terms anywhere', () => {
   const out = formatFieldCandidatesBlock(r);
   assert.ok(!/facebook|twitter|tiktok|linkedin|reddit|instagram|youtube|weibo|wechat|xiaohongshu/i.test(out));
 });
+
+test('wizard.html lib modules do not collide on top-level const (RC30-style guard)', () => {
+  // This is a smoke test: load all lib modules that wizard.html loads, in
+  // the same order, in a single JSDOM context. If any module declares a
+  // top-level `const api` without IIFE-wrapping, this throws.
+  const fs = require('fs');
+  const path = require('path');
+  const modules = [
+    'list-pattern.js',
+    'annotation-cluster.js',
+    'record-shape-distribution.js',
+    'field-candidate-discovery.js',
+  ];
+  // Concatenate all sources and eval in a single sandbox-like context.
+  const combined = modules.map(m =>
+    fs.readFileSync(path.join(__dirname, '..', 'lib', m), 'utf8')
+  ).join('\n');
+  // Use vm to evaluate in a fresh global. We expect no SyntaxError.
+  const vm = require('vm');
+  const sandbox = { window: {}, global: {}, globalThis: {}, module: { exports: {} }, console };
+  sandbox.window = sandbox;
+  sandbox.self = sandbox;
+  sandbox.global = sandbox;
+  sandbox.globalThis = sandbox;
+  try {
+    vm.createContext(sandbox);
+    vm.runInContext(combined, sandbox);
+    assert.ok(true);
+  } catch (e) {
+    assert.fail('Module collision: ' + e.message);
+  }
+});
