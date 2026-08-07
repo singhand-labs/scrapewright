@@ -3002,24 +3002,24 @@ Rules (READ ALL):
             ? findUpstreamExtractionStepId(wizardState.steps, lastStepId2)
             : lastStepId2;
           if (extractionStepId2) {
-            const finalData2 = wafeFallbackFinalResult(wizardState);
-            const records2 = Array.isArray(finalData2) ? finalData2
-              : (finalData2 && Array.isArray(finalData2.records)) ? finalData2.records
-              : [];
-            const representative2 = records2[0];
+            // Record HTML comes from the extraction step's selectorDiagnostics
+            // (captured by computeExtractListDiagnostics as firstContainerHtml),
+            // NOT from the output records themselves — those are flat LLM-
+            // extracted values without source HTML. See wizard-utils.js
+            // getFirstRecordHtmlFromExecution for the rationale.
+            const recordHtml2 = (typeof getFirstRecordHtmlFromExecution === 'function')
+              ? getFirstRecordHtmlFromExecution(wizardState.lastExecutionEvents || [], extractionStepId2)
+              : '';
             const DomCleanerRef2 = (typeof window !== 'undefined' && window.DomCleaner)
               || (typeof global !== 'undefined' && global.DomCleaner);
-            if (representative2 && DomCleanerRef2 && DomCleanerRef2.normalizeRecordStructure) {
-              const recordHtml2 = representative2._html || representative2.outerHTML || '';
-              if (recordHtml2) {
-                const normalized2 = DomCleanerRef2.normalizeRecordStructure(recordHtml2);
-                const discoveryResult2 = (typeof discoverFieldCandidates === 'function')
-                  ? discoverFieldCandidates(normalized2, chronicEmpty2.map(f => f.path || f.field))
-                  : { fields: [] };
-                fieldCandidatesSignal = (typeof formatFieldCandidatesBlock === 'function')
-                  ? formatFieldCandidatesBlock(discoveryResult2)
-                  : '';
-              }
+            if (recordHtml2 && DomCleanerRef2 && DomCleanerRef2.normalizeRecordStructure) {
+              const normalized2 = DomCleanerRef2.normalizeRecordStructure(recordHtml2);
+              const discoveryResult2 = (typeof discoverFieldCandidates === 'function')
+                ? discoverFieldCandidates(normalized2, chronicEmpty2.map(f => f.path || f.field))
+                : { fields: [] };
+              fieldCandidatesSignal = (typeof formatFieldCandidatesBlock === 'function')
+                ? formatFieldCandidatesBlock(discoveryResult2)
+                : '';
             }
           }
         }
@@ -3151,24 +3151,24 @@ ${RETURN_FORMAT}`;
             ? findUpstreamExtractionStepId(wizardState.steps, lastStepId2)
             : lastStepId2;
           if (extractionStepId2) {
-            const finalData2 = wafeFallbackFinalResult(wizardState);
-            const records2 = Array.isArray(finalData2) ? finalData2
-              : (finalData2 && Array.isArray(finalData2.records)) ? finalData2.records
-              : [];
-            const representative2 = records2[0];
+            // Record HTML comes from the extraction step's selectorDiagnostics
+            // (captured by computeExtractListDiagnostics as firstContainerHtml),
+            // NOT from the output records themselves — those are flat LLM-
+            // extracted values without source HTML. See wizard-utils.js
+            // getFirstRecordHtmlFromExecution for the rationale.
+            const recordHtml2 = (typeof getFirstRecordHtmlFromExecution === 'function')
+              ? getFirstRecordHtmlFromExecution(wizardState.lastExecutionEvents || [], extractionStepId2)
+              : '';
             const DomCleanerRef2 = (typeof window !== 'undefined' && window.DomCleaner)
               || (typeof global !== 'undefined' && global.DomCleaner);
-            if (representative2 && DomCleanerRef2 && DomCleanerRef2.normalizeRecordStructure) {
-              const recordHtml2 = representative2._html || representative2.outerHTML || '';
-              if (recordHtml2) {
-                const normalized2 = DomCleanerRef2.normalizeRecordStructure(recordHtml2);
-                const discoveryResult2 = (typeof discoverFieldCandidates === 'function')
-                  ? discoverFieldCandidates(normalized2, chronicEmpty2.map(f => f.path || f.field))
-                  : { fields: [] };
-                fieldCandidatesSignal = (typeof formatFieldCandidatesBlock === 'function')
-                  ? formatFieldCandidatesBlock(discoveryResult2)
-                  : '';
-              }
+            if (recordHtml2 && DomCleanerRef2 && DomCleanerRef2.normalizeRecordStructure) {
+              const normalized2 = DomCleanerRef2.normalizeRecordStructure(recordHtml2);
+              const discoveryResult2 = (typeof discoverFieldCandidates === 'function')
+                ? discoverFieldCandidates(normalized2, chronicEmpty2.map(f => f.path || f.field))
+                : { fields: [] };
+              fieldCandidatesSignal = (typeof formatFieldCandidatesBlock === 'function')
+                ? formatFieldCandidatesBlock(discoveryResult2)
+                : '';
             }
           }
         }
@@ -3252,9 +3252,10 @@ ${RETURN_FORMAT_FEEDBACK}`;
     if (noOpEscalation) signalsIncluded.push('NO_OP_ESCALATION');
     if (emptyFieldsSignal) signalsIncluded.push('EMPTY_FIELDS');
     if (shapeDistributionSignal) signalsIncluded.push('RECORD_SHAPE_DISTRIBUTION');
+    if (fieldCandidatesSignal) signalsIncluded.push('FIELD_CANDIDATES');
     if (typeof buildAnnotationsText === 'function' && wizardState.annotations && wizardState.annotations.length > 0) signalsIncluded.push('ANNOTATIONS');
     if (typeof summarizeAllStepDiagnostics === 'function') signalsIncluded.push('RUNTIME_DIAGNOSTICS');
-    console.log('[autoFix] Signals emitted:', { signalsIncluded, emptyFieldsChars: emptyFieldsSignal.length, shapeDistributionChars: shapeDistributionSignal.length, annotationCount: (wizardState.annotations || []).length });
+    console.log('[autoFix] Signals emitted:', { signalsIncluded, emptyFieldsChars: emptyFieldsSignal.length, shapeDistributionChars: shapeDistributionSignal.length, fieldCandidatesChars: fieldCandidatesSignal.length, annotationCount: (wizardState.annotations || []).length });
     appendLog(`Prompt size: ${promptSizeStats.totalChars} chars (history ${promptSizeStats.historyMessages} msgs / ${promptSizeStats.historyChars} chars + current ${promptSizeStats.promptChars} chars, snapshot budget ${promptSizeStats.snapshotBudget}); signals: ${signalsIncluded.join(',') || '(none)'}`, 'info');
     const result = await client.chat(messages, { maxTokens: 8192 });
 
