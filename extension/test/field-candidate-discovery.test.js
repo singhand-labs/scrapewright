@@ -236,3 +236,85 @@ test('discoverFieldCandidates: respects options.maxCandidatesPerField', () => {
   const r = discoverFieldCandidates(html, ['content'], { maxCandidatesPerField: 2 });
   assert.strictEqual(r.fields[0].candidates.length, 2);
 });
+
+const { formatFieldCandidatesBlock } = FieldCandidateDiscovery;
+
+test('formatFieldCandidatesBlock: empty result returns empty string', () => {
+  assert.strictEqual(formatFieldCandidatesBlock({ fields: [] }), '');
+  assert.strictEqual(formatFieldCandidatesBlock({ fields: [], skipped: 'no_html' }), '');
+});
+
+test('formatFieldCandidatesBlock: single field with candidates', () => {
+  const r = {
+    fields: [{
+      fieldName: 'postTime',
+      fieldType: 'time-like',
+      candidates: [
+        { selector: 'abbr[data-absolute-time]', text: '2h', tag: 'abbr', strength: 'strong' },
+        { selector: 'time', text: '5 hours ago', tag: 'time', strength: 'strong' },
+      ],
+    }],
+  };
+  const out = formatFieldCandidatesBlock(r);
+  assert.ok(out.startsWith('FIELD CANDIDATES'));
+  assert.ok(out.includes('postTime'));
+  assert.ok(out.includes('time-like'));
+  assert.ok(out.includes('abbr[data-absolute-time]'));
+  assert.ok(out.includes('"2h"'));
+  assert.ok(out.includes('[1]'));
+  assert.ok(out.includes('[2]'));
+});
+
+test('formatFieldCandidatesBlock: nameMismatch surfaces rename hint', () => {
+  const r = {
+    fields: [{
+      fieldName: 'account.username',
+      fieldType: 'text-like',
+      nameMismatch: true,
+      candidates: [{ selector: 'span', text: 'Jane', tag: 'span', strength: 'medium' }],
+    }],
+  };
+  const out = formatFieldCandidatesBlock(r);
+  assert.ok(/NAME DOES NOT MATCH|REVIEW NEEDED|rename/i.test(out));
+});
+
+test('formatFieldCandidatesBlock: field with 0 candidates surfaces fallback message', () => {
+  const r = {
+    fields: [{
+      fieldName: 'postTime',
+      fieldType: 'time-like',
+      candidates: [],
+      fallbackReason: 'no_match',
+    }],
+  };
+  const out = formatFieldCandidatesBlock(r);
+  assert.ok(/0 candidates|RELAX|ANNOTATE/i.test(out));
+});
+
+test('formatFieldCandidatesBlock: multiple fields each get a section', () => {
+  const r = {
+    fields: [
+      { fieldName: 'postTime', fieldType: 'time-like', candidates: [{ selector: 'time', text: '2h', tag: 'time', strength: 'strong' }] },
+      { fieldName: 'likes', fieldType: 'count-like', candidates: [{ selector: 'span', text: '42', tag: 'span', strength: 'strong' }] },
+    ],
+  };
+  const out = formatFieldCandidatesBlock(r);
+  assert.ok(out.includes('postTime'));
+  assert.ok(out.includes('likes'));
+  // Both fields should appear, separated.
+  const firstIdx = out.indexOf('postTime');
+  const secondIdx = out.indexOf('likes');
+  assert.ok(firstIdx < secondIdx);
+});
+
+test('formatFieldCandidatesBlock: no site-specific terms anywhere', () => {
+  const r = {
+    fields: [{
+      fieldName: 'postTime',
+      fieldType: 'time-like',
+      candidates: [{ selector: 'time', text: '2h', tag: 'time', strength: 'strong' }],
+    }],
+  };
+  const out = formatFieldCandidatesBlock(r);
+  assert.ok(!/facebook|twitter|tiktok|linkedin|reddit|instagram|youtube|weibo|wechat|xiaohongshu/i.test(out));
+});

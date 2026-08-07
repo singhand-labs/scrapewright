@@ -261,12 +261,56 @@
     return { fields: fieldsOut };
   }
 
+  // --- formatFieldCandidatesBlock ----------------------------------------
+  // Render a discovery result as the FIELD CANDIDATES block for the autoFix
+  // prompt. Empty string when nothing to show (no fields, skipped, etc.).
+  //
+  // Universality: no site-specific terms. Only generic type names and
+  // selectors extracted from the user's actual record HTML appear.
+
+  function pad(s, n) {
+    s = String(s);
+    while (s.length < n) s += ' ';
+    return s;
+  }
+
+  function formatFieldCandidatesBlock(result) {
+    if (!result || !Array.isArray(result.fields) || result.fields.length === 0) return '';
+    const lines = ['FIELD CANDIDATES (chronic-empty fields — pick a selector or write your own)'];
+    for (const f of result.fields) {
+      const candCount = f.candidates.length;
+      const namePart = f.nameMismatch ? ' — NAME DOES NOT MATCH A TYPE PATTERN, rename to /Time$|Date$|Count$|Url$|Id$/ to opt into a tighter type, or keep text-like fallback' : '';
+      const fallbackPart = f.fallbackReason === 'no_match'
+        ? ', 0 candidates — RELAX SELECTOR OR ANNOTATE THIS FIELD'
+        : '';
+      lines.push('  Field: ' + f.fieldName + ' (inferred type: ' + f.fieldType + ', ' + candCount + ' candidate' + (candCount === 1 ? '' : 's') + namePart + fallbackPart + ')');
+      for (let i = 0; i < f.candidates.length; i++) {
+        const c = f.candidates[i];
+        const idx = '[' + (i + 1) + ']';
+        const sel = pad(c.selector, 42);
+        const text = '"' + (c.text || '').slice(0, 40) + '"';
+        const tag = pad(c.tag, 8);
+        lines.push('    ' + pad(idx, 4) + sel + ' text: ' + pad(text, 24) + ' tag: ' + tag + ' strength: ' + c.strength);
+      }
+    }
+    return lines.join('\n');
+  }
+
   const api = {
     inferFieldType,
     findFieldCandidates,
     discoverFieldCandidates,
+    formatFieldCandidatesBlock,
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
-  if (typeof global !== 'undefined') global.FieldCandidateDiscovery = api;
+  if (typeof window !== 'undefined') window.FieldCandidateDiscovery = api;
+  if (typeof self !== 'undefined') self.FieldCandidateDiscovery = api;
+  if (typeof global !== 'undefined') {
+    global.FieldCandidateDiscovery = api;
+    global.inferFieldType = inferFieldType;
+    global.findFieldCandidates = findFieldCandidates;
+    global.discoverFieldCandidates = discoverFieldCandidates;
+    global.formatFieldCandidatesBlock = formatFieldCandidatesBlock;
+  }
 })(typeof globalThis !== 'undefined' ? globalThis : this);
