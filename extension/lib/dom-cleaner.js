@@ -624,6 +624,73 @@ The selector should target the smallest container that holds all the relevant da
     return parts.length ? ' ' + parts.join(' ') : '';
   }
 
+  // --- normalizeRecordStructure -----------------------------------------
+  // Collapse chains of single-child, attribute-less wrapper divs/spans.
+  // <div><div><div><span>X</span></div></div></div> → <span>X</span>.
+  // Preserves: multi-child containers, any element with class/id/role/data-*/
+  // aria-*/href/src. Iterative — repeats until stable.
+  // Does NOT collapse into opaque tags (script/style/template/etc.) — those
+  // are treated as opaque leaf content.
+  const OPAQUE_TAGS = new Set(['script', 'style', 'template', 'noscript']);
+
+  function hasUsefulAttributes(el) {
+    if (!el.attributes || el.attributes.length === 0) return false;
+    for (const attr of el.attributes) {
+      const n = attr.name.toLowerCase();
+      // Drop only truly-inert attributes; everything else counts as useful.
+      if (n === 'style') continue;
+      return true;
+    }
+    return false;
+  }
+
+  function normalizeRecordStructure(htmlString) {
+    if (!htmlString) return '';
+    let doc;
+    try {
+      doc = new DOMParser().parseFromString('<html><body>' + String(htmlString) + '</body></html>', 'text/html');
+    } catch (_) {
+      return String(htmlString);
+    }
+    if (!doc || !doc.body) return String(htmlString);
+
+    let changed = true;
+    let iterations = 0;
+    while (changed && iterations < 50) {
+      changed = false;
+      iterations++;
+      // Walk all elements. If a non-opaque element has exactly one element
+      // child, no useful attributes, and the child is not opaque, replace
+      // the element with its child.
+      const candidates = [];
+      const walk = (node) => {
+        if (node.nodeType !== Node.ELEMENT_NODE) return;
+        const tag = node.tagName.toLowerCase();
+        if (!OPAQUE_TAGS.has(tag)) {
+          const elementChildren = Array.from(node.children);
+          if (elementChildren.length === 1 && !hasUsefulAttributes(node)) {
+            const child = elementChildren[0];
+            const childTag = child.tagName.toLowerCase();
+            if (!OPAQUE_TAGS.has(childTag)) {
+              candidates.push({ parent: node, child });
+            }
+          }
+        }
+        for (const child of Array.from(node.children)) walk(child);
+      };
+      // Walk body's CHILDREN, not body itself — replacing body would orphan
+      // the document. body is the container; only its descendants are
+      // candidates for collapse.
+      for (const child of Array.from(doc.body.children)) walk(child);
+      for (const { parent, child } of candidates) {
+        parent.replaceWith(child);
+        changed = true;
+      }
+    }
+
+    return doc.body.innerHTML;
+  }
+
   function getCompressedSnapshot() {
     if (!document || !document.documentElement || !document.body) {
       return {
@@ -720,7 +787,7 @@ The selector should target the smallest container that holds all the relevant da
   const api = {
     filterClasses, truncateText, truncateLongTextInNodes, shouldRemoveTag,
     buildIframePrefix, htmlFingerprint,
-    cleanPageHtml, extractAnnotationContext, compressStructure, cleanHtmlForLLM,
+    cleanPageHtml, normalizeRecordStructure, extractAnnotationContext, compressStructure, cleanHtmlForLLM,
     requestSubtreeSelection,
     getCompressedSnapshot, getElementFullHtml, getElementsFullHtml,
   };
