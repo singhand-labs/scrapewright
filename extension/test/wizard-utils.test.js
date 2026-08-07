@@ -846,6 +846,88 @@ describe('findEmptyExtractionFields', () => {
   });
 });
 
+describe('findUpstreamExtractionStepId', () => {
+  const { findUpstreamExtractionStepId } = require('../lib/wizard-utils');
+
+  it('walks back through pure pass-through steps to the actual extractor', () => {
+    // 2026-08-06 console.log topology: step4 extracts, step5 + step6 are
+    // pass-throughs (just map over __stepResults__['N'].posts). EMPTY_EXTRACTION
+    // was attributed to step6 — autoFix rewrote the finalizer for 3 iterations
+    // and never touched step4 where the broken filter lived.
+    const steps = [
+      { id: '1', name: 'scroll', script: 'await $scrollToBottom(); return {done:true};' },
+      { id: '2', name: 'extract_posts', script: 'const records = await $extractListMulti("div", {...}); return { posts: records.map(r => ({...r})) };' },
+      { id: '3', name: 'enrich', script: 'const posts = __stepResults__["2"].posts; return { posts };' },
+      { id: '4', name: 'finalize_output', script: 'const posts = __stepResults__["3"].posts.map(p => ({...p})); return { posts };' },
+    ];
+    // Without walk-back, the failing step is the last step (id '4').
+    // With walk-back, we find id '2' which actually calls $extractListMulti.
+    assert.equal(findUpstreamExtractionStepId(steps, '4'), '2');
+  });
+
+  it('finds the CLOSEST upstream extractor (not the earliest)', () => {
+    // If step 2 extracts partial data and step 4 ALSO extracts (e.g. re-extracts
+    // after enrichment), we want step 4 — its output flows directly into the
+    // finalizer, so it's the most likely cause of an empty final result.
+    const steps = [
+      { id: '1', name: 'initial', script: 'await $extractList("div", {a:"a"});' },
+      { id: '2', name: 'transform', script: 'return __stepResults__["1"];' },
+      { id: '3', name: 'refined_extract', script: 'const r = await $extractListMulti("div", {b:"b"}); return { posts: r };' },
+      { id: '4', name: 'finalize', script: 'return { posts: __stepResults__["3"].posts };' },
+    ];
+    assert.equal(findUpstreamExtractionStepId(steps, '4'), '3');
+  });
+
+  it('matches $list as well as $extractList / $extractListMulti', () => {
+    // Some LLM scripts still use the $list + .map(el => ({...})) pattern
+    // instead of $extractList. Walk-back should still find the extractor.
+    const steps = [
+      { id: '1', name: 'extract', script: 'const items = await $list("li.item"); return { posts: items.map(el => ({title: el.textContent})) };' },
+      { id: '2', name: 'finalize', script: 'return { posts: __stepResults__["1"].posts };' },
+    ];
+    assert.equal(findUpstreamExtractionStepId(steps, '2'), '1');
+  });
+
+  it('falls back to fallbackStepId when no step calls an extraction primitive', () => {
+    // Defensive: preserves prior behavior when steps are all pass-through
+    // (rare — means extraction lives in an earlier step the DSL guide
+    // discourages, e.g. hand-rolled DOM walking — but we don't break).
+    const steps = [
+      { id: '1', name: 'wait', script: 'await new Promise(r => setTimeout(r, 1000)); return {done:true};' },
+      { id: '2', name: 'finalize', script: 'return { posts: [] };' },
+    ];
+    assert.equal(findUpstreamExtractionStepId(steps, '2'), '2');
+  });
+
+  it('returns fallbackStepId for empty or non-array steps', () => {
+    assert.equal(findUpstreamExtractionStepId([], '6'), '6');
+    assert.equal(findUpstreamExtractionStepId(null, '6'), '6');
+    assert.equal(findUpstreamExtractionStepId(undefined, '6'), '6');
+  });
+
+  it('does NOT match $count or $extract (single-value, not array extraction)', () => {
+    // Single-value $extract and $count are NOT array-extraction primitives.
+    // A step that reads one title with $extract isn't the array extractor.
+    const steps = [
+      { id: '1', name: 'page_title', script: 'const title = await $extract("h1"); return {title};' },
+      { id: '2', name: 'count_check', script: 'const n = await $count("li"); return {n};' },
+      { id: '3', name: 'finalize', script: 'return __stepResults__["2"];' },
+    ];
+    // Neither step 1 nor step 2 calls an ARRAY extractor, so fall back to '3'.
+    assert.equal(findUpstreamExtractionStepId(steps, '3'), '3');
+  });
+
+  it('handles steps with missing or non-string scripts', () => {
+    const steps = [
+      { id: '1', name: 'noScript' },
+      { id: '2', name: 'emptyScript', script: '' },
+      { id: '3', name: 'extract', script: 'await $extractList("li", {a:"a"});' },
+      { id: '4', name: 'finalize', script: 'return __stepResults__["3"];' },
+    ];
+    assert.equal(findUpstreamExtractionStepId(steps, '4'), '3');
+  });
+});
+
 describe('getOutputFieldOptions', () => {
   const { getOutputFieldOptions } = require('../lib/wizard-utils');
 
@@ -1141,6 +1223,50 @@ describe('SCRIPT_DSL_GUIDE regression', () => {
     assert.ok(!/facebook/i.test(SCRIPT_DSL_GUIDE), 'SCRIPT_DSL_GUIDE must not mention facebook');
     assert.ok(!/twitter/i.test(SCRIPT_DSL_GUIDE), 'SCRIPT_DSL_GUIDE must not mention twitter');
     assert.ok(!/tiktok/i.test(SCRIPT_DSL_GUIDE), 'SCRIPT_DSL_GUIDE must not mention tiktok');
+  });
+
+  it('forbids article.querySelector on $list results (data-object contract)', () => {
+    // 2026-08-06 console.log: LLM treated $list() return values as DOM
+    // elements, calling article.querySelectorAll(...) inside a for-loop.
+    // Crashed at runtime with "article.querySelectorAll is not a function"
+    // because $list returns plain data objects {tagName, textContent, ...},
+    // NOT DOM elements. Earlier the guide had a "RIGHT (fallback)" pattern
+    // that contradicted CRITICAL RULE 3 and taught the LLM the broken call.
+    // Source-text audit guards the corrected rule.
+    assert.match(SCRIPT_DSL_GUIDE, /querySelector is not a function/);
+    assert.match(SCRIPT_DSL_GUIDE, /article\.querySelectorAll/);
+    assert.match(SCRIPT_DSL_GUIDE, /BROKEN/);
+    // The corrected rule must NOT include the misleading old comment that
+    // claimed $list items expose querySelector.
+    assert.ok(!/article is a DOM element handle/i.test(SCRIPT_DSL_GUIDE),
+      'SCRIPT_DSL_GUIDE must not claim $list items are DOM element handles');
+    // Must still steer toward $extractListMulti (correct path).
+    assert.match(SCRIPT_DSL_GUIDE, /\$extractListMulti/);
+  });
+
+  it('forbids record-filter patterns that collapse arrays to [] (RECORD FILTERING)', () => {
+    // 2026-08-06 console.log: feed-search extraction returned {posts:[]} because the
+    // LLM wrote `if (isAd) return null` + `.filter(p => p !== null)` AFTER
+    // an ad-detection regex that matched every record's outerHTML. The
+    // framework threw EMPTY_EXTRACTION but attributed it to the LAST step
+    // (a schema-conformance finalizer that just maps over upstream data),
+    // so autoFix spent 3 iterations on the wrong step. The DSL must teach
+    // the LLM that:
+    //   - regex on outerHTML over-matches (sites use data-* for rendering)
+    //   - return-null + filter-non-null can collapse all records → []
+    //   - EMPTY_EXTRACTION fires on [] and is treated as a selector problem
+    //   - empty strings per field are honest signals; return every record
+    assert.match(SCRIPT_DSL_GUIDE, /RECORD FILTERING/);
+    assert.match(SCRIPT_DSL_GUIDE, /outerHTML/);
+    assert.match(SCRIPT_DSL_GUIDE, /return null/i);
+    assert.match(SCRIPT_DSL_GUIDE, /filter\(p => p !== null\)/);
+    assert.match(SCRIPT_DSL_GUIDE, /EMPTY_EXTRACTION/);
+    // Correct pattern must be present (empty strings, not null filter):
+    assert.match(SCRIPT_DSL_GUIDE, /empty-string /i);
+    // Universality: still no site names.
+    assert.ok(!/facebook/i.test(SCRIPT_DSL_GUIDE));
+    assert.ok(!/twitter/i.test(SCRIPT_DSL_GUIDE));
+    assert.ok(!/tiktok/i.test(SCRIPT_DSL_GUIDE));
   });
 });
 
@@ -1716,5 +1842,92 @@ describe('RECORD SHAPE DISTRIBUTION prompt-text audit', () => {
     assert.ok(wizardIdx > 0, 'wizard.js not loaded in wizard.html');
     assert.ok(distIdx < wizardIdx,
       'record-shape-distribution.js must load before wizard.js so its globals are available');
+  });
+});
+describe('field-candidate-discovery source-text audit', () => {
+  const fs = require('fs');
+  const path = require('path');
+
+  test('field-candidate-discovery source has no site-specific terms', () => {
+    const srcPath = path.join(__dirname, '..', 'lib', 'field-candidate-discovery.js');
+    if (!fs.existsSync(srcPath)) {
+      // Will exist after Task 1.2; until then this test is skipped via the
+      // existsSync check below. Once the file lands, the audit is enforced.
+      return;
+    }
+    const src = fs.readFileSync(srcPath, 'utf8');
+    assert.ok(!/facebook|twitter|tiktok|linkedin|reddit|instagram|youtube|weibo|wechat|xiaohongshu/i.test(src),
+      'field-candidate-discovery.js must not contain site-specific names');
+    assert.ok(!/\bdata-ad-|\bdata-ft-|\bdata-xt-|\brole="article"\b|cosd-markdown-loading/i.test(src),
+      'field-candidate-discovery.js must not contain site-specific DOM patterns');
+  });
+});
+describe('wizard.html script-tag load audit (RC27 silent-disable guard)', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(
+    path.join(__dirname, '..', 'wizard.html'),
+    'utf8'
+  );
+
+  it('wizard.html loads annotation-cluster.js before wizard-utils.js', () => {
+    // 2026-08-06 console.log diagnostic gap: Phase 1 RC27 clustering only
+    // fired in Node tests because they require() annotation-cluster.js.
+    // The browser production path was silently disabled — wizard.html
+    // never loaded the script tag. Source-text audit catches this so
+    // the gap can't silently recur.
+    const clusterIdx = html.indexOf('annotation-cluster.js');
+    const utilsIdx = html.indexOf('wizard-utils.js');
+    assert.ok(clusterIdx > 0, 'annotation-cluster.js not loaded in wizard.html — Phase 1 RC27 clustering will be silently disabled in production browser');
+    assert.ok(utilsIdx > 0, 'wizard-utils.js not loaded in wizard.html');
+    assert.ok(clusterIdx < utilsIdx,
+      'annotation-cluster.js must load before wizard-utils.js so clusterAnnotationsByContainer is defined when buildAnnotationsText runs');
+  });
+});
+
+describe('wizard.html module-load collision audit (RC30 lexical-scope guard)', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const { JSDOM, VirtualConsole } = require('jsdom');
+
+  // 2026-08-06 console.log: annotation-cluster.js and record-shape-distribution.js
+  // both crashed at page load with "Identifier 'api' has already been declared"
+  // because classic <script> tags share a global lexical scope. The fix was to
+  // IIFE-wrap each module. This test loads every wizard.html module IN BROWSER
+  // MODE (concatenated script tags, not require()) and asserts zero jsdomErrors.
+  // Catches any future top-level const/let collision that would silently break
+  // the browser while continuing to pass Node-side require() tests.
+
+  it('every lib module loaded by wizard.html parses and executes without lexical collision', async () => {
+    const html = fs.readFileSync(path.join(__dirname, '..', 'wizard.html'), 'utf8');
+    const scriptMatches = Array.from(html.matchAll(/<script src="(lib\/[^"]+\.js|wizard\.js)">/g));
+    const libPaths = scriptMatches
+      .map(m => m[1])
+      .filter(p => p.endsWith('.js'));
+    assert.ok(libPaths.length >= 10, `expected at least 10 scripts in wizard.html, found ${libPaths.length}`);
+
+    // wizard.js can't run in jsdom (it references chrome.* APIs at load time).
+    // We only verify lib/* modules don't collide with each other.
+    const libModules = libPaths.filter(p => p.startsWith('lib/'));
+    const scriptTags = libModules.map(p => {
+      const code = fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
+      return `<script>${code}<\/script>`;
+    }).join('');
+
+    const errors = [];
+    const vc = new VirtualConsole();
+    vc.on('jsdomError', e => errors.push(`${e.message}`));
+
+    const dom = new JSDOM(`<!DOCTYPE html><html><body>${scriptTags}</body></html>`, {
+      runScripts: 'dangerously',
+      virtualConsole: vc
+    });
+
+    // Give microtasks a tick to settle any queued async errors.
+    await new Promise(r => setTimeout(r, 100));
+
+    assert.strictEqual(errors.length, 0,
+      `wizard.html lib modules failed to load together: ${errors.join('; ')}`);
+    dom.window.close();
   });
 });

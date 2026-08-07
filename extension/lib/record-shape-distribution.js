@@ -13,8 +13,15 @@
 // signatures across the extracted records, that signal is fed back to the
 // LLM so it can write genuine shape-switching logic instead of guessing
 // from URL patterns.
+//
+// IIFE-wrapped (RC30): classic <script> tags share a global lexical scope,
+// so a top-level `const api` here would collide with the same declaration in
+// list-pattern.js / annotation-cluster.js (Identifier 'api' has already been
+// declared). The IIFE gives the module its own lexical scope; the api object
+// is still exposed via window.X / module.exports / global.X.
 
-// Walk a record recursively and emit dotted paths for populated fields.
+(function (global) {
+  // Walk a record recursively and emit dotted paths for populated fields.
 // Empty string, null, undefined, empty array, empty object → unpopulated.
 // false and 0 → populated (they are valid values, distinct from "absent").
 // Arrays are treated as a single field value — element structure is not
@@ -151,3 +158,4 @@ if (typeof global !== 'undefined') {
   global.formatShapeDistributionFromData = formatShapeDistributionFromData;
   global.RecordShapeDistribution = api;
 }
+})(typeof globalThis !== 'undefined' ? globalThis : this);

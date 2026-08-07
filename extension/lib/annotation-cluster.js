@@ -5,10 +5,17 @@
 // to the LLM. Pure module — no DOM access, no IO.
 //
 // Algorithm: STRUCTURAL BRANCHING ANALYSIS + TAG SEMANTIC CONFIRMATION.
-// No site-specific DOM patterns. See doc comment on clusterAnnotationsByContainer
+// No site specific DOM patterns. See doc comment on clusterAnnotationsByContainer
 // for the two-stage algorithm.
+//
+// IIFE-wrapped (RC30): classic <script> tags share a global lexical scope,
+// so a top-level `const api` here would collide with the same declaration in
+// list-pattern.js / record-shape-distribution.js (Identifier 'api' has already
+// been declared). The IIFE gives the module its own lexical scope; the api
+// object is still exposed via window.X / module.exports / global.X.
 
-// Parse a domPath like "div > div[x='1'] > span" into ["div", "div[x='1']", "span"].
+(function (global) {
+  // Parse a domPath like "div > div[x='1'] > span" into ["div", "div[x='1']", "span"].
 // Bracket-aware: spaces inside [attr='value'] are not split. Returns [] for
 // non-string input so callers can pass annotation.domPath without type guards.
 function parseDomPathSegments(domPath) {
@@ -200,3 +207,4 @@ if (typeof global !== 'undefined') {
   global.clusterAnnotationsByContainer = clusterAnnotationsByContainer;
   global.AnnotationCluster = api;
 }
+})(typeof globalThis !== 'undefined' ? globalThis : this);
