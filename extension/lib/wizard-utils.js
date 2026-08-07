@@ -96,6 +96,37 @@ MULTI-VALUE FIELDS (e.g., images[], attachments[], tags[]) — When the output s
 
 EMPTY-LIST BAILOUT — If the parent list query returns 0 items, DO NOT proceed with field queries. Return { done: false } immediately (if the step has a retry budget) or { failed: true, error: 'no items found for selector X' }. Without this rule, a step runs 8+ sequential DOM round-trips that all return empty, burning the step time budget and hiding the real failure behind a generic not-done signal.
 
+RECORD FILTERING — Do NOT write patterns that risk collapsing ALL records to an empty array. The framework's EMPTY_EXTRACTION detector fires when a required array-of-objects field returns [] (the LLM gets the strong "fix failing step" autoFix prompt). Two patterns reliably trigger this:
+
+Pattern 1 — regex-test outerHTML to classify records (BROKEN):
+  // WRONG — sites use data-* attributes for legitimate rendering, NOT just ads:
+  const html = (r.html && r.html[0]) || '';
+  const isAd = /sponsored|data-ad-/i.test(html);
+  const isRecommendation = /recommend/i.test(html) && !content;
+  if (isAd || isRecommendation) return null;
+outerHTML contains EVERY internal attribute the site uses for rendering — preview metadata, tracking pixels, component-library hooks. Your content selector probably uses one of those same attributes (e.g. the content container itself has data-preview="message"), so the ad-detection regex will match EVERY record. The whole list collapses to [].
+
+Pattern 2 — return null + .filter(p => p !== null) (BROKEN):
+  // WRONG — if every record matches a filter-out condition, posts becomes []:
+  const posts = records.map(r => {
+    if (!r.content) return null;
+    return { content: r.content, ... };
+  }).filter(p => p !== null);
+  return { posts };
+When the content selector misses (a single broken field), EVERY record returns null and the array becomes []. The framework treats this as a SELECTOR problem and never discovers your filter logic.
+
+CORRECT patterns — return EVERY record with empty fields for missing data:
+  // RIGHT — empty strings are honest signals the framework's EMPTY_FIELDS detector can act on:
+  const posts = records.map(r => ({
+    content: (r.content && r.content[0]) || '',
+    author: r.author || '',
+    // ...all schema-required fields with empty-string / empty-array defaults
+  }));
+  return { posts };
+The framework's EMPTY_FIELDS detector will surface which fields are uniformly empty across records, and autoFix can iterate field-by-field instead of guessing.
+
+If you MUST skip a record, do so conservatively — only skip when you have POSITIVE evidence from a SPECIFIC element (e.g. an explicit "Sponsored" label span that exists NOWHERE else on the page), never regex-test outerHTML.
+
 IMPORTANT: For waiting or polling scenarios (e.g., checking if AI has finished generating), do NOT use $() in a loop — it will throw after 30s if the element is not found. Instead:
 - Use 'await new Promise(r => setTimeout(r, ms))' for fixed delays
 - Use $exists(selector, timeoutMs) for quick existence checks in polling loops
@@ -313,22 +344,21 @@ RIGHT (preferred) — use \$extractListMulti with sub-selectors RELATIVE to each
      content:  'div[data-field="content"]'          // scoped per-article
    });
    return { posts: records };
-RIGHT (fallback) — if you must hand-roll a loop, the \$ API is document-global, so use the element's own querySelector to scope sub-queries to the current record:
+RIGHT (fallback) — if you genuinely cannot use \$extractListMulti and must hand-roll, the \$ API is document-global and \$list returns PLAIN DATA objects (NOT DOM elements). You CANNOT call article.querySelector / article.querySelectorAll / article.closest on items returned by \$list — those properties do not exist on data objects. The ONLY correct hand-rolled pattern is to pre-compute every per-field array with a SEPARATE \$list call scoped by a selector that includes the Nth container's positional prefix (rare; usually wrong due to the CSS TRAP above), OR (much simpler) just call \$extractListMulti:
+   const records = await \$extractListMulti('div[role="article"]', {
+     group:    'h3 a[href*="/groups/"] span',
+     username: 'h3 a[href*="/user/"] span',
+     content:  'div[data-field="content"]',
+     mediaUrls: { selector: 'img[src*="scontent"]', attr: 'src' }   // multi-match per container → array
+   });
+   return { posts: records };
+NEVER write this (BROKEN — \$list items are not DOM elements):
    const articles = await \$list('div[role="article"]');
-   const posts = [];
    for (const article of articles) {
-     // article is a DOM element handle from \$list — use its querySelector
-     const groupEl = article.querySelector('h3 a[href*="/groups/"] span');
-     const userEl  = article.querySelector('h3 a[href*="/user/"] span');
-     const contEl  = article.querySelector('div[data-field="content"]');
-     posts.push({
-       group:    groupEl ? groupEl.textContent.trim() : '',
-       username: userEl  ? userEl.textContent.trim()  : '',
-       content:  contEl  ? contEl.textContent.trim()  : ''
-     });
+     article.querySelector(...);     // ❌ TypeError: article.querySelector is not a function
+     article.querySelectorAll(...);  // ❌ TypeError: article.querySelectorAll is not a function
    }
-   return { posts };
-Prefer \$extractListMulti — it handles per-record scoping, attribute reads, and empty-value defaults correctly without per-iteration bookkeeping. Hand-rolled loops are a common source of DUPLICATE_RECORDS, FIELD-NAME-COLLISION, and silent-empty-field bugs that autoFix then has to repair round after round.
+Prefer \$extractListMulti — it handles per-record scoping, attribute reads, and empty-value defaults correctly without per-iteration bookkeeping. Hand-rolled \$list loops are a common source of "X is not a function" runtime errors, DUPLICATE_RECORDS, FIELD-NAME-COLLISION, and silent-empty-field bugs that autoFix then has to repair round after round.
 
 7. NEVER RETURN THE SAME SCRIPT (autoFix no-op rule): When you receive a fix request (after ACK), your response MUST actually change the code. Do NOT ACK the hint and then return the same script char-for-char — the framework detects this via isNoOpAutoFixPatch and rejects the response as a no-op. A no-op fix wastes an autoFix attempt and produces the SAME wrong output again. If you genuinely cannot see how to fix the problem after inspecting the script, the snapshot, and the annotations, use NACK with specifics (e.g., "// NACK: cannot determine username field — the page's profile_name area has no element matching 'Mamur Obaid' in the snapshot I was given; need an annotation on the username element") instead of faking a fix. A NACK surfaces a concrete question to the user; a no-op ACK wastes everyone's time.
 
@@ -1243,6 +1273,43 @@ function validateOutputAgainstSchema(finalResult, outputSchema) {
 // this check, the wizard's testScript reports success and autoFix uses the
 // weak "improve based on feedback" prompt instead of the strong "fix failing
 // step" prompt, so the LLM keeps generating similar broken selectors.
+// findUpstreamExtractionStepId(steps, fallbackStepId)
+//
+// Walks the steps array in REVERSE, returning the id of the first step whose
+// script calls an array-extraction primitive ($extractList / $extractListMulti
+// / $list). Used by testScript's EMPTY_EXTRACTION and DUPLICATE_RECORDS paths
+// so the failing-step pointer the LLM sees targets the ACTUAL extractor — not
+// a schema-conformance finalizer that just maps over __stepResults__['N'].
+//
+// Why this matters (console.log 2026-08-06 feed-search extraction): step graph was
+//   4 extract_posts ($extractListMulti) → 5 extract_hovercard_details (pass-through) → 6 finalize_output (pass-through)
+// Step 4's post-filter (if (isAd) return null; .filter(p => p !== null))
+// collapsed every record to null because the ad-detection regex matched
+// legitimate content attributes. Result: {posts:[]}. Steps 5 and 6 are pure
+// pass-throughs. The framework attributed EMPTY_EXTRACTION to step 6 — autoFix
+// spent 3 iterations rewriting the finalizer and never touched step 4.
+//
+// The walk-back finds step 4 (last step with an extraction call) so the LLM
+// gets pointed at the real extractor. We walk in REVERSE so we find the
+// CLOSEST upstream extractor to the failing finalizer — if step 5 ALSO called
+// $extractListMulti, we'd want step 5 (whose output flows directly into 6),
+// not an earlier step whose output is already transformed.
+//
+// Falls back to fallbackStepId unchanged when no step in the chain calls an
+// extraction primitive (defensive — preserves prior behavior for hand-rolled
+// loops the DSL guide nonetheless discourages).
+const ARRAY_EXTRACTION_RE = /\$(extractList|extractListMulti|list)\s*\(/;
+function findUpstreamExtractionStepId(steps, fallbackStepId) {
+  if (!Array.isArray(steps) || steps.length === 0) return fallbackStepId;
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const s = steps[i];
+    if (s && typeof s.script === 'string' && ARRAY_EXTRACTION_RE.test(s.script)) {
+      return s.id;
+    }
+  }
+  return fallbackStepId;
+}
+
 function findEmptyExtractionFields(data, outputSchema) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return [];
   if (!outputSchema || !Array.isArray(outputSchema.required) || outputSchema.required.length === 0) return [];
@@ -3126,13 +3193,14 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
   window.validateInputAgainstSchema = validateInputAgainstSchema;
   window.validateOutputAgainstSchema = validateOutputAgainstSchema;
   window.findEmptyExtractionFields = findEmptyExtractionFields;
+  window.findUpstreamExtractionStepId = findUpstreamExtractionStepId;
   window.detectEmptyOutputFieldsByRatio = detectEmptyOutputFieldsByRatio;
   window.formatEmptyOutputFieldsSignal = formatEmptyOutputFieldsSignal;
   window.detectDuplicateRecords = detectDuplicateRecords;
@@ -3188,6 +3256,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.validateInputAgainstSchema = validateInputAgainstSchema;
   self.validateOutputAgainstSchema = validateOutputAgainstSchema;
   self.findEmptyExtractionFields = findEmptyExtractionFields;
+  self.findUpstreamExtractionStepId = findUpstreamExtractionStepId;
   self.detectEmptyOutputFieldsByRatio = detectEmptyOutputFieldsByRatio;
   self.formatEmptyOutputFieldsSignal = formatEmptyOutputFieldsSignal;
   self.detectDuplicateRecords = detectDuplicateRecords;

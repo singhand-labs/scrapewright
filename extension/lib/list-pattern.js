@@ -4,9 +4,18 @@
 // a CSS selector) into a derived $extractList / $clickInList call template.
 // The output is fed to buildAnnotationsText so the LLM sees a generalized
 // pattern ABOVE the raw per-annotation lines.
+//
+// IIFE-wrapped (RC30): classic <script> tags share a global lexical scope, so
+// a top-level `const api` here collides with the same declaration in
+// annotation-cluster.js / record-shape-distribution.js (Identifier 'api' has
+// already been declared). The IIFE gives the module its own lexical scope; the
+// api object is still exposed via window.X / module.exports / global.X. This
+// file currently loads first in wizard.html so it works by accident — wrap
+// defensively so reordering or future additions don't reintroduce the crash.
 
-// Split a selector into segments on descendant/child combinators, preserving
-// whether each join was a child combinator ('>') so emit can rebuild it.
+(function (global) {
+  // Split a selector into segments on descendant/child combinators, preserving
+  // whether each join was a child combinator ('>') so emit can rebuild it.
 // Bracket-aware so attribute values with spaces aren't split.
 function splitOnCombinators(sel) {
   const tokens = [];
@@ -236,3 +245,4 @@ if (typeof global !== 'undefined') {
   global.parseSelectorSegments = parseSelectorSegments;
   global.ListPattern = api;
 }
+})(typeof globalThis !== 'undefined' ? globalThis : this);

@@ -2026,12 +2026,22 @@ async function testScript() {
     const emptyFields = findEmptyExtractionFields(finalData, wizardState.outputSchema);
     if (emptyFields.length > 0) {
       const lastStepEntry = result.steps[result.steps.length - 1];
-      const extractionStepId = lastStepEntry?.stepId || (wizardState.steps[wizardState.steps.length - 1] && wizardState.steps[wizardState.steps.length - 1].id);
+      // Walk back through pass-through steps to find the actual extraction step.
+      // Without this, EMPTY_EXTRACTION is attributed to the LAST step in the
+      // chain even when that step is a pure schema-conformance finalizer that
+      // just maps over __stepResults__['N'].posts. autoFix would then target
+      // the finalizer and never touch the real extractor (console.log
+      // 2026-08-06: step6 finalize_output blamed for step4 extract_posts
+      // returning {posts:[]} due to an over-aggressive ad filter).
+      const nominalStepId = lastStepEntry?.stepId || (wizardState.steps[wizardState.steps.length - 1] && wizardState.steps[wizardState.steps.length - 1].id);
+      const extractionStepId = (typeof findUpstreamExtractionStepId === 'function')
+        ? findUpstreamExtractionStepId(wizardState.steps, nominalStepId)
+        : nominalStepId;
       const err = new Error('EMPTY_EXTRACTION: required field(s) [' + emptyFields.join(', ') + '] are present but every extracted item has only empty values, or no items were extracted at all. The script found list items but the field selectors are wrong.');
       err.stepId = extractionStepId;
       err.snapshot = lastStepEntry?.snapshot || null;
       err.emptyFields = emptyFields;
-      debugLogger.log('warn', 'wizard', 'Empty extraction detected — treating as failure', { emptyFields, extractionStepId });
+      debugLogger.log('warn', 'wizard', 'Empty extraction detected — treating as failure', { emptyFields, extractionStepId, nominalStepId });
       throw err;
     }
     // Duplicate-records check: catches the per-record-loop-with-global-sub-selector
@@ -2043,13 +2053,19 @@ async function testScript() {
     const duplicateFields = detectDuplicateRecords(finalData, wizardState.outputSchema);
     if (duplicateFields.length > 0) {
       const lastStepEntry = result.steps[result.steps.length - 1];
-      const extractionStepId = lastStepEntry?.stepId || (wizardState.steps[wizardState.steps.length - 1] && wizardState.steps[wizardState.steps.length - 1].id);
+      // Same walk-back as EMPTY_EXTRACTION above — duplicate records come from
+      // a $extractList-per-record loop using a global sub-selector, not from a
+      // pass-through finalizer.
+      const nominalStepId = lastStepEntry?.stepId || (wizardState.steps[wizardState.steps.length - 1] && wizardState.steps[wizardState.steps.length - 1].id);
+      const extractionStepId = (typeof findUpstreamExtractionStepId === 'function')
+        ? findUpstreamExtractionStepId(wizardState.steps, nominalStepId)
+        : nominalStepId;
       const summary = duplicateFields.map(d => `${d.field} (${d.totalRecords} records, ${d.uniqueSignatures} unique)`).join('; ');
       const err = new Error('DUPLICATE_RECORDS: array-of-objects output(s) [' + summary + '] are entirely identical across records. The script almost certainly uses a global sub-selector inside a per-record loop — every iteration captured the same first-match values. Use $extractListMulti with per-record sub-selectors (or scope queries via element.querySelector inside the loop).');
       err.stepId = extractionStepId;
       err.snapshot = lastStepEntry?.snapshot || null;
       err.duplicateFields = duplicateFields;
-      debugLogger.log('warn', 'wizard', 'Duplicate records detected — treating as failure', { duplicateFields, extractionStepId });
+      debugLogger.log('warn', 'wizard', 'Duplicate records detected — treating as failure', { duplicateFields, extractionStepId, nominalStepId });
       throw err;
     }
     const oc = validateOutputAgainstSchema(finalData, wizardState.outputSchema);
@@ -2604,6 +2620,43 @@ async function autoFix(userFeedback = null) {
         showToast(msg, 'warn', 12000);
       }
     }
+    // Chronic-empty-fields annotation suggestion (fires on BOTH paths).
+    // The hard-EMPTY_EXTRACTION suggestion above only fires when the WHOLE
+    // array comes back empty. The more common case (console.log 2026-08-06
+    // / 2026-08-07): partial extraction succeeds — the array has N records
+    // with some fields populated (groupName, content, images) — but specific
+    // fields are 100% empty across every record (postTime, account.username,
+    // groupNature, location). The LLM iterates and iterates; EMPTY_FIELDS
+    // signal tells it WHICH fields are empty, but the LLM still can't find
+    // working selectors for them because the site's DOM is heavily obfuscated.
+    // Element annotation is the most direct fix — the user clicks the actual
+    // element and the LLM uses that selector verbatim. Surface a data-driven
+    // suggestion naming the specific chronic-empty fields so the user knows
+    // exactly what to annotate.
+    const _finalData = wizardState.testResult && wizardState.testResult.finalResult !== undefined
+      ? wizardState.testResult.finalResult
+      : null;
+    if (_finalData && typeof _finalData === 'object' && !Array.isArray(_finalData) && wizardState.outputSchema) {
+      const chronicEmpty = (typeof detectEmptyOutputFieldsByRatio === 'function')
+        ? detectEmptyOutputFieldsByRatio(_finalData, wizardState.outputSchema, { emptyRatioThreshold: 1.0, minRecords: 2 })
+        : [];
+      if (chronicEmpty.length > 0) {
+        const lastStepId = wizardState.steps[wizardState.steps.length - 1] && wizardState.steps[wizardState.steps.length - 1].id;
+        const extractionStepId = (typeof findUpstreamExtractionStepId === 'function')
+          ? findUpstreamExtractionStepId(wizardState.steps, lastStepId)
+          : lastStepId;
+        const extractionStep = extractionStepId ? wizardState.steps.find(s => s.id === extractionStepId) : null;
+        const hasNoAnnotations = !extractionStep || !extractionStep.annotations || extractionStep.annotations.length === 0;
+        if (extractionStep && hasNoAnnotations) {
+          // Show up to 5 field paths to keep the toast readable.
+          const fieldList = chronicEmpty.slice(0, 5).map(f => f.path || f.field).join(', ');
+          const more = chronicEmpty.length > 5 ? ' (+' + (chronicEmpty.length - 5) + ' more)' : '';
+          const msg = 'Field(s) [' + fieldList + more + '] are empty across ALL extracted records. The LLM cannot find working selectors for them on this site. Click "Start Annotating" on step "' + extractionStep.name + '" and pick the actual elements — annotations are used directly by the LLM.';
+          appendLog(msg, 'warn');
+          showToast(msg, 'warn', 12000);
+        }
+      }
+    }
     // === Spec 5: restore best attempt if the last iteration regressed ===
     if (wizardState.bestAttempt && wizardState.bestAttempt.score > 0) {
       const finalResult = wizardState.testResult && wizardState.testResult.finalResult !== undefined
@@ -2920,6 +2973,14 @@ Rules (READ ALL):
   * "posts have wrong author/content" → the extract step's sub-selectors are matching the wrong element.
   * "scroll/poll step returned the same postCount on every iteration with a stalled counter increasing" → the scroll mechanism itself did not progress (page did not actually scroll). NOT a selector problem. Check RUNTIME DIAGNOSTICS above: if scrollRoot is not 'window' or stalled is true, the site uses an inner scroll container — the framework auto-probes one, but if the auto-probe picked the wrong container, pin it explicitly with $scrollToBottom('<inner container selector>').`;
 
+  // Signal-block tracking (RC30 part-1): these are assigned in the
+  // user-feedback branch below. Declared here with empty defaults so the
+  // post-prompt signal-emission log can reference them on BOTH branches
+  // (failure-fix path doesn't emit these specific signals).
+  let noOpEscalation = '';
+  let emptyFieldsSignal = '';
+  let shapeDistributionSignal = '';
+
   let prompt;
   if (isFailureFix) {
     prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${buildFeedbackSection(userFeedback, attemptNum, totalAttempts, wizardState.llmHistory)}${SCRIPT_DSL_GUIDE}
@@ -3005,7 +3066,7 @@ ${RETURN_FORMAT}`;
     // records, so the LLM's attention is pinned on extraction-quality
     // regardless of how the user phrased the feedback. Generic — works for
     // any site, any field, not just FB comments/shares.
-    const emptyFieldsSignal = formatEmptyOutputFieldsSignal(
+    emptyFieldsSignal = formatEmptyOutputFieldsSignal(
       detectEmptyOutputFieldsByRatio(wafeFallbackFinalResult(wizardState), wizardState.outputSchema)
     );
 
@@ -3018,7 +3079,7 @@ ${RETURN_FORMAT}`;
     // test-driven signal derived from real output — does not depend on user
     // annotation, which is the fallback path. Stays empty when all records
     // share one signature (no variance to surface).
-    const shapeDistributionSignal = typeof formatShapeDistributionFromData === 'function'
+    shapeDistributionSignal = typeof formatShapeDistributionFromData === 'function'
       ? formatShapeDistributionFromData(wafeFallbackFinalResult(wizardState), wizardState.outputSchema)
       : '';
 
@@ -3029,7 +3090,7 @@ ${RETURN_FORMAT}`;
     // byte-identical responses across 3 iterations because the current
     // prompt was textually identical. The iteration counter both (a) tells
     // the LLM this is a retry and (b) busts any upstream proxy cache.
-    const noOpEscalation = buildNoOpEscalationSection(wizardState.consecutiveNoOpCount || 0);
+    noOpEscalation = buildNoOpEscalationSection(wizardState.consecutiveNoOpCount || 0);
 
     prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${buildFeedbackSection(userFeedback, attemptNum, totalAttempts, wizardState.llmHistory)}${SCRIPT_DSL_GUIDE}
 
@@ -3104,7 +3165,14 @@ ${RETURN_FORMAT_FEEDBACK}`;
       steps: wizardState.steps.length
     };
     console.log('[autoFix] Prompt sizes:', promptSizeStats);
-    appendLog(`Prompt size: ${promptSizeStats.totalChars} chars (history ${promptSizeStats.historyMessages} msgs / ${promptSizeStats.historyChars} chars + current ${promptSizeStats.promptChars} chars, snapshot budget ${promptSizeStats.snapshotBudget})`, 'info');
+    const signalsIncluded = [];
+    if (noOpEscalation) signalsIncluded.push('NO_OP_ESCALATION');
+    if (emptyFieldsSignal) signalsIncluded.push('EMPTY_FIELDS');
+    if (shapeDistributionSignal) signalsIncluded.push('RECORD_SHAPE_DISTRIBUTION');
+    if (typeof buildAnnotationsText === 'function' && wizardState.annotations && wizardState.annotations.length > 0) signalsIncluded.push('ANNOTATIONS');
+    if (typeof summarizeAllStepDiagnostics === 'function') signalsIncluded.push('RUNTIME_DIAGNOSTICS');
+    console.log('[autoFix] Signals emitted:', { signalsIncluded, emptyFieldsChars: emptyFieldsSignal.length, shapeDistributionChars: shapeDistributionSignal.length, annotationCount: (wizardState.annotations || []).length });
+    appendLog(`Prompt size: ${promptSizeStats.totalChars} chars (history ${promptSizeStats.historyMessages} msgs / ${promptSizeStats.historyChars} chars + current ${promptSizeStats.promptChars} chars, snapshot budget ${promptSizeStats.snapshotBudget}); signals: ${signalsIncluded.join(',') || '(none)'}`, 'info');
     const result = await client.chat(messages, { maxTokens: 8192 });
 
     wizardState.llmHistory.push(
