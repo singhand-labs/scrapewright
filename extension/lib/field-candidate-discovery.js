@@ -211,9 +211,60 @@
     return scored.slice(0, maxCandidates).map(({ _domOrder, ...rest }) => rest);
   }
 
+  // --- discoverFieldCandidates -------------------------------------------
+  // Top-level: for each empty field name, infer type and find candidates.
+  // Returns { fields: [...], skipped?: string }.
+  // Each field: { fieldName, fieldType, candidates, nameMismatch?, fallbackReason? }
+
+  function discoverFieldCandidates(recordHtml, emptyFields, options) {
+    const opts = options || {};
+    const maxCandidatesPerField = typeof opts.maxCandidatesPerField === 'number'
+      ? opts.maxCandidatesPerField : DEFAULT_MAX_CANDIDATES;
+    const maxLeavesToScan = typeof opts.maxLeavesToScan === 'number'
+      ? opts.maxLeavesToScan : DEFAULT_MAX_LEAVES;
+
+    if (!recordHtml) return { fields: [], skipped: 'no_html' };
+
+    // Count leaves once; skip if too many.
+    let doc;
+    try {
+      doc = new DOMParser().parseFromString('<html><body>' + String(recordHtml) + '</body></html>', 'text/html');
+    } catch (_) {
+      return { fields: [], skipped: 'parse_error' };
+    }
+    if (!doc || !doc.body) return { fields: [], skipped: 'no_body' };
+    const leaves = collectLeaves(doc.body, doc);
+    if (leaves.length > maxLeavesToScan) {
+      return { fields: [], skipped: 'too_many_leaves' };
+    }
+
+    const fieldsOut = [];
+    const fieldList = Array.isArray(emptyFields) ? emptyFields : [];
+    for (const fieldName of fieldList) {
+      const inferred = inferFieldType(fieldName);
+      // Track nameMismatch: text-like as a result of falling through (not
+      // matching any explicit pattern). Distinguish from a hypothetical
+      // future 'text-like' pattern.
+      const lastSegment = (fieldName || '').split('.').pop() || fieldName;
+      const matchedExplicit = TIME_NAME_RE.test(lastSegment)
+        || COUNT_NAME_RE.test(lastSegment)
+        || URL_NAME_RE.test(lastSegment)
+        || ID_NAME_RE.test(lastSegment);
+      const nameMismatch = !matchedExplicit;
+
+      const candidates = findFieldCandidates(recordHtml, inferred, { maxCandidates: maxCandidatesPerField });
+      const entry = { fieldName, fieldType: inferred, candidates };
+      if (nameMismatch) entry.nameMismatch = true;
+      if (candidates.length === 0) entry.fallbackReason = 'no_match';
+      fieldsOut.push(entry);
+    }
+    return { fields: fieldsOut };
+  }
+
   const api = {
     inferFieldType,
     findFieldCandidates,
+    discoverFieldCandidates,
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
