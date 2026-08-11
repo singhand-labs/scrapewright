@@ -311,3 +311,61 @@ test('domHover sets up MutationObserver BEFORE hover dispatch (RC36 observer rac
     'observerSetupPos=' + observerSetupPos + ' hoverDispatchPos=' + hoverDispatchPos
   );
 });
+
+test('domHover auto-discovery filters candidates by position + z-index (RC37 popover mis-detection)', () => {
+  // console.log 2026-08-11 14:34: even with RC36 observer-before-dispatch
+  // fixed, hover enrichment still returned empty fields across all posts.
+  // The hover dispatched (dispatched:true ok:true) and the observer caught
+  // added nodes — but auto-discovery picked up the WRONG nodes: gradient
+  // placeholder divs (`<div style="background-image: linear-gradient(...)">`)
+  // and video-player scaffolding (with a "播放视频" button). Both satisfied
+  // the existing visibility + >=50x50px filter. Real popovers never made it
+  // into htmlSnippet because the reverse walk picks the LATEST added node,
+  // and these noise nodes are appended after the popover.
+  //
+  // The universal distinguishing signal: real popovers (React Portal,
+  // Vue Teleport, Popper, Floating UI, Tippy, any site-specific hovercard
+  // framework) are positioned `absolute` or `fixed` AND carry a numeric
+  // z-index so they overlay the surrounding content. Gradient placeholders,
+  // video scaffolding, and analytics pixels injected during hover handlers
+  // don't have these properties — they're statically positioned in the
+  // normal flow.
+  //
+  // This test pins the filter: the auto-discovery loop MUST call
+  // getComputedStyle and reject candidates whose position is `static`/
+  // `relative`/`sticky` or whose z-index is `auto`. Without this, the
+  // auto-discovery path returns htmlSnippets of non-popover noise and
+  // the LLM has no way to recover.
+  const cs = readSrc('content-script.js');
+  const fnStart = cs.indexOf('async function domHover(');
+  const fnEnd = cs.indexOf('async function domOpenTab(', fnStart);
+  const fnBody = cs.slice(fnStart, fnEnd);
+  assert.ok(fnStart > -1 && fnEnd > fnStart, 'domHover must exist');
+
+  // Slice just the auto-discovery loop region (after observer setup, before
+  // the dismiss block). This isolates the filter from any unrelated
+  // getComputedStyle calls elsewhere in the function.
+  const autoDiscoverStart = fnBody.indexOf('Path (b): auto-discovery');
+  const autoDiscoverEnd = fnBody.indexOf('observer.disconnect()', autoDiscoverStart);
+  assert.ok(autoDiscoverStart > -1, 'auto-discovery comment block must exist');
+  assert.ok(autoDiscoverEnd > autoDiscoverStart, 'auto-discovery loop must end before observer.disconnect');
+  const loopBody = fnBody.slice(autoDiscoverStart, autoDiscoverEnd);
+
+  // Must call getComputedStyle during auto-discovery.
+  assert.match(loopBody, /getComputedStyle/,
+    'auto-discovery must call getComputedStyle to check stacking signals');
+
+  // Must reject candidates whose position is NOT absolute/fixed.
+  // Accept either an allow-list check (position === 'absolute' || 'fixed')
+  // or a deny-list check (!== 'static' etc.). Either pattern satisfies the
+  // universal requirement. We assert by checking the position property is
+  // read at all.
+  assert.match(loopBody, /\.position\b/,
+    'auto-discovery must read computed style .position to filter by absolute/fixed');
+
+  // Must reject candidates whose z-index is `auto` (the default for elements
+  // that don't create a stacking context). Real popovers have a numeric
+  // z-index so they overlay page content.
+  assert.match(loopBody, /\.zIndex\b/,
+    'auto-discovery must read computed style .zIndex to filter out non-overlaying elements');
+});
