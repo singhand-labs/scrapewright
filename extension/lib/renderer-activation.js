@@ -114,16 +114,20 @@
   // orchestrator's timeout, surfacing as "Detached while handling command").
   // Wrap each CDP step in a Promise.race with a hard cap so any hang unblocks
   // within CDP_STEP_TIMEOUT_MS regardless of cause. Generic defense — works
-  // for any Chrome version / tab state.
+  // for any Chrome version / tab state. For best-effort paths (e.g. hover
+  // dismiss), pass a shorter ms via the second arg to avoid eating the
+  // per-iteration budget on cleanup that may legitimately never fire on a
+  // re-throttled tab.
   const CDP_STEP_TIMEOUT_MS = 2000;
-  function withTimeout(promiseFactory, stepLabel) {
+  function withTimeout(promiseFactory, stepLabel, ms) {
+    const cap = (typeof ms === 'number' && ms > 0) ? ms : CDP_STEP_TIMEOUT_MS;
     return new Promise(function (resolve, reject) {
       let settled = false;
       const timer = setTimeout(function () {
         if (settled) return;
         settled = true;
-        reject(new Error(stepLabel + ' timeout after ' + CDP_STEP_TIMEOUT_MS + 'ms'));
-      }, CDP_STEP_TIMEOUT_MS);
+        reject(new Error(stepLabel + ' timeout after ' + cap + 'ms'));
+      }, cap);
       promiseFactory().then(
         function (v) { if (settled) return; settled = true; clearTimeout(timer); resolve(v); },
         function (e) { if (settled) return; settled = true; clearTimeout(timer); reject(e); }
@@ -396,7 +400,7 @@
             if (err) reject(err); else resolve();
           });
         });
-      }, 'hoverDismiss.mouseMoved');
+      }, 'hoverDismiss.mouseMoved', 500);
 
       result.dispatched = true;
       result.ok = true;
@@ -408,7 +412,7 @@
           return new Promise(function (resolve) {
             chrome.debugger.detach(target, function () { resolve(); });
           });
-        }, 'hoverDismiss.detach');
+        }, 'hoverDismiss.detach', 500);
         result.detached = true;
       } catch (e) {
         result.detached = false;
