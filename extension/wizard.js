@@ -3007,9 +3007,19 @@ Rules (READ ALL):
             // NOT from the output records themselves — those are flat LLM-
             // extracted values without source HTML. See wizard-utils.js
             // getFirstRecordHtmlFromExecution for the rationale.
-            const recordHtml2 = (typeof getFirstRecordHtmlFromExecution === 'function')
+            // Fallback (RC34, console.log 2026-08-11): findUpstreamExtractionStepId
+            // may return a $list-using step that doesn't capture firstContainerHtml
+            // (the regex matches $list). When that happens, scan ALL events for any
+            // step's firstContainerHtml — discovery just needs SOME container
+            // snapshot, regardless of provenance.
+            let recordHtml2 = (typeof getFirstRecordHtmlFromExecution === 'function')
               ? getFirstRecordHtmlFromExecution(wizardState.lastExecutionEvents || [], extractionStepId2)
               : '';
+            let recordHtmlSource2 = recordHtml2 ? 'chosen-step' : 'none';
+            if (!recordHtml2 && typeof getFirstRecordHtmlFromAnyStep === 'function') {
+              recordHtml2 = getFirstRecordHtmlFromAnyStep(wizardState.lastExecutionEvents || []);
+              if (recordHtml2) recordHtmlSource2 = 'any-step-fallback';
+            }
             const DomCleanerRef2 = (typeof window !== 'undefined' && window.DomCleaner)
               || (typeof global !== 'undefined' && global.DomCleaner);
             if (recordHtml2 && DomCleanerRef2 && DomCleanerRef2.normalizeRecordStructure) {
@@ -3021,6 +3031,27 @@ Rules (READ ALL):
                 ? formatFieldCandidatesBlock(discoveryResult2)
                 : '';
             }
+            // RC34 diagnostic: trace which condition fired (or all of them)
+            // so future investigations into "fieldCandidatesChars: 0" don't
+            // need to re-instrument. Mirrors the failure-fix branch.
+            try {
+              const _evts = wizardState.lastExecutionEvents || [];
+              const _hasAnyHtml = (typeof getFirstRecordHtmlFromAnyStep === 'function')
+                ? !!getFirstRecordHtmlFromAnyStep(_evts)
+                : null;
+              debugLogger.log('info', 'wizard', 'fieldCandidates gate', {
+                branch: isFailureFix ? 'failure-fix' : 'user-feedback',
+                attemptNum,
+                chronicEmptyCount: chronicEmpty2.length,
+                chronicEmptyPaths: chronicEmpty2.slice(0, 5).map(f => f.path),
+                hasAnnotations,
+                extractionStepId: extractionStepId2,
+                recordHtmlChars: recordHtml2 ? recordHtml2.length : 0,
+                recordHtmlSource: recordHtmlSource2,
+                anyStepHasHtml: _hasAnyHtml,
+                signalChars: fieldCandidatesSignal.length
+              });
+            } catch (_) { /* diagnostic must never break the prompt */ }
           }
         }
       } catch (_) { /* defensive: discovery must never break the prompt */ }
@@ -3156,9 +3187,19 @@ ${RETURN_FORMAT}`;
             // NOT from the output records themselves — those are flat LLM-
             // extracted values without source HTML. See wizard-utils.js
             // getFirstRecordHtmlFromExecution for the rationale.
-            const recordHtml2 = (typeof getFirstRecordHtmlFromExecution === 'function')
+            // Fallback (RC34, console.log 2026-08-11): findUpstreamExtractionStepId
+            // may return a $list-using step that doesn't capture firstContainerHtml
+            // (the regex matches $list). When that happens, scan ALL events for any
+            // step's firstContainerHtml — discovery just needs SOME container
+            // snapshot, regardless of provenance.
+            let recordHtml2 = (typeof getFirstRecordHtmlFromExecution === 'function')
               ? getFirstRecordHtmlFromExecution(wizardState.lastExecutionEvents || [], extractionStepId2)
               : '';
+            let recordHtmlSource2 = recordHtml2 ? 'chosen-step' : 'none';
+            if (!recordHtml2 && typeof getFirstRecordHtmlFromAnyStep === 'function') {
+              recordHtml2 = getFirstRecordHtmlFromAnyStep(wizardState.lastExecutionEvents || []);
+              if (recordHtml2) recordHtmlSource2 = 'any-step-fallback';
+            }
             const DomCleanerRef2 = (typeof window !== 'undefined' && window.DomCleaner)
               || (typeof global !== 'undefined' && global.DomCleaner);
             if (recordHtml2 && DomCleanerRef2 && DomCleanerRef2.normalizeRecordStructure) {
@@ -3170,6 +3211,27 @@ ${RETURN_FORMAT}`;
                 ? formatFieldCandidatesBlock(discoveryResult2)
                 : '';
             }
+            // RC34 diagnostic: trace which condition fired (or all of them)
+            // so future investigations into "fieldCandidatesChars: 0" don't
+            // need to re-instrument. Mirrors the failure-fix branch.
+            try {
+              const _evts = wizardState.lastExecutionEvents || [];
+              const _hasAnyHtml = (typeof getFirstRecordHtmlFromAnyStep === 'function')
+                ? !!getFirstRecordHtmlFromAnyStep(_evts)
+                : null;
+              debugLogger.log('info', 'wizard', 'fieldCandidates gate', {
+                branch: isFailureFix ? 'failure-fix' : 'user-feedback',
+                attemptNum,
+                chronicEmptyCount: chronicEmpty2.length,
+                chronicEmptyPaths: chronicEmpty2.slice(0, 5).map(f => f.path),
+                hasAnnotations,
+                extractionStepId: extractionStepId2,
+                recordHtmlChars: recordHtml2 ? recordHtml2.length : 0,
+                recordHtmlSource: recordHtmlSource2,
+                anyStepHasHtml: _hasAnyHtml,
+                signalChars: fieldCandidatesSignal.length
+              });
+            } catch (_) { /* diagnostic must never break the prompt */ }
           }
         }
       } catch (_) { /* defensive: discovery must never break the prompt */ }
