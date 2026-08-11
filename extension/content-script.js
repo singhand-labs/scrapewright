@@ -176,10 +176,26 @@
         }
         return { field, subSelector, attr, matchCount, sampleTexts, sampleHrefs };
       });
+      // Mirror lib/list-extract-ops.js RC13: capture up to 2000 chars of the
+      // first container's outerHTML. WITHOUT this, field-candidate discovery
+      // silently suppresses because getFirstRecordHtmlFromAnyStep requires
+      // firstContainerHtml — autoFix then iterates blind to where in the DOM
+      // neighborhood of a record the missing fields actually live. This inline
+      // fallback fires on Chrome MV3 injection glitches; the same drift hit
+      // RC8 (extractListMultiRecords missing) and RC19 (ScrollOps missing).
+      let firstContainerHtml = null;
+      if (containerArr.length > 0) {
+        const c0 = containerArr[0];
+        if (c0 && typeof c0.outerHTML === 'string') {
+          const collapsed = c0.outerHTML.replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, ' ');
+          firstContainerHtml = collapsed.length > 2000 ? collapsed.slice(0, 2000) + '…[truncated]' : collapsed;
+        }
+      }
       return {
         api: 'extractList',
         containerSelector: containerSelector || null,
         containerMatches: containerArr.length,
+        firstContainerHtml,
         perField
       };
     }

@@ -18,6 +18,8 @@ const path = require('node:path');
 const MODULE_PATH = path.join(__dirname, '..', 'lib', 'list-extract-ops.js');
 const CONTENT_SCRIPT_PATH = path.join(__dirname, '..', 'content-script.js');
 
+const libModule = require(MODULE_PATH);
+
 function extractModuleExports(source) {
   // Match: const api = { ... }; (the public api object near the end)
   const m = source.match(/const\s+api\s*=\s*\{([\s\S]*?)\};/);
@@ -157,6 +159,99 @@ describe('inline ListExtractOps fallback drift guard', () => {
     assert.ok(
       /outerHTML/.test(slice) && /innerHTML/.test(slice),
       'content-script.js: inline fallback DOM_PROPERTY_READS must include outerHTML and innerHTML.'
+    );
+  });
+
+  it('lib computeExtractListDiagnostics emits firstContainerHtml (RC13 contract)', () => {
+    // Pin the lib contract: with at least one container, the returned
+    // diagnostic object MUST carry firstContainerHtml. This is the field
+    // getFirstRecordHtmlFromAnyStep reads to produce the FIELD_CANDIDATES
+    // signal. Without it, autoFix iterates blind to where in the record
+    // DOM the missing fields live (console.log 2026-08-11 regression).
+    const { JSDOM } = require('jsdom');
+    const dom = new JSDOM('<!DOCTYPE html><div id="c1"><span class="t">hello</span></div>');
+    const c1 = dom.window.document.getElementById('c1');
+    const result = libModule.computeExtractListDiagnostics(
+      [c1],
+      { text: '.t' },
+      '#c1'
+    );
+    assert.ok(
+      typeof result.firstContainerHtml === 'string' && result.firstContainerHtml.length > 0,
+      'lib computeExtractListDiagnostics must return non-empty firstContainerHtml when containers non-empty'
+    );
+  });
+
+  it('inline fallback computeExtractListDiagnostics body mentions firstContainerHtml (RC13 mirror)', () => {
+    // Source-text audit: the inline fallback's computeExtractListDiagnostics
+    // function body MUST reference firstContainerHtml. This guards against
+    // the silent drift where lib gains a field (RC13 added firstContainerHtml)
+    // but the inline fallback doesn't mirror it — when MV3 injection glitch
+    // fires the fallback, the field goes missing and FIELD_CANDIDATES signal
+    // silently suppresses (console.log 2026-08-11).
+    //
+    // We slice the inline function body using the same comment-aware brace
+    // walker the existing tests use, then assert the literal appears.
+    const csSrc = fs.readFileSync(CONTENT_SCRIPT_PATH, 'utf8');
+    const fnName = 'computeExtractListDiagnostics';
+    // Find the inline definition INSIDE createInlineListExtractOps (not the
+    // lib's). The inline is at top-level inside the IIFE; pick the second
+    // occurrence (first is the call site in domExtractList).
+    const fnDefStart = csSrc.indexOf(`function ${fnName}(`);
+    assert.ok(fnDefStart !== -1, `content-script.js: inline ${fnName} not defined`);
+
+    // Brace-walk to the end of the function body.
+    let depth = 0;
+    let inString = null;
+    let bodyStart = -1;
+    let bodyEnd = -1;
+    for (let i = fnDefStart; i < csSrc.length; i++) {
+      const ch = csSrc[i];
+      const next = csSrc[i + 1];
+      if (inString) {
+        if (ch === '\\') { i++; continue; }
+        if (ch === inString) inString = null;
+        continue;
+      }
+      if (ch === '/' && next === '/') {
+        while (i < csSrc.length && csSrc[i] !== '\n') i++;
+        continue;
+      }
+      if (ch === '/' && next === '*') {
+        i += 2;
+        while (i < csSrc.length && !(csSrc[i] === '*' && csSrc[i + 1] === '/')) i++;
+        i++;
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === '`') { inString = ch; continue; }
+      if (ch === '{') {
+        if (depth === 0) bodyStart = i + 1;
+        depth++;
+      } else if (ch === '}') {
+        depth--;
+        if (depth === 0) { bodyEnd = i; break; }
+      }
+    }
+    assert.ok(bodyEnd !== -1, `content-script.js: inline ${fnName} body never closes`);
+    const body = csSrc.slice(bodyStart, bodyEnd);
+    assert.ok(
+      /firstContainerHtml/.test(body),
+      'content-script.js: inline computeExtractListDiagnostics must reference firstContainerHtml. ' +
+      'lib/list-extract-ops.js RC13 added this field; the inline fallback must mirror the capture ' +
+      'so FIELD_CANDIDATES signal survives MV3 injection glitches.'
+    );
+    // Also assert the field is in the return object (not just referenced in a
+    // comment). Look for `firstContainerHtml,` or `firstContainerHtml:` in the
+    // last `return {` block within the body.
+    let lastRet = -1;
+    for (let i = 0; i < body.length - 8; i++) {
+      if (body[i] === 'r' && body.slice(i, i + 8) === 'return {') lastRet = i;
+    }
+    assert.ok(lastRet !== -1, `content-script.js: inline ${fnName} has no return object`);
+    const retSlice = body.slice(lastRet);
+    assert.ok(
+      /firstContainerHtml/.test(retSlice),
+      'content-script.js: inline computeExtractListDiagnostics return object must include firstContainerHtml'
     );
   });
 });
