@@ -1713,40 +1713,90 @@
           break;
         }
       }
-      // Path (b): auto-discovery. Walk addedNodes in REVERSE so the most
-      // recently added candidate wins (popovers are usually the last node a
-      // site injects during a hover handler).
-      for (var k = addedNodes.length - 1; k >= 0; k--) {
+      // Path (b): auto-discovery. Score all added nodes by overlay signals
+      // and pick the highest-scoring candidate. See RC38 for the architectural
+      // rationale — RC34-RC37 each used a hard filter (visibility+size,
+      // position-only, position+z-index) and each silently rejected real
+      // hovercards in some overlay-framework configuration.
+      //
+      // Scoring signals (strongest first):
+      //   1. position absolute/fixed (overlay positioning — primary signal,
+      //      hard requirement UNLESS the candidate is very close to cursor)
+      //   2. numeric z-index (creates stacking context; common but not
+      //      universal — many frameworks inherit z-index from a parent)
+      //   3. proximity to cursor (universal — hovercards always appear
+      //      AT/NEAR the anchor; gradient placeholders and video
+      //      scaffolding in post body are far from cursor)
+      //   4. area (larger wins on full ties)
+      //
+      // Hard reject: tiny additions (<50x50) and static-positioned additions
+      // far from cursor (>300px). These cannot be hovercards.
+      var bestCandidate = null;       // { node, posAbsolute, z, dist, area }
+      for (var k = 0; k < addedNodes.length; k++) {
         var node = addedNodes[k];
         if (!node || node.nodeType !== 1) continue; // elements only
         if (!isElementVisible(node)) continue;
         var nr = node.getBoundingClientRect();
-        // Reject tiny additions (analytics pixels, 1px spacers, etc.).
-        // Popovers are typically >100px on at least one axis; 50 is a safe floor.
         if (nr.width < 50 || nr.height < 50) continue;
-        // Stacking signal filter (RC37): real popovers (React Portal, Vue
-        // Teleport, Popper, Floating UI, Tippy, any site-specific hovercard)
-        // are positioned absolute/fixed AND carry a numeric z-index so they
-        // overlay surrounding content. Without this filter, the reverse walk
-        // picks up gradient placeholders, video-player scaffolding, and other
-        // noise injected during the hover handler — those nodes satisfy
-        // visibility+size but are statically positioned in the normal flow.
-        // getComputedStyle is the universal signal; works for every overlay
-        // framework and every site.
         var nodeWin = node.ownerDocument && node.ownerDocument.defaultView || window;
         var nodeStyle;
         try { nodeStyle = nodeWin.getComputedStyle(node); }
         catch (e) { nodeStyle = null; }
         if (!nodeStyle) continue;
-        if (nodeStyle.position !== 'absolute' && nodeStyle.position !== 'fixed') continue;
-        var nz = nodeStyle.zIndex;
-        if (nz === 'auto' || nz === '') continue;
-        var nzi = parseInt(nz, 10);
-        if (!isFinite(nzi) || nzi <= 0) continue;
-        htmlSnippet = node.outerHTML;
+        var posAbsolute = (nodeStyle.position === 'absolute' || nodeStyle.position === 'fixed');
+        var nz = 0;
+        var zRaw = nodeStyle.zIndex;
+        if (zRaw !== 'auto' && zRaw !== '') {
+          var zi = parseInt(zRaw, 10);
+          if (isFinite(zi) && zi > 0) nz = zi;
+        }
+        var ndx = (nr.left + nr.width / 2) - x;
+        var ndy = (nr.top + nr.height / 2) - y;
+        var ndist = Math.sqrt(ndx * ndx + ndy * ndy);
+        var narea = nr.width * nr.height;
+        // Hard filter: positioned overlays always pass; static-positioned
+        // candidates only pass if very close to cursor (likely a hovercard
+        // rendered without explicit positioning).
+        if (!posAbsolute && ndist > 300) continue;
+        var candidate = { node: node, posAbsolute: posAbsolute, z: nz, dist: ndist, area: narea };
+        if (!bestCandidate) {
+          bestCandidate = candidate;
+          continue;
+        }
+        // Score comparison: positioned beats non-positioned; higher z wins;
+        // closer to cursor wins; larger area wins.
+        var a = candidate, b = bestCandidate;
+        var aWins = false;
+        if (a.posAbsolute !== b.posAbsolute) aWins = a.posAbsolute;
+        else if (a.z !== b.z) aWins = (a.z > b.z);
+        else if (a.dist !== b.dist) aWins = (a.dist < b.dist);
+        else aWins = (a.area > b.area);
+        if (aWins) bestCandidate = candidate;
+      }
+      if (bestCandidate) {
+        htmlSnippet = bestCandidate.node.outerHTML;
         matchedSel = '[auto-discovered popover]';
         autoDiscovered = true;
-        break;
+        notifyBackgroundDiagnostic('hover_auto_discover', {
+          selector: sel,
+          addedNodes: addedNodes.length,
+          picked: {
+            tag: bestCandidate.node.tagName,
+            posAbsolute: bestCandidate.posAbsolute,
+            z: bestCandidate.z,
+            dist: Math.round(bestCandidate.dist),
+            area: Math.round(bestCandidate.area)
+          }
+        });
+      } else if (addedNodes.length > 0) {
+        // Diagnostic: observer caught additions but none passed even the
+        // looser scoring filter. Surfaces the failure mode for debugging.
+        notifyBackgroundDiagnostic('hover_auto_discover', {
+          selector: sel,
+          addedNodes: addedNodes.length,
+          picked: null,
+          reason: 'no candidate passed visibility+size+positioning filter'
+        });
       }
       if (htmlSnippet) break;
       await new Promise(function (r) { setTimeout(r, 250); });
