@@ -1590,10 +1590,25 @@
     opts = opts || {};
     var timeoutMs = (typeof opts.timeoutMs === 'number' && opts.timeoutMs > 0) ? opts.timeoutMs : 3000;
     var dismiss = (typeof opts.dismiss === 'boolean') ? opts.dismiss : true;
+    var index = (typeof opts.index === 'number' && Number.isFinite(opts.index)) ? Math.floor(opts.index) : null;
 
-    var found = querySelectorDeep(sel);
-    if (!found) throw new Error('ELEMENT_NOT_FOUND: ' + sel);
-    var anchor = found.element;
+    // Multi-record addressing: when opts.index is set, enumerate ALL matches
+    // and pick the Nth. This is the correct way to hover "the i-th anchor in
+    // a list" — `:nth-of-type(N)` is a CSS TRAP (matches the Nth sibling OF
+    // THE SAME TAG, not the Nth compound-selector match) and silently picks
+    // the wrong anchor or none. Same addressing semantics as `$list()[N]`.
+    var anchor = null;
+    if (index !== null) {
+      if (index < 0) throw new Error('INDEX_OUT_OF_RANGE: $hover opts.index must be >= 0, got ' + index);
+      var matches = querySelectorAllDeep(sel);
+      if (matches.length === 0) throw new Error('ELEMENT_NOT_FOUND: ' + sel);
+      if (index >= matches.length) throw new Error('INDEX_OUT_OF_RANGE: $hover opts.index=' + index + ' but selector matched only ' + matches.length + ' element(s)');
+      anchor = matches[index];
+    } else {
+      var found = querySelectorDeep(sel);
+      if (!found) throw new Error('ELEMENT_NOT_FOUND: ' + sel);
+      anchor = found.element;
+    }
 
     // Scroll anchor into view so the bounding rect has viewport coordinates
     // CDP can target. Without this, an anchor below the fold has negative/

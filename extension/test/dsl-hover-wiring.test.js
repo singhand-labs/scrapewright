@@ -200,3 +200,55 @@ test('$hover primitive name is consistent across all 4 files', () => {
   assert.match(raSrc, /async function dispatchTrustedHover\b/);
   assert.match(raSrc, /async function dispatchTrustedHoverDismiss\b/);
 });
+
+test('domHover supports opts.index for multi-record addressing (RC34)', () => {
+  // console.log 2026-08-11: LLM tried to hover the Nth anchor in a list using
+  // `:nth-of-type(${i+1})` — the CSS TRAP already documented at line 50 of
+  // SCRIPT_DSL_GUIDE. The trap silently matches the Nth sibling OF THE SAME
+  // TAG, not the Nth compound-selector match, so iter>0 picks the wrong
+  // anchor (or none). The fix: $hover accepts opts.index and uses
+  // querySelectorAllDeep to pick the Nth match — same addressing semantics
+  // as $list()[N] but without the round-trip.
+  const cs = readSrc('content-script.js');
+  const fnStart = cs.indexOf('async function domHover(');
+  const fnEnd = cs.indexOf('async function domOpenTab(', fnStart);
+  const fnBody = cs.slice(fnStart, fnEnd);
+  assert.ok(fnStart > -1 && fnEnd > fnStart, 'domHover must exist');
+  // Must read opts.index
+  assert.match(fnBody, /opts\.index/, 'domHover must read opts.index');
+  // When opts.index is set, must use querySelectorAllDeep (not querySelectorDeep)
+  // to enumerate all matches and pick the Nth.
+  assert.match(fnBody, /querySelectorAllDeep/, 'domHover must use querySelectorAllDeep for opts.index');
+  // Must throw a clear error when index is out of range (so autoFix can react),
+  // not silently fall back to the first match.
+  assert.match(fnBody, /INDEX_OUT_OF_RANGE|out of range/i,
+    'domHover must surface an out-of-range index error');
+});
+
+test('HOVER ENRICHMENT guide teaches opts.index (NOT :nth-of-type) for multi-record hover', () => {
+  // The pre-fix example used `li.result-item:nth-of-type(1) a.profile-link`,
+  // which is the exact CSS TRAP that caused the production failure. The guide
+  // must now teach opts.index for multi-record addressing and explicitly
+  // cross-reference the :nth-of-type trap.
+  const wu = readSrc('lib/wizard-utils.js');
+  // Slice from the SECTION HEADER (not the inline "See HOVER ENRICHMENT below"
+  // mention in the signature line). The header is the long-form variant.
+  const sectionStart = wu.indexOf('HOVER ENRICHMENT (hovercard');
+  const sectionEnd = wu.indexOf('ROBUSTNESS RULES', sectionStart);
+  const section = wu.slice(sectionStart, sectionEnd);
+  assert.ok(sectionStart > -1 && sectionEnd > sectionStart, 'HOVER ENRICHMENT section must exist');
+  // Must document opts.index as the multi-record addressing mechanism.
+  assert.match(section, /opts\.index|index:\s*\d/i,
+    'HOVER ENRICHMENT must document opts.index for multi-record addressing');
+  // Must NOT demonstrate :nth-of-type(N) as the addressing mechanism in code
+  // samples. The CSS TRAP anti-pattern block at the top of the file (outside
+  // this slice) legitimately shows the WRONG pattern for teaching — that's
+  // fine. Inside HOVER ENRICHMENT, only WARNING references are allowed
+  // (lines that contain 'trap', 'wrong', 'do not', 'never', etc.).
+  const codeLines = section.split('\n').filter(l => /:nth-of-type\(\s*\\?\$?\{?/i.test(l) || /:nth-of-type\(\d+/i.test(l));
+  for (const line of codeLines) {
+    const isWarning = /trap|wrong|do not|never|anti-pattern|forbidden/i.test(line);
+    assert.ok(isWarning,
+      `HOVER ENRICHMENT must not demonstrate :nth-of-type in code; found: ${line.trim()}`);
+  }
+});
