@@ -252,3 +252,29 @@ test('HOVER ENRICHMENT guide teaches opts.index (NOT :nth-of-type) for multi-rec
       `HOVER ENRICHMENT must not demonstrate :nth-of-type in code; found: ${line.trim()}`);
   }
 });
+
+test('domHover auto-discovers portal popovers when popoverSel fails (RC34 followup)', () => {
+  // console.log 2026-08-11: LLM-provided popoverSel 'div[data-hovercard],
+  // div[role=dialog]' never matched the site's actual portal container, so
+  // htmlSnippet stayed null on every iteration even though the hover did fire.
+  // The fix: when popoverSel doesn't match within timeout, fall back to
+  // auto-discovery — observe DOM mutations during the hover window, and if any
+  // new visible element of non-trivial size appears, treat it as the popover.
+  // Universal: works for React Portal / Vue Teleport / Popper / Floating UI —
+  // any popover implementation that adds a new element to the DOM.
+  const cs = readSrc('content-script.js');
+  const fnStart = cs.indexOf('async function domHover(');
+  const fnEnd = cs.indexOf('async function domOpenTab(', fnStart);
+  const fnBody = cs.slice(fnStart, fnEnd);
+  assert.ok(fnStart > -1 && fnEnd > fnStart, 'domHover must exist');
+  // Must use MutationObserver to track added nodes during the hover window.
+  assert.match(fnBody, /MutationObserver/, 'domHover must use MutationObserver for auto-discovery');
+  // Must observe document.body subtree (portals render at body level).
+  assert.match(fnBody, /subtree:\s*true/, 'observer must track subtree');
+  // Must filter out tiny additions (analytics pixels, etc.) by size.
+  assert.match(fnBody, /getBoundingClientRect/,
+    'auto-discovery must size-filter candidates to avoid analytics noise');
+  // Result must surface autoDiscovered flag so the LLM knows we fell back.
+  assert.match(fnBody, /autoDiscovered/,
+    'domHover result must surface autoDiscovered flag');
+});
