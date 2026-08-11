@@ -278,3 +278,36 @@ test('domHover auto-discovers portal popovers when popoverSel fails (RC34 follow
   assert.match(fnBody, /autoDiscovered/,
     'domHover result must surface autoDiscovered flag');
 });
+
+test('domHover sets up MutationObserver BEFORE hover dispatch (RC36 observer race)', () => {
+  // console.log 2026-08-11 13:14+: when the LLM picks the wrong popoverSel
+  // (e.g. a link-preview tooltip selector instead of a hovercard container),
+  // path (a) explicit-match misses. Path (b) auto-discovery MUST catch the
+  // popover via MutationObserver — but only if the observer was set up
+  // BEFORE the page's hover handler fired. If observer setup happens AFTER
+  // the hover dispatch await, the page handler has already added the popover
+  // by the time .observe() starts, and observer never sees the addition
+  // (MutationObserver doesn't fire for past mutations).
+  //
+  // Production symptom: htmlSnippet:null across all iterations even though
+  // hover_request logs dispatched:true/ok:true. The hovercard WAS rendered,
+  // we just missed it.
+  //
+  // This test pins the order: `new MutationObserver` must appear BEFORE
+  // the TRUSTED_HOVER_REQUEST sendMessage in the function body.
+  const cs = readSrc('content-script.js');
+  const fnStart = cs.indexOf('async function domHover(');
+  const fnEnd = cs.indexOf('async function domOpenTab(', fnStart);
+  const fnBody = cs.slice(fnStart, fnEnd);
+  assert.ok(fnStart > -1 && fnEnd > fnStart, 'domHover must exist');
+
+  const observerSetupPos = fnBody.indexOf('new MutationObserver');
+  const hoverDispatchPos = fnBody.indexOf('TRUSTED_HOVER_REQUEST');
+  assert.ok(observerSetupPos > -1, 'domHover must create a MutationObserver');
+  assert.ok(hoverDispatchPos > -1, 'domHover must dispatch TRUSTED_HOVER_REQUEST');
+  assert.ok(
+    observerSetupPos < hoverDispatchPos,
+    'MutationObserver must be set up BEFORE hover dispatch (currently observer starts after dispatch returns, missing popovers added during the CDP roundtrip). ' +
+    'observerSetupPos=' + observerSetupPos + ' hoverDispatchPos=' + hoverDispatchPos
+  );
+});

@@ -1641,6 +1641,43 @@
     var x = (rect.width > 0) ? Math.round(rect.left + rect.width / 2) : 400;
     var y = (rect.height > 0) ? Math.round(rect.top + rect.height / 2) : 400;
 
+    // Popover detection. Two paths:
+    //   (a) If popoverSel was provided, poll for it explicitly (preferred —
+    //       the LLM named the container so trust it).
+    //   (b) Auto-discovery fallback: observe DOM mutations during the hover
+    //       window and pick up ANY new visible element of non-trivial size.
+    //       React Portal / Vue Teleport / Popper / Floating UI all render
+    //       popovers as new body-level elements, so a subtree MutationObserver
+    //       on document.body catches them. Size-filter rejects analytics
+    //       pixels, hidden scaffolding, etc. (RC34 followup: console.log
+    //       2026-08-11 showed every iteration returning htmlSnippet:null
+    //       because the LLM's popoverSel guess never matched the actual
+    //       portal markup.)
+    // RC36 (console.log 2026-08-11 13:14+): observer MUST be set up BEFORE
+    // the hover dispatch. The page's hover handler can fire synchronously
+    // during the CDP roundtrip and add the popover before .observe() is
+    // called. MutationObserver doesn't fire for past mutations, so a
+    // late-starting observer silently misses the popover.
+    var htmlSnippet = null;
+    var matchedSel = null;
+    var autoDiscovered = false;
+
+    var addedNodes = [];
+    var observer = null;
+    try {
+      if (typeof MutationObserver !== 'undefined') {
+        observer = new MutationObserver(function (records) {
+          for (var i = 0; i < records.length; i++) {
+            var arr = records[i].addedNodes;
+            for (var j = 0; j < arr.length; j++) addedNodes.push(arr[j]);
+          }
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+      }
+    } catch (e) {
+      sendDebugLog('warn', 'content-script', 'MutationObserver setup failed; auto-discovery disabled', { error: e && e.message });
+    }
+
     var hoverResp = null;
     var hoverError = null;
     try {
@@ -1664,38 +1701,6 @@
       ok: !!(hoverResp && hoverResp.ok),
       reason: hoverResp ? hoverResp.reason : null
     });
-
-    // Popover detection. Two paths:
-    //   (a) If popoverSel was provided, poll for it explicitly (preferred —
-    //       the LLM named the container so trust it).
-    //   (b) Auto-discovery fallback: observe DOM mutations during the hover
-    //       window and pick up ANY new visible element of non-trivial size.
-    //       React Portal / Vue Teleport / Popper / Floating UI all render
-    //       popovers as new body-level elements, so a subtree MutationObserver
-    //       on document.body catches them. Size-filter rejects analytics
-    //       pixels, hidden scaffolding, etc. (RC34 followup: console.log
-    //       2026-08-11 showed every iteration returning htmlSnippet:null
-    //       because the LLM's popoverSel guess never matched the actual
-    //       portal markup.)
-    var htmlSnippet = null;
-    var matchedSel = null;
-    var autoDiscovered = false;
-
-    var addedNodes = [];
-    var observer = null;
-    try {
-      if (typeof MutationObserver !== 'undefined') {
-        observer = new MutationObserver(function (records) {
-          for (var i = 0; i < records.length; i++) {
-            var arr = records[i].addedNodes;
-            for (var j = 0; j < arr.length; j++) addedNodes.push(arr[j]);
-          }
-        });
-        observer.observe(document.body, { childList: true, subtree: true });
-      }
-    } catch (e) {
-      sendDebugLog('warn', 'content-script', 'MutationObserver setup failed; auto-discovery disabled', { error: e && e.message });
-    }
 
     var deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
