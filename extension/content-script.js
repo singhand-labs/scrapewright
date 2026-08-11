@@ -1649,22 +1649,70 @@
       reason: hoverResp ? hoverResp.reason : null
     });
 
-    // Popover detection — only when popoverSel was provided. Without a
-    // selector we can't know what to wait for, so we return immediately and
-    // let the LLM re-query the DOM in its script.
+    // Popover detection. Two paths:
+    //   (a) If popoverSel was provided, poll for it explicitly (preferred —
+    //       the LLM named the container so trust it).
+    //   (b) Auto-discovery fallback: observe DOM mutations during the hover
+    //       window and pick up ANY new visible element of non-trivial size.
+    //       React Portal / Vue Teleport / Popper / Floating UI all render
+    //       popovers as new body-level elements, so a subtree MutationObserver
+    //       on document.body catches them. Size-filter rejects analytics
+    //       pixels, hidden scaffolding, etc. (RC34 followup: console.log
+    //       2026-08-11 showed every iteration returning htmlSnippet:null
+    //       because the LLM's popoverSel guess never matched the actual
+    //       portal markup.)
     var htmlSnippet = null;
     var matchedSel = null;
-    if (popoverSel) {
-      var deadline = Date.now() + timeoutMs;
-      while (Date.now() < deadline) {
+    var autoDiscovered = false;
+
+    var addedNodes = [];
+    var observer = null;
+    try {
+      if (typeof MutationObserver !== 'undefined') {
+        observer = new MutationObserver(function (records) {
+          for (var i = 0; i < records.length; i++) {
+            var arr = records[i].addedNodes;
+            for (var j = 0; j < arr.length; j++) addedNodes.push(arr[j]);
+          }
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+      }
+    } catch (e) {
+      sendDebugLog('warn', 'content-script', 'MutationObserver setup failed; auto-discovery disabled', { error: e && e.message });
+    }
+
+    var deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      // Path (a): explicit selector match.
+      if (popoverSel) {
         var popFound = querySelectorDeep(popoverSel);
         if (popFound && isElementVisible(popFound.element)) {
           htmlSnippet = popFound.element.outerHTML;
           matchedSel = popoverSel;
           break;
         }
-        await new Promise(function (r) { setTimeout(r, 250); });
       }
+      // Path (b): auto-discovery. Walk addedNodes in REVERSE so the most
+      // recently added candidate wins (popovers are usually the last node a
+      // site injects during a hover handler).
+      for (var k = addedNodes.length - 1; k >= 0; k--) {
+        var node = addedNodes[k];
+        if (!node || node.nodeType !== 1) continue; // elements only
+        if (!isElementVisible(node)) continue;
+        var nr = node.getBoundingClientRect();
+        // Reject tiny additions (analytics pixels, 1px spacers, etc.).
+        // Popovers are typically >100px on at least one axis; 50 is a safe floor.
+        if (nr.width < 50 || nr.height < 50) continue;
+        htmlSnippet = node.outerHTML;
+        matchedSel = '[auto-discovered popover]';
+        autoDiscovered = true;
+        break;
+      }
+      if (htmlSnippet) break;
+      await new Promise(function (r) { setTimeout(r, 250); });
+    }
+    if (observer) {
+      try { observer.disconnect(); } catch {}
     }
 
     // Dismiss: move the trusted cursor to (1,1) so hover handlers fire
@@ -1686,16 +1734,21 @@
       hovered: !!(hoverResp && hoverResp.ok),
       htmlSnippet: htmlSnippet,
       popoverSelector: matchedSel,
+      autoDiscovered: autoDiscovered,
       hoverDispatched: !!(hoverResp && hoverResp.dispatched),
       hoverReason: hoverResp ? hoverResp.reason : null
     };
-    if (!htmlSnippet && popoverSel) result.reason = 'popover_timeout';
-    else if (!result.hovered) result.reason = hoverResp && hoverResp.reason ? hoverResp.reason : 'hover_failed';
+    if (!htmlSnippet && (popoverSel || observer)) {
+      result.reason = 'popover_timeout';
+    } else if (!result.hovered) {
+      result.reason = hoverResp && hoverResp.reason ? hoverResp.reason : 'hover_failed';
+    }
 
     sendDebugLog('info', 'content-script', 'domHover done', {
       selector: sel, popoverSelector: popoverSel || null,
       hovered: result.hovered, hasSnippet: !!htmlSnippet,
       snippetLen: htmlSnippet ? htmlSnippet.length : 0,
+      autoDiscovered: autoDiscovered,
       reason: result.reason || null
     });
     return result;
