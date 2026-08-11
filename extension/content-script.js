@@ -1724,6 +1724,25 @@
         // Reject tiny additions (analytics pixels, 1px spacers, etc.).
         // Popovers are typically >100px on at least one axis; 50 is a safe floor.
         if (nr.width < 50 || nr.height < 50) continue;
+        // Stacking signal filter (RC37): real popovers (React Portal, Vue
+        // Teleport, Popper, Floating UI, Tippy, any site-specific hovercard)
+        // are positioned absolute/fixed AND carry a numeric z-index so they
+        // overlay surrounding content. Without this filter, the reverse walk
+        // picks up gradient placeholders, video-player scaffolding, and other
+        // noise injected during the hover handler — those nodes satisfy
+        // visibility+size but are statically positioned in the normal flow.
+        // getComputedStyle is the universal signal; works for every overlay
+        // framework and every site.
+        var nodeWin = node.ownerDocument && node.ownerDocument.defaultView || window;
+        var nodeStyle;
+        try { nodeStyle = nodeWin.getComputedStyle(node); }
+        catch (e) { nodeStyle = null; }
+        if (!nodeStyle) continue;
+        if (nodeStyle.position !== 'absolute' && nodeStyle.position !== 'fixed') continue;
+        var nz = nodeStyle.zIndex;
+        if (nz === 'auto' || nz === '') continue;
+        var nzi = parseInt(nz, 10);
+        if (!isFinite(nzi) || nzi <= 0) continue;
         htmlSnippet = node.outerHTML;
         matchedSel = '[auto-discovered popover]';
         autoDiscovered = true;
