@@ -128,6 +128,8 @@ describe('lib/renderer-activation.js — module shape', () => {
     assert.equal(typeof api.requestDebuggerPermission, 'function');
     assert.equal(typeof api.removeDebuggerPermission, 'function');
     assert.equal(typeof api.dispatchTrustedWheelScroll, 'function');
+    assert.equal(typeof api.dispatchTrustedHover, 'function');
+    assert.equal(typeof api.dispatchTrustedHoverDismiss, 'function');
     assert.equal(api.DEBUGGER_PROTOCOL_VERSION, '1.3');
     assert.equal(api.CDP_STEP_TIMEOUT_MS, 2000);
   });
@@ -213,10 +215,14 @@ describe('lib/renderer-activation.js — permission helpers', () => {
 });
 
 describe('lib/renderer-activation.js — global free-variable exposure', () => {
-  it('exposes dispatchTrustedWheelScroll + permission helpers as free variables', () => {
+  it('exposes dispatchTrustedWheelScroll + dispatchTrustedHover + permission helpers as free variables', () => {
     const { sandbox } = loadModuleInSandbox();
     assert.equal(typeof sandbox.dispatchTrustedWheelScroll, 'function',
       'dispatchTrustedWheelScroll must be a global free variable — background.js references it');
+    assert.equal(typeof sandbox.dispatchTrustedHover, 'function',
+      'dispatchTrustedHover must be a global free variable — background.js references it');
+    assert.equal(typeof sandbox.dispatchTrustedHoverDismiss, 'function',
+      'dispatchTrustedHoverDismiss must be a global free variable — background.js references it');
     assert.equal(typeof sandbox.hasDebuggerPermission, 'function');
     assert.equal(typeof sandbox.requestDebuggerPermission, 'function');
     assert.equal(typeof sandbox.removeDebuggerPermission, 'function');
@@ -226,6 +232,8 @@ describe('lib/renderer-activation.js — global free-variable exposure', () => {
     const { sandbox } = loadModuleInSandbox();
     assert.equal(typeof sandbox.RendererActivation, 'object');
     assert.equal(typeof sandbox.RendererActivation.dispatchTrustedWheelScroll, 'function');
+    assert.equal(typeof sandbox.RendererActivation.dispatchTrustedHover, 'function');
+    assert.equal(typeof sandbox.RendererActivation.dispatchTrustedHoverDismiss, 'function');
     assert.equal(typeof sandbox.RendererActivation.hasDebuggerPermission, 'function');
   });
 
@@ -504,5 +512,194 @@ describe('lib/renderer-activation.js — RC19 follow-up: CDP step timeout (2026-
     assert.equal(result.dispatched, false);
     assert.match(result.reason, /attach failed/);
     assert.match(result.reason, /timeout/);
+  });
+});
+
+// ============================================================================
+// dispatchTrustedHover — CDP hover event for hovercard enrichment
+//
+// Same shape as dispatchTrustedWheelScroll but WITHOUT the mouseWheel step.
+// Used by the $hover DSL primitive to trigger JS hover handlers (link preview
+// popovers, hovercards) that filter on event.isTrusted=true. The CDP path
+// enters Chrome's input pipeline so the resulting mouseMoved has
+// isTrusted=true — the only programmatic mechanism that does.
+//
+// Tests guard:
+//   1. Attach → mouseMoved (single) → detach in order
+//   2. NEVER sends mouseWheel (this is hover, not scroll)
+//   3. NEVER sends Runtime/Network/DOM commands (detection-risk guard)
+//   4. Enhanced Mode opt-in gate: skip attach entirely when flag is unset
+//   5. Detach always runs even if mouseMoved fails
+//   6. Invalid tabId / missing chrome.debugger fast-fail
+//   7. Each CDP step wrapped in 2s timeout (RC19 follow-up pattern)
+//   8. dismiss variant sends mouseMoved to (1,1) to move cursor off-anchor
+// ============================================================================
+
+describe('lib/renderer-activation.js — dispatchTrustedHover operation order', () => {
+  it('attaches → mouseMoved (single) → detaches (Enhanced Mode on)', async () => {
+    const { api, calls } = loadModuleInSandbox({ seedStore: { enhancedModeEnabled: true } });
+    const result = await api.dispatchTrustedHover(123, { x: 250, y: 300 });
+    assert.equal(calls.attach.length, 1);
+    assert.equal(calls.attach[0].target.tabId, 123);
+    assert.equal(calls.sendCommand.length, 1, 'exactly one sendCommand — mouseMoved only');
+    assert.equal(calls.sendCommand[0].method, 'Input.dispatchMouseEvent');
+    assert.equal(calls.sendCommand[0].params.type, 'mouseMoved');
+    assert.equal(calls.sendCommand[0].params.x, 250);
+    assert.equal(calls.sendCommand[0].params.y, 300);
+    assert.equal(calls.detach.length, 1);
+    assert.equal(result.ok, true);
+    assert.equal(result.attached, true);
+    assert.equal(result.dispatched, true);
+    assert.equal(result.detached, true);
+    assert.equal(result.hoverX, 250);
+    assert.equal(result.hoverY, 300);
+  });
+
+  it('NEVER sends mouseWheel (hover is a stationary mouseMoved, not a scroll)', async () => {
+    const { api, calls } = loadModuleInSandbox({ seedStore: { enhancedModeEnabled: true } });
+    await api.dispatchTrustedHover(42);
+    const wheels = calls.sendCommand.filter(c =>
+      c.method === 'Input.dispatchMouseEvent' && c.params.type === 'mouseWheel');
+    assert.equal(wheels.length, 0, 'hover must not dispatch mouseWheel');
+  });
+
+  it('defaults x=400, y=400 when opts omitted', async () => {
+    const { api, calls } = loadModuleInSandbox({ seedStore: { enhancedModeEnabled: true } });
+    await api.dispatchTrustedHover(1);
+    assert.equal(calls.sendCommand[0].params.x, 400);
+    assert.equal(calls.sendCommand[0].params.y, 400);
+  });
+
+  it('NEVER sends Runtime/Network/DOM commands (detection-risk guard)', async () => {
+    const { api, calls } = loadModuleInSandbox({ seedStore: { enhancedModeEnabled: true } });
+    await api.dispatchTrustedHover(42);
+    const forbidden = calls.sendCommand.filter(c =>
+      c.method.startsWith('Runtime.') ||
+      c.method.startsWith('Network.') ||
+      c.method.startsWith('DOM.'));
+    assert.equal(forbidden.length, 0,
+      `Runtime/Network/DOM commands forbidden in hover path. Found: ${JSON.stringify(forbidden)}`);
+  });
+
+  it('only sends Input.dispatchMouseEvent (single command family)', async () => {
+    const { api, calls } = loadModuleInSandbox({ seedStore: { enhancedModeEnabled: true } });
+    await api.dispatchTrustedHover(42);
+    const methods = new Set(calls.sendCommand.map(c => c.method));
+    assert.deepEqual([...methods], ['Input.dispatchMouseEvent']);
+  });
+});
+
+describe('lib/renderer-activation.js — dispatchTrustedHover gating + errors', () => {
+  it('fast-fails without attach when Enhanced Mode is off', async () => {
+    const { api, calls } = loadModuleInSandbox(); // default: flag unset
+    const result = await api.dispatchTrustedHover(7);
+    assert.equal(result.ok, false);
+    assert.equal(result.dispatched, false);
+    assert.equal(result.attached, false);
+    assert.equal(calls.attach.length, 0, 'must NOT attach when Enhanced Mode is off');
+    assert.match(result.reason, /debugger permission not granted/);
+  });
+
+  it('fast-fails when chrome.debugger is unavailable (test sandbox shape)', async () => {
+    const overrides = { chrome: { runtime: {}, storage: { local: {
+      get: (k, cb) => cb({ enhancedModeEnabled: true }),
+      set: (i, cb) => { if (cb) cb(); },
+      remove: (k, cb) => { if (cb) cb(); }
+    } } } };
+    const { sandbox } = loadModuleInSandbox(overrides);
+    const result = await sandbox.module.exports.dispatchTrustedHover(7);
+    assert.equal(result.ok, false);
+    assert.equal(result.dispatched, false);
+    assert.match(result.reason, /chrome\.debugger unavailable/);
+  });
+
+  it('returns ok:false for invalid tabId', async () => {
+    const { api } = loadModuleInSandbox({ seedStore: { enhancedModeEnabled: true } });
+    const r1 = await api.dispatchTrustedHover(undefined);
+    const r2 = await api.dispatchTrustedHover(-1);
+    const r3 = await api.dispatchTrustedHover('not-a-number');
+    assert.equal(r1.ok, false);
+    assert.equal(r2.ok, false);
+    assert.equal(r3.ok, false);
+    assert.equal(r1.dispatched, false);
+  });
+
+  it('detaches even when mouseMoved sendCommand fails', async () => {
+    let ctx;
+    ctx = loadModuleInSandbox({
+      seedStore: { enhancedModeEnabled: true },
+      debuggerMethods: {
+        sendCommand: (target, method, params, cb) => {
+          if (params.type === 'mouseMoved') {
+            ctx.sandbox.chrome.runtime.lastError = { message: 'mouseMoved failed' };
+          }
+          cb();
+        }
+      }
+    });
+    const result = await ctx.api.dispatchTrustedHover(7);
+    assert.equal(result.ok, false);
+    assert.equal(result.dispatched, false);
+    assert.equal(result.attached, true);
+    assert.equal(result.detached, true, 'detach MUST still run even if hover dispatch failed');
+    assert.equal(ctx.calls.detach.length, 1);
+    assert.match(result.reason, /hover dispatch failed/);
+  });
+
+  it('returns within ~2s when sendCommand(mouseMoved) never calls back', async () => {
+    const ctx = loadModuleInSandbox({
+      seedStore: { enhancedModeEnabled: true },
+      debuggerMethods: {
+        sendCommand: (target, method, params, cb) => {
+          if (params.type === 'mouseMoved') {
+            return; // never calls back
+          }
+          ctx.calls.sendCommand.push({ target, method, params });
+          cb();
+        }
+      }
+    });
+    const t0 = Date.now();
+    const result = await ctx.api.dispatchTrustedHover(42);
+    const elapsed = Date.now() - t0;
+    assert.ok(elapsed < 3000, 'hover dispatch must return within ~2s timeout, took ' + elapsed + 'ms');
+    assert.equal(result.ok, false);
+    assert.equal(result.dispatched, false);
+    assert.match(result.reason, /hover dispatch failed/);
+    assert.match(result.reason, /timeout/);
+    assert.equal(result.detached, true);
+  });
+});
+
+describe('lib/renderer-activation.js — dispatchTrustedHoverDismiss', () => {
+  it('attaches → mouseMoved to (1,1) → detaches', async () => {
+    const { api, calls } = loadModuleInSandbox({ seedStore: { enhancedModeEnabled: true } });
+    const result = await api.dispatchTrustedHoverDismiss(123);
+    assert.equal(calls.attach.length, 1);
+    assert.equal(calls.sendCommand.length, 1);
+    assert.equal(calls.sendCommand[0].method, 'Input.dispatchMouseEvent');
+    assert.equal(calls.sendCommand[0].params.type, 'mouseMoved');
+    assert.equal(calls.sendCommand[0].params.x, 1);
+    assert.equal(calls.sendCommand[0].params.y, 1);
+    assert.equal(calls.detach.length, 1);
+    assert.equal(result.ok, true);
+    assert.equal(result.dispatched, true);
+  });
+
+  it('NEVER sends mouseWheel (dismiss is a move, not a scroll)', async () => {
+    const { api, calls } = loadModuleInSandbox({ seedStore: { enhancedModeEnabled: true } });
+    await api.dispatchTrustedHoverDismiss(42);
+    const wheels = calls.sendCommand.filter(c =>
+      c.method === 'Input.dispatchMouseEvent' && c.params.type === 'mouseWheel');
+    assert.equal(wheels.length, 0);
+  });
+
+  it('fast-fails without attach when Enhanced Mode is off', async () => {
+    const { api, calls } = loadModuleInSandbox();
+    const result = await api.dispatchTrustedHoverDismiss(7);
+    assert.equal(result.ok, false);
+    assert.equal(result.attached, false);
+    assert.equal(calls.attach.length, 0);
+    assert.match(result.reason, /debugger permission not granted/);
   });
 });

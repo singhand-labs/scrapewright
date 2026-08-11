@@ -1074,6 +1074,66 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })();
     return true;
   }
+  if (message.type === 'TRUSTED_HOVER_REQUEST') {
+    // $hover DSL primitive: content-script has resolved an anchor element,
+    // read its bounding rect, and is asking us to dispatch a trusted
+    // mouseMoved at (x, y) via CDP so the page's JS hover handler fires with
+    // event.isTrusted=true. Enhanced Mode gate is enforced inside
+    // dispatchTrustedHover (fast-fails without attach when off).
+    const tabId = sender.tab && sender.tab.id;
+    if (!tabId) {
+      sendResponse({ dispatched: false, reason: 'no sender.tab.id' });
+      return false;
+    }
+    (async () => {
+      try {
+        const result = await RendererActivation.dispatchTrustedHover(tabId, {
+          x: (typeof message.x === 'number') ? message.x : undefined,
+          y: (typeof message.y === 'number') ? message.y : undefined
+        });
+        debugLogger.log('info', 'background', 'Trusted hover dispatch', {
+          tabId,
+          ok: result.ok,
+          dispatched: result.dispatched,
+          hoverX: result.hoverX,
+          hoverY: result.hoverY,
+          reason: result.reason
+        });
+        sendResponse(result);
+      } catch (e) {
+        debugLogger.log('error', 'background', 'Trusted hover dispatcher threw', {
+          tabId, error: e && e.message
+        });
+        sendResponse({ dispatched: false, reason: 'error: ' + (e && e.message || String(e)) });
+      }
+    })();
+    return true;
+  }
+  if (message.type === 'TRUSTED_HOVER_DISMISS') {
+    // $hover DSL primitive: move the trusted cursor to (1,1) so JS hover
+    // handlers fire mouseout/mouseleave and close the popover. Sent by
+    // content-script after extracting the popover's outerHTML.
+    const tabId = sender.tab && sender.tab.id;
+    if (!tabId) {
+      sendResponse({ dispatched: false, reason: 'no sender.tab.id' });
+      return false;
+    }
+    (async () => {
+      try {
+        const result = await RendererActivation.dispatchTrustedHoverDismiss(tabId);
+        debugLogger.log('info', 'background', 'Trusted hover dismiss', {
+          tabId, ok: result.ok, dispatched: result.dispatched, reason: result.reason
+        });
+        sendResponse(result);
+      } catch (e) {
+        debugLogger.log('error', 'background', 'Trusted hover dismiss threw', {
+          tabId, error: e && e.message
+        });
+        sendResponse({ dispatched: false, reason: 'error: ' + (e && e.message || String(e)) });
+      }
+    })();
+    return true;
+  }
   if (message.type === 'GET_ENHANCED_MODE_STATE') {
     // RC25 (console.log 2026-08-04): content-script's enhancedModeCache asks
     // for the current Enhanced Mode state once (lazy), then short-circuits

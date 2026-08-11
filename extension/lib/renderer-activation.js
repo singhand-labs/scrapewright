@@ -264,6 +264,161 @@
     return result;
   }
 
+  // dispatchTrustedHover(tabId, opts): the hover primitive for hovercard
+  // enrichment. Same CDP path as dispatchTrustedWheelScroll but WITHOUT the
+  // mouseWheel step — hover is a stationary mouseMoved. Used by $hover to
+  // trigger JS hover handlers (link preview popovers, hovercards) that filter
+  // on event.isTrusted=true. Same Enhanced Mode opt-in gate; same
+  // detection-risk minimization (Input.dispatchMouseEvent only, never
+  // Runtime/Network/DOM); same 2s per-step timeout.
+  //
+  // Returns { ok, dispatched, attached, detached, reason?, hoverX?, hoverY? }
+  // for diagnostic logging. Never throws.
+  async function dispatchTrustedHover(tabId, opts) {
+    opts = opts || {};
+    var x = (typeof opts.x === 'number') ? opts.x : 400;
+    var y = (typeof opts.y === 'number') ? opts.y : 400;
+
+    if (typeof chrome === 'undefined' || !chrome.debugger ||
+        typeof chrome.debugger.attach !== 'function' ||
+        typeof chrome.debugger.sendCommand !== 'function' ||
+        typeof chrome.debugger.detach !== 'function') {
+      return { ok: false, attached: false, dispatched: false, detached: false, reason: 'chrome.debugger unavailable' };
+    }
+    if (typeof tabId !== 'number' || tabId <= 0) {
+      return { ok: false, attached: false, dispatched: false, detached: false, reason: 'invalid tabId' };
+    }
+
+    var permitted = await hasDebuggerPermission();
+    if (!permitted) {
+      return { ok: false, attached: false, dispatched: false, detached: false, reason: 'debugger permission not granted' };
+    }
+
+    var target = { tabId: tabId };
+    var result = { ok: false, attached: false, dispatched: false, detached: false, hoverX: x, hoverY: y };
+
+    try {
+      await withTimeout(function () {
+        return new Promise(function (resolve, reject) {
+          chrome.debugger.attach(target, DEBUGGER_PROTOCOL_VERSION, function () {
+            var err = chrome.runtime && chrome.runtime.lastError;
+            if (err) reject(err); else resolve();
+          });
+        });
+      }, 'hover.attach');
+      result.attached = true;
+    } catch (e) {
+      return { ok: false, dispatched: false, reason: 'attach failed: ' + (e && e.message || String(e)) };
+    }
+
+    try {
+      await withTimeout(function () {
+        return new Promise(function (resolve, reject) {
+          chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+            type: 'mouseMoved',
+            x: x, y: y,
+            modifier: 0
+          }, function () {
+            var err = chrome.runtime && chrome.runtime.lastError;
+            if (err) reject(err); else resolve();
+          });
+        });
+      }, 'hover.mouseMoved');
+
+      result.dispatched = true;
+      result.ok = true;
+    } catch (e) {
+      result.reason = 'hover dispatch failed: ' + (e && e.message || String(e));
+    } finally {
+      try {
+        await withTimeout(function () {
+          return new Promise(function (resolve) {
+            chrome.debugger.detach(target, function () { resolve(); });
+          });
+        }, 'hover.detach');
+        result.detached = true;
+      } catch (e) {
+        result.detached = false;
+        result.detachError = e && e.message || String(e);
+      }
+    }
+
+    return result;
+  }
+
+  // dispatchTrustedHoverDismiss(tabId): moves the trusted cursor to (1,1) so
+  // JS hover handlers fire mouseout/mouseleave and close the popover. Same
+  // CDP path + Enhanced Mode gate + detection-risk profile as the other
+  // dispatch* helpers. Used by $hover after extracting the popover HTML so
+  // the popover doesn't linger into the next iteration.
+  async function dispatchTrustedHoverDismiss(tabId) {
+    if (typeof chrome === 'undefined' || !chrome.debugger ||
+        typeof chrome.debugger.attach !== 'function' ||
+        typeof chrome.debugger.sendCommand !== 'function' ||
+        typeof chrome.debugger.detach !== 'function') {
+      return { ok: false, attached: false, dispatched: false, detached: false, reason: 'chrome.debugger unavailable' };
+    }
+    if (typeof tabId !== 'number' || tabId <= 0) {
+      return { ok: false, attached: false, dispatched: false, detached: false, reason: 'invalid tabId' };
+    }
+
+    var permitted = await hasDebuggerPermission();
+    if (!permitted) {
+      return { ok: false, attached: false, dispatched: false, detached: false, reason: 'debugger permission not granted' };
+    }
+
+    var target = { tabId: tabId };
+    var result = { ok: false, attached: false, dispatched: false, detached: false };
+
+    try {
+      await withTimeout(function () {
+        return new Promise(function (resolve, reject) {
+          chrome.debugger.attach(target, DEBUGGER_PROTOCOL_VERSION, function () {
+            var err = chrome.runtime && chrome.runtime.lastError;
+            if (err) reject(err); else resolve();
+          });
+        });
+      }, 'hoverDismiss.attach');
+      result.attached = true;
+    } catch (e) {
+      return { ok: false, dispatched: false, reason: 'attach failed: ' + (e && e.message || String(e)) };
+    }
+
+    try {
+      await withTimeout(function () {
+        return new Promise(function (resolve, reject) {
+          chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+            type: 'mouseMoved',
+            x: 1, y: 1,
+            modifier: 0
+          }, function () {
+            var err = chrome.runtime && chrome.runtime.lastError;
+            if (err) reject(err); else resolve();
+          });
+        });
+      }, 'hoverDismiss.mouseMoved');
+
+      result.dispatched = true;
+      result.ok = true;
+    } catch (e) {
+      result.reason = 'hover dismiss failed: ' + (e && e.message || String(e));
+    } finally {
+      try {
+        await withTimeout(function () {
+          return new Promise(function (resolve) {
+            chrome.debugger.detach(target, function () { resolve(); });
+          });
+        }, 'hoverDismiss.detach');
+        result.detached = true;
+      } catch (e) {
+        result.detached = false;
+        result.detachError = e && e.message || String(e);
+      }
+    }
+
+    return result;
+  }
+
   // createEnhancedModeCache({query}): lazy cache for the Enhanced Mode state.
   // console.log 2026-08-04: every scroll stall in an Enhanced-Mode-off run
   // was producing a full message round-trip (content-script → background →
@@ -331,6 +486,8 @@
     requestDebuggerPermission: requestDebuggerPermission,
     removeDebuggerPermission: removeDebuggerPermission,
     dispatchTrustedWheelScroll: dispatchTrustedWheelScroll,
+    dispatchTrustedHover: dispatchTrustedHover,
+    dispatchTrustedHoverDismiss: dispatchTrustedHoverDismiss,
     createEnhancedModeCache: createEnhancedModeCache,
     DEBUGGER_PROTOCOL_VERSION: DEBUGGER_PROTOCOL_VERSION,
     CDP_STEP_TIMEOUT_MS: CDP_STEP_TIMEOUT_MS
@@ -340,6 +497,8 @@
   if (typeof window !== 'undefined') {
     window.RendererActivation = api;
     window.dispatchTrustedWheelScroll = dispatchTrustedWheelScroll;
+    window.dispatchTrustedHover = dispatchTrustedHover;
+    window.dispatchTrustedHoverDismiss = dispatchTrustedHoverDismiss;
     window.hasDebuggerPermission = hasDebuggerPermission;
     window.requestDebuggerPermission = requestDebuggerPermission;
     window.removeDebuggerPermission = removeDebuggerPermission;
@@ -348,6 +507,8 @@
   if (typeof self !== 'undefined') {
     self.RendererActivation = api;
     self.dispatchTrustedWheelScroll = dispatchTrustedWheelScroll;
+    self.dispatchTrustedHover = dispatchTrustedHover;
+    self.dispatchTrustedHoverDismiss = dispatchTrustedHoverDismiss;
     self.hasDebuggerPermission = hasDebuggerPermission;
     self.requestDebuggerPermission = requestDebuggerPermission;
     self.removeDebuggerPermission = removeDebuggerPermission;
@@ -356,6 +517,8 @@
   if (typeof global !== 'undefined') {
     global.RendererActivation = api;
     global.dispatchTrustedWheelScroll = dispatchTrustedWheelScroll;
+    global.dispatchTrustedHover = dispatchTrustedHover;
+    global.dispatchTrustedHoverDismiss = dispatchTrustedHoverDismiss;
     global.hasDebuggerPermission = hasDebuggerPermission;
     global.requestDebuggerPermission = requestDebuggerPermission;
     global.removeDebuggerPermission = removeDebuggerPermission;
