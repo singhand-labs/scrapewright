@@ -1577,6 +1577,34 @@ function getFirstRecordHtmlFromExecution(events, stepId) {
   return '';
 }
 
+// getFirstRecordHtmlFromAnyStep(events) → string
+//
+// Fallback when getFirstRecordHtmlFromExecution returns '' for the chosen
+// stepId. Scans ALL STEP_ITERATION events for any firstContainerHtml. Use when
+// the upstream-extraction resolver picks a $list-using step (which doesn't
+// capture firstContainerHtml) instead of the real $extractList/$extractListMulti
+// step — the record HTML is the record HTML regardless of provenance, and
+// field-candidate discovery just needs SOME container snapshot to scan.
+//
+// Console.log 2026-08-11: production service had step4=$extractListMulti (the
+// real extractor, with firstContainerHtml) and step5=hover_enrich (uses $list
+// for media URLs). findUpstreamExtractionStepId returned step5 because the
+// regex matches $list too — so the chosen-step lookup returned '' and the
+// FIELD_CANDIDATES signal was silently suppressed. This fallback recovers.
+function getFirstRecordHtmlFromAnyStep(events) {
+  if (!Array.isArray(events) || events.length === 0) return '';
+  for (const evt of events) {
+    if (!evt || evt.type !== 'STEP_ITERATION') continue;
+    const diags = Array.isArray(evt.selectorDiagnostics) ? evt.selectorDiagnostics : [];
+    for (const d of diags) {
+      if (d && typeof d.firstContainerHtml === 'string' && d.firstContainerHtml.length > 0) {
+        return d.firstContainerHtml;
+      }
+    }
+  }
+  return '';
+}
+
 // detectDuplicateRecords(data, outputSchema, options) → array
 //
 // Schema-aware duplicate detector. Locates the first array-of-objects field
@@ -3270,7 +3298,7 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
@@ -3279,6 +3307,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.findEmptyExtractionFields = findEmptyExtractionFields;
   window.findUpstreamExtractionStepId = findUpstreamExtractionStepId;
   window.getFirstRecordHtmlFromExecution = getFirstRecordHtmlFromExecution;
+  window.getFirstRecordHtmlFromAnyStep = getFirstRecordHtmlFromAnyStep;
   window.detectEmptyOutputFieldsByRatio = detectEmptyOutputFieldsByRatio;
   window.formatEmptyOutputFieldsSignal = formatEmptyOutputFieldsSignal;
   window.detectDuplicateRecords = detectDuplicateRecords;
@@ -3336,6 +3365,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.findEmptyExtractionFields = findEmptyExtractionFields;
   self.findUpstreamExtractionStepId = findUpstreamExtractionStepId;
   self.getFirstRecordHtmlFromExecution = getFirstRecordHtmlFromExecution;
+  self.getFirstRecordHtmlFromAnyStep = getFirstRecordHtmlFromAnyStep;
   self.detectEmptyOutputFieldsByRatio = detectEmptyOutputFieldsByRatio;
   self.formatEmptyOutputFieldsSignal = formatEmptyOutputFieldsSignal;
   self.detectDuplicateRecords = detectDuplicateRecords;

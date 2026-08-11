@@ -2020,3 +2020,51 @@ describe('getFirstRecordHtmlFromExecution', () => {
     assert.ok(html.includes('found-it'));
   });
 });
+
+describe('getFirstRecordHtmlFromAnyStep', () => {
+  const { getFirstRecordHtmlFromAnyStep } = require('../lib/wizard-utils');
+
+  it('scans ALL step iterations (not just one stepId) and returns the first non-empty HTML', () => {
+    // RC34 console.log 2026-08-11 scenario: findUpstreamExtractionStepId
+    // returned a $list-using step (no firstContainerHtml), so the chosen-
+    // step lookup returned ''. Fallback scans all events for ANY step's
+    // firstContainerHtml.
+    const events = [
+      { type: 'STEP_ITERATION', stepId: '5', iteration: 1,
+        selectorDiagnostics: [{ api: 'list', selector: 'a', matchCount: 3 }] }, // no HTML
+      { type: 'STEP_ITERATION', stepId: '4', iteration: 1,
+        selectorDiagnostics: [
+          { api: 'extractList', containerSelector: 'div.post', containerMatches: 3,
+            firstContainerHtml: '<div class="post"><time>2h</time></div>' },
+        ] },
+    ];
+    const html = getFirstRecordHtmlFromAnyStep(events);
+    assert.ok(html.includes('<time>2h</time>'),
+      'should find firstContainerHtml from any step, not just the chosen one');
+  });
+
+  it('returns empty string when no event has firstContainerHtml', () => {
+    const events = [
+      { type: 'STEP_ITERATION', stepId: '4', selectorDiagnostics: [{ api: 'list' }] },
+      { type: 'STEP_ITERATION', stepId: '5', selectorDiagnostics: [{ api: 'list' }] },
+    ];
+    assert.strictEqual(getFirstRecordHtmlFromAnyStep(events), '');
+  });
+
+  it('returns empty string for empty/non-array events', () => {
+    assert.strictEqual(getFirstRecordHtmlFromAnyStep([]), '');
+    assert.strictEqual(getFirstRecordHtmlFromAnyStep(null), '');
+    assert.strictEqual(getFirstRecordHtmlFromAnyStep(undefined), '');
+  });
+
+  it('skips non-STEP_ITERATION events', () => {
+    const events = [
+      { type: 'STEP_COMPLETE', stepId: '4', selectorDiagnostics: [{ firstContainerHtml: '<div>skip</div>' }] },
+      { type: 'TAB_OPENED', tabId: 9 },
+      { type: 'STEP_ITERATION', stepId: '4', iteration: 1,
+        selectorDiagnostics: [{ api: 'extractList', firstContainerHtml: '<div>real</div>' }] },
+    ];
+    const html = getFirstRecordHtmlFromAnyStep(events);
+    assert.ok(html.includes('real') && !html.includes('skip'));
+  });
+});

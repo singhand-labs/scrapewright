@@ -73,6 +73,16 @@ test('wizard.js wiring sanity: grep for fieldCandidatesSignal references', () =>
     'wizard.js should resolve record HTML via getFirstRecordHtmlFromExecution');
   assert.ok(!/representative2\._html|representative2\.outerHTML|finalData2\.records/.test(wiz),
     'wizard.js must not look up record HTML from output records (broken pattern)');
+  // RC34 console.log 2026-08-11: when findUpstreamExtractionStepId picks a
+  // $list-using step (which doesn't capture firstContainerHtml), the chosen-
+  // step lookup returns ''. The wiring must fall back to scanning ALL steps.
+  // Audit: both branches (failure-fix + user-feedback) should call
+  // getFirstRecordHtmlFromAnyStep when the chosen-step lookup is empty.
+  assert.ok(/getFirstRecordHtmlFromAnyStep\(/.test(wiz),
+    'wizard.js should fall back to getFirstRecordHtmlFromAnyStep when chosen step has no HTML');
+  const fallbackMatches = wiz.match(/if\s*\(\s*!recordHtml2\s*&&\s*typeof\s+getFirstRecordHtmlFromAnyStep/g) || [];
+  assert.ok(fallbackMatches.length >= 2,
+    'both autoFix branches (failure-fix + user-feedback) must have the any-step fallback; got ' + fallbackMatches.length);
 });
 
 test('end-to-end: realistic wizardState shape -> discovery produces non-empty block', () => {
