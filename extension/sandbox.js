@@ -60,6 +60,14 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
   window.$scrollBy = (deltaY, selector) => sendDomRequest('scrollBy', selector || null, [deltaY]);
   window.$scrollToBottom = (selector) => sendDomRequest('scrollToBottom', selector || null);
   window.$scrollIntoView = (selector) => sendDomRequest('scrollIntoView', selector);
+  // $hover: dispatch a trusted mouseMoved at the anchor's bounding-box center
+  // via CDP, wait for the popover selector to appear, return its outerHTML as
+  // htmlSnippet. Use for hovercard/link-preview enrichment — fields not in the
+  // list DOM but present in the page's hover popover. Prefer this over $openTab
+  // for hovercards: $openTab opens a new tab (slow, navigation lifecycle);
+  // $hover stays in-page and reuses the already-loaded page JS. See
+  // HOVER ENRICHMENT in SCRIPT_DSL_GUIDE.
+  window.$hover = (anchorSel, popoverSel, opts) => sendDomRequest('hover', anchorSel, [popoverSel, opts || {}]);
 
   window.addEventListener('message', (e) => {
     if (e.data.type === 'DOM_RESPONSE') {

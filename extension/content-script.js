@@ -881,6 +881,12 @@
           recordDomActivity('$scrollIntoView', data.selector, result && result.found ? 1 : 0, Date.now() - __t0);
           break;
         }
+        case 'hover': {
+          const __t0 = Date.now();
+          result = await domHover(data.selector, data.args && data.args[0], data.args && data.args[1]);
+          recordDomActivity('$hover', data.selector, result && result.hovered ? 1 : 0, Date.now() - __t0);
+          break;
+        }
         default:
           error = 'Unknown DOM action: ' + data.action;
       }
@@ -1554,6 +1560,130 @@
     }
     sendDebugLog('info', 'content-script', 'domScrollIntoView', { selector: sel });
     return { found: true };
+  }
+
+  // $hover DSL primitive: dispatch a trusted mouseMoved at the anchor's
+  // bounding-box center via CDP so the page's JS hover handler fires with
+  // event.isTrusted=true. After hover, poll for popoverSel; once present,
+  // return its outerHTML as htmlSnippet. Used for hovercard enrichment —
+  // fields not in the list DOM but present in the page's hover popover.
+  //
+  // WHY CDP: same root cause as RC19 trusted-wheel. Sites whose hover handlers
+  // filter on event.isTrusted=true (link-preview loaders, hovercard fetches)
+  // ignore JS-only mouseover/mouseenter events because they have
+  // isTrusted=false. CDP Input.dispatchMouseEvent enters Chrome's input
+  // pipeline so the resulting event is trusted. JS event dispatch
+  // (el.dispatchEvent(new MouseEvent('mouseover', {bubbles:true}))) is NOT
+  // a substitute — the isTrusted property is read-only and always false for
+  // script-initiated events.
+  //
+  // WHY TAB ACTIVATION: compositor frames are produced only for the active
+  // tab — without frames, hover handlers tied to layout (most of them) won't
+  // run. Mirrors domScrollToBottom's RC20 wrapping.
+  //
+  // Returns { hovered, htmlSnippet, popoverSelector, reason? }. Never throws
+  // on hover/popover failure — returns hovered:false or htmlSnippet:null so
+  // the LLM script can branch. Throws only on ELEMENT_NOT_FOUND for the
+  // anchor (so the LLM gets an autoFix-able error, not silent empty).
+  async function domHover(sel, popoverSel, opts) {
+    if (!sel) throw new Error('$hover requires an anchor selector');
+    opts = opts || {};
+    var timeoutMs = (typeof opts.timeoutMs === 'number' && opts.timeoutMs > 0) ? opts.timeoutMs : 3000;
+    var dismiss = (typeof opts.dismiss === 'boolean') ? opts.dismiss : true;
+
+    var found = querySelectorDeep(sel);
+    if (!found) throw new Error('ELEMENT_NOT_FOUND: ' + sel);
+    var anchor = found.element;
+
+    // Scroll anchor into view so the bounding rect has viewport coordinates
+    // CDP can target. Without this, an anchor below the fold has negative/
+    // out-of-range y and the mouseMoved lands on the wrong pixel.
+    if (typeof anchor.scrollIntoView === 'function') {
+      try { anchor.scrollIntoView({ block: 'center', behavior: 'instant' }); }
+      catch { anchor.scrollIntoView(); }
+      // Layout settles within a frame; a 50ms wait covers the reflow.
+      await new Promise(function (r) { setTimeout(r, 50); });
+    }
+
+    var rect = anchor.getBoundingClientRect();
+    // Default to viewport center if rect is degenerate (display:none, etc.).
+    var x = (rect.width > 0) ? Math.round(rect.left + rect.width / 2) : 400;
+    var y = (rect.height > 0) ? Math.round(rect.top + rect.height / 2) : 400;
+
+    var hoverResp = null;
+    var hoverError = null;
+    try {
+      var hoverResult = await withTabActivation('hover', async function () {
+        return await chrome.runtime.sendMessage({
+          type: 'TRUSTED_HOVER_REQUEST',
+          x: x, y: y
+        });
+      });
+      hoverResp = hoverResult || { dispatched: false, reason: 'no response from background' };
+    } catch (e) {
+      hoverError = e && e.message || String(e);
+      hoverResp = { dispatched: false, reason: 'sendMessage error: ' + hoverError };
+    }
+
+    notifyBackgroundDiagnostic('hover_request', {
+      selector: sel,
+      popoverSelector: popoverSel || null,
+      hoverX: x, hoverY: y,
+      dispatched: !!(hoverResp && hoverResp.dispatched),
+      ok: !!(hoverResp && hoverResp.ok),
+      reason: hoverResp ? hoverResp.reason : null
+    });
+
+    // Popover detection — only when popoverSel was provided. Without a
+    // selector we can't know what to wait for, so we return immediately and
+    // let the LLM re-query the DOM in its script.
+    var htmlSnippet = null;
+    var matchedSel = null;
+    if (popoverSel) {
+      var deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        var popFound = querySelectorDeep(popoverSel);
+        if (popFound && isElementVisible(popFound.element)) {
+          htmlSnippet = popFound.element.outerHTML;
+          matchedSel = popoverSel;
+          break;
+        }
+        await new Promise(function (r) { setTimeout(r, 250); });
+      }
+    }
+
+    // Dismiss: move the trusted cursor to (1,1) so hover handlers fire
+    // mouseout/mouseleave and the popover closes. Best-effort — failure here
+    // doesn't affect the htmlSnippet already captured.
+    if (dismiss) {
+      try {
+        await chrome.runtime.sendMessage({ type: 'TRUSTED_HOVER_DISMISS' });
+        notifyBackgroundDiagnostic('hover_dismiss', { selector: sel, ok: true });
+      } catch (e) {
+        notifyBackgroundDiagnostic('hover_dismiss', {
+          selector: sel, ok: false,
+          reason: 'sendMessage error: ' + (e && e.message || String(e))
+        });
+      }
+    }
+
+    var result = {
+      hovered: !!(hoverResp && hoverResp.ok),
+      htmlSnippet: htmlSnippet,
+      popoverSelector: matchedSel,
+      hoverDispatched: !!(hoverResp && hoverResp.dispatched),
+      hoverReason: hoverResp ? hoverResp.reason : null
+    };
+    if (!htmlSnippet && popoverSel) result.reason = 'popover_timeout';
+    else if (!result.hovered) result.reason = hoverResp && hoverResp.reason ? hoverResp.reason : 'hover_failed';
+
+    sendDebugLog('info', 'content-script', 'domHover done', {
+      selector: sel, popoverSelector: popoverSel || null,
+      hovered: result.hovered, hasSnippet: !!htmlSnippet,
+      snippetLen: htmlSnippet ? htmlSnippet.length : 0,
+      reason: result.reason || null
+    });
+    return result;
   }
 
   const openTabPending = new Map();

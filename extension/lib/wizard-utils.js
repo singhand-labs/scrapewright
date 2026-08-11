@@ -45,6 +45,7 @@ AVAILABLE API FUNCTIONS:
 - $scrollBy(deltaY, selector?): Scroll the window (or element matching selector) by deltaY pixels. Returns { scrolled, prevY, newY }. Use for infinite feeds / load-more pages.
 - $scrollToBottom(selector?): Scroll window (or element) to its bottom. Returns { scrolled, prevY, newY }. scrolled:false means the position did not change — the feed is exhausted. See SCROLLING below for the poll-load pattern.
 - $scrollIntoView(selector): Scroll element to the top of the viewport. Returns { found: true }. Use to reveal "See more" / "Load more" buttons before clicking them.
+- $hover(anchorSelector, popoverSelector?, opts?): Dispatch a trusted mouseMoved at the anchor's bounding-box center, wait for the popover selector to appear (default 3000ms), return { hovered, htmlSnippet, popoverSelector, reason? }. Use to enrich records with fields that live in a hover popover (group/account/profile preview cards) rather than the list DOM. See HOVER ENRICHMENT below.
 
 CSS TRAP — Do NOT use :nth-of-type(N) on a compound selector. 'li.result-item:nth-of-type(5)' matches the 5th sibling *of that element type* (any 5th <li>), not the 5th matching li.result-item. To get the Nth match, use $list and index into the returned array: const items = await $list('li.result-item'); const fifth = items[4]; If you need all items in a list, iterate the array — never emit per-index selectors. (Exception: if an ANNOTATION gives you a selector that already contains :nth-of-type, copy it verbatim per the SELECTOR FIDELITY RULE below — this trap applies only to selectors you compose yourself.)
 
@@ -301,6 +302,36 @@ $extract(sel) and $extractList(sel, { field: { selector, attr } }) support attri
   });
   // ^ Note: empty selector inside $extractListMulti returns the container's own outerHTML.
 Do NOT use textContent as a substitute for outerHTML when outputSchema asks for raw HTML — textContent strips all tags and produces plain text the consumer cannot parse.
+
+HOVER ENRICHMENT (hovercard / link-preview fields): some sites surface richer data — group name, member count, account bio, profile image URL — only in a popover that appears when the user hovers a link. The popover is NOT in the list DOM; it's injected into a portal layer on hover. Use \$hover to fire the popover, then parse fields out of htmlSnippet with \$extractListMulti on a temporary DOM root. Signature: \$hover(anchorSelector, popoverSelector?, opts?) → { hovered: bool, htmlSnippet: string|null, popoverSelector: string|null, reason?: 'popover_timeout'|'hover_failed'|<bg reason> }.
+  // Step 4: extract list with anchor hrefs / link elements
+  const records = await \$extractListMulti('li.result-item', {
+    anchorHref: { selector: 'a.profile-link', attr: 'href' },
+    title: { selector: 'h3.title' }
+  });
+  // Step 5: hover the FIRST record's anchor to enrich with popover-only fields.
+  //   (In real services, iterate; for the first record only here for brevity.)
+  const firstAnchorSel = 'li.result-item:nth-of-type(1) a.profile-link';
+  const r = await \$hover(firstAnchorSel, 'div[role="dialog"][data-hovercard]', { timeoutMs: 3000 });
+  if (r.hovered && r.htmlSnippet) {
+    // Parse the snippet as a standalone doc so \$extractListMulti can scope to it.
+    // The trick: \$extractListMulti expects a CSS selector in the LIVE document,
+    // so we parse the snippet in-page and read fields with querySelector. The
+    // simpler path is to call the framework helper that takes HTML directly.
+    // Below uses DOMParser in a sandboxed iframe:
+    const doc = new DOMParser().parseFromString(r.htmlSnippet, 'text/html');
+    const groupName = (doc.querySelector('div[data-name]') || {}).textContent || '';
+    const memberCount = (doc.querySelector('span[data-count]') || {}).textContent || '';
+    records[0].groupName = groupName.trim();
+    records[0].memberCount = memberCount.trim();
+  }
+RULES:
+- \$hover requires Enhanced Mode (it uses CDP Input.dispatchMouseEvent under the hood to produce an isTrusted=true hover — JS-only mouseover is filtered by hover-gated loaders). Without Enhanced Mode, hovered:false with reason:'debugger permission not granted'. Surface this to the user via test-result feedback, not by retrying.
+- popoverSelector is the popover container, NOT the field inside it. Inspect the page (DevTools Elements panel) while manually hovering the anchor to find the popover container selector. A weak popoverSelector (e.g. 'div') will match the wrong element; a too-specific one will time out.
+- After \$hover returns, the framework auto-dismisses (moves the trusted cursor to (1,1) so the popover closes). Pass { dismiss: false } ONLY if you want the popover to linger (rare — usually you want it gone before the next iteration).
+- For MULTIPLE records: hover each anchor, extract snippet, dismiss, then hover the next. Do NOT batch-hovers — only one popover is on screen at a time, and most sites close the previous popover on the next hover. The LLM should iterate records and call \$hover per-record.
+- PREFER \$hover over \$openTab for hovercard data. \$openTab opens a NEW TAB (full navigation lifecycle, network refetch, 5-15s per record). \$hover stays in-page (~250-500ms per record) because the popover content is already loaded or fetched via XHR the page already knows how to make.
+- If htmlSnippet is null after hover (popover never appeared), common causes: (a) popoverSelector wrong — inspect the actual popover DOM, (b) anchor offscreen — \$hover calls scrollIntoView first but some popovers only fire for fully-visible anchors, (c) hover handler gated on Enhanced Mode being enabled. Do NOT retry in a tight loop — surface the failure to the framework.
 
 ROBUSTNESS RULES (MANDATORY — these prevent the most common silent failures):
 
