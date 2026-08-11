@@ -312,60 +312,96 @@ test('domHover sets up MutationObserver BEFORE hover dispatch (RC36 observer rac
   );
 });
 
-test('domHover auto-discovery filters candidates by position + z-index (RC37 popover mis-detection)', () => {
-  // console.log 2026-08-11 14:34: even with RC36 observer-before-dispatch
-  // fixed, hover enrichment still returned empty fields across all posts.
-  // The hover dispatched (dispatched:true ok:true) and the observer caught
-  // added nodes — but auto-discovery picked up the WRONG nodes: gradient
-  // placeholder divs (`<div style="background-image: linear-gradient(...)">`)
-  // and video-player scaffolding (with a "播放视频" button). Both satisfied
-  // the existing visibility + >=50x50px filter. Real popovers never made it
-  // into htmlSnippet because the reverse walk picks the LATEST added node,
-  // and these noise nodes are appended after the popover.
+test('domHover auto-discovery scores candidates by multiple signals including cursor proximity (RC38 over-filter architecture fix)', () => {
+  // console.log 2026-08-11 15:14: SIXTH hover-family incident. Even after
+  // RC37 added the position+z-index hard filter, hover enrichment returned
+  // empty fields across all posts. User feedback was unambiguous: "the
+  // hovercard IS popping up visually" but htmlSnippet stayed empty. Every
+  // hover_request showed dispatched:true ok:true, but path (a) explicit
+  // selector missed (LLM picked div[role='dialog']/div[data-hovercard]
+  // instead of the working div[data-visualcompletion='ignore-dynamic']),
+  // and path (b) auto-discovery SILENTLY rejected the real hovercard.
   //
-  // The universal distinguishing signal: real popovers (React Portal,
-  // Vue Teleport, Popper, Floating UI, Tippy, any site-specific hovercard
-  // framework) are positioned `absolute` or `fixed` AND carry a numeric
-  // z-index so they overlay the surrounding content. Gradient placeholders,
-  // video scaffolding, and analytics pixels injected during hover handlers
-  // don't have these properties — they're statically positioned in the
-  // normal flow.
+  // Why the RC37 hard filter failed: overlay frameworks don't always set
+  // position:absolute AND numeric z-index on the popover element itself.
+  // Common cases the RC37 filter silently rejected:
+  //   - Hovercard has position:absolute but z-index:auto (stacking context
+  //     managed by parent wrapper — common in React Portal + CSS Modules)
+  //   - Hovercard wrapper has position:static, inner hovercard has the
+  //     positioning (MutationObserver sees the wrapper, not the inner)
+  //   - Site uses relative positioning + transform-style overlays
   //
-  // This test pins the filter: the auto-discovery loop MUST call
-  // getComputedStyle and reject candidates whose position is `static`/
-  // `relative`/`sticky` or whose z-index is `auto`. Without this, the
-  // auto-discovery path returns htmlSnippets of non-popover noise and
-  // the LLM has no way to recover.
+  // Architecture fix: replace the hard filter with multi-signal SCORING.
+  // Every candidate (visible, >50x50) is scored; the highest score wins.
+  // Signals (strongest first):
+  //   1. position absolute/fixed (overlay positioning — primary signal)
+  //   2. numeric z-index (creates stacking context)
+  //   3. proximity to cursor (hovercards appear AT/NEAR the anchor — the
+  //      NEW signal that breaks ties between positioned overlays)
+  //   4. area (larger wins on full ties)
+  //
+  // Why proximity: the hover cursor (anchor bounding-box center) is the
+  // universal reference point. Hovercards appear within ~100px of this
+  // point regardless of framework. Gradient placeholders and video
+  // scaffolding are typically 200-500px away (in post body, not header).
+  // Proximity breaks ties the position+z-index signals can't.
+  //
+  // This test pins the architectural shift: hard filters are fragile
+  // (RC37 was the 4th attempt), scoring is robust. Must read .position
+  // AND .zIndex AND compute cursor distance.
   const cs = readSrc('content-script.js');
   const fnStart = cs.indexOf('async function domHover(');
   const fnEnd = cs.indexOf('async function domOpenTab(', fnStart);
   const fnBody = cs.slice(fnStart, fnEnd);
   assert.ok(fnStart > -1 && fnEnd > fnStart, 'domHover must exist');
 
-  // Slice just the auto-discovery loop region (after observer setup, before
-  // the dismiss block). This isolates the filter from any unrelated
-  // getComputedStyle calls elsewhere in the function.
+  // Slice the auto-discovery loop region. Isolates from unrelated
+  // getComputedStyle calls elsewhere in the function (e.g. isElementVisible).
   const autoDiscoverStart = fnBody.indexOf('Path (b): auto-discovery');
   const autoDiscoverEnd = fnBody.indexOf('observer.disconnect()', autoDiscoverStart);
   assert.ok(autoDiscoverStart > -1, 'auto-discovery comment block must exist');
   assert.ok(autoDiscoverEnd > autoDiscoverStart, 'auto-discovery loop must end before observer.disconnect');
   const loopBody = fnBody.slice(autoDiscoverStart, autoDiscoverEnd);
 
-  // Must call getComputedStyle during auto-discovery.
+  // Signal 1: getComputedStyle must be called.
   assert.match(loopBody, /getComputedStyle/,
-    'auto-discovery must call getComputedStyle to check stacking signals');
+    'auto-discovery must call getComputedStyle to read stacking signals');
 
-  // Must reject candidates whose position is NOT absolute/fixed.
-  // Accept either an allow-list check (position === 'absolute' || 'fixed')
-  // or a deny-list check (!== 'static' etc.). Either pattern satisfies the
-  // universal requirement. We assert by checking the position property is
-  // read at all.
+  // Signal 2: .position must be read.
   assert.match(loopBody, /\.position\b/,
-    'auto-discovery must read computed style .position to filter by absolute/fixed');
+    'auto-discovery must read computed style .position (positioned-overlays signal)');
 
-  // Must reject candidates whose z-index is `auto` (the default for elements
-  // that don't create a stacking context). Real popovers have a numeric
-  // z-index so they overlay page content.
+  // Signal 3: .zIndex must be read (as a scoring input, not a hard filter).
   assert.match(loopBody, /\.zIndex\b/,
-    'auto-discovery must read computed style .zIndex to filter out non-overlaying elements');
+    'auto-discovery must read computed style .zIndex (stacking-context signal)');
+
+  // Signal 4 (NEW): cursor proximity must be computed. The hover x/y
+  // coordinates are the universal reference point — hovercards appear
+  // near the cursor regardless of framework. Look for distance computation
+  // (sqrt, dx/dy, or rect-vs-cursor comparison).
+  assert.match(loopBody, /dist|distance|proximity|dx\s*=|dy\s*=|Math\.(sqrt|hypot)|cursorDist/i,
+    'auto-discovery must compute cursor proximity (NEW signal — breaks ties that position/z-index alone cannot). ' +
+    'Look for: distance from added-node rect to hover x/y coordinates.');
+});
+
+test('domHover auto-discovery emits hover_auto_discover diagnostic (RC38 observability)', () => {
+  // RC37/RC38 lesson: auto-discovery failures are SILENT. The user sees
+  // empty hover-enriched fields; the log shows dispatched:true ok:true;
+  // but no signal explains WHY path (b) rejected the hovercard. We need
+  // a diagnostic that surfaces:
+  //   - how many nodes the observer caught
+  //   - which one was picked (or null)
+  //   - its position/z-index/area/proximity
+  //
+  // This pins the diagnostic emission so future hover-family bugs are
+  // debuggable from the SW log alone.
+  const cs = readSrc('content-script.js');
+  const fnStart = cs.indexOf('async function domHover(');
+  const fnEnd = cs.indexOf('async function domOpenTab(', fnStart);
+  const fnBody = cs.slice(fnStart, fnEnd);
+  assert.ok(fnStart > -1 && fnEnd > fnStart, 'domHover must exist');
+
+  assert.match(fnBody, /notifyBackgroundDiagnostic\(\s*['"]hover_auto_discover['"]/,
+    'domHover must emit hover_auto_discover diagnostic via notifyBackgroundDiagnostic ' +
+    '(goes to background SW log, not just page console — observability for future hover bugs)');
 });
