@@ -928,6 +928,78 @@ describe('findUpstreamExtractionStepId', () => {
   });
 });
 
+describe('findUpstreamProducingStepId (RC42: scalar-empty fallback)', () => {
+  // RC42 console.log 2026-08-12: step graph
+  //   1 wait → 2 scroll → 3 expand → 4 extract_posts ($extractListMulti)
+  //   → 5 hover_enrich ($hover, two calls writing accountInfoHtml + groupInfoHtml)
+  //   → 6 parse_and_output (pass-through returning __stepResults__["5"] fields)
+  // Final result { accountInfoHtml: "", groupInfoHtml: "" } — both STRINGS,
+  // not arrays. validateOutputAgainstSchema fired REQUIRED_OUTPUT_MISSING,
+  // but findUpstreamExtractionStepId only matches $extractList/$extractListMulti/
+  // $list — step 5's $hover is invisible to it. Without a producing-step
+  // finder that recognizes $hover/$extract, autoFix either didn't fire or
+  // mis-targeted step 6 (the pass-through finalizer).
+  const { findUpstreamProducingStepId } = require('../lib/wizard-utils');
+
+  it('walks back through pass-throughs to a $hover step that produces scalar fields', () => {
+    const steps = [
+      { id: '1', name: 'wait', script: 'await $wait("div"); return {done:true};' },
+      { id: '2', name: 'scroll', script: 'await $scrollToBottom(); return {done:true};' },
+      { id: '3', name: 'extract_posts', script: 'const r = await $extractListMulti("div", {}); return {posts: r};' },
+      { id: '4', name: 'hover_enrich', script: 'const ai = await $hover("a", {popoverSelector:".x"}); return {accountInfoHtml: ai};' },
+      { id: '5', name: 'parse_output', script: 'return {accountInfoHtml: __stepResults__["4"].accountInfoHtml};' },
+    ];
+    // Step 4 calls $hover and writes accountInfoHtml. Step 5 is a pass-through.
+    assert.equal(findUpstreamProducingStepId(steps, '5'), '4');
+  });
+
+  it('matches $extract (single-value) as a producing primitive', () => {
+    // Unlike findUpstreamExtractionStepId (which intentionally skips $extract
+    // because it's not an ARRAY primitive), findUpstreamProducingStepId
+    // accepts $extract — single-value extraction can populate scalar output
+    // fields like title, postTime, etc.
+    const steps = [
+      { id: '1', name: 'page_title', script: 'const t = await $extract("h1"); return {title: t};' },
+      { id: '2', name: 'finalize', script: 'return __stepResults__["1"];' },
+    ];
+    assert.equal(findUpstreamProducingStepId(steps, '2'), '1');
+  });
+
+  it('finds the CLOSEST upstream producer (not the earliest)', () => {
+    const steps = [
+      { id: '1', name: 'initial_extract', script: 'await $extractList("div", {a:"a"});' },
+      { id: '2', name: 'hover_pass', script: 'const h = await $hover("a", {}); return {info: h};' },
+      { id: '3', name: 'finalize', script: 'return __stepResults__["2"];' },
+    ];
+    // Step 2 is closer to the finalizer than step 1 — pick step 2.
+    assert.equal(findUpstreamProducingStepId(steps, '3'), '2');
+  });
+
+  it('falls back to fallbackStepId when no step calls any producing primitive', () => {
+    const steps = [
+      { id: '1', name: 'wait', script: 'await $wait("div"); return {done:true};' },
+      { id: '2', name: 'finalize', script: 'return {posts: []};' },
+    ];
+    assert.equal(findUpstreamProducingStepId(steps, '2'), '2');
+  });
+
+  it('returns fallbackStepId for empty or non-array steps', () => {
+    assert.equal(findUpstreamProducingStepId([], '6'), '6');
+    assert.equal(findUpstreamProducingStepId(null, '6'), '6');
+    assert.equal(findUpstreamProducingStepId(undefined, '6'), '6');
+  });
+
+  it('does NOT match $count, $exists, $check (predicate primitives, not producers)', () => {
+    // $count / $exists / $check return booleans/numbers for control flow,
+    // not page content. They are NOT extraction primitives.
+    const steps = [
+      { id: '1', name: 'gate', script: 'const n = await $count("li"); return {ready: n > 0};' },
+      { id: '2', name: 'finalize', script: 'return __stepResults__["1"];' },
+    ];
+    assert.equal(findUpstreamProducingStepId(steps, '2'), '2');
+  });
+});
+
 describe('getOutputFieldOptions', () => {
   const { getOutputFieldOptions } = require('../lib/wizard-utils');
 

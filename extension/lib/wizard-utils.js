@@ -332,6 +332,8 @@ RULES:
 - For MULTIPLE records: pass \`{ index: i }\` per call. Do NOT batch-hovers — only one popover is on screen at a time, and most sites close the previous popover on the next hover.
 - PREFER \$hover over \$openTab for hovercard data. \$openTab opens a NEW TAB (full navigation lifecycle, network refetch, 5-15s per record). \$hover stays in-page (~250-500ms per record) because the popover content is already loaded or fetched via XHR the page already knows how to make.
 - If htmlSnippet is null after hover (popover never appeared), common causes: (a) popoverSelector wrong — inspect the actual popover DOM, (b) anchor offscreen — \$hover calls scrollIntoView first but some popovers only fire for fully-visible anchors, (c) hover handler gated on Enhanced Mode being enabled. Do NOT retry in a tight loop — surface the failure to the framework.
+- HOVERCARD vs LINK-PREVIEW vs TOOLTIP — when an anchor triggers MULTIPLE popover types on the same page (a link-preview card with OpenGraph image+title AND a hovercard with entity stats/member-count/bio AND a small URL tooltip), popoverSelector MUST specifically match the HOVERCARD container — not the link-preview and not the tooltip. The hovercard carries the entity-detail fields you want; the link-preview carries page-preview fields (OG title, OG image, page description) which look similar but are the WRONG card. How to disambiguate in DevTools: (1) manually hover the anchor until every popover has appeared, (2) inspect each popover's data-* attributes and ARIA role/label, (3) pick the one whose DOM contains the field you actually want to extract (member count, bio, follower count, etc.) and use its specific selector — usually a stable container with a distinct [role], [aria-label], or [data-*] attribute. A popoverSelector like 'div[role="dialog"]' or 'div[data-hovercard]' is usually correct; 'div[aria-label="...preview..."]' or any selector matching the link-preview card is the WRONG card. When unsure, prefer the popover whose [role] is "dialog" or "tooltip" with a non-preview [aria-label].
+- ANCHOR SELECTOR ROBUSTNESS — keep \$hover's anchorSelector SHORT and use DESCENDANT combinators (spaces), not CHILD (>). Component-library DOM commonly wraps the visible link in 5-10 anonymous intermediate wrappers (div > div > div > ... > a). A selector like \`section h3 a[role="link"]\` (descendant) tolerates wrapper-level refactors; a selector like \`section h3 > span > span > span > span > span > a[role="link"]\` (child chain) breaks the moment the page adds or removes one wrapper level. Prefer: \`<stable-container> <stable-leaf>\` (e.g. \`div[role="article"] a[role="link"]\`). The framework's selector generator already produces short descendant selectors for annotated elements — mirror that style.
 
 ROBUSTNESS RULES (MANDATORY — these prevent the most common silent failures):
 
@@ -1335,6 +1337,35 @@ function findUpstreamExtractionStepId(steps, fallbackStepId) {
   for (let i = steps.length - 1; i >= 0; i--) {
     const s = steps[i];
     if (s && typeof s.script === 'string' && ARRAY_EXTRACTION_RE.test(s.script)) {
+      return s.id;
+    }
+  }
+  return fallbackStepId;
+}
+
+// RC42: Producing-primitive finder for REQUIRED_OUTPUT_MISSING fallback.
+// console.log 2026-08-12 incident: finalResult {accountInfoHtml:"", groupInfoHtml:""}
+// where both fields are STRINGS produced by step 5's `$hover` calls. The script
+// returned cleanly (try/catch swallowed the underlying hover failure), so the
+// orchestrator's catch path with its ELEMENT_NOT_FOUND/SCRIPT_ERROR autoFix
+// gate never fired. validateOutputAgainstSchema DID fire REQUIRED_OUTPUT_MISSING,
+// but the failure path returned without attempting autoFix — and even if it had,
+// findUpstreamExtractionStepId only matches $extractList/$extractListMulti/$list
+// (ARRAY primitives), so step 5's $hover was invisible to the walk-back.
+//
+// This helper matches a BROADER set of producing primitives — anything that
+// pulls content out of the page ($hover, $extract, $extractList,
+// $extractListMulti, $list). It deliberately excludes predicate primitives
+// ($count, $exists, $check) which return booleans/numbers for control flow,
+// not extracted content. Used by background.js's REQUIRED_OUTPUT_MISSING path
+// to point autoFix at the actual producer when scalar output fields come back
+// empty.
+const PRODUCING_PRIMITIVE_RE = /\$(hover|extract|extractList|extractListMulti|list)\s*\(/;
+function findUpstreamProducingStepId(steps, fallbackStepId) {
+  if (!Array.isArray(steps) || steps.length === 0) return fallbackStepId;
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const s = steps[i];
+    if (s && typeof s.script === 'string' && PRODUCING_PRIMITIVE_RE.test(s.script)) {
       return s.id;
     }
   }
@@ -3298,7 +3329,7 @@ function applyTemplate(templateId) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
@@ -3306,6 +3337,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.validateOutputAgainstSchema = validateOutputAgainstSchema;
   window.findEmptyExtractionFields = findEmptyExtractionFields;
   window.findUpstreamExtractionStepId = findUpstreamExtractionStepId;
+  window.findUpstreamProducingStepId = findUpstreamProducingStepId;
   window.getFirstRecordHtmlFromExecution = getFirstRecordHtmlFromExecution;
   window.getFirstRecordHtmlFromAnyStep = getFirstRecordHtmlFromAnyStep;
   window.detectEmptyOutputFieldsByRatio = detectEmptyOutputFieldsByRatio;
@@ -3364,6 +3396,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.validateOutputAgainstSchema = validateOutputAgainstSchema;
   self.findEmptyExtractionFields = findEmptyExtractionFields;
   self.findUpstreamExtractionStepId = findUpstreamExtractionStepId;
+  self.findUpstreamProducingStepId = findUpstreamProducingStepId;
   self.getFirstRecordHtmlFromExecution = getFirstRecordHtmlFromExecution;
   self.getFirstRecordHtmlFromAnyStep = getFirstRecordHtmlFromAnyStep;
   self.detectEmptyOutputFieldsByRatio = detectEmptyOutputFieldsByRatio;
