@@ -303,7 +303,7 @@ $extract(sel) and $extractList(sel, { field: { selector, attr } }) support attri
   // ^ Note: empty selector inside $extractListMulti returns the container's own outerHTML.
 Do NOT use textContent as a substitute for outerHTML when outputSchema asks for raw HTML — textContent strips all tags and produces plain text the consumer cannot parse.
 
-\$EXTRACT-WITH-HOVER (container-scoped extract + hover — PREFERRED for list enrichment):
+EXTRACT-WITH-HOVER (container-scoped extract + hover — PREFERRED for list enrichment):
 When you need to extract fields from a list of containers AND enrich each
 record with hovercard/popover data from anchors inside the SAME container,
 \$extractWithHover is the correct primitive. It extracts fields AND hovers
