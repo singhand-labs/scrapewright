@@ -263,3 +263,56 @@ describe('RC45 Task 3: inline fallback mirrors extractWithHoverRecords', () => {
       'inline fallback must export extractWithHoverRecords in its return object');
   });
 });
+
+describe('RC45 Task 4: domExtractWithHover wrapper', () => {
+  it('exists and validates inputs', () => {
+    const src = readSrc('content-script.js');
+    assert.ok(/async\s+function\s+domExtractWithHover\s*\(/.test(src),
+      'domExtractWithHover function must exist');
+    // Must validate containerSel as non-empty string.
+    assert.ok(/containerSel must be a non-empty string/.test(src),
+      'domExtractWithHover must validate containerSel');
+    // Must validate opts.hover existence.
+    assert.ok(/opts\.hover must be an object/.test(src),
+      'domExtractWithHover must validate opts.hover');
+    // Must validate opts.hover.anchorSel.
+    assert.ok(/anchorSel must be a non-empty string/.test(src),
+      'domExtractWithHover must validate opts.hover.anchorSel');
+  });
+
+  it('resolves containers via querySelectorAllDeep and supports range opts', () => {
+    const src = readSrc('content-script.js');
+    const fnStart = src.indexOf('async function domExtractWithHover');
+    const fnEnd = src.indexOf('}', src.indexOf('return { result', fnStart));
+    const body = src.slice(fnStart, fnEnd > fnStart ? fnEnd + 1 : src.length);
+    assert.ok(/querySelectorAllDeep/.test(body),
+      'domExtractWithHover must resolve containers via querySelectorAllDeep');
+    // Range opts must be honored.
+    assert.ok(/containerIndex/.test(body), 'must support containerIndex');
+    assert.ok(/containerRange/.test(body), 'must support containerRange');
+    assert.ok(/maxContainers/.test(body), 'must support maxContainers');
+    // Must enforce only-one-of constraint.
+    assert.ok(/only one of/.test(body), 'must enforce only-one-of range opts');
+  });
+
+  it('delegates to ops.extractWithHoverRecords with domHover injected', () => {
+    const src = readSrc('content-script.js');
+    const fnStart = src.indexOf('async function domExtractWithHover');
+    const body = src.slice(fnStart, fnStart + 8000);
+    assert.ok(/extractWithHoverRecords/.test(body),
+      'must call ops.extractWithHoverRecords');
+    // Must pass domHover as the hoverFn argument.
+    assert.ok(/\bdomHover\b/.test(body),
+      'must inject domHover as the hoverFn parameter');
+  });
+
+  it('returns { result, _diagnostics } with hover summary in diagnostics', () => {
+    const src = readSrc('content-script.js');
+    const fnStart = src.indexOf('async function domExtractWithHover');
+    const body = src.slice(fnStart, fnStart + 8000);
+    assert.ok(/return\s*\{\s*result/.test(body),
+      'must return { result, _diagnostics }');
+    assert.ok(/hoverSummary|hovercardsCaptured|hoverFailures/.test(body),
+      'diagnostics must include a hover summary (captured + failed counts)');
+  });
+});
