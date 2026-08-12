@@ -1776,7 +1776,25 @@
       }
 
       // Score each candidate. Cap rejectedSummary to bound diagnostic size.
-      var bestCandidate = null;
+      //
+      // RC40 (console.log 2026-08-12): added viewport-size rejection. The
+      // prior "larger area wins on ties" tiebreaker silently preferred a
+      // full-viewport positioned backdrop (area ~= innerWidth*innerHeight,
+      // pos:absolute, z:0, dist<100) over the actual hovercard (~250x400)
+      // because the backdrop "won" every tie dimension. Hovercards are by
+      // construction smaller than the viewport: they float OVER content,
+      // never covering it. A candidate with area > 50% of the viewport
+      // is a backdrop/wrapper/portal-root, never the hovercard itself.
+      // REJECTING these is universal: works for any site that uses a
+      // portal backdrop (React Portal overlays, modal-style hover popovers,
+      // loading-shim containers that persist between hovers).
+      //
+      // Also: track ALL passing candidates and emit the top-3 to the SW log
+      // even when one wins. "Picked the wrong one of N that passed" is
+      // invisible without this — only the winner was logged before.
+      var viewportArea = (window.innerWidth || 0) * (window.innerHeight || 0);
+      var viewportAreaThreshold = viewportArea * 0.5;
+      var passingCandidates = [];
       var rejectedSummary = [];
       for (var ci = 0; ci < candidatePool.length; ci++) {
         var node = candidatePool[ci];
@@ -1792,6 +1810,16 @@
             tag: node.tagName,
             size: Math.round(nr.width) + 'x' + Math.round(nr.height),
             reason: 'too_small'
+          });
+          continue;
+        }
+        var narea = nr.width * nr.height;
+        if (viewportArea > 0 && narea > viewportAreaThreshold) {
+          if (rejectedSummary.length < 5) rejectedSummary.push({
+            tag: node.tagName,
+            size: Math.round(nr.width) + 'x' + Math.round(nr.height),
+            viewportRatio: Math.round((narea / viewportArea) * 100) / 100,
+            reason: 'viewport_sized'
           });
           continue;
         }
@@ -1815,7 +1843,6 @@
         var ndx = (nr.left + nr.width / 2) - x;
         var ndy = (nr.top + nr.height / 2) - y;
         var ndist = Math.sqrt(ndx * ndx + ndy * ndy);
-        var narea = nr.width * nr.height;
         if (!posAbsolute && ndist > 300) {
           if (rejectedSummary.length < 5) rejectedSummary.push({
             tag: node.tagName,
@@ -1825,19 +1852,30 @@
           });
           continue;
         }
-        var candidate = { node: node, posAbsolute: posAbsolute, z: nz, dist: ndist, area: narea };
-        if (!bestCandidate) {
-          bestCandidate = candidate;
-          continue;
-        }
-        var a = candidate, b = bestCandidate;
-        var aWins = false;
-        if (a.posAbsolute !== b.posAbsolute) aWins = a.posAbsolute;
-        else if (a.z !== b.z) aWins = (a.z > b.z);
-        else if (a.dist !== b.dist) aWins = (a.dist < b.dist);
-        else aWins = (a.area > b.area);
-        if (aWins) bestCandidate = candidate;
+        passingCandidates.push({
+          node: node, posAbsolute: posAbsolute, z: nz, dist: ndist, area: narea
+        });
       }
+      // Sort passing candidates by the scoring cascade: posAbsolute wins,
+      // then z (desc), then proximity (asc), then area (desc).
+      passingCandidates.sort(function (a, b) {
+        if (a.posAbsolute !== b.posAbsolute) return a.posAbsolute ? -1 : 1;
+        if (a.z !== b.z) return b.z - a.z;
+        if (a.dist !== b.dist) return a.dist - b.dist;
+        return b.area - a.area;
+      });
+      var bestCandidate = passingCandidates.length > 0 ? passingCandidates[0] : null;
+      function summarizeCandidate(c) {
+        if (!c) return null;
+        return {
+          tag: c.node.tagName,
+          posAbsolute: c.posAbsolute,
+          z: c.z,
+          dist: Math.round(c.dist),
+          area: Math.round(c.area)
+        };
+      }
+      var consideredTop = passingCandidates.slice(0, 3).map(summarizeCandidate);
       if (bestCandidate) {
         htmlSnippet = bestCandidate.node.outerHTML;
         matchedSel = '[auto-discovered popover]';
@@ -1846,13 +1884,9 @@
           selector: sel,
           addedNodes: addedNodes.length,
           pool: candidatePool.length,
-          picked: {
-            tag: bestCandidate.node.tagName,
-            posAbsolute: bestCandidate.posAbsolute,
-            z: bestCandidate.z,
-            dist: Math.round(bestCandidate.dist),
-            area: Math.round(bestCandidate.area)
-          }
+          passing: passingCandidates.length,
+          picked: summarizeCandidate(bestCandidate),
+          considered: consideredTop
         });
       } else if (candidatePool.length > 0) {
         // Diagnostic: observer and/or elementsFromPoint caught candidates
@@ -1864,8 +1898,10 @@
           selector: sel,
           addedNodes: addedNodes.length,
           pool: candidatePool.length,
+          passing: 0,
           picked: null,
-          reason: 'no candidate passed visibility+size+positioning filter',
+          considered: [],
+          reason: 'no candidate passed visibility+size+viewport+positioning filter',
           rejected: rejectedSummary
         });
       }
