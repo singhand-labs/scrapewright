@@ -395,10 +395,15 @@ describe('RC45 Task 7: $EXTRACT-WITH-HOVER DSL section', () => {
 describe('RC45 Task 8: HOVER ENRICHMENT points to $extractWithHover', () => {
   it('HOVER ENRICHMENT section mentions $extractWithHover as preferred for lists', () => {
     const src = readSrc('lib/wizard-utils.js');
-    const start = src.indexOf('HOVER ENRICHMENT');
-    assert.ok(start > -1, 'HOVER ENRICHMENT section must exist');
+    // The string "HOVER ENRICHMENT" appears once in a passing reference
+    // (top-level bullet) and once as the actual section header. Target the
+    // section header (followed by the "(hovercard / link-preview fields)"
+    // qualifier) so the slice is the real section body.
+    const headerNeedle = 'HOVER ENRICHMENT (hovercard / link-preview fields)';
+    const start = src.indexOf(headerNeedle);
+    assert.ok(start > -1, 'HOVER ENRICHMENT section header must exist');
     const end = src.indexOf('ROBUSTNESS RULES', start);
-    assert.ok(end > start);
+    assert.ok(end > start, 'ROBUSTNESS RULES section must follow HOVER ENRICHMENT');
     const section = src.slice(start, end);
     assert.ok(/extractWithHover/.test(section),
       'HOVER ENRICHMENT must point readers to $extractWithHover for list contexts');
