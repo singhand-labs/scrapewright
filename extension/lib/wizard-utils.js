@@ -1334,7 +1334,7 @@ function validateOutputAgainstSchema(finalResult, outputSchema) {
 // Falls back to fallbackStepId unchanged when no step in the chain calls an
 // extraction primitive (defensive — preserves prior behavior for hand-rolled
 // loops the DSL guide nonetheless discourages).
-const ARRAY_EXTRACTION_RE = /\$(extractList|extractListMulti|list)\s*\(/;
+const ARRAY_EXTRACTION_RE = /\$(extractList|extractListMulti|extractWithHover|list)\s*\(/;
 function findUpstreamExtractionStepId(steps, fallbackStepId) {
   if (!Array.isArray(steps) || steps.length === 0) return fallbackStepId;
   for (let i = steps.length - 1; i >= 0; i--) {
