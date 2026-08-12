@@ -344,3 +344,18 @@ describe('RC45 Task 5: DOM_REQUEST + sandbox wiring', () => {
       'window.$extractWithHover signature must be (containerSel, fieldMap, opts) — 3 args, matching existing list primitives');
   });
 });
+
+describe('RC45 Task 6: ARRAY_EXTRACTION_RE recognizes extractWithHover', () => {
+  it('ARRAY_EXTRACTION_RE matches $extractWithHover( calls', () => {
+    const src = readSrc('lib/wizard-utils.js');
+    const m = src.match(/const\s+ARRAY_EXTRACTION_RE\s*=\s*\/([^\/]+)\//);
+    assert.ok(m, 'ARRAY_EXTRACTION_RE must exist');
+    const re = new RegExp(m[1]);
+    assert.ok(re.test('$extractWithHover('),
+      'ARRAY_EXTRACTION_RE must match $extractWithHover( — autoFix uses this to identify array-producing steps');
+    // Sanity: existing primitives still recognized.
+    assert.ok(re.test('$extractListMulti('));
+    assert.ok(re.test('$extractList('));
+    assert.ok(re.test('$list('));
+  });
+});
