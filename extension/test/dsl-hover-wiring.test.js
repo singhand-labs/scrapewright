@@ -169,6 +169,30 @@ test('universality: no site-specific terms in new hover-related code or prompt t
   }
 });
 
+test('universality: no site specific terms in EXTRACT-WITH-HOVER section (RC45)', () => {
+  // Mirrors the HOVER ENRICHMENT universality check for the new section
+  // added in RC45. The section must use only abstract selector names
+  // (li.result-item, a.profile-link, div[role=dialog]) — never site names.
+  const wu = readSrc('lib/wizard-utils.js');
+  // Target the actual section header (with the parenthesized qualifier),
+  // not a passing reference. The bare string 'EXTRACT-WITH-HOVER' appears
+  // only at the section header today, but qualify the needle to be robust
+  // against future passing references.
+  const start = wu.indexOf('EXTRACT-WITH-HOVER (container-scoped extract + hover');
+  assert.ok(start > -1, 'EXTRACT-WITH-HOVER section header must exist');
+  const end = wu.indexOf('HOVER ENRICHMENT', start);
+  assert.ok(end > start, 'HOVER ENRICHMENT section must follow EXTRACT-WITH-HOVER');
+  const section = wu.slice(start, end);
+
+  const bannedRegex = /\b(facebook|twitter|linkedin|tiktok|reddit|instagram|youtube|weibo|wechat|xiaohongshu|douyin)\b/i;
+  const m = section.match(bannedRegex);
+  assert.ok(!m, `EXTRACT-WITH-HOVER section must not contain site names; found: ${m && m[0]}`);
+
+  const lower = section.toLowerCase();
+  assert.ok(!/\bfb\b/.test(lower), 'EXTRACT-WITH-HOVER section must not contain standalone "fb"');
+  assert.ok(!/\big\b/.test(lower), 'EXTRACT-WITH-HOVER section must not contain standalone "ig"');
+});
+
 test('sandbox.js, content-script.js, background.js: hover wiring is non-empty (regression guard)', () => {
   // RC30 part-2 lesson: source-text audits that only check for the EXISTENCE
   // of a substring can pass against stubs. Add a minimum-content check: the
