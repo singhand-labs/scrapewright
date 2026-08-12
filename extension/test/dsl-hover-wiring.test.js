@@ -405,3 +405,103 @@ test('domHover auto-discovery emits hover_auto_discover diagnostic (RC38 observa
     'domHover must emit hover_auto_discover diagnostic via notifyBackgroundDiagnostic ' +
     '(goes to background SW log, not just page console — observability for future hover bugs)');
 });
+
+test('domHover auto-discovery samples elementsFromPoint as a secondary candidate source (RC39 pre-existing overlay architecture fix)', () => {
+  // console.log 2026-08-12 02:04+: SEVENTH hover-family incident. Even
+  // after RC38 added multi-signal scoring (replacing RC37's hard filter),
+  // every hover iteration still returned picked:null. The diagnostic
+  // repeatedly showed `addedNodes:3, picked:null, reason:"no candidate
+  // passed visibility+size+positioning filter"` across all 5 anchors ×
+  // multiple iterations.
+  //
+  // Why scoring alone is INSUFFICIENT: MutationObserver has a fundamental
+  // blind spot. It only catches DOM ADDITIONS. Overlay frameworks that
+  // PRE-ALLOCATE the portal container at page load and show the hovercard
+  // via CSS (display:none → display:block, visibility:hidden → visible)
+  // produce ZERO addedNodes during hover. The observer simply cannot see
+  // these hovercards, no matter how good the scoring is.
+  //
+  // Architecture fix: add document.elementsFromPoint sampling as a
+  // SECONDARY candidate source. elementsFromPoint returns the stack of
+  // elements at a given viewport coordinate, topmost first. It catches
+  // overlays regardless of HOW they were shown (new node vs CSS toggle).
+  //
+  // Sample at cursor AND offset points (above/below/left/right of anchor
+  // center) to catch hovercards that appear BESIDE the anchor rather than
+  // overlapping it. Combine elementsFromPoint candidates with
+  // MutationObserver additions into a unified scoring pool.
+  //
+  // This is a fundamentally different detection mechanism: MutationObserver
+  // observes CHANGES, elementsFromPoint observes STATE. Both are needed
+  // because overlay frameworks split into two camps (mutate-on-show vs
+  // pre-allocate-and-toggle).
+  const cs = readSrc('content-script.js');
+  const fnStart = cs.indexOf('async function domHover(');
+  const fnEnd = cs.indexOf('async function domOpenTab(', fnStart);
+  const fnBody = cs.slice(fnStart, fnEnd);
+  assert.ok(fnStart > -1 && fnEnd > fnStart, 'domHover must exist');
+
+  // Slice the auto-discovery region (same RC38 marker pair).
+  const autoDiscoverStart = fnBody.indexOf('Path (b): auto-discovery');
+  const autoDiscoverEnd = fnBody.indexOf('observer.disconnect()', autoDiscoverStart);
+  assert.ok(autoDiscoverStart > -1, 'auto-discovery comment block must exist');
+  assert.ok(autoDiscoverEnd > autoDiscoverStart, 'auto-discovery region must end before observer.disconnect');
+  const region = fnBody.slice(autoDiscoverStart, autoDiscoverEnd);
+
+  // elementsFromPoint must be invoked in the auto-discovery region.
+  assert.match(region, /elementsFromPoint/,
+    'auto-discovery must call document.elementsFromPoint to sample pre-existing overlays ' +
+    '(MutationObserver alone cannot catch hovercards shown via CSS toggle from a pre-allocated container)');
+
+  // Sampling at multiple offset points (not just the cursor itself) is
+  // required to catch hovercards that appear beside the anchor. Look for
+  // either: an offsets array literal with >=3 points, OR multiple
+  // elementsFromPoint calls, OR a loop over sampling coordinates.
+  const hasOffsetsArray = /\[\s*\[\s*0\s*,\s*0\s*\]\s*,/.test(region) ||
+                          /\[\s*\[\s*-\d+\s*,\s*0\s*\]/.test(region) ||
+                          /\[\s*\[\s*0\s*,\s*-?\d+\s*\]/.test(region);
+  const hasMultipleSampling = (region.match(/elementsFromPoint/g) || []).length >= 2;
+  const hasLoopSampling = /for\s*\(.*offset|offsets\s*\[|sampleOffsets|samplePoints/.test(region);
+  assert.ok(hasOffsetsArray || hasMultipleSampling || hasLoopSampling,
+    'auto-discovery must sample elementsFromPoint at multiple coordinates (cursor + offsets) ' +
+    'so hovercards appearing beside the anchor are caught');
+});
+
+test('domHover auto-discovery diagnostic emits per-candidate rejection details (RC39 observability enhancement)', () => {
+  // RC39 lesson: the RC38 diagnostic surfaced `addedNodes:3, picked:null`
+  // but gave NO signal to distinguish between two competing hypotheses:
+  //   (A) hovercard WAS in addedNodes but rejected by some filter
+  //       (need to know WHICH filter — size, position, proximity?)
+  //   (B) hovercard was NOT in addedNodes at all (pre-existing overlay
+  //       shown via CSS toggle — observer can never catch it)
+  //
+  // Without per-candidate rejection detail, debugging requires the user
+  // to capture a separate page-console log (the page-only sendDebugLog
+  // doesn't reach the SW log). This is the same observability gap that
+  // made RC37/RC38 debugging take multiple round-trips.
+  //
+  // Fix: when no candidate passes, emit a rejected[] array with per-node
+  // properties: tag, size, position, proximity, reject reason. Cap the
+  // array length to keep the diagnostic payload bounded (e.g. <=5).
+  const cs = readSrc('content-script.js');
+  const fnStart = cs.indexOf('async function domHover(');
+  const fnEnd = cs.indexOf('async function domOpenTab(', fnStart);
+  const fnBody = cs.slice(fnStart, fnEnd);
+  assert.ok(fnStart > -1 && fnEnd > fnStart, 'domHover must exist');
+
+  // Slice the auto-discovery region (same RC38 marker pair).
+  const autoDiscoverStart = fnBody.indexOf('Path (b): auto-discovery');
+  const autoDiscoverEnd = fnBody.indexOf('observer.disconnect()', autoDiscoverStart);
+  assert.ok(autoDiscoverStart > -1 && autoDiscoverEnd > autoDiscoverStart,
+    'auto-discovery region must be sliceable');
+  const region = fnBody.slice(autoDiscoverStart, autoDiscoverEnd);
+
+  // Per-candidate rejection logging: look for a rejected-array push or
+  // a rejectedSummary-like accumulator with per-node fields.
+  const hasRejectedAccumulator = /rejectedSummary|rejectedList|rejected\s*:\s*\[|rejected\.push/.test(region);
+  const hasRejectReason = /reason:\s*['"]?(too_small|invisible|static_and_far|no_computed_style|size|position|proximity)/i.test(region);
+  assert.ok(hasRejectedAccumulator && hasRejectReason,
+    'auto-discovery must accumulate per-candidate rejection details ' +
+    '(tag/size/position/proximity + reject reason) into the hover_auto_discover diagnostic ' +
+    'so future hover-family bugs are debuggable from the SW log alone');
+});

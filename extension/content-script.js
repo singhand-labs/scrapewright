@@ -1713,36 +1713,98 @@
           break;
         }
       }
-      // Path (b): auto-discovery. Score all added nodes by overlay signals
-      // and pick the highest-scoring candidate. See RC38 for the architectural
-      // rationale — RC34-RC37 each used a hard filter (visibility+size,
-      // position-only, position+z-index) and each silently rejected real
-      // hovercards in some overlay-framework configuration.
+      // Path (b): auto-discovery. Score observed added nodes AND
+      // elementsFromPoint samples by overlay signals, then pick the
+      // highest-scoring candidate.
+      //
+      // Why TWO candidate sources (RC39 architectural fix):
+      //   - MutationObserver catches DOM ADDITIONS (React Portal mounts,
+      //     Vue Teleport mounts, Popper / Floating UI / Tippy mounts).
+      //   - elementsFromPoint catches PRE-EXISTING overlays shown via
+      //     CSS toggle (display:block, visibility:visible). Common in
+      //     architectures that pre-allocate the portal container at page
+      //     load and show/hide its children on hover. The observer cannot
+      //     see these because nothing is added — only CSS changes.
+      //
+      // RC38 added scoring; RC38 alone was insufficient because scoring
+      // only helps when the hovercard is in the candidate pool at all.
+      // RC39 console.log showed `addedNodes:3, picked:null` on every
+      // iteration: the hovercard was never in addedNodes (it pre-existed).
       //
       // Scoring signals (strongest first):
-      //   1. position absolute/fixed (overlay positioning — primary signal,
-      //      hard requirement UNLESS the candidate is very close to cursor)
-      //   2. numeric z-index (creates stacking context; common but not
-      //      universal — many frameworks inherit z-index from a parent)
+      //   1. position absolute/fixed (overlay positioning — primary signal)
+      //   2. numeric z-index (creates stacking context; common but
+      //      inherited from parent in some frameworks)
       //   3. proximity to cursor (universal — hovercards always appear
-      //      AT/NEAR the anchor; gradient placeholders and video
-      //      scaffolding in post body are far from cursor)
+      //      AT/NEAR the anchor)
       //   4. area (larger wins on full ties)
       //
-      // Hard reject: tiny additions (<50x50) and static-positioned additions
-      // far from cursor (>300px). These cannot be hovercards.
-      var bestCandidate = null;       // { node, posAbsolute, z, dist, area }
+      // Hard reject: tiny additions (<50x50) and static-positioned
+      // additions far from cursor (>300px). These cannot be hovercards.
+
+      // Build candidate pool. Dedupe by element identity.
+      var candidatePool = [];
+      var seenEls = [];
+      function pushCandidate(el) {
+        if (!el || el.nodeType !== 1) return;
+        for (var d = 0; d < seenEls.length; d++) {
+          if (seenEls[d] === el) return;
+        }
+        seenEls.push(el);
+        candidatePool.push(el);
+      }
       for (var k = 0; k < addedNodes.length; k++) {
-        var node = addedNodes[k];
-        if (!node || node.nodeType !== 1) continue; // elements only
-        if (!isElementVisible(node)) continue;
+        pushCandidate(addedNodes[k]);
+      }
+      // Path (c): elementsFromPoint sampling. Sample at cursor and
+      // cardinal offsets (~120px) to catch hovercards appearing beside
+      // the anchor rather than overlapping it. Wraps in try/catch since
+      // the API can throw on out-of-viewport coordinates in some engines.
+      if (typeof document.elementsFromPoint === 'function') {
+        var offsets = [[0, 0], [0, -120], [0, 120], [-120, 0], [120, 0]];
+        for (var oi = 0; oi < offsets.length; oi++) {
+          var ox = x + offsets[oi][0];
+          var oy = y + offsets[oi][1];
+          if (ox < 0 || oy < 0 || ox > window.innerWidth || oy > window.innerHeight) continue;
+          var stack = [];
+          try { stack = document.elementsFromPoint(ox, oy) || []; }
+          catch (e) { stack = []; }
+          for (var ti = 0; ti < stack.length; ti++) {
+            pushCandidate(stack[ti]);
+          }
+        }
+      }
+
+      // Score each candidate. Cap rejectedSummary to bound diagnostic size.
+      var bestCandidate = null;
+      var rejectedSummary = [];
+      for (var ci = 0; ci < candidatePool.length; ci++) {
+        var node = candidatePool[ci];
+        if (!isElementVisible(node)) {
+          if (rejectedSummary.length < 5) rejectedSummary.push({
+            tag: node.tagName, reason: 'invisible'
+          });
+          continue;
+        }
         var nr = node.getBoundingClientRect();
-        if (nr.width < 50 || nr.height < 50) continue;
+        if (nr.width < 50 || nr.height < 50) {
+          if (rejectedSummary.length < 5) rejectedSummary.push({
+            tag: node.tagName,
+            size: Math.round(nr.width) + 'x' + Math.round(nr.height),
+            reason: 'too_small'
+          });
+          continue;
+        }
         var nodeWin = node.ownerDocument && node.ownerDocument.defaultView || window;
         var nodeStyle;
         try { nodeStyle = nodeWin.getComputedStyle(node); }
         catch (e) { nodeStyle = null; }
-        if (!nodeStyle) continue;
+        if (!nodeStyle) {
+          if (rejectedSummary.length < 5) rejectedSummary.push({
+            tag: node.tagName, reason: 'no_computed_style'
+          });
+          continue;
+        }
         var posAbsolute = (nodeStyle.position === 'absolute' || nodeStyle.position === 'fixed');
         var nz = 0;
         var zRaw = nodeStyle.zIndex;
@@ -1754,17 +1816,20 @@
         var ndy = (nr.top + nr.height / 2) - y;
         var ndist = Math.sqrt(ndx * ndx + ndy * ndy);
         var narea = nr.width * nr.height;
-        // Hard filter: positioned overlays always pass; static-positioned
-        // candidates only pass if very close to cursor (likely a hovercard
-        // rendered without explicit positioning).
-        if (!posAbsolute && ndist > 300) continue;
+        if (!posAbsolute && ndist > 300) {
+          if (rejectedSummary.length < 5) rejectedSummary.push({
+            tag: node.tagName,
+            pos: nodeStyle.position,
+            dist: Math.round(ndist),
+            reason: 'static_and_far'
+          });
+          continue;
+        }
         var candidate = { node: node, posAbsolute: posAbsolute, z: nz, dist: ndist, area: narea };
         if (!bestCandidate) {
           bestCandidate = candidate;
           continue;
         }
-        // Score comparison: positioned beats non-positioned; higher z wins;
-        // closer to cursor wins; larger area wins.
         var a = candidate, b = bestCandidate;
         var aWins = false;
         if (a.posAbsolute !== b.posAbsolute) aWins = a.posAbsolute;
@@ -1780,6 +1845,7 @@
         notifyBackgroundDiagnostic('hover_auto_discover', {
           selector: sel,
           addedNodes: addedNodes.length,
+          pool: candidatePool.length,
           picked: {
             tag: bestCandidate.node.tagName,
             posAbsolute: bestCandidate.posAbsolute,
@@ -1788,14 +1854,19 @@
             area: Math.round(bestCandidate.area)
           }
         });
-      } else if (addedNodes.length > 0) {
-        // Diagnostic: observer caught additions but none passed even the
-        // looser scoring filter. Surfaces the failure mode for debugging.
+      } else if (candidatePool.length > 0) {
+        // Diagnostic: observer and/or elementsFromPoint caught candidates
+        // but none passed the scoring filter. rejected[] surfaces per-node
+        // properties + reject reason so future hover-family bugs are
+        // debuggable from the SW log alone — no separate page-console
+        // capture needed.
         notifyBackgroundDiagnostic('hover_auto_discover', {
           selector: sel,
           addedNodes: addedNodes.length,
+          pool: candidatePool.length,
           picked: null,
-          reason: 'no candidate passed visibility+size+positioning filter'
+          reason: 'no candidate passed visibility+size+positioning filter',
+          rejected: rejectedSummary
         });
       }
       if (htmlSnippet) break;
