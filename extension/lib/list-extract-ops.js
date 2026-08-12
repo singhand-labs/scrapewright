@@ -150,6 +150,105 @@ function clickInListItems(containers, subSel, clickFn, delayMs) {
   return { clicked, errors, delayMs: delay };
 }
 
+// extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverFn, opts) → Promise<records>
+//
+// Container-scoped extract-then-hover. For each container:
+//   1. Extract fields via extractListRecords (delegation — same
+//      fieldMap semantics, including empty-selector-returns-container-itself).
+//   2. Enumerate anchors via container.querySelectorAll(hoverConfig.anchorSel)
+//      — scoped to the container subtree. Anchors outside any container
+//      are never reached.
+//   3. For each anchor, call hoverFn(anchorEl, hoverConfig.popoverSel, perHoverOpts).
+//      hoverFn is injected so the helper stays testable without chrome.* deps
+//      (production passes domHover; tests pass a mock).
+//   4. Append a hovercards[] array to the record. Each entry carries the
+//      full hover result shape plus anchorIndex (the anchor position within
+//      THIS container, not globally).
+//
+// Why this exists: the existing manual-loop pattern of $hover(..., {index:i})
+// uses a GLOBAL anchor enumeration. When containers hold variable numbers of
+// anchors, the i-th global anchor does not correspond to the i-th container,
+// producing systematically mis-aligned hovercard attachments. Container-scoped
+// querySelector makes misalignment structurally impossible.
+//
+// hoverConfig: { anchorSel (required), popoverSel?, timeoutMs?, dismiss? }
+// opts:        { allowEmpty? } — same semantics as extractListRecords
+async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverFn, opts) {
+  if (!Array.isArray(containers)) {
+    throw new Error('$extractWithHover: containers must be an array');
+  }
+  if (!fieldMap || typeof fieldMap !== 'object' || Object.keys(fieldMap).length === 0) {
+    throw new Error('$extractWithHover fieldMap must be a non-empty object');
+  }
+  if (!hoverConfig || typeof hoverConfig !== 'object') {
+    throw new Error('$extractWithHover hoverConfig must be an object');
+  }
+  if (!hoverConfig.anchorSel || typeof hoverConfig.anchorSel !== 'string') {
+    throw new Error('$extractWithHover hoverConfig.anchorSel must be a non-empty string');
+  }
+  if (typeof hoverFn !== 'function') {
+    throw new Error('$extractWithHover hoverFn must be a function');
+  }
+  if (!containers.length) {
+    if (opts && opts.allowEmpty) return [];
+    throw new Error('$extractWithHover: no containers matched');
+  }
+  // Step 1: extract fields per container via the existing helper. allowEmpty
+  // is forced on here because we already validated containers.length > 0;
+  // per-field emptiness is signaled via diagnostics, not by throwing.
+  const records = extractListRecords(containers, fieldMap, { allowEmpty: true });
+  // Step 2-4: per-container anchor iteration. Sequential — only one popover
+  // can be on screen at a time on most sites (the page dismisses the previous
+  // popover on the next hover). Parallel dispatch would race.
+  const anchorSel = hoverConfig.anchorSel;
+  const popoverSel = hoverConfig.popoverSel || null;
+  const perHoverOpts = {};
+  if (typeof hoverConfig.timeoutMs === 'number' && hoverConfig.timeoutMs > 0) {
+    perHoverOpts.timeoutMs = hoverConfig.timeoutMs;
+  }
+  if (typeof hoverConfig.dismiss === 'boolean') {
+    perHoverOpts.dismiss = hoverConfig.dismiss;
+  } else {
+    perHoverOpts.dismiss = true;
+  }
+  for (let i = 0; i < containers.length; i++) {
+    const container = containers[i];
+    let anchors = [];
+    try {
+      anchors = Array.prototype.slice.call(container.querySelectorAll(anchorSel));
+    } catch (_) {
+      // Invalid anchorSel inside this container subtree — leave anchors empty.
+      anchors = [];
+    }
+    const hovercards = [];
+    for (let j = 0; j < anchors.length; j++) {
+      const anchorEl = anchors[j];
+      try {
+        const r = await hoverFn(anchorEl, popoverSel, perHoverOpts);
+        hovercards.push({
+          hovered: !!(r && r.hovered),
+          htmlSnippet: (r && r.htmlSnippet) || null,
+          popoverSelector: (r && r.popoverSelector) || null,
+          autoDiscovered: !!(r && r.autoDiscovered),
+          reason: (r && r.reason) || null,
+          anchorIndex: j
+        });
+      } catch (err) {
+        hovercards.push({
+          hovered: false,
+          htmlSnippet: null,
+          popoverSelector: null,
+          autoDiscovered: false,
+          reason: 'hover_error: ' + (err && err.message || String(err)),
+          anchorIndex: j
+        });
+      }
+    }
+    records[i].hovercards = hovercards;
+  }
+  return records;
+}
+
 // computeExtractListDiagnostics(containers, fieldMap, containerSelector) → object
 //
 // Computes per-field match diagnostics for an $extractList call. For each
@@ -258,6 +357,7 @@ function computeSimpleSelectorDiagnostics(elements, selector, api) {
 const api = {
   extractListRecords,
   extractListMultiRecords,
+  extractWithHoverRecords,
   clickInListItems,
   computeExtractListDiagnostics,
   computeSimpleSelectorDiagnostics
