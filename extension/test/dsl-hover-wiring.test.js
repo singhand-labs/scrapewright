@@ -505,3 +505,92 @@ test('domHover auto-discovery diagnostic emits per-candidate rejection details (
     '(tag/size/position/proximity + reject reason) into the hover_auto_discover diagnostic ' +
     'so future hover-family bugs are debuggable from the SW log alone');
 });
+
+test('domHover auto-discovery rejects viewport-sized candidates (RC40 backdrop filter)', () => {
+  // console.log 2026-08-12 03:59+: EIGHTH hover-family incident. RC39 added
+  // elementsFromPoint sampling (pool:186-211 candidates) — a HUGE improvement
+  // over RC38's empty pool. But the picked candidate was consistently a
+  // viewport-sized element: area:1,644,015 px² (~80% of a 1920×1080 viewport),
+  // posAbsolute:true, z:0, dist:7-78.
+  //
+  // The result confirmed this is a backdrop/wrapper, NOT a hovercard:
+  // accountInfoHtml = "<div class=\"x1ey2m1c xtijo5x x1o0tod xixxii4
+  // x13vifvy x1h0vfkc\"></div>" — an empty positioned div. Its CSS classes
+  // apply position:absolute; inset:0; making it cover the viewport while
+  // remaining empty (a click-capture layer or a placeholder container for a
+  // yet-to-render hovercard).
+  //
+  // Why the RC38/RC39 scoring picked it: the cascade is posAbsolute → z →
+  // dist → area (larger wins). The backdrop ties with the real hovercard on
+  // posAbsolute (both true) and z (both 0/auto), beats it on dist (viewport
+  // center is near cursor), and CRUSHES it on area (1.6M vs ~100K px²).
+  //
+  // Universal signal: hovercards are bounded UI elements meant to be
+  // unobtrusive overlays. They are ALWAYS smaller than the viewport.
+  // Backdrops, modal screens, and portal-container pre-allocation layers
+  // are viewport-sized or near-viewport-sized. The 50% viewport-area
+  // threshold cleanly separates these populations across every overlay
+  // framework (portal implementations, modal libraries, site-specific
+  // Layer architectures).
+  //
+  // This is a hard filter, not a scoring change. Hard filters have been
+  // fragile before (RC37), but this filter rests on a UNIVERSAL property
+  // of hovercards (size bounded by viewport) rather than a framework
+  // specific property (z-index value, position value).
+  const cs = readSrc('content-script.js');
+  const fnStart = cs.indexOf('async function domHover(');
+  const fnEnd = cs.indexOf('async function domOpenTab(', fnStart);
+  const fnBody = cs.slice(fnStart, fnEnd);
+  assert.ok(fnStart > -1 && fnEnd > fnStart, 'domHover must exist');
+
+  const autoDiscoverStart = fnBody.indexOf('Path (b): auto-discovery');
+  const autoDiscoverEnd = fnBody.indexOf('observer.disconnect()', autoDiscoverStart);
+  assert.ok(autoDiscoverStart > -1 && autoDiscoverEnd > autoDiscoverStart,
+    'auto-discovery region must be sliceable');
+  const region = fnBody.slice(autoDiscoverStart, autoDiscoverEnd);
+
+  // Must compare candidate area against viewport area (universal hovercard
+  // bound). Look for: innerWidth*innerHeight, viewportArea, or a 0.5/50%
+  // threshold comparison.
+  const hasViewportArea = /innerWidth\s*\*\s*innerHeight|viewportArea|viewport_area/.test(region);
+  const hasViewportThreshold = /viewport_sized|viewport.*0\.\d|0\.5\s*\*\s*viewport|viewport.*half/i.test(region);
+  assert.ok(hasViewportArea && hasViewportThreshold,
+    'auto-discovery must reject viewport-sized candidates (area > ~50% of viewport). ' +
+    'Hovercards are always smaller than the viewport; backdrops/wrappers are viewport-sized. ' +
+    'Look for: window.innerWidth * window.innerHeight comparison with threshold.');
+});
+
+test('domHover auto-discovery diagnostic emits top-N considered candidates always (RC40 observability)', () => {
+  // RC40 lesson: the RC39 diagnostic emitted per-candidate rejection details
+  // ONLY when picked was null. When picked was non-null (the WRONG pick —
+  // viewport-sized backdrop), the diagnostic showed only the picked element's
+  // properties with NO visibility into what else was in the pool.
+  //
+  // Without top-N visibility, we couldn't answer: "was the real hovercard in
+  // the pool and lost to the backdrop on area, or was it not in the pool at
+  // all?" That question is critical for forming the next hypothesis.
+  //
+  // Fix: always emit a considered[] array showing the top-N candidates by
+  // score, regardless of whether picked is null. Each entry includes the
+  // score-relevant fields (tag, posAbsolute, z, dist, area) so the scoring
+  // decision can be audited from the SW log alone.
+  const cs = readSrc('content-script.js');
+  const fnStart = cs.indexOf('async function domHover(');
+  const fnEnd = cs.indexOf('async function domOpenTab(', fnStart);
+  const fnBody = cs.slice(fnStart, fnEnd);
+  assert.ok(fnStart > -1 && fnEnd > fnStart, 'domHover must exist');
+
+  const autoDiscoverStart = fnBody.indexOf('Path (b): auto-discovery');
+  const autoDiscoverEnd = fnBody.indexOf('observer.disconnect()', autoDiscoverStart);
+  assert.ok(autoDiscoverStart > -1 && autoDiscoverEnd > autoDiscoverStart,
+    'auto-discovery region must be sliceable');
+  const region = fnBody.slice(autoDiscoverStart, autoDiscoverEnd);
+
+  // Look for a considered/topCandidates accumulator that's emitted in the
+  // diagnostic regardless of picked value.
+  const hasConsideredAccumulator = /considered|topCandidates|topCandidates\s*=\s*\[|consideredCandidates/.test(region);
+  assert.ok(hasConsideredAccumulator,
+    'auto-discovery must emit a considered[]/topCandidates[] array in the hover_auto_discover ' +
+    'diagnostic ALWAYS (not just when picked is null), so the scoring decision is auditable ' +
+    'from the SW log without needing a separate page-console capture.');
+});
