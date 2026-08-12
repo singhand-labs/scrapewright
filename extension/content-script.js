@@ -1601,8 +1601,8 @@
   // on hover/popover failure — returns hovered:false or htmlSnippet:null so
   // the LLM script can branch. Throws only on ELEMENT_NOT_FOUND for the
   // anchor (so the LLM gets an autoFix-able error, not silent empty).
-  async function domHover(sel, popoverSel, opts) {
-    if (!sel) throw new Error('$hover requires an anchor selector');
+  async function domHover(selOrEl, popoverSel, opts) {
+    if (!selOrEl) throw new Error('$hover requires an anchor selector or element');
     opts = opts || {};
     var timeoutMs = (typeof opts.timeoutMs === 'number' && opts.timeoutMs > 0) ? opts.timeoutMs : 3000;
     var dismiss = (typeof opts.dismiss === 'boolean') ? opts.dismiss : true;
@@ -1620,21 +1620,33 @@
     var MIN_HOVERCONTENT_TEXT_LEN = 20;
     var STABILITY_SAMPLE_INTERVAL_MS = 100;
 
-    // Multi-record addressing: when opts.index is set, enumerate ALL matches
-    // and pick the Nth. This is the correct way to hover "the i-th anchor in
-    // a list" — `:nth-of-type(N)` is a CSS TRAP (matches the Nth sibling OF
-    // THE SAME TAG, not the Nth compound-selector match) and silently picks
-    // the wrong anchor or none. Same addressing semantics as `$list()[N]`.
+    // RC45: accept a resolved DOM element as the first argument. Callers like
+    // $extractWithHover iterate anchors inside a specific container and pass
+    // them directly, bypassing global querySelector enumeration. The
+    // element branch MUST run before the string branches so opts.index is
+    // ignored when an element is supplied (the caller already chose the
+    // anchor; index would re-enumerate globally and reintroduce the
+    // alignment bug this primitive exists to fix). Same signature, backward
+    // compatible: existing $hover callers pass strings and behave unchanged.
     var anchor = null;
-    if (index !== null) {
+    var selectorForLog = selOrEl;
+    if (selOrEl && typeof selOrEl === 'object' && selOrEl.nodeType) {
+      anchor = selOrEl;
+      selectorForLog = '[element:' + (selOrEl.tagName || 'DIV') + ']';
+    } else if (index !== null) {
+      // Multi-record addressing: when opts.index is set, enumerate ALL matches
+      // and pick the Nth. This is the correct way to hover "the i-th anchor in
+      // a list" — `:nth-of-type(N)` is a CSS TRAP (matches the Nth sibling OF
+      // THE SAME TAG, not the Nth compound-selector match) and silently picks
+      // the wrong anchor or none. Same addressing semantics as `$list()[N]`.
       if (index < 0) throw new Error('INDEX_OUT_OF_RANGE: $hover opts.index must be >= 0, got ' + index);
-      var matches = querySelectorAllDeep(sel);
-      if (matches.length === 0) throw new Error('ELEMENT_NOT_FOUND: ' + sel);
+      var matches = querySelectorAllDeep(selOrEl);
+      if (matches.length === 0) throw new Error('ELEMENT_NOT_FOUND: ' + selOrEl);
       if (index >= matches.length) throw new Error('INDEX_OUT_OF_RANGE: $hover opts.index=' + index + ' but selector matched only ' + matches.length + ' element(s)');
       anchor = matches[index];
     } else {
-      var found = querySelectorDeep(sel);
-      if (!found) throw new Error('ELEMENT_NOT_FOUND: ' + sel);
+      var found = querySelectorDeep(selOrEl);
+      if (!found) throw new Error('ELEMENT_NOT_FOUND: ' + selOrEl);
       anchor = found.element;
     }
 
@@ -1766,7 +1778,7 @@
     }
 
     notifyBackgroundDiagnostic('hover_request', {
-      selector: sel,
+      selector: selectorForLog,
       popoverSelector: popoverSel || null,
       hoverX: x, hoverY: y,
       dispatched: !!(hoverResp && hoverResp.dispatched),
@@ -2072,7 +2084,7 @@
           autoDiscovered = true;
         }
         notifyBackgroundDiagnostic('hover_auto_discover', {
-          selector: sel,
+          selector: selectorForLog,
           dwellMs: Math.round(dwellMs),
           addedNodes: addedNodes.length,
           pool: candidatePool.length,
@@ -2089,7 +2101,7 @@
         // debuggable from the SW log alone — no separate page-console
         // capture needed.
         notifyBackgroundDiagnostic('hover_auto_discover', {
-          selector: sel,
+          selector: selectorForLog,
           dwellMs: Math.round(dwellMs),
           addedNodes: addedNodes.length,
           pool: candidatePool.length,
@@ -2114,10 +2126,10 @@
     if (dismiss) {
       try {
         await chrome.runtime.sendMessage({ type: 'TRUSTED_HOVER_DISMISS' });
-        notifyBackgroundDiagnostic('hover_dismiss', { selector: sel, ok: true });
+        notifyBackgroundDiagnostic('hover_dismiss', { selector: selectorForLog, ok: true });
       } catch (e) {
         notifyBackgroundDiagnostic('hover_dismiss', {
-          selector: sel, ok: false,
+          selector: selectorForLog, ok: false,
           reason: 'sendMessage error: ' + (e && e.message || String(e))
         });
       }
@@ -2138,7 +2150,7 @@
     }
 
     sendDebugLog('info', 'content-script', 'domHover done', {
-      selector: sel, popoverSelector: popoverSel || null,
+      selector: selectorForLog, popoverSelector: popoverSel || null,
       hovered: result.hovered, hasSnippet: !!htmlSnippet,
       snippetLen: htmlSnippet ? htmlSnippet.length : 0,
       autoDiscovered: autoDiscovered,
