@@ -614,6 +614,34 @@ async function handleExecute(serviceName, input) {
         const outErr = oc.code + ': missing [' + oc.missing.join(', ') + '] — result has [' + gotKeys.join(', ') + ']; the extraction step must return outputSchema field names';
         debugLogger.log('warn', 'background', 'Output failed required-field check', { missing: oc.missing, got: gotKeys });
         await logExecution(service, input, result.finalResult, outErr, attempt);
+
+        // RC42: scalar-empty fallback. console.log 2026-08-12 showed step 5
+        // using `$hover` calls wrapped in try/catch with empty catch blocks.
+        // The hovers silently failed (popover never matched), the script
+        // returned {done:true, accountInfoHtml:"", groupInfoHtml:""}, and
+        // the orchestrator saw a clean success. validateOutputAgainstSchema
+        // fired REQUIRED_OUTPUT_MISSING but the prior code returned failure
+        // directly — autoFix never got a chance to repair the producing step.
+        // Throw a synthetic error to enter the catch path; the catch path's
+        // shouldAutoFix gate (extended in RC42 to accept
+        // REQUIRED_OUTPUT_MISSING) routes it to tryAutoFixStep.
+        //
+        // findUpstreamProducingStepId matches $hover/$extract/$extractList/
+        // $extractListMulti/$list — broader than findUpstreamExtractionStepId
+        // (which only matches ARRAY primitives) so $hover-producing steps
+        // become visible to the walk-back.
+        const fallbackStepId = (Array.isArray(service.steps) && service.steps.length > 0)
+          ? service.steps[service.steps.length - 1].id
+          : null;
+        const targetStepId = findUpstreamProducingStepId(service.steps, fallbackStepId);
+        if (targetStepId && attempt < maxRetries) {
+          const syntheticErr = new Error(outErr);
+          syntheticErr.stepId = targetStepId;
+          syntheticErr.code = 'REQUIRED_OUTPUT_MISSING';
+          syntheticErr.missingFields = oc.missing.slice();
+          throw syntheticErr;
+        }
+
         return {
           success: false,
           error: outErr,
@@ -687,7 +715,7 @@ async function handleExecute(serviceName, input) {
 
       const shouldAutoFix = attempt < maxRetries &&
         error.stepId &&
-        (error.message?.includes('ELEMENT_NOT_FOUND') || error.message?.includes('SCRIPT_ERROR') || error.message?.includes('SCRIPT_TIMEOUT'));
+        (error.message?.includes('ELEMENT_NOT_FOUND') || error.message?.includes('SCRIPT_ERROR') || error.message?.includes('SCRIPT_TIMEOUT') || error.code === 'REQUIRED_OUTPUT_MISSING');
 
       if (shouldAutoFix) {
         sendLog('Auto-fixing step "' + error.stepId + '" (attempt ' + (attempt + 1) + ')...');

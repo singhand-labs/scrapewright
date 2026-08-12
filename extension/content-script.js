@@ -1882,16 +1882,21 @@
         var ndx = (nr.left + nr.width / 2) - x;
         var ndy = (nr.top + nr.height / 2) - y;
         var ndist = Math.sqrt(ndx * ndx + ndy * ndy);
-        // RC41: UNIVERSAL distance cap. The prior filter only rejected
+        // RC41 + RC42: UNIVERSAL distance cap. The prior filter only rejected
         // STATIC-positioned far candidates (`!posAbsolute && dist > 300`),
         // which let posAbsolute post-wrappers 400-500px from cursor win the
         // scoring cascade. Universal UX property: hovercards ALWAYS appear
-        // AT/NEAR the anchor (within ~300px of cursor center, even for
-        // tall portal cards). Cap at 400 to leave margin for very tall
-        // hovercards whose center is ~350px below cursor (top of card
-        // aligned with anchor). Rejecting farther candidates regardless of
-        // positioning is universal — works for any site.
-        if (ndist > 400) {
+        // AT/NEAR the anchor. RC41 set the cap at 400; RC42 widens it to 600
+        // after console.log 2026-08-12 showed a real hovercard rejected at
+        // dist:496 ('too_far_from_cursor'). Portal-based hovercard frameworks
+        // commonly mount the popover centered ~400-500px below the cursor
+        // when the anchor sits near the top of the viewport (popover grows
+        // downward from anchor; its center ends up far from cursor center
+        // because the cursor sits on the anchor at the top edge). 600 keeps
+        // a margin against page-wide modals while admitting real hovercards.
+        // Rejecting farther candidates regardless of positioning is
+        // universal — works for any site.
+        if (ndist > 600) {
           if (rejectedSummary.length < 5) rejectedSummary.push({
             tag: node.tagName,
             pos: nodeStyle.position,
@@ -1906,15 +1911,19 @@
           source: nsource
         });
       }
-      // Sort passing candidates by the scoring cascade: posAbsolute wins,
-      // then z (desc), then proximity (asc), then source ('added' beats
-      // 'efp' — MutationObserver caught the element appearing post-hover,
-      // strongest hovercard signal), then area (desc).
+      // Sort passing candidates by the scoring cascade. RC42 reordering:
+      // source ('added' beats 'efp') is checked BEFORE dist. Why: a candidate
+      // that just appeared in the MutationObserver buffer (added) is the
+      // strongest hovercard-mount signal — it must win over pre-existing
+      // efp-sampled elements regardless of which is closer to the cursor.
+      // The prior ordering (dist before source) let a closer-to-cursor
+      // pre-existing positioned DIV beat the actual hovercard that mounted
+      // slightly farther away. posAbsolute > z > source > dist > area.
       passingCandidates.sort(function (a, b) {
         if (a.posAbsolute !== b.posAbsolute) return a.posAbsolute ? -1 : 1;
         if (a.z !== b.z) return b.z - a.z;
-        if (a.dist !== b.dist) return a.dist - b.dist;
         if (a.source !== b.source) return a.source === 'added' ? -1 : 1;
+        if (a.dist !== b.dist) return a.dist - b.dist;
         return b.area - a.area;
       });
       var bestCandidate = passingCandidates.length > 0 ? passingCandidates[0] : null;
