@@ -2231,6 +2231,134 @@
     return result;
   }
 
+  // domExtractWithHover: container-scoped extract-then-hover. See
+  // $EXTRACT-WITH-HOVER in SCRIPT_DSL_GUIDE for the LLM-facing contract.
+  //
+  // Resolves containers via querySelectorAllDeep, applies range opts
+  // (containerIndex / containerRange / maxContainers), validates allowEmpty,
+  // then delegates to ops.extractWithHoverRecords with the real domHover
+  // injected as hoverFn. The pure helper in lib/list-extract-ops.js handles
+  // the per-container anchor iteration; this wrapper handles the
+  // chrome.*-dependent concerns (container resolution, diagnostics wiring).
+  async function domExtractWithHover(containerSel, fieldMap, opts) {
+    if (!containerSel || typeof containerSel !== 'string') {
+      throw new Error('$extractWithHover containerSel must be a non-empty string');
+    }
+    opts = opts || {};
+    var hoverConfig = opts.hover;
+    if (!hoverConfig || typeof hoverConfig !== 'object') {
+      throw new Error('$extractWithHover opts.hover must be an object');
+    }
+    if (!hoverConfig.anchorSel || typeof hoverConfig.anchorSel !== 'string') {
+      throw new Error('$extractWithHover opts.hover.anchorSel must be a non-empty string');
+    }
+    if (!fieldMap || typeof fieldMap !== 'object' || Object.keys(fieldMap).length === 0) {
+      throw new Error('$extractWithHover fieldMap must be a non-empty object');
+    }
+    // Range opts: at most one may be set. They narrow which containers get
+    // processed before anchor iteration begins.
+    var containerIndex = opts.containerIndex;
+    var containerRange = opts.containerRange;
+    var maxContainers = opts.maxContainers;
+    var rangeOptsSet =
+      (containerIndex !== null && containerIndex !== undefined ? 1 : 0) +
+      (containerRange ? 1 : 0) +
+      (maxContainers !== null && maxContainers !== undefined ? 1 : 0);
+    if (rangeOptsSet > 1) {
+      throw new Error('$extractWithHover only one of containerIndex/containerRange/maxContainers may be set');
+    }
+    // Resolve containers.
+    var containers;
+    try {
+      containers = querySelectorAllDeep(containerSel);
+    } catch (err) {
+      throw new Error('$extractWithHover container selector invalid: ' + (err.message || err));
+    }
+    sendDebugLog('info', 'content-script', 'domExtractWithHover resolved containers', {
+      selector: containerSel,
+      count: containers.length,
+      anchorSel: hoverConfig.anchorSel,
+      fieldKeys: Object.keys(fieldMap)
+    });
+    // Apply range opts.
+    var processed;
+    if (containerIndex !== null && containerIndex !== undefined) {
+      if (containerIndex < 0) {
+        throw new Error('$extractWithHover containerIndex must be >= 0, got ' + containerIndex);
+      }
+      processed = (containerIndex < containers.length) ? [containers[containerIndex]] : [];
+    } else if (containerRange) {
+      var start = typeof containerRange[0] === 'number' ? Math.max(0, containerRange[0]) : 0;
+      var end = typeof containerRange[1] === 'number' ? Math.min(containers.length, containerRange[1]) : containers.length;
+      processed = containers.slice(start, end);
+    } else if (maxContainers !== null && maxContainers !== undefined) {
+      processed = containers.slice(0, Math.max(0, maxContainers));
+    } else {
+      processed = containers;
+    }
+    if (processed.length === 0) {
+      if (opts.allowEmpty) {
+        return {
+          result: [],
+          _diagnostics: {
+            api: 'extractWithHover',
+            containerSelector: containerSel,
+            containerMatches: 0,
+            processedContainers: 0,
+            perField: [],
+            hoverSummary: { anchorsFound: 0, hovercardsCaptured: 0, hoverFailures: 0 }
+          }
+        };
+      }
+      throw new Error('$extractWithHover: no containers matched' +
+        (rangeOptsSet === 1 ? ' (after range filtering)' : ''));
+    }
+    var ops = getListExtractOps();
+    if (!ops) {
+      throw new Error('$extractWithHover runtime missing: lib/list-extract-ops.js did not attach window.ListExtractOps. Reload the extension and refresh the target tab.');
+    }
+    if (typeof ops.extractWithHoverRecords !== 'function') {
+      throw new Error('$extractWithHover runtime stale: ops.extractWithHoverRecords missing — lib/list-extract-ops.js and content-script.js inline fallback are out of sync. Reload the extension; if it persists, run test/inline-list-extract-ops-drift.test.js.');
+    }
+    // Delegate the per-container iteration to the pure helper. Inject the
+    // real domHover (refactor in Task 1 lets domHover accept the anchor
+    // element directly, bypassing global querySelector).
+    var records = await ops.extractWithHoverRecords(
+      processed,
+      fieldMap,
+      hoverConfig,
+      domHover,
+      { allowEmpty: true }
+    );
+    // Compute diagnostics: reuse the extractList diagnostics shape for
+    // per-field match data, then layer on a hover summary.
+    var _diagnostics = (ops && typeof ops.computeExtractListDiagnostics === 'function')
+      ? ops.computeExtractListDiagnostics(processed, fieldMap, containerSel)
+      : { api: 'extractWithHover', containerSelector: containerSel, containerMatches: processed.length, perField: [] };
+    _diagnostics.api = 'extractWithHover';
+    _diagnostics.processedContainers = processed.length;
+    var anchorsFound = 0;
+    var hovercardsCaptured = 0;
+    var hoverFailures = 0;
+    for (var i = 0; i < records.length; i++) {
+      var cards = records[i].hovercards || [];
+      anchorsFound += cards.length;
+      for (var j = 0; j < cards.length; j++) {
+        if (cards[j].hovered && cards[j].htmlSnippet) {
+          hovercardsCaptured++;
+        } else {
+          hoverFailures++;
+        }
+      }
+    }
+    _diagnostics.hoverSummary = {
+      anchorsFound: anchorsFound,
+      hovercardsCaptured: hovercardsCaptured,
+      hoverFailures: hoverFailures
+    };
+    return { result: records, _diagnostics: _diagnostics };
+  }
+
   const openTabPending = new Map();
   let openTabCounter = 0;
 
