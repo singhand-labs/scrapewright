@@ -92,6 +92,15 @@ function buildSegment(el) {
   return parts.join('');
 }
 
+function isBareSegment(seg, tagName) {
+  // A "bare" segment is just the tag with no anchor — e.g. "div", "span".
+  // Such segments contribute `> div >` noise without adding disambiguation
+  // power, and they encode DOM structure that breaks across refactors.
+  // We skip them when walking up; the gap is bridged with the descendant
+  // combinator (space) between stable anchors instead.
+  return !!tagName && seg === tagName.toLowerCase();
+}
+
 function generateSelector(el, ownerDoc) {
   if (!el || !el.tagName) return 'body';
 
@@ -101,31 +110,51 @@ function generateSelector(el, ownerDoc) {
   const ownerBody = doc.body || doc.documentElement;
   if (!ownerBody) return el.tagName.toLowerCase();
 
-  const path = [];
-  let current = el;
+  // Always include the leaf segment — it is the match target. Even when
+  // the leaf is bare (e.g. "div"), we keep it; the brittleness penalty
+  // for one bare tag is small and the execution selector still resolves.
+  const path = [buildSegment(el)];
   let uniqueFound = false;
 
-  while (current && current !== ownerBody && current.tagName) {
-    const segment = buildSegment(current);
-    if (!segment) break;
-    path.unshift(segment);
-
-    // Early-stop: partial path now matches at most one element.
-    const partial = path.join(' > ');
-    let matches = null;
-    try {
-      matches = doc.querySelectorAll(partial);
-    } catch (e) {
-      // Invalid selector — should not happen given our construction,
-      // but never throw. Bail with what we have.
-      break;
-    }
-    if (matches.length <= 1) {
+  try {
+    if (doc.querySelectorAll(path.join(' ')).length <= 1) {
       uniqueFound = true;
-      break;
     }
+  } catch (e) {
+    // Invalid selector — defensive only, given our construction.
+  }
 
-    current = current.parentNode;
+  // Walk up. SKIP anonymous parents (those whose buildSegment is just the
+  // bare tag) — they contribute only structural noise. Add a parent only
+  // when it has a real anchor (id, role, aria-*, data-*, semantic class).
+  // Bridge consecutive stable anchors with the DESCENDANT combinator
+  // (space), not child (>). This tolerates intermediate wrapper changes
+  // and yields short, robust selectors. Before this change, deeply nested
+  // portal markup (18+ anonymous wrapper divs between a stable article
+  // anchor and a stable leaf) produced 19-segment chains that scored 115+
+  // on the brittleness check; the walk now produces a 2-segment descendant
+  // selector for the same element.
+  if (!uniqueFound) {
+    let current = el.parentNode;
+    while (current && current !== ownerBody && current.tagName) {
+      const segment = buildSegment(current);
+      if (!segment) break;
+      if (!isBareSegment(segment, current.tagName)) {
+        path.unshift(segment);
+        const partial = path.join(' ');
+        let matches = null;
+        try {
+          matches = doc.querySelectorAll(partial);
+        } catch (e) {
+          break;
+        }
+        if (matches.length <= 1) {
+          uniqueFound = true;
+          break;
+        }
+      }
+      current = current.parentNode;
+    }
   }
 
   // If we walked to body without uniqueness, the clicked element has siblings
@@ -147,7 +176,7 @@ function generateSelector(el, ownerDoc) {
     }
   }
 
-  return path.length > 0 ? path.join(' > ') : el.tagName.toLowerCase();
+  return path.join(' ');
 }
 
 // Full ancestry walk — same segment construction as generateSelector, but
