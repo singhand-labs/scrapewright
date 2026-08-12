@@ -7,7 +7,14 @@
 //   - module.exports (Node)
 //   - window.SelectorGenerator (content-script context)
 //   - self.SelectorGenerator (service worker / offscreen context)
+//
+// IIFE-wrapped: content_scripts in the same manifest entry share a global
+// lexical scope, so a top-level `const api` here collides with the same
+// declaration in list-extract-ops.js (Identifier 'api' has already been
+// declared). The IIFE gives the module its own lexical scope; the api object
+// is still exposed via window.X / self.X / module.exports.
 
+(function (global) {
 const STABLE_ATTRS = [
   'role',
   'aria-label',
@@ -188,9 +195,7 @@ const api = { generateSelector, generateFullDomPath, buildSegment, STABLE_ATTRS,
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = api;
 }
-if (typeof window !== 'undefined') {
-  window.SelectorGenerator = api;
+if (typeof global !== 'undefined') {
+  global.SelectorGenerator = api;
 }
-if (typeof self !== 'undefined') {
-  self.SelectorGenerator = api;
-}
+})(typeof globalThis !== 'undefined' ? globalThis : this);
