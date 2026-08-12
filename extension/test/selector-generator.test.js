@@ -231,6 +231,43 @@ describe('generateSelector', () => {
     const sel = generateSelector(el, document);
     assert.ok(sel.includes('#post-list'), `should anchor on semantic id, got "${sel}"`);
   });
+
+  // Regression: deeply nested React-portal-style markup produced 19-segment
+  // chains like
+  //   div[role="article"][aria-posinset="\3 3"] > div > div > div > ... > div[role="button"][aria-label="..."]
+  // (18 anonymous `> div >` levels). The brittleness scorer flagged these
+  // at 115+, and the chains broke across any wrapper-level refactor.
+  // The fix: skip anonymous parents during the walk-up; bridge stable
+  // anchors with the descendant combinator (space).
+  it('collapses anonymous wrapper divs into a short descendant selector', () => {
+    const anonymousWrappers = '<div>'.repeat(17);
+    const closedWrappers = '</div>'.repeat(17);
+    setupDOM(
+      '<!DOCTYPE html><html><body>' +
+      '<div role="article" aria-posinset="1">' + anonymousWrappers +
+        '<div role="button" aria-label="Comment"></div>' +
+      closedWrappers + '</div>' +
+      '<div role="article" aria-posinset="2">' + anonymousWrappers +
+        '<div role="button" aria-label="Comment"></div>' +
+      closedWrappers + '</div>' +
+      '</body></html>'
+    );
+    // Click the first article's button. Walking up, every wrapper is an
+    // anonymous div — none has a stable anchor. Only the article parent
+    // counts. Result should be a 2-segment descendant selector.
+    const target = document.querySelectorAll('div[role="button"]')[0];
+    const sel = generateSelector(target, document);
+    const segments = sel.split(/\s+/).filter(Boolean);
+    assert.ok(segments.length <= 3,
+      `expected ≤ 3 segments, got ${segments.length} in "${sel}"`);
+    assert.ok(sel.includes('role="article"'),
+      `should include the article anchor, got "${sel}"`);
+    assert.ok(sel.includes('role="button"'),
+      `should include the leaf button, got "${sel}"`);
+    // Critical: no `> div >` chain. Descendant combinator only.
+    assert.ok(!/>[\s]*div[\s]*>/.test(sel),
+      `should not contain anonymous > div > chain, got "${sel}"`);
+  });
 });
 
 const { generateFullDomPath } = require('../lib/selector-generator');
