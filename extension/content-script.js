@@ -951,6 +951,14 @@
           recordDomActivity('$clickInList', data.selector, result && typeof result.clicked === 'number' ? result.clicked : 0, Date.now() - __t0);
           break;
         }
+        case 'extractWithHover': {
+          const __t0 = Date.now();
+          const __r = await domExtractWithHover(data.selector, data.args && data.args[0], data.args && data.args[1]);
+          result = __r.result;
+          _diagnostics = __r._diagnostics;
+          recordDomActivity('$extractWithHover', data.selector, Array.isArray(result) ? result.length : 0, Date.now() - __t0);
+          break;
+        }
         case 'scrollBy': {
           const __t0 = Date.now();
           result = await domScrollBy(data.selector, data.args && data.args[0]);
