@@ -3,7 +3,14 @@
 // Pure helpers that operate on already-resolved container Element arrays.
 // content-script.js wraps these with querySelectorAllDeep to produce
 // domExtractList / domClickInList.
+//
+// IIFE-wrapped: content_scripts in the same manifest entry share a global
+// lexical scope, so a top-level `const api` here collides with the same
+// declaration in selector-generator.js (Identifier 'api' has already been
+// declared). The IIFE gives the module its own lexical scope; the api object
+// is still exposed via window.X / self.X / module.exports.
 
+(function (global) {
 // DOM properties that look like attributes but aren't — getAttribute returns
 // null for these. Read from the element directly when `attr` names one of them.
 // Regression for console.log 2026-07-26 RC5: $extract(_, 'outerHTML') returned
@@ -257,5 +264,5 @@ const api = {
 };
 
 if (typeof module !== 'undefined' && module.exports) module.exports = api;
-if (typeof window !== 'undefined') window.ListExtractOps = api;
-if (typeof self !== 'undefined') self.ListExtractOps = api;
+if (typeof global !== 'undefined') global.ListExtractOps = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this);

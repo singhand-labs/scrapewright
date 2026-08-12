@@ -10,7 +10,15 @@
 // leaving the page stuck at 6 articles. The new algorithm increments the
 // scroll position, watches scrollHeight for growth, and declares "stalled"
 // only after N consecutive no-progress attempts.
+//
+// IIFE-wrapped: content_scripts in the same manifest entry share a global
+// lexical scope. Even though this file uses `var api` (not `const`), a
+// top-level `var api` still collides with `const api` in the same scope
+// (SyntaxError: Identifier 'api' has already been declared). The IIFE gives
+// the module its own lexical scope; the api object is still exposed via
+// window.X / self.X / module.exports.
 
+(function (global) {
 var SCROLL_INCREMENT_RATIO = 0.85;   // fraction of clientHeight per scrollBy
 var DEFAULT_MAX_ATTEMPTS = 15;        // hard cap on scrollBy calls per invocation (was 8; bumped RC21 to give stallWindowMs room to fire)
 var DEFAULT_NO_PROGRESS_LIMIT = 3;   // consecutive no-growth + no-position-change attempts before stalled (legacy count-based signal)
@@ -265,5 +273,5 @@ var api = { scrollToBottomIncremental: scrollToBottomIncremental,
             SCROLL_INCREMENT_RATIO: SCROLL_INCREMENT_RATIO };
 
 if (typeof module !== 'undefined' && module.exports) module.exports = api;
-if (typeof window !== 'undefined') window.ScrollOps = api;
-if (typeof self !== 'undefined') self.ScrollOps = api;
+if (typeof global !== 'undefined') global.ScrollOps = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this);
