@@ -594,3 +594,129 @@ test('domHover auto-discovery diagnostic emits top-N considered candidates alway
     'diagnostic ALWAYS (not just when picked is null), so the scoring decision is auditable ' +
     'from the SW log without needing a separate page-console capture.');
 });
+
+test('domHover auto-discovery gated by min dwell time before scoring pre-existing pool (RC41 dwell gate)', () => {
+  // NINTH hover-family incident (console.log 2026-08-12). Even after RC38-RC40
+  // scoring improvements, the picked candidate was consistently wrong:
+  // dist:239-489, area:49629-463760, never the actual hovercard.
+  //
+  // Root cause: auto-discovery picked "best of pool" on the FIRST 250ms tick
+  // (T=0). At T=0, MutationObserver had addedNodes:0 (hovercard hadn't mounted
+  // yet) and elementsFromPoint returned 77-113 pre-existing positioned DIVs
+  // (post wrappers, content sections). The scoring cascade picked the most
+  // overlay-looking noise; the loop broke before the actual hovercard appeared
+  // (T=500ms+).
+  //
+  // Architectural fix: gate auto-discovery behind a minimum dwell time. Path
+  // (a) popoverSel is exempt (explicit selectors should be honored immediately).
+  // The gate lets the loop sleep through the pre-hover window so when
+  // auto-discover DOES run, the hovercard has had time to mount and compete
+  // in the scoring cascade.
+  const cs = readSrc('content-script.js');
+  const fnStart = cs.indexOf('async function domHover(');
+  const fnEnd = cs.indexOf('async function domOpenTab(', fnStart);
+  const fnBody = cs.slice(fnStart, fnEnd);
+  assert.ok(fnStart > -1 && fnEnd > fnStart, 'domHover must exist');
+
+  // Look for a min-dwell constant + gate check inside the polling loop.
+  const hasMinDwellConstant = /MIN_AUTO_DISCOVER_DWELL_MS|MIN_DWELL_MS|MIN_HOVER_DWELL_MS/.test(fnBody);
+  const hasDwellGate = /dwellMs\s*<\s*(?:MIN_AUTO_DISCOVER_DWELL_MS|MIN_DWELL_MS|MIN_HOVER_DWELL_MS)/.test(fnBody);
+  assert.ok(hasMinDwellConstant && hasDwellGate,
+    'auto-discovery must be gated behind a minimum dwell time (MIN_AUTO_DISCOVER_DWELL_MS or similar). ' +
+    'Without the gate, the loop picks pre-existing pool noise on the first 250ms tick before the ' +
+    'hovercard has time to mount (~500ms portal delay).');
+});
+
+test('domHover auto-discovery applies UNIVERSAL distance cap regardless of position (RC41 distance filter)', () => {
+  // NINTH incident: prior filter only rejected STATIC+far elements
+  // (`!posAbsolute && dist > 300`). PosAbsolute candidates had NO distance
+  // filter, so positioned post-wrappers 400-500px from cursor won the cascade
+  // (tied on posAbsolute+z, lost on dist to actual hovercard but won on area).
+  //
+  // Universal UX property: hovercards ALWAYS appear within ~300-400px of the
+  // anchor (cursor center). A candidate > 400px away is definitively not the
+  // hovercard regardless of positioning. The cap must apply to ALL candidates.
+  const cs = readSrc('content-script.js');
+  const fnStart = cs.indexOf('async function domHover(');
+  const fnEnd = cs.indexOf('async function domOpenTab(', fnStart);
+  const fnBody = cs.slice(fnStart, fnEnd);
+  assert.ok(fnStart > -1 && fnEnd > fnStart, 'domHover must exist');
+
+  const autoDiscoverStart = fnBody.indexOf('Path (b): auto-discovery');
+  const autoDiscoverEnd = fnBody.indexOf('observer.disconnect()', autoDiscoverStart);
+  assert.ok(autoDiscoverStart > -1 && autoDiscoverEnd > autoDiscoverStart,
+    'auto-discovery region must be sliceable');
+  const region = fnBody.slice(autoDiscoverStart, autoDiscoverEnd);
+
+  // Universal distance cap: dist > N (NOT conditioned on !posAbsolute).
+  // Reject reason should be distance-flavored.
+  const hasUniversalDistanceCap = /if\s*\(\s*(?:ndist|dist)\s*>\s*\d{2,3}\s*\)/.test(region);
+  const hasTooFarReason = /too_far_from_cursor|too_far|dist_max_exceeded/i.test(region);
+  assert.ok(hasUniversalDistanceCap && hasTooFarReason,
+    'auto-discovery must apply a UNIVERSAL distance cap (reject dist > N regardless of position). ' +
+    'The prior `!posAbsolute && dist > 300` filter only caught static+far elements; absolute-positioned ' +
+    'wrappers 400-500px from cursor won the cascade. Look for: unconditional distance check with ' +
+    'too_far_from_cursor reject reason.');
+});
+
+test('domHover auto-discovery tags candidates by source and prefers added over efp (RC41 source priority)', () => {
+  // NINTH incident diagnostic showed addedNodes:0 for most iterations but
+  // addedNodes:1-2 for a few late iterations. When addedNodes > 0, the new
+  // element SHOULD have been the hovercard — but it lost the scoring cascade
+  // to larger pre-existing positioned DIVs. The diagnostic didn't even tell
+  // us WHICH candidate was the added one vs an efp sample, so we couldn't
+  // confirm whether the hovercard was in the pool at all.
+  //
+  // Fix: tag each candidate with source ('added' from MutationObserver vs
+  // 'efp' from elementsFromPoint). Source becomes a tiebreaker in the scoring
+  // cascade — 'added' wins ties because it's the strongest hovercard signal
+  // (universal across portal frameworks: hovercards mount via React Portal /
+  // Vue Teleport / Popper / Floating UI / Tippy, all trigger addedNodes).
+  const cs = readSrc('content-script.js');
+  const fnStart = cs.indexOf('async function domHover(');
+  const fnEnd = cs.indexOf('async function domOpenTab(', fnStart);
+  const fnBody = cs.slice(fnStart, fnEnd);
+  assert.ok(fnStart > -1 && fnEnd > fnStart, 'domHover must exist');
+
+  const autoDiscoverStart = fnBody.indexOf('Path (b): auto-discovery');
+  const autoDiscoverEnd = fnBody.indexOf('observer.disconnect()', autoDiscoverStart);
+  assert.ok(autoDiscoverStart > -1 && autoDiscoverEnd > autoDiscoverStart,
+    'auto-discovery region must be sliceable');
+  const region = fnBody.slice(autoDiscoverStart, autoDiscoverEnd);
+
+  // Source tracking: pushCandidate takes a source arg ('added' or 'efp').
+  const hasSourceArg = /pushCandidate\s*\([^,)]+,\s*['"](?:added|efp)['"]/.test(region);
+  // Source priority in scoring: 'added' wins ties.
+  const hasSourcePriority = /source\s*===?\s*['"]added['"]|source\s*!==?\s*['"]efp['"]/.test(region);
+  assert.ok(hasSourceArg && hasSourcePriority,
+    'auto-discovery must tag each candidate with source (pushCandidate(el, "added"|"efp")) and ' +
+    'prefer "added" over "efp" as a tiebreaker in the scoring cascade. The addedNodes signal is the ' +
+    'strongest universal hovercard-mount indicator.');
+});
+
+test('domHover auto-discovery diagnostic emits dwellMs and per-candidate source (RC41 observability)', () => {
+  // Diagnostic continuation: without dwellMs in the payload, we can't tell
+  // whether a picked-noise iteration happened at T=0 (dwell gate broken) or
+  // T=500+ (dwell gate worked but scoring still picked noise). Without
+  // per-candidate source, we can't tell whether the picked candidate was the
+  // new (added) hovercard or pre-existing efp noise. Both fields are needed
+  // to triage future hover incidents from the SW log alone.
+  const cs = readSrc('content-script.js');
+  const fnStart = cs.indexOf('async function domHover(');
+  const fnEnd = cs.indexOf('async function domOpenTab(', fnStart);
+  const fnBody = cs.slice(fnStart, fnEnd);
+  assert.ok(fnStart > -1 && fnEnd > fnStart, 'domHover must exist');
+
+  const autoDiscoverStart = fnBody.indexOf('Path (b): auto-discovery');
+  const autoDiscoverEnd = fnBody.indexOf('observer.disconnect()', autoDiscoverStart);
+  assert.ok(autoDiscoverStart > -1 && autoDiscoverEnd > autoDiscoverStart,
+    'auto-discovery region must be sliceable');
+  const region = fnBody.slice(autoDiscoverStart, autoDiscoverEnd);
+
+  const hasDwellMs = /dwellMs\s*:/.test(region);
+  const hasSourceInSummary = /source\s*:\s*c\.source|source\s*:\s*(?:candidate|c)\.source/.test(region);
+  assert.ok(hasDwellMs && hasSourceInSummary,
+    'hover_auto_discover diagnostic must include dwellMs (how long we waited before scoring) and ' +
+    'source per candidate (added vs efp) in picked and considered[] summaries. Without these, future ' +
+    'hover incidents cannot be triaged from the SW log alone.');
+});

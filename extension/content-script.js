@@ -1702,8 +1702,24 @@
       reason: hoverResp ? hoverResp.reason : null
     });
 
-    var deadline = Date.now() + timeoutMs;
+    var dispatchedAt = Date.now();
+    var deadline = dispatchedAt + timeoutMs;
+    // RC41 (console.log 2026-08-12 NINTH hover incident): gate auto-discovery
+    // behind a minimum dwell time. The prior architecture picked "best of
+    // pool" on the FIRST 250ms tick — before the hovercard had time to mount.
+    // MutationObserver pool was empty (addedNodes:0) and elementsFromPoint
+    // returned 77-113 pre-existing positioned DIVs, of which the scoring
+    // cascade picked the most overlay-looking one. Result: every iteration
+    // picked noise like {dist:297, area:136200} or {dist:489, area:463760}.
+    // The actual hovercard appears around T=500ms (React Portal mount
+    // delay — universal across portal-based hovercard frameworks). With the
+    // dwell gate, the loop sleeps through the pre-hover window and only
+    // scores candidates after the hovercard has had time to appear. Path
+    // (a) popoverSel is exempt — explicit selectors should be honored
+    // immediately.
+    var MIN_AUTO_DISCOVER_DWELL_MS = 500;
     while (Date.now() < deadline) {
+      var dwellMs = Date.now() - dispatchedAt;
       // Path (a): explicit selector match.
       if (popoverSel) {
         var popFound = querySelectorDeep(popoverSel);
@@ -1713,9 +1729,8 @@
           break;
         }
       }
-      // Path (b): auto-discovery. Score observed added nodes AND
-      // elementsFromPoint samples by overlay signals, then pick the
-      // highest-scoring candidate.
+      // Path (b): auto-discovery. Gated by MIN_AUTO_DISCOVER_DWELL_MS to
+      // avoid scoring pre-existing noise before the hovercard mounts.
       //
       // Why TWO candidate sources (RC39 architectural fix):
       //   - MutationObserver catches DOM ADDITIONS (React Portal mounts,
@@ -1739,22 +1754,46 @@
       //      AT/NEAR the anchor)
       //   4. area (larger wins on full ties)
       //
-      // Hard reject: tiny additions (<50x50) and static-positioned
-      // additions far from cursor (>300px). These cannot be hovercards.
+      // Hard reject: tiny additions (<50x50) and candidates too far from
+      // cursor (>400px). These cannot be hovercards.
+
+      // RC41 dwell gate: skip auto-discovery entirely for the first
+      // MIN_AUTO_DISCOVER_DWELL_MS after dispatch. Path (a) above still
+      // runs each tick. Without this gate, auto-discover picks pre-existing
+      // noise on the first tick (T=0) because the hovercard has not yet
+      // mounted — the loop breaks before the typical ~500ms portal mount
+      // delay fires. Skipping auto-discover lets the loop sleep through the
+      // pre-hover window.
+      if (dwellMs < MIN_AUTO_DISCOVER_DWELL_MS) {
+        await new Promise(function (r) { setTimeout(r, 250); });
+        continue;
+      }
 
       // Build candidate pool. Dedupe by element identity.
+      //
+      // RC41 (console.log 2026-08-12 NINTH incident): tag each candidate
+      // with its SOURCE so the diagnostic and the scoring cascade can
+      // distinguish NEW candidates (MutationObserver addedNodes — strongest
+      // hovercard signal) from PRE-EXISTING candidates (elementsFromPoint
+      // samples — usually post wrappers, content sections, etc.).
+      // addedNodes is the universal "portal mounted this" signal across
+      // React/Vue/Popper/Floating UI; preferring it ties the picker to the
+      // actual hovercard-mount event instead of trying to recognize the
+      // hovercard by shape.
       var candidatePool = [];
+      var candidateSource = new Map();
       var seenEls = [];
-      function pushCandidate(el) {
+      function pushCandidate(el, source) {
         if (!el || el.nodeType !== 1) return;
         for (var d = 0; d < seenEls.length; d++) {
           if (seenEls[d] === el) return;
         }
         seenEls.push(el);
         candidatePool.push(el);
+        candidateSource.set(el, source);
       }
       for (var k = 0; k < addedNodes.length; k++) {
-        pushCandidate(addedNodes[k]);
+        pushCandidate(addedNodes[k], 'added');
       }
       // Path (c): elementsFromPoint sampling. Sample at cursor and
       // cardinal offsets (~120px) to catch hovercards appearing beside
@@ -1770,7 +1809,7 @@
           try { stack = document.elementsFromPoint(ox, oy) || []; }
           catch (e) { stack = []; }
           for (var ti = 0; ti < stack.length; ti++) {
-            pushCandidate(stack[ti]);
+            pushCandidate(stack[ti], 'efp');
           }
         }
       }
@@ -1843,25 +1882,39 @@
         var ndx = (nr.left + nr.width / 2) - x;
         var ndy = (nr.top + nr.height / 2) - y;
         var ndist = Math.sqrt(ndx * ndx + ndy * ndy);
-        if (!posAbsolute && ndist > 300) {
+        // RC41: UNIVERSAL distance cap. The prior filter only rejected
+        // STATIC-positioned far candidates (`!posAbsolute && dist > 300`),
+        // which let posAbsolute post-wrappers 400-500px from cursor win the
+        // scoring cascade. Universal UX property: hovercards ALWAYS appear
+        // AT/NEAR the anchor (within ~300px of cursor center, even for
+        // tall portal cards). Cap at 400 to leave margin for very tall
+        // hovercards whose center is ~350px below cursor (top of card
+        // aligned with anchor). Rejecting farther candidates regardless of
+        // positioning is universal — works for any site.
+        if (ndist > 400) {
           if (rejectedSummary.length < 5) rejectedSummary.push({
             tag: node.tagName,
             pos: nodeStyle.position,
             dist: Math.round(ndist),
-            reason: 'static_and_far'
+            reason: 'too_far_from_cursor'
           });
           continue;
         }
+        var nsource = candidateSource.get(node) || 'efp';
         passingCandidates.push({
-          node: node, posAbsolute: posAbsolute, z: nz, dist: ndist, area: narea
+          node: node, posAbsolute: posAbsolute, z: nz, dist: ndist, area: narea,
+          source: nsource
         });
       }
       // Sort passing candidates by the scoring cascade: posAbsolute wins,
-      // then z (desc), then proximity (asc), then area (desc).
+      // then z (desc), then proximity (asc), then source ('added' beats
+      // 'efp' — MutationObserver caught the element appearing post-hover,
+      // strongest hovercard signal), then area (desc).
       passingCandidates.sort(function (a, b) {
         if (a.posAbsolute !== b.posAbsolute) return a.posAbsolute ? -1 : 1;
         if (a.z !== b.z) return b.z - a.z;
         if (a.dist !== b.dist) return a.dist - b.dist;
+        if (a.source !== b.source) return a.source === 'added' ? -1 : 1;
         return b.area - a.area;
       });
       var bestCandidate = passingCandidates.length > 0 ? passingCandidates[0] : null;
@@ -1872,7 +1925,8 @@
           posAbsolute: c.posAbsolute,
           z: c.z,
           dist: Math.round(c.dist),
-          area: Math.round(c.area)
+          area: Math.round(c.area),
+          source: c.source
         };
       }
       var consideredTop = passingCandidates.slice(0, 3).map(summarizeCandidate);
@@ -1882,6 +1936,7 @@
         autoDiscovered = true;
         notifyBackgroundDiagnostic('hover_auto_discover', {
           selector: sel,
+          dwellMs: Math.round(dwellMs),
           addedNodes: addedNodes.length,
           pool: candidatePool.length,
           passing: passingCandidates.length,
@@ -1896,12 +1951,13 @@
         // capture needed.
         notifyBackgroundDiagnostic('hover_auto_discover', {
           selector: sel,
+          dwellMs: Math.round(dwellMs),
           addedNodes: addedNodes.length,
           pool: candidatePool.length,
           passing: 0,
           picked: null,
           considered: [],
-          reason: 'no candidate passed visibility+size+viewport+positioning filter',
+          reason: 'no candidate passed visibility+size+viewport+distance filter',
           rejected: rejectedSummary
         });
       }
