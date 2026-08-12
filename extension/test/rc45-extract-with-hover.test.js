@@ -359,3 +359,35 @@ describe('RC45 Task 6: ARRAY_EXTRACTION_RE recognizes extractWithHover', () => {
     assert.ok(re.test('$list('));
   });
 });
+
+describe('RC45 Task 7: $EXTRACT-WITH-HOVER DSL section', () => {
+  it('SCRIPT_DSL_GUIDE documents $extractWithHover as a section', () => {
+    const src = readSrc('lib/wizard-utils.js');
+    // Section header exists.
+    assert.ok(/\$EXTRACT-WITH-HOVER|EXTRACT-WITH-HOVER/i.test(src),
+      'SCRIPT_DSL_GUIDE must have an $EXTRACT-WITH-HOVER section header');
+    // Section must document the signature.
+    assert.ok(/\$extractWithHover\s*\(/.test(src),
+      'DSL section must show $extractWithHover call syntax');
+    // Section must mention hovercards (the per-record array).
+    assert.ok(/hovercards/.test(src),
+      'DSL section must document the hovercards[] field in returned records');
+    // Section must warn about the alignment bug this primitive fixes.
+    assert.ok(/align|misalign|index math|global anchor|variable.*anchor/i.test(src),
+      'DSL section must warn about the alignment failure mode this primitive fixes');
+  });
+
+  it('does NOT contain site-specific terms (universality guard)', () => {
+    const src = readSrc('lib/wizard-utils.js');
+    // Slice just the new section.
+    const start = src.indexOf('EXTRACT-WITH-HOVER');
+    assert.ok(start > -1, 'EXTRACT-WITH-HOVER section must exist');
+    const end = src.indexOf('HOVER ENRICHMENT', start);
+    assert.ok(end > start, 'HOVER ENRICHMENT section must follow');
+    const section = src.slice(start, end);
+    // Universality: no site-specific terms.
+    const forbidden = /\b(facebook|twitter|linkedin|tiktok|reddit|instagram|weibo|zhihu|douyin|fb|ig)\b/i;
+    assert.ok(!forbidden.test(section),
+      'EXTRACT-WITH-HOVER section must not use site-specific terms (universality)');
+  });
+});
