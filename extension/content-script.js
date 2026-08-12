@@ -129,6 +129,77 @@
       return records;
     }
 
+    function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverFn, opts) {
+      if (!Array.isArray(containers)) {
+        throw new Error('$extractWithHover: containers must be an array');
+      }
+      if (!fieldMap || typeof fieldMap !== 'object' || Object.keys(fieldMap).length === 0) {
+        throw new Error('$extractWithHover fieldMap must be a non-empty object');
+      }
+      if (!hoverConfig || typeof hoverConfig !== 'object') {
+        throw new Error('$extractWithHover hoverConfig must be an object');
+      }
+      if (!hoverConfig.anchorSel || typeof hoverConfig.anchorSel !== 'string') {
+        throw new Error('$extractWithHover hoverConfig.anchorSel must be a non-empty string');
+      }
+      if (typeof hoverFn !== 'function') {
+        throw new Error('$extractWithHover hoverFn must be a function');
+      }
+      if (!containers.length) {
+        if (opts && opts.allowEmpty) return [];
+        throw new Error('$extractWithHover: no containers matched');
+      }
+      // Field extraction reuses extractListRecords above. allowEmpty is
+      // forced on here because container count is already validated.
+      var records = extractListRecords(containers, fieldMap, { allowEmpty: true });
+      var anchorSel = hoverConfig.anchorSel;
+      var popoverSel = hoverConfig.popoverSel || null;
+      var perHoverOpts = {};
+      if (typeof hoverConfig.timeoutMs === 'number' && hoverConfig.timeoutMs > 0) {
+        perHoverOpts.timeoutMs = hoverConfig.timeoutMs;
+      }
+      perHoverOpts.dismiss = (typeof hoverConfig.dismiss === 'boolean') ? hoverConfig.dismiss : true;
+      // Sequential hover iteration. Only one popover can be on screen at a
+      // time on most sites; parallel dispatch would race.
+      return (async function () {
+        for (var i = 0; i < containers.length; i++) {
+          var container = containers[i];
+          var anchors = [];
+          try {
+            anchors = Array.prototype.slice.call(container.querySelectorAll(anchorSel));
+          } catch (_) {
+            anchors = [];
+          }
+          var hovercards = [];
+          for (var j = 0; j < anchors.length; j++) {
+            var anchorEl = anchors[j];
+            try {
+              var r = await hoverFn(anchorEl, popoverSel, perHoverOpts);
+              hovercards.push({
+                hovered: !!(r && r.hovered),
+                htmlSnippet: (r && r.htmlSnippet) || null,
+                popoverSelector: (r && r.popoverSelector) || null,
+                autoDiscovered: !!(r && r.autoDiscovered),
+                reason: (r && r.reason) || null,
+                anchorIndex: j
+              });
+            } catch (err) {
+              hovercards.push({
+                hovered: false,
+                htmlSnippet: null,
+                popoverSelector: null,
+                autoDiscovered: false,
+                reason: 'hover_error: ' + (err && err.message || String(err)),
+                anchorIndex: j
+              });
+            }
+          }
+          records[i].hovercards = hovercards;
+        }
+        return records;
+      })();
+    }
+
     function clickInListItems(containers, subSel, clickFn, delayMs) {
       const delay = Math.max(0, Math.min(5000, typeof delayMs === 'number' ? delayMs : 500));
       let clicked = 0;
@@ -231,6 +302,7 @@
     return {
       extractListRecords,
       extractListMultiRecords,
+      extractWithHoverRecords,
       clickInListItems,
       computeExtractListDiagnostics,
       computeSimpleSelectorDiagnostics
