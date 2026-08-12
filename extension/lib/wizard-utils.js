@@ -401,6 +401,7 @@ RULES:
   never appeared; 'popover_failed' means the hover dispatch itself failed.
 
 HOVER ENRICHMENT (hovercard / link-preview fields): some sites surface richer data — group name, member count, account bio, profile image URL — only in a popover that appears when the user hovers a link. The popover is NOT in the list DOM; it's injected into a portal layer on hover. Use \$hover to fire the popover, then parse fields out of htmlSnippet with \$extractListMulti on a temporary DOM root. Signature: \$hover(anchorSelector, popoverSelector?, opts?) → { hovered: bool, htmlSnippet: string|null, popoverSelector: string|null, reason?: 'popover_timeout'|'hover_failed'|<bg reason> }.
+ **PREFERRED for list contexts:** if you are extracting a list of records AND enriching each with hovercard data, use \$extractWithHover (see the EXTRACT-WITH-HOVER section above). It scopes anchor iteration per container, eliminating the alignment failure mode of the manual-loop pattern below. The standalone \$hover primitive (this section) is for one-off hovers outside a list context.
   // Step 4: extract list with anchor hrefs / link elements
   const records = await \$extractListMulti('li.result-item', {
     anchorHref: { selector: 'a.profile-link', attr: 'href' },
