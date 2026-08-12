@@ -1607,6 +1607,18 @@
     var timeoutMs = (typeof opts.timeoutMs === 'number' && opts.timeoutMs > 0) ? opts.timeoutMs : 3000;
     var dismiss = (typeof opts.dismiss === 'boolean') ? opts.dismiss : true;
     var index = (typeof opts.index === 'number' && Number.isFinite(opts.index)) ? Math.floor(opts.index) : null;
+    // RC43 constants for the three-gate acceptance check.
+    //   - MIN_HOVERCONTENT_TEXT_LEN: empty pre-allocated portal wrappers have
+    //     no children and no meaningful text. Requiring >= 20 chars of trimmed
+    //     text rejects them while still accepting hovercards that render as
+    //     pure text (rare but possible).
+    //   - STABILITY_SAMPLE_INTERVAL_MS: outerHTML is sampled this often; two
+    //     consecutive equal samples mark content as stable. The prior 250ms
+    //     interval meant stability converged in 500ms minimum, eating the
+    //     3000ms timeout budget across multiple candidates. 100ms converges
+    //     in 200ms.
+    var MIN_HOVERCONTENT_TEXT_LEN = 20;
+    var STABILITY_SAMPLE_INTERVAL_MS = 100;
 
     // Multi-record addressing: when opts.index is set, enumerate ALL matches
     // and pick the Nth. This is the correct way to hover "the i-th anchor in
@@ -1661,6 +1673,13 @@
     var htmlSnippet = null;
     var matchedSel = null;
     var autoDiscovered = false;
+    // RC43: per-path stability tracking. Two consecutive samples of the SAME
+    // element with the SAME outerHTML mark content as stable (streaming done).
+    // Separate trackers per path because they observe different elements.
+    var lastPopEl = null;
+    var lastPopSample = null;
+    var lastBestEl = null;
+    var lastBestSample = null;
 
     var addedNodes = [];
     var observer = null;
@@ -1680,6 +1699,59 @@
 
     var hoverResp = null;
     var hoverError = null;
+
+    // RC43: Baseline sampling BEFORE hover dispatch. Two baselines:
+    //   - popoverBaseline: outerHTML of popoverSel-matched element at T0.
+    //     Path (a) later requires the CURRENT outerHTML to DIFFER from this
+    //     baseline — so an empty pre-allocated portal wrapper (role="dialog"
+    //     set, content not yet rendered) doesn't get accepted just because
+    //     popoverSelector matched it. Console.log 2026-08-12 incident: a
+    //     portal-based site pre-allocates
+    //     `<div role="dialog" class="xtijo5x ..."></div>` at page load;
+    //     popoverSel `div[role=dialog]` matched it on every tick; path (a)
+    //     broke immediately and returned the empty outerHTML.
+    //   - baselineEfpSnippets: Set of outerHTMLs of every element returned
+    //     by elementsFromPoint at cursor + cardinal offsets at T0. Path (b)
+    //     later rejects candidates whose source !== 'added' AND whose
+    //     outerHTML is in this set — so pre-existing page chrome (top nav,
+    //     popup layer wrappers, content sections that happen to be near the
+    //     cursor) doesn't win the scoring cascade just because it has
+    //     position:absolute and content.
+    // Both baselines are best-effort: a thrown querySelector / elementsFromPoint
+    // just leaves the baseline empty, which disables that specific check.
+    var popoverBaseline = null;
+    if (popoverSel) {
+      try {
+        // Sample popoverSel-matched element's outerHTML at T0. The IIFE keeps
+        // the sampling as a single expression so source-text audits can verify
+        // popoverBaseline is anchored to querySelectorDeep(popoverSel).
+        popoverBaseline = (function () {
+          var f = querySelectorDeep(popoverSel);
+          return (f && isElementVisible(f.element)) ? f.element.outerHTML : null;
+        })();
+      } catch (e) {
+        // baseline sampling best-effort; absence disables baseline-diff check
+      }
+    }
+    var baselineEfpSnippets = new Set();
+    if (typeof document.elementsFromPoint === 'function') {
+      var baselineOffsets = [[0, 0], [0, -120], [0, 120], [-120, 0], [120, 0]];
+      for (var boi = 0; boi < baselineOffsets.length; boi++) {
+        var box = x + baselineOffsets[boi][0];
+        var boy = y + baselineOffsets[boi][1];
+        if (box < 0 || boy < 0 || box > window.innerWidth || boy > window.innerHeight) continue;
+        var bstack = [];
+        try { bstack = document.elementsFromPoint(box, boy) || []; }
+        catch (e) { bstack = []; }
+        for (var bti = 0; bti < bstack.length; bti++) {
+          try {
+            var bhtml = bstack[bti].outerHTML;
+            if (bhtml) baselineEfpSnippets.add(bhtml);
+          } catch (e) { /* skip unreadable */ }
+        }
+      }
+    }
+
     try {
       var hoverResult = await withTabActivation('hover', async function () {
         return await chrome.runtime.sendMessage({
@@ -1699,7 +1771,9 @@
       hoverX: x, hoverY: y,
       dispatched: !!(hoverResp && hoverResp.dispatched),
       ok: !!(hoverResp && hoverResp.ok),
-      reason: hoverResp ? hoverResp.reason : null
+      reason: hoverResp ? hoverResp.reason : null,
+      popoverBaselineSampled: !!popoverBaseline,
+      baselineEfpCount: baselineEfpSnippets.size
     });
 
     var dispatchedAt = Date.now();
@@ -1721,12 +1795,34 @@
     while (Date.now() < deadline) {
       var dwellMs = Date.now() - dispatchedAt;
       // Path (a): explicit selector match.
+      // RC43 (ELEVENTH hover incident, console.log 2026-08-12): the prior
+      // code broke on the first visible match — accepting an empty
+      // pre-allocated portal wrapper (popoverSel matched role="dialog" but
+      // the wrapper had no children yet, content would fill in 100-300ms
+      // later). The result was htmlSnippet = `<div role="dialog"></div>`
+      // returned as success. Now apply three gates before accepting:
+      // hasContent (children OR trimmed text >= MIN_HOVERCONTENT_TEXT_LEN),
+      // differsFromBaseline (outerHTML !== popoverBaseline sampled at T0),
+      // stable (same element + same outerHTML across two consecutive
+      // samples). Fall through to path (b) on any gate failure so
+      // auto_discover can catch the actual hovercard content once mounted.
       if (popoverSel) {
         var popFound = querySelectorDeep(popoverSel);
         if (popFound && isElementVisible(popFound.element)) {
-          htmlSnippet = popFound.element.outerHTML;
-          matchedSel = popoverSel;
-          break;
+          var popEl = popFound.element;
+          var popHtml = popEl.outerHTML;
+          var hasContent = (popEl.childElementCount > 0) ||
+            ((popEl.textContent || '').trim().length >= MIN_HOVERCONTENT_TEXT_LEN);
+          var differsFromBaseline = !popoverBaseline || popHtml !== popoverBaseline;
+          var popStable = (lastPopEl === popEl && lastPopSample === popHtml);
+          lastPopEl = popEl;
+          lastPopSample = popHtml;
+          if (hasContent && differsFromBaseline && popStable) {
+            htmlSnippet = popHtml;
+            matchedSel = popoverSel;
+            break;
+          }
+          // Gates failed. Fall through to path (b).
         }
       }
       // Path (b): auto-discovery. Gated by MIN_AUTO_DISCOVER_DWELL_MS to
@@ -1765,7 +1861,7 @@
       // delay fires. Skipping auto-discover lets the loop sleep through the
       // pre-hover window.
       if (dwellMs < MIN_AUTO_DISCOVER_DWELL_MS) {
-        await new Promise(function (r) { setTimeout(r, 250); });
+        await new Promise(function (r) { setTimeout(r, STABILITY_SAMPLE_INTERVAL_MS); });
         continue;
       }
 
@@ -1843,6 +1939,27 @@
           });
           continue;
         }
+        var nsource = candidateSource.get(node) || 'efp';
+        // RC43: reject pre-existing-unchanged candidates early. baselineEfpSnippets
+        // was sampled at T0 (before hover dispatch) at cursor + cardinal offsets.
+        // If a candidate's outerHTML matches a baseline entry AND its source is
+        // not 'added' (MutationObserver didn't catch it as a new node), the
+        // candidate is pre-existing chrome that didn't change during the hover
+        // window — page nav, popup layer wrappers, content sections near the
+        // cursor. The actual hovercard must either be a NEW addition (source
+        // 'added') or a pre-existing element whose outerHTML CHANGED. Without
+        // this reject, page chrome wins the scoring cascade on
+        // posAbsolute+z+area ties.
+        var nhtml = '';
+        try { nhtml = node.outerHTML; } catch (e) { nhtml = ''; }
+        if (nsource !== 'added' && nhtml && baselineEfpSnippets.has(nhtml)) {
+          if (rejectedSummary.length < 5) rejectedSummary.push({
+            tag: node.tagName,
+            source: nsource,
+            reason: 'pre_existed_unchanged'
+          });
+          continue;
+        }
         var nr = node.getBoundingClientRect();
         if (nr.width < 50 || nr.height < 50) {
           if (rejectedSummary.length < 5) rejectedSummary.push({
@@ -1905,7 +2022,6 @@
           });
           continue;
         }
-        var nsource = candidateSource.get(node) || 'efp';
         passingCandidates.push({
           node: node, posAbsolute: posAbsolute, z: nz, dist: ndist, area: narea,
           source: nsource
@@ -1940,9 +2056,21 @@
       }
       var consideredTop = passingCandidates.slice(0, 3).map(summarizeCandidate);
       if (bestCandidate) {
-        htmlSnippet = bestCandidate.node.outerHTML;
-        matchedSel = '[auto-discovered popover]';
-        autoDiscovered = true;
+        // RC43: apply stability check before accepting. The best candidate
+        // may change tick to tick (different element wins the cascade); only
+        // accept when the SAME element wins TWO consecutive ticks with the
+        // SAME outerHTML. Catches mid-render states where the hovercard is
+        // streaming in content.
+        var bestEl = bestCandidate.node;
+        var bestHtml = bestEl.outerHTML;
+        var bestStable = (lastBestEl === bestEl && lastBestSample === bestHtml);
+        lastBestEl = bestEl;
+        lastBestSample = bestHtml;
+        if (bestStable) {
+          htmlSnippet = bestHtml;
+          matchedSel = '[auto-discovered popover]';
+          autoDiscovered = true;
+        }
         notifyBackgroundDiagnostic('hover_auto_discover', {
           selector: sel,
           dwellMs: Math.round(dwellMs),
@@ -1950,7 +2078,9 @@
           pool: candidatePool.length,
           passing: passingCandidates.length,
           picked: summarizeCandidate(bestCandidate),
-          considered: consideredTop
+          considered: consideredTop,
+          stable: bestStable,
+          baselineEfpCount: baselineEfpSnippets.size
         });
       } else if (candidatePool.length > 0) {
         // Diagnostic: observer and/or elementsFromPoint caught candidates
@@ -1966,12 +2096,13 @@
           passing: 0,
           picked: null,
           considered: [],
-          reason: 'no candidate passed visibility+size+viewport+distance filter',
-          rejected: rejectedSummary
+          reason: 'no candidate passed visibility+size+viewport+distance+baseline filter',
+          rejected: rejectedSummary,
+          baselineEfpCount: baselineEfpSnippets.size
         });
       }
       if (htmlSnippet) break;
-      await new Promise(function (r) { setTimeout(r, 250); });
+      await new Promise(function (r) { setTimeout(r, STABILITY_SAMPLE_INTERVAL_MS); });
     }
     if (observer) {
       try { observer.disconnect(); } catch {}
