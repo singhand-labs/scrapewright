@@ -303,6 +303,103 @@ $extract(sel) and $extractList(sel, { field: { selector, attr } }) support attri
   // ^ Note: empty selector inside $extractListMulti returns the container's own outerHTML.
 Do NOT use textContent as a substitute for outerHTML when outputSchema asks for raw HTML — textContent strips all tags and produces plain text the consumer cannot parse.
 
+\$EXTRACT-WITH-HOVER (container-scoped extract + hover — PREFERRED for list enrichment):
+When you need to extract fields from a list of containers AND enrich each
+record with hovercard/popover data from anchors inside the SAME container,
+\$extractWithHover is the correct primitive. It extracts fields AND hovers
+every anchor inside each container in one atomic call, eliminating the
+alignment failure mode of the manual-loop pattern.
+
+Signature: \$extractWithHover(containerSel, fieldMap, opts) → Promise<Array<Record>>
+  - containerSel: CSS selector for the list containers (e.g. 'li.result-item').
+  - fieldMap: same shape as \$extractList ({ fieldName: subSel | { selector, attr? } }).
+    Each field gets ONE value (the first match) per container — scalar, not array.
+  - opts.hover: { anchorSel (required), popoverSel?, timeoutMs?, dismiss? }.
+  - opts.allowEmpty: same semantics as \$extractList.
+  - opts.containerIndex / opts.containerRange / opts.maxContainers: narrow
+    which containers get processed (only one may be set). Use containerRange
+    to slice a large batch across orchestrator iterations when the total
+    time would exceed the step timeout.
+
+Returned records (one per processed container, in document order):
+  [
+    {
+      // ...fields from fieldMap (scalar values — same as \$extractList)
+      hovercards: [
+        { hovered: bool, htmlSnippet: string|null, popoverSelector: string|null,
+          autoDiscovered: bool, reason: string|null, anchorIndex: number },
+        // one entry per anchor inside THIS container, in document order
+      ]
+    }
+  ]
+
+  const records = await \$extractWithHover('li.result-item', {
+    title: 'h3.title',
+    anchorHref: { selector: 'a.profile-link', attr: 'href' }
+  }, {
+    hover: {
+      anchorSel: 'a.profile-link',
+      popoverSel: 'div[role="dialog"]',
+      timeoutMs: 3000
+    },
+    allowEmpty: true
+  });
+  // Step 2: classify hovercards per record. The framework returns raw
+  // htmlSnippet[] — classification is your job. Parse each snippet with
+  // DOMParser and bucket by snippet-specific signals.
+  for (const rec of records) {
+    rec.categoryA = [];
+    rec.categoryB = [];
+    for (const card of rec.hovercards) {
+      if (!card.htmlSnippet) continue;
+      const doc = new DOMParser().parseFromString(card.htmlSnippet, 'text/html');
+      if (doc.querySelector('[data-kind="a"]')) rec.categoryA.push(card.htmlSnippet);
+      else if (doc.querySelector('[data-kind="b"]')) rec.categoryB.push(card.htmlSnippet);
+    }
+  }
+  return { done: true, records };
+
+WHY THIS EXISTS — the manual-loop alternative is WRONG for variable anchors per container:
+  // BAD: manual loop with global anchor index
+  for (let i = 0; i < records.length; i++) {
+    const r = await \$hover('a.profile-link', '...', { index: i });  // ← WRONG
+    records[i].someField = parse(r.htmlSnippet);
+  }
+The bug: opts.index addresses the i-th match of 'a.profile-link' GLOBALLY
+(across the whole document), not the i-th container's first anchor. When
+containers hold variable numbers of anchors, the global array interleaves
+across containers and the i-th global anchor belongs to a different
+container than records[i]. Use \$extractWithHover to make per-container
+anchor iteration the framework responsibility.
+
+RULES:
+- PREFER \$extractWithHover whenever you need hovercard data for items in
+  a list. Use the standalone \$hover primitive ONLY for one-off hovers
+  outside a list context (a single header avatar, a standalone link).
+- Field extraction and hover enrichment happen atomically per container
+  in one call. There is no inter-step DOM drift.
+- Fields are SCALAR (one value per field per container, same as
+  \$extractList). If you need array-valued fields (e.g. all tag links
+  in a record), call \$extractListMulti separately on the same containers
+  and zip the results by index.
+- Hovercards within a record are ordered by anchor document position
+  inside that container. anchorIndex is the per-container index (NOT
+  global).
+- The framework dismisses each popover before hovering the next anchor
+  (dismiss defaults to true). Do not set dismiss:false unless you have
+  a specific reason — lingering popovers contaminate the next hover.
+- Total time scales as containers × anchors × per-hover timeout. For
+  large batches, slice via containerRange across iterations.
+- \$extractWithHover requires Enhanced Mode (it uses \$hover under the
+  hood, which needs CDP Input.dispatchMouseEvent). Surface this via
+  test-result feedback, not by retrying.
+- Per-hover reliability (popover detection, baseline-diff, stability,
+  contamination scoring) inherits from \$hover — same diagnostics, same
+  RC33-RC44 invariants.
+- Each hovercard entry carries the full \$hover result shape. If
+  htmlSnippet is null, check reason: 'popover_timeout' means the popover
+  never appeared; 'popover_failed' means the hover dispatch itself failed.
+
 HOVER ENRICHMENT (hovercard / link-preview fields): some sites surface richer data — group name, member count, account bio, profile image URL — only in a popover that appears when the user hovers a link. The popover is NOT in the list DOM; it's injected into a portal layer on hover. Use \$hover to fire the popover, then parse fields out of htmlSnippet with \$extractListMulti on a temporary DOM root. Signature: \$hover(anchorSelector, popoverSelector?, opts?) → { hovered: bool, htmlSnippet: string|null, popoverSelector: string|null, reason?: 'popover_timeout'|'hover_failed'|<bg reason> }.
   // Step 4: extract list with anchor hrefs / link elements
   const records = await \$extractListMulti('li.result-item', {
