@@ -244,3 +244,22 @@ describe('RC45 Task 2: extractWithHoverRecords pure helper', () => {
     assert.equal(card.anchorIndex, 0);
   });
 });
+
+describe('RC45 Task 3: inline fallback mirrors extractWithHoverRecords', () => {
+  it('createInlineListExtractOps exports extractWithHoverRecords', () => {
+    // The drift-guard test enforces name parity; this test is a more
+    // targeted check that specifically confirms the inline fallback has
+    // the function (not just that the name sets match).
+    const src = readSrc('content-script.js');
+    const fnStart = src.indexOf('function createInlineListExtractOps');
+    assert.ok(fnStart > -1, 'createInlineListExtractOps must exist');
+    // Slice the function body using a reasonable window.
+    const window = src.slice(fnStart, fnStart + 30000);
+    assert.ok(/extractWithHoverRecords/.test(window),
+      'inline fallback must define extractWithHoverRecords (drift guard will also enforce this)');
+    // Must be returned from the inline api object.
+    assert.ok(/extractWithHoverRecords\s*,/.test(window) ||
+              /extractWithHoverRecords\s*:/.test(window),
+      'inline fallback must export extractWithHoverRecords in its return object');
+  });
+});
