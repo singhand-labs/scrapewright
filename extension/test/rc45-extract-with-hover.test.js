@@ -316,3 +316,31 @@ describe('RC45 Task 4: domExtractWithHover wrapper', () => {
       'diagnostics must include a hover summary (captured + failed counts)');
   });
 });
+
+describe('RC45 Task 5: DOM_REQUEST + sandbox wiring', () => {
+  it('content-script.js has case "extractWithHover" in the DOM_REQUEST switch', () => {
+    const src = readSrc('content-script.js');
+    assert.ok(/case\s+['"]extractWithHover['"]\s*:/.test(src),
+      'DOM_REQUEST switch must have a case for extractWithHover');
+    // The case must call domExtractWithHover.
+    const caseIdx = src.indexOf("case 'extractWithHover'");
+    assert.ok(caseIdx > -1);
+    const caseBody = src.slice(caseIdx, caseIdx + 500);
+    assert.ok(/domExtractWithHover/.test(caseBody),
+      'extractWithHover case must call domExtractWithHover');
+  });
+
+  it('sandbox.js exposes window.$extractWithHover', () => {
+    const src = readSrc('sandbox.js');
+    assert.ok(/window\.\$extractWithHover\s*=/.test(src),
+      'sandbox.js must define window.$extractWithHover');
+    // Must send a DOM_REQUEST with action 'extractWithHover'.
+    const defIdx = src.indexOf('window.$extractWithHover');
+    const def = src.slice(defIdx, defIdx + 300);
+    assert.ok(/sendDomRequest\(\s*['"]extractWithHover['"]/.test(def),
+      'window.$extractWithHover must call sendDomRequest with action "extractWithHover"');
+    // Arity must be (containerSel, fieldMap, opts) — 3 args.
+    assert.ok(/containerSel,\s*fieldMap,\s*opts/.test(def),
+      'window.$extractWithHover signature must be (containerSel, fieldMap, opts) — 3 args, matching existing list primitives');
+  });
+});

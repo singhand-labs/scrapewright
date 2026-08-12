@@ -51,6 +51,13 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
   // a[role=link] inside an FB post matches BOTH author and timestamp links —
   // pick by text/attribute regex in JS). Regression for console.log 2026-07-26 RC4.
   window.$extractListMulti = (containerSel, fieldMap, opts) => sendDomRequest('extractListMulti', containerSel, [fieldMap, opts || {}]);
+  // $extractWithHover: container-scoped extract-then-hover. Extracts fields
+  // per container AND hovers every anchor inside each container in one call,
+  // returning records with a hovercards[] array (variable length per record).
+  // Eliminates the post-hovercard alignment bug that the manual
+  // $hover(..., { index: i }) loop pattern has when containers hold variable
+  // numbers of anchors. See $EXTRACT-WITH-HOVER in SCRIPT_DSL_GUIDE.
+  window.$extractWithHover = (containerSel, fieldMap, opts) => sendDomRequest('extractWithHover', containerSel, [fieldMap, opts || {}]);
   window.$clickInList = (containerSel, subSel, opts) => sendDomRequest('clickInList', containerSel, [subSel, opts || {}]);
   // Scroll DSL — see SCROLLING section in SCRIPT_DSL_GUIDE. Scrolls the target
   // tab (window or a matched scrollable element), NOT the sandbox iframe.
