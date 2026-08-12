@@ -391,3 +391,18 @@ describe('RC45 Task 7: $EXTRACT-WITH-HOVER DSL section', () => {
       'EXTRACT-WITH-HOVER section must not use site-specific terms (universality)');
   });
 });
+
+describe('RC45 Task 8: HOVER ENRICHMENT points to $extractWithHover', () => {
+  it('HOVER ENRICHMENT section mentions $extractWithHover as preferred for lists', () => {
+    const src = readSrc('lib/wizard-utils.js');
+    const start = src.indexOf('HOVER ENRICHMENT');
+    assert.ok(start > -1, 'HOVER ENRICHMENT section must exist');
+    const end = src.indexOf('ROBUSTNESS RULES', start);
+    assert.ok(end > start);
+    const section = src.slice(start, end);
+    assert.ok(/extractWithHover/.test(section),
+      'HOVER ENRICHMENT must point readers to $extractWithHover for list contexts');
+    assert.ok(/prefer|preferred/i.test(section),
+      'HOVER ENRICHMENT must mark $extractWithHover as PREFERRED');
+  });
+});
