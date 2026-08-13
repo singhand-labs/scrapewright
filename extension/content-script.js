@@ -2296,9 +2296,23 @@
     // Dismiss: move the trusted cursor to (1,1) so hover handlers fire
     // mouseout/mouseleave and the popover closes. Best-effort — failure here
     // doesn't affect the htmlSnippet already captured.
+    //
+    // RC50 (console.log 2026-08-13 13:24-28): wrap dismiss in withTabActivation,
+    // matching the hover path's wrapper at line 1869. RC48 raised the dismiss
+    // timeout to 2000ms but 100% of dismisses still timed out — because the
+    // root cause was NOT timeout duration but background-tab throttle. CDP
+    // Input.dispatchMouseEvent on a background tab hangs because Chrome only
+    // produces compositor frames for the active tab in the focused window
+    // (RC20 architectural rule). The hover path got the wrapper in RC20; the
+    // dismiss path was missed. Same CDP command (Input.dispatchMouseEvent
+    // mouseMoved), same tab, same debugger — hover succeeds (active tab),
+    // dismiss hung (background tab). This is the parallel asymmetry to RC48
+    // (which fixed asymmetric timeouts); RC50 fixes asymmetric tab activation.
     if (dismiss) {
       try {
-        await chrome.runtime.sendMessage({ type: 'TRUSTED_HOVER_DISMISS' });
+        await withTabActivation('hoverDismiss', async function () {
+          await chrome.runtime.sendMessage({ type: 'TRUSTED_HOVER_DISMISS' });
+        });
         notifyBackgroundDiagnostic('hover_dismiss', { selector: selectorForLog, ok: true });
       } catch (e) {
         notifyBackgroundDiagnostic('hover_dismiss', {
