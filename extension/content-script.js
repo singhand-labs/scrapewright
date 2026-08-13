@@ -2027,8 +2027,44 @@
         candidatePool.push(el);
         candidateSource.set(el, source);
       }
+      // RC49: portal-wrapper descent. Portal-based hovercard frameworks
+      // (React Portals, modal-style popovers) mount in two phases: (1) create
+      // an invisible wrapper DIV (display:none, visibility:hidden, opacity:0,
+      // or 0x0), then (2) render the hovercard content INSIDE the wrapper as
+      // a child. MutationObserver fires for the wrapper; the candidate filter
+      // calls isElementVisible(wrapper) which returns false; the filter
+      // rejects it without ever inspecting the visible children inside.
+      //
+      // console.log 2026-08-13 08:27:43-52 (post-RC48) showed 82 of 116
+      // null-pick iterations with addedNodes:2 (portal mounted) where BOTH
+      // added DIVs were rejected as `invisible` — 164 invisible rejections
+      // across the run. Every one was a missed hovercard whose content was
+      // fully rendered inside the wrapper.
+      //
+      // Fix: when pushCandidate surfaces an ADDED node that is itself
+      // invisible, walk its descendants (bounded) and push visible
+      // descendants to candidatePool with source='added'. The source tag
+      // lets them win the RC46 cascade over efp-sampled page chrome.
+      //
+      // The walk happens BEFORE the filter loop so descendants enter the
+      // scoring pool on the same tick as the wrapper mount — no extra
+      // polling round-trip needed.
+      var RC49_MAX_DESCENDANTS = 50;
+      function collectVisibleDescendantsFromInvisibleAdded(root) {
+        if (!root || root.nodeType !== 1) return;
+        if (candidateSource.get(root) !== 'added') return;
+        if (isElementVisible(root)) return;
+        var descendants;
+        try { descendants = root.querySelectorAll('*'); } catch (e) { return; }
+        for (var i = 0; i < descendants.length && i < RC49_MAX_DESCENDANTS; i++) {
+          if (isElementVisible(descendants[i])) {
+            pushCandidate(descendants[i], 'added');
+          }
+        }
+      }
       for (var k = 0; k < addedNodes.length; k++) {
         pushCandidate(addedNodes[k], 'added');
+        collectVisibleDescendantsFromInvisibleAdded(addedNodes[k]);
       }
       // Path (c): elementsFromPoint sampling. Sample at cursor and
       // cardinal offsets (~120px) to catch hovercards appearing beside
