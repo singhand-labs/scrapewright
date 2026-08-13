@@ -703,30 +703,32 @@ describe('lib/renderer-activation.js — dispatchTrustedHoverDismiss', () => {
     assert.match(result.reason, /debugger permission not granted/);
   });
 
-  it('uses a shorter (500ms) best-effort timeout for mouseMoved + detach', async () => {
-    // console.log 2026-08-11: dismiss was eating 2s per iteration because the
-    // hover had released withTabActivation by the time dismiss ran, so the
-    // mouseMoved on (1,1) hit the same 2s CDP-step cap as the hover itself.
-    // Dismiss is best-effort cleanup — it must NOT eat the iteration budget.
-    // Source-text audit: the dismiss callsite must pass a shorter ms to
-    // withTimeout than the default 2000.
+  it('uses default (2000ms) timeout for mouseMoved + detach — RC48 fix', async () => {
+    // RC48 (console.log 2026-08-13): the previous 500ms override caused 98%
+    // dismiss failure (58/59 events timed out). The override was framed as
+    // "best-effort cleanup, don't eat iteration budget" but failed dismisses
+    // compound — the previous hovercard stays mounted, the target site's
+    // hover state machine then suppresses or reuses-for subsequent hovers,
+    // and every hover after the first failed dismiss produces empty results.
+    // The hover path uses the default 2000ms for the SAME CDP command on the
+    // SAME tab and succeeds; the asymmetry had no principled basis. Source-
+    // text audit: the dismiss callsite must NOT pass a sub-1500ms override.
     const src = fs.readFileSync(
       path.join(__dirname, '..', 'lib', 'renderer-activation.js'), 'utf8');
     const dismissStart = src.indexOf('async function dispatchTrustedHoverDismiss(');
     assert.ok(dismissStart > -1);
-    const dismissBody = src.slice(dismissStart);
-    // Look for the pattern `hoverDismiss.<step>', N)` — the closing of a
-    // withTimeout call with an explicit ms argument. (We don't try to match
-    // the whole withTimeout(...) form because the first arg is a multi-line
-    // function body that defeats simple regex.)
-    const caps = dismissBody.match(/['"]hoverDismiss\.[^'"]+['"]\s*,\s*(\d+)\s*\)/g) || [];
-    assert.ok(caps.length >= 2,
-      'dismiss must wrap mouseMoved + detach in withTimeout with explicit ms; found ' + caps.length);
-    for (const call of caps) {
-      const m = call.match(/,\s*(\d+)\s*\)$/);
-      const ms = m ? parseInt(m[1], 10) : 2000;
-      assert.ok(ms <= 1000,
-        'dismiss withTimeout cap must be ≤1000ms (best-effort); got ' + ms + ' in: ' + call);
+    const dismissBody = src.slice(dismissStart, dismissStart + 4000);
+    // Find each hoverDismiss.<step> label and verify no sub-1500ms override.
+    const labelPattern = /['"]hoverDismiss\.[^'"]+['"]\s*(,\s*(\d+)\s*\))?/g;
+    let match;
+    while ((match = labelPattern.exec(dismissBody)) !== null) {
+      const overrideClause = match[1];
+      if (overrideClause) {
+        const ms = parseInt(match[2], 10);
+        assert.ok(ms >= 1500,
+          'dismiss withTimeout cap must be >= 1500ms (RC48). Got ' + ms + ' in: ' + match[0]);
+      }
+      // If no override clause, the default CDP_STEP_TIMEOUT_MS (2000ms) applies — OK.
     }
   });
 });

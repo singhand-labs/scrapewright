@@ -355,6 +355,18 @@
   // CDP path + Enhanced Mode gate + detection-risk profile as the other
   // dispatch* helpers. Used by $hover after extracting the popover HTML so
   // the popover doesn't linger into the next iteration.
+  //
+  // RC48 (console.log 2026-08-13): dismiss previously used a 500ms override
+  // on mouseMoved + detach, framed as "best-effort cleanup, don't eat
+  // iteration budget". Empirically wrong — that override caused 98% dismiss
+  // failure (58/59 events timed out at 500ms in the incident log). The
+  // hover path uses the default 2000ms for the SAME CDP command on the SAME
+  // tab and succeeds; the asymmetry had no principled basis. Failed
+  // dismisses compound: the previous hovercard stays mounted, the target
+  // site's hover state machine then suppresses or reuses-for subsequent
+  // hovers, and every hover after the first failed dismiss produces empty
+  // results. DO NOT tighten the dismiss timeouts back below 1500ms — the
+  // 500ms override is the documented regression point.
   async function dispatchTrustedHoverDismiss(tabId) {
     if (typeof chrome === 'undefined' || !chrome.debugger ||
         typeof chrome.debugger.attach !== 'function' ||
@@ -400,7 +412,7 @@
             if (err) reject(err); else resolve();
           });
         });
-      }, 'hoverDismiss.mouseMoved', 500);
+      }, 'hoverDismiss.mouseMoved');
 
       result.dispatched = true;
       result.ok = true;
@@ -412,7 +424,7 @@
           return new Promise(function (resolve) {
             chrome.debugger.detach(target, function () { resolve(); });
           });
-        }, 'hoverDismiss.detach', 500);
+        }, 'hoverDismiss.detach');
         result.detached = true;
       } catch (e) {
         result.detached = false;
