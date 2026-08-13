@@ -1699,6 +1699,22 @@
     //     in 200ms.
     var MIN_HOVERCONTENT_TEXT_LEN = 20;
     var STABILITY_SAMPLE_INTERVAL_MS = 100;
+    // RC47 (console.log 2026-08-13): no-signal early-exit threshold. Real
+    //   hovercards mount in 600-1600ms (per empirical captures across
+    //   portal-based hovercard frameworks). If by 1500ms no signal has
+    //   appeared — no MutationObserver additions AND no popoverSel match
+    //   (verified via querySelectorDeep(popoverSel) + isElementVisible) —
+    //   the anchor almost certainly has no hovercard. Continuing to poll
+    //   until the 3000ms default timeout wastes ~1.5s per no-hovercard
+    //   anchor. With $extractWithHover iterating many anchors per container
+    //   (and the LLM sometimes writing overly-broad anchorSels that match
+    //   post permalinks, timestamps, etc.), this waste compounds to 5-10
+    //   minutes per step. The NO_SIGNAL_EARLY_EXIT_MS constant caps it at
+    //   1.5s. The path (a) match check (earlyPathAMatch via popoverSel +
+    //   isElementVisible) preserves RC39 pre-allocated portals (which never
+    //   fire MutationObserver but DO match popoverSel once CSS reveals
+    //   them via isElementVisible).
+    var NO_SIGNAL_EARLY_EXIT_MS = 1500;
 
     // RC45: accept a resolved DOM element as the first argument. Callers like
     // $extractWithHover iterate anchors inside a specific container and pass
@@ -1765,6 +1781,11 @@
     var htmlSnippet = null;
     var matchedSel = null;
     var autoDiscovered = false;
+    // RC47: set when the polling loop breaks early because no hover signal
+    // was observed past NO_SIGNAL_EARLY_EXIT_MS. Drives the result.reason
+    // field so the LLM's autoFix context can distinguish "this anchor has
+    // no hovercard" from "we waited the full timeout budget".
+    var earlyExited = false;
     // RC43: per-path stability tracking. Two consecutive samples of the SAME
     // element with the SAME outerHTML mark content as stable (streaming done).
     // Separate trackers per path because they observe different elements.
@@ -1955,6 +1976,32 @@
       if (dwellMs < MIN_AUTO_DISCOVER_DWELL_MS) {
         await new Promise(function (r) { setTimeout(r, STABILITY_SAMPLE_INTERVAL_MS); });
         continue;
+      }
+
+      // RC47: no-signal early-exit. If we've polled past
+      // NO_SIGNAL_EARLY_EXIT_MS with no MutationObserver activity AND no
+      // visible popoverSel match, the anchor almost certainly has no
+      // hovercard — break early instead of burning the rest of the timeout
+      // budget. Real hovercards mount in 600-1600ms; by 1500ms something
+      // would have appeared. The path (a) check preserves RC39
+      // pre-allocated portals (MutationObserver blind but popoverSel
+      // matches once CSS reveals them).
+      if (dwellMs > NO_SIGNAL_EARLY_EXIT_MS && addedNodes.length === 0) {
+        var earlyPathAMatch = false;
+        if (popoverSel) {
+          try {
+            var earlyProbe = querySelectorDeep(popoverSel);
+            earlyPathAMatch = !!(earlyProbe && isElementVisible(earlyProbe.element));
+          } catch (e) { earlyPathAMatch = false; }
+        }
+        if (!earlyPathAMatch) {
+          earlyExited = true;
+          sendDebugLog('info', 'content-script', 'domHover no-signal early-exit', {
+            selector: selectorForLog, dwellMs: Math.round(dwellMs),
+            addedNodes: addedNodes.length, popoverSel: popoverSel || null
+          });
+          break;
+        }
       }
 
       // Build candidate pool. Dedupe by element identity.
@@ -2233,7 +2280,9 @@
       hoverDispatched: !!(hoverResp && hoverResp.dispatched),
       hoverReason: hoverResp ? hoverResp.reason : null
     };
-    if (!htmlSnippet && (popoverSel || observer)) {
+    if (earlyExited) {
+      result.reason = 'no_hover_signal_early_exit';
+    } else if (!htmlSnippet && (popoverSel || observer)) {
       result.reason = 'popover_timeout';
     } else if (!result.hovered) {
       result.reason = hoverResp && hoverResp.reason ? hoverResp.reason : 'hover_failed';
