@@ -2119,18 +2119,28 @@
           source: nsource
         });
       }
-      // Sort passing candidates by the scoring cascade. RC42 reordering:
-      // source ('added' beats 'efp') is checked BEFORE dist. Why: a candidate
-      // that just appeared in the MutationObserver buffer (added) is the
-      // strongest hovercard-mount signal — it must win over pre-existing
-      // efp-sampled elements regardless of which is closer to the cursor.
-      // The prior ordering (dist before source) let a closer-to-cursor
-      // pre-existing positioned DIV beat the actual hovercard that mounted
-      // slightly farther away. posAbsolute > z > source > dist > area.
+      // Sort passing candidates by the scoring cascade. RC46 reordering:
+      // source ('added' beats 'efp') is checked BEFORE posAbsolute. Why: a
+      // candidate that just appeared in the MutationObserver buffer (added)
+      // is the strongest hovercard-mount signal — it must win over
+      // pre-existing efp-sampled elements regardless of positioning. The
+      // prior ordering (posAbsolute first, then source) let a pre-existing
+      // positioned page chrome (posAbsolute:true, source:"efp") beat the
+      // actual hovercard (posAbsolute:false on its visible inner content,
+      // source:"added"). The captured htmlSnippet was page chrome, which
+      // downstream classifiers then dropped for lacking hovercard-shaped
+      // content — producing empty results despite the portal mount
+      // succeeding. source > posAbsolute > z > dist > area.
+      //
+      // RC42 had moved source ahead of dist (correct) but kept posAbsolute
+      // ahead of source. RC46 finishes the reorder. posAbsolute remains a
+      // tiebreaker BETWEEN same-source candidates: when no portal mount was
+      // observed (both source:"efp"), positioned overlays still beat static
+      // content — preserving the RC39 pre-allocated-portal scenario.
       passingCandidates.sort(function (a, b) {
+        if (a.source !== b.source) return a.source === 'added' ? -1 : 1;
         if (a.posAbsolute !== b.posAbsolute) return a.posAbsolute ? -1 : 1;
         if (a.z !== b.z) return b.z - a.z;
-        if (a.source !== b.source) return a.source === 'added' ? -1 : 1;
         if (a.dist !== b.dist) return a.dist - b.dist;
         return b.area - a.area;
       });
