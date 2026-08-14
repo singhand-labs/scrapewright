@@ -1156,10 +1156,17 @@ ${response.elements.map(e => `--- ${e.selector} ---\n${e.found ? e.outerHTML : '
 Return JSON with:
 - confirmedSelectors: array of { purpose, selector, status: "confirmed"|"revised", revisedSelector? }`;
 
+  // RC52 (console.log 2026-08-14 12:59-13:04): this call embeds full element
+  // outerHTML for every candidate selector — the largest prompts in the wizard
+  // flow (136,953 tokens observed). Without an explicit maxTokens, llm-client
+  // falls back to 4096, the model burns the whole completion budget without
+  // emitting parseable content (finish_reason: length, empty content), and
+  // the deterministic failure retries 4x before surfacing LLMRetryExhausted.
+  // Match the sibling wizard calls: explicit 8192.
   const result = await client.chat([
     { role: 'system', content: buildSystemMessageWithGlobalContext('You are a web scraping expert. Return JSON only.') },
     { role: 'user', content: prompt }
-  ], { jsonMode: true });
+  ], { jsonMode: true, maxTokens: 8192 });
 
   const cleaned = cleanLLMResponse(result);
   let parsed;
@@ -1476,10 +1483,13 @@ URL Template Detection (optional). If the user's Page Operations *explicitly* de
 
 Do NOT infer templates from implicit patterns like "search for keyword" or "show results for X" — only extract when the user *explicitly* describes URL rewriting. When in doubt, return null. Returning a wrong template breaks the service; returning null falls back to the safe type/click flow.`;
 
+  // RC52: sibling-parity maxTokens (see confirmSelectorsWithFullHtml note) —
+  // this prompt embeds the full DSL guide; the 4096 default can deterministically
+  // fail with finish_reason:length.
   const result = await client.chat([
     { role: 'system', content: buildSystemMessageWithGlobalContext('You are a web scraping expert. Return JSON only.') },
     { role: 'user', content: prompt }
-  ], { jsonMode: true });
+  ], { jsonMode: true, maxTokens: 8192 });
 
   return parseLLMJson(cleanLLMResponse(result), 'generateExplorationScript', result);
 }
