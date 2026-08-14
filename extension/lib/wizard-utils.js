@@ -327,8 +327,13 @@ Returned records (one per processed container, in document order):
       // ...fields from fieldMap (scalar values — same as \$extractList)
       hovercards: [
         { hovered: bool, htmlSnippet: string|null, popoverSelector: string|null,
-          autoDiscovered: bool, reason: string|null, anchorIndex: number },
-        // one entry per anchor inside THIS container, in document order
+          autoDiscovered: bool, reason: string|null, anchorIndex: number,
+          anchorHref: string, anchorText: string },
+        // one entry per anchor inside THIS container, in document order.
+        // anchorHref is the raw href attribute of the hovered anchor
+        // (empty string when absent) — the primary signal for classifying
+        // which kind of entity the hovercard describes. anchorText is the
+        // trimmed anchor text (capped at 120 chars).
       ]
     }
   ]
@@ -376,6 +381,10 @@ RULES:
 - PREFER \$extractWithHover whenever you need hovercard data for items in
   a list. Use the standalone \$hover primitive ONLY for one-off hovers
   outside a list context (a single header avatar, a standalone link).
+- CLASSIFY BY card.anchorHref FIRST. The href of the hovered anchor is the
+  most robust signal for which kind of entity a hovercard describes (its
+  URL path shape — segment prefixes, id patterns). Only fall back to
+  parsing card.htmlSnippet when anchors are href-less.
 - Field extraction and hover enrichment happen atomically per container
   in one call. There is no inter-step DOM drift.
 - Fields are SCALAR (one value per field per container, same as
