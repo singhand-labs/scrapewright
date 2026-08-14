@@ -1145,25 +1145,32 @@ async function confirmSelectorsWithFullHtml(tabId, config, candidates, pageInfo)
   });
 
   const client = new LLMClient(config);
+  // RC54 (console.log 2026-08-14 13:51-13:5x): embedding raw outerHTML here
+  // produced a 756,464-token prompt — container candidates repeat the whole
+  // rendered feed, and attempt 1 timed out at 120s (attempt 2 survived at
+  // ~78s by luck). formatElementsForPrompt caps each element (30K chars,
+  // [TRUNCATED] marker) and the total section (200K chars, [SKIPPED] keeps
+  // every selector listed).
   const prompt = `Confirm these selectors using the full element HTML.
 
 URL: ${pageInfo.url}
 Requirements: ${pageInfo.description}
 
 Elements:
-${response.elements.map(e => `--- ${e.selector} ---\n${e.found ? e.outerHTML : 'NOT FOUND'}`).join('\n')}
+${formatElementsForPrompt(response.elements)}
 
 Return JSON with:
 - confirmedSelectors: array of { purpose, selector, status: "confirmed"|"revised", revisedSelector? }`;
 
-  // RC52 (console.log 2026-08-14 12:59-13:04): this call embeds full element
-  // outerHTML for every candidate selector — the largest prompts in the wizard
-  // flow (136,953 tokens observed). With the 4096 default the model burned the
-  // whole completion budget without emitting parseable content (finish_reason:
-  // length, empty content), and the deterministic failure retried 4x before
-  // surfacing LLMRetryExhausted. RC53: no call-site budget — the completion
-  // budget is the Settings-page maxOutputTokens config parameter, falling
-  // back to 8192 in llm-client (options.maxTokens ?? config ?? 8192).
+  // RC52 (console.log 2026-08-14 12:59-13:04): this call embeds element
+  // HTML for every candidate selector — among the largest prompts in the
+  // wizard flow (136,953 tokens observed even before RC54). With the 4096
+  // default the model burned the whole completion budget without emitting
+  // parseable content (finish_reason: length, empty content), and the
+  // deterministic failure retried 4x before surfacing LLMRetryExhausted.
+  // RC53: no call-site budget — the completion budget is the Settings-page
+  // maxOutputTokens config parameter, falling back to 8192 in llm-client
+  // (options.maxTokens ?? config ?? 8192).
   const result = await client.chat([
     { role: 'system', content: buildSystemMessageWithGlobalContext('You are a web scraping expert. Return JSON only.') },
     { role: 'user', content: prompt }

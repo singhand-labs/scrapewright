@@ -3438,8 +3438,53 @@ function applyTemplate(templateId) {
   return tmpl.steps.map(step => ({ ...step }));
 }
 
+// RC54: caps for the confirmSelectorsWithFullHtml Elements section. The
+// uncapped version embedded the full outerHTML of every candidate selector —
+// container candidates (a page's main/feed wrappers) each repeat the entire
+// rendered content, reaching a 756,464-token prompt (console.log
+// 2026-08-14 13:51-13:5x): attempt 1 timed out at 120s, attempt 2 survived
+// at ~78s only by luck. The opening tag + leading children of an oversized
+// container carry all the structural signal a confirmation needs.
+const RC54_MAX_ELEMENT_HTML_CHARS = 30000;
+const RC54_TOTAL_ELEMENTS_BUDGET_CHARS = 200000;
+
+function formatElementsForPrompt(elements, opts) {
+  const perElementCapChars = (opts && opts.perElementCapChars) || RC54_MAX_ELEMENT_HTML_CHARS;
+  const totalBudgetChars = (opts && opts.totalBudgetChars) || RC54_TOTAL_ELEMENTS_BUDGET_CHARS;
+  const lines = [];
+  let used = 0;
+  let budgetExhausted = false;
+  for (const e of elements) {
+    const header = '--- ' + e.selector + ' ---';
+    if (!e.found) {
+      lines.push(header + '\nNOT FOUND');
+      continue;
+    }
+    if (budgetExhausted) {
+      lines.push(header + '\n[SKIPPED: element HTML budget exhausted — confirm from structure context]');
+      continue;
+    }
+    const html = e.outerHTML || '';
+    let block;
+    if (html.length > perElementCapChars) {
+      block = html.slice(0, perElementCapChars) + '\n[TRUNCATED: first ' + perElementCapChars + ' of ' + html.length + ' chars]';
+    } else {
+      block = html;
+    }
+    if (used + header.length + block.length >= totalBudgetChars) {
+      budgetExhausted = true;
+      lines.push(header + '\n[SKIPPED: element HTML budget exhausted — confirm from structure context]');
+      continue;
+    }
+    used += header.length + block.length;
+    lines.push(header + '\n' + block);
+  }
+  return lines.join('\n');
+}
+
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
@@ -3450,6 +3495,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.findUpstreamProducingStepId = findUpstreamProducingStepId;
   window.getFirstRecordHtmlFromExecution = getFirstRecordHtmlFromExecution;
   window.getFirstRecordHtmlFromAnyStep = getFirstRecordHtmlFromAnyStep;
+  window.formatElementsForPrompt = formatElementsForPrompt;
   window.detectEmptyOutputFieldsByRatio = detectEmptyOutputFieldsByRatio;
   window.formatEmptyOutputFieldsSignal = formatEmptyOutputFieldsSignal;
   window.detectDuplicateRecords = detectDuplicateRecords;
