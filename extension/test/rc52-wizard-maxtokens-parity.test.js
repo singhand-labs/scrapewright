@@ -1,32 +1,26 @@
-// RC52 audit: every wizard LLM call that embeds large page HTML must pass an
-// explicit maxTokens >= 8192.
+// RC52 audit, superseded in part by RC53.
 //
-// FOLLOWUP to RC51. console.log 2026-08-14 12:59-13:04 showed service
-// creation DYING IN ROUND 2 — before any step ran, before any hover. The
-// wizard confirmSelectorsWithFullHtml call sent a 136,953-token prompt
-// (full element outerHTML for every candidate selector) with NO maxTokens
-// option, so llm-client fell back to its 4096 default. The model burned the
-// whole 4096-token completion budget without emitting parseable content
-// (finish_reason: length, empty content, output_tokens: 4096). The failure
-// is deterministic — retrying with the identical 4096 cap can never succeed —
-// yet llm-client retried 4 times (1351ms/2380ms/4189ms backoff) and then
-// surfaced LLMRetryExhausted. Round 2 aborted; no service was generated.
+// RC52 (console.log 2026-08-14 12:59-13:04): service creation DIED IN ROUND 2.
+// confirmSelectorsWithFullHtml sent a 136,953-token prompt with NO maxTokens,
+// so llm-client fell back to its 4096 default. The model burned the whole
+// completion budget without emitting parseable content (finish_reason:length,
+// empty content), the deterministic failure retried 4x, then
+// LLMRetryExhausted aborted the round. Original fix: explicit maxTokens: 8192
+// at both under-budgeted call sites + a guard that every wizard client.chat
+// carries explicit maxTokens.
 //
-// Root cause: asymmetric completion budgets between sibling wizard LLM calls.
-// getCandidateSelectors (line 1127), the round-3/4 calls (1276, 1407), and
-// the autoFix path (background.js:819, wizard.js:2229, 3322) ALL pass
-// maxTokens: 8192. confirmSelectorsWithFullHtml (1159) and
-// generateExplorationScript (1479) pass only { jsonMode: true } — the 4096
-// default. Same asymmetry class as RC48 (dismiss timeout) and RC50 (dismiss
-// tab activation): sibling paths issuing the same request with different
-// budgets. The under-budgeted one fails on exactly the inputs where it
-// needs the headroom — here, the largest prompts in the wizard flow.
-//
-// Fix: pass maxTokens: 8192 at both call sites, matching every sibling.
-//
-// Source-text audit pattern: wizard.js functions are not unit-testable
-// directly (they drive chrome.tabs + LLMClient). Audit by slicing the
-// function body from the source.
+// RC53 evolution: the user chose to make the completion budget a per-provider
+// CONFIG PARAMETER (Settings → maxOutputTokens) threaded through the whole
+// flow. llm-client now resolves options.maxTokens ?? config.maxOutputTokens
+// ?? 8192 at the single budgeting site, and every call-site hardcode was
+// REMOVED (a hardcoded 8192 would cap a user configuring 16384). The guard
+// here is updated to the new invariant:
+//   1. wizard/background call sites do NOT hardcode maxTokens:8192 (config
+//      is authoritative — behavioral chain tested in
+//      rc53-maxoutputtokens-config.test.js).
+//   2. No call site hardcodes a value BELOW 8192 — that reintroduces the RC52
+//      failure mode even when no config is set.
+//   3. The incident stays documented at the fixed call site.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -53,56 +47,40 @@ function chatOptionsOf(fnBody, fnName) {
   return fnBody.slice(chatIdx, close);
 }
 
-describe('RC52: wizard LLM calls embedding large HTML pass explicit maxTokens', () => {
-  it('confirmSelectorsWithFullHtml passes maxTokens >= 8192', () => {
+describe('RC52/RC53: completion budget is config-driven, never sub-8192', () => {
+  it('confirmSelectorsWithFullHtml does not hardcode a completion budget', () => {
     const body = sliceFunction(readSrc('wizard.js'), 'confirmSelectorsWithFullHtml');
-    const opts = chatOptionsOf(body, 'confirmSelectorsWithFullHtml');
-    const m = opts.match(/maxTokens:\s*(\d+)/);
-    assert.ok(m, 'confirmSelectorsWithFullHtml must pass an explicit maxTokens ' +
-      '(llm-client defaults to 4096 — insufficient for 136K-token prompts; ' +
-      'console.log 2026-08-14 12:59-13:04: finish_reason:length, empty content, 4 wasted retries).');
-    const val = parseInt(m[1], 10);
-    assert.ok(val >= 8192,
-      'confirmSelectorsWithFullHtml maxTokens must be >= 8192 (sibling-calls parity). Got: ' + val);
+    assert.ok(!/maxTokens\s*:\s*\d+/.test(body),
+      'the completion budget comes from the maxOutputTokens config (RC53); a call-site ' +
+      'hardcode caps users who configure a larger budget');
   });
 
-  it('generateExplorationScript passes maxTokens >= 8192', () => {
-    // Same { jsonMode: true }-only shape as the failing call; its prompt
-    // embeds the full SCRIPT_DSL_GUIDE plus page info — same failure exposure.
+  it('generateExplorationScript does not hardcode a completion budget', () => {
     const body = sliceFunction(readSrc('wizard.js'), 'generateExplorationScript');
-    const opts = chatOptionsOf(body, 'generateExplorationScript');
-    const m = opts.match(/maxTokens:\s*(\d+)/);
-    assert.ok(m, 'generateExplorationScript must pass an explicit maxTokens.');
-    const val = parseInt(m[1], 10);
-    assert.ok(val >= 8192,
-      'generateExplorationScript maxTokens must be >= 8192 (sibling-calls parity). Got: ' + val);
+    assert.ok(!/maxTokens\s*:\s*\d+/.test(body),
+      'the completion budget comes from the maxOutputTokens config (RC53)');
   });
 });
 
-describe('RC52: no other wizard client.chat call omits maxTokens', () => {
-  // Guards against a THIRD under-budgeted call site appearing in a future
-  // edit. Every client.chat in wizard.js must carry an explicit maxTokens.
-  it('every client.chat call in wizard.js passes an explicit maxTokens', () => {
+describe('RC52/RC53: no call site hardcodes sub-8192 budgets', () => {
+  // Guards against a future edit reintroducing the RC52 failure mode: an
+  // explicit maxTokens below 8192 truncates large-prompt calls even when no
+  // config is set (deterministic finish_reason:length + empty content).
+  it('wizard.js contains no numeric maxTokens below 8192', () => {
     const src = readSrc('wizard.js');
-    const calls = [];
-    let idx = -1;
-    while ((idx = src.indexOf('client.chat(', idx + 1)) > -1) {
-      const close = src.indexOf('});', idx);
-      calls.push(src.slice(idx, close));
+    const sub8192 = [];
+    const re = /maxTokens\s*:\s*(\d+)/g;
+    let m;
+    while ((m = re.exec(src)) !== null) {
+      if (parseInt(m[1], 10) < 8192) sub8192.push(m[0]);
     }
-    assert.ok(calls.length >= 6, 'expected at least 6 client.chat calls in wizard.js, found ' + calls.length);
-    const missing = [];
-    for (const call of calls) {
-      if (!/maxTokens\s*:/.test(call)) missing.push(call.slice(0, 60));
-    }
-    assert.deepEqual(missing, [],
-      'every wizard client.chat call must pass explicit maxTokens — omitting it falls back to the ' +
-      '4096 llm-client default which deterministically fails on large prompts. Missing: ' +
-      JSON.stringify(missing));
+    assert.deepEqual(sub8192, [],
+      'wizard.js must not hardcode maxTokens < 8192 (RC52 failure mode). Found: ' +
+      JSON.stringify(sub8192));
   });
 });
 
-describe('RC52: comment documents the incident at the fixed call sites', () => {
+describe('RC52: comment documents the incident at the fixed call site', () => {
   it('confirmSelectorsWithFullHtml comment references RC52 or the length-finish failure', () => {
     const src = readSrc('wizard.js');
     const start = src.indexOf('async function confirmSelectorsWithFullHtml(');

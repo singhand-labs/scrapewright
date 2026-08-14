@@ -41,6 +41,13 @@ class LLMClient {
     // when undefined/invalid so legacy configs without this field still work.
     const configured = Number(config.timeoutMs);
     this.timeoutMs = Number.isFinite(configured) && configured > 0 ? configured : undefined;
+    // Per-provider completion budget (RC53). The safe max_tokens value belongs
+    // to the provider+model pair (e.g. reasoning models can spend the whole
+    // budget on non-visible tokens — RC52: output_tokens 4096, text_tokens 0),
+    // so it is a Settings-page config knob, not a per-call-site guess. Use
+    // site chain: options.maxTokens ?? this.maxOutputTokens ?? 8192.
+    const maxOut = Number(config.maxOutputTokens);
+    this.maxOutputTokens = Number.isFinite(maxOut) && maxOut > 0 ? maxOut : undefined;
   }
 
   getDefaultBaseUrl() {
@@ -94,7 +101,7 @@ class LLMClient {
       model: this.model,
       messages,
       temperature: options.temperature ?? this.temperature,
-      max_tokens: options.maxTokens ?? 4096,
+      max_tokens: options.maxTokens ?? this.maxOutputTokens ?? 8192,
       response_format: options.jsonMode ? { type: 'json_object' } : undefined
     };
 

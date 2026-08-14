@@ -1124,7 +1124,7 @@ Return JSON with:
   const result = await client.chat([
     { role: 'system', content: buildSystemMessageWithGlobalContext('You are a web scraping expert. Return JSON only.') },
     { role: 'user', content: prompt }
-  ], { jsonMode: true, maxTokens: 8192 });
+  ], { jsonMode: true });
 
   const cleaned = cleanLLMResponse(result);
   let parsed;
@@ -1158,15 +1158,16 @@ Return JSON with:
 
   // RC52 (console.log 2026-08-14 12:59-13:04): this call embeds full element
   // outerHTML for every candidate selector — the largest prompts in the wizard
-  // flow (136,953 tokens observed). Without an explicit maxTokens, llm-client
-  // falls back to 4096, the model burns the whole completion budget without
-  // emitting parseable content (finish_reason: length, empty content), and
-  // the deterministic failure retries 4x before surfacing LLMRetryExhausted.
-  // Match the sibling wizard calls: explicit 8192.
+  // flow (136,953 tokens observed). With the 4096 default the model burned the
+  // whole completion budget without emitting parseable content (finish_reason:
+  // length, empty content), and the deterministic failure retried 4x before
+  // surfacing LLMRetryExhausted. RC53: no call-site budget — the completion
+  // budget is the Settings-page maxOutputTokens config parameter, falling
+  // back to 8192 in llm-client (options.maxTokens ?? config ?? 8192).
   const result = await client.chat([
     { role: 'system', content: buildSystemMessageWithGlobalContext('You are a web scraping expert. Return JSON only.') },
     { role: 'user', content: prompt }
-  ], { jsonMode: true, maxTokens: 8192 });
+  ], { jsonMode: true });
 
   const cleaned = cleanLLMResponse(result);
   let parsed;
@@ -1280,7 +1281,7 @@ Sample detail page URL (use as entryUrl for detail-page steps): ${detailPageInfo
   const result = await client.chat([
     { role: 'system', content: buildSystemMessageWithGlobalContext('You are a web scraping expert. Return JSON only.') },
     { role: 'user', content: prompt }
-  ], { jsonMode: true, maxTokens: 8192 });
+  ], { jsonMode: true });
 
   wizardState.llmHistory.push(
     { role: 'user', content: summarizeStepsGeneration({
@@ -1411,7 +1412,7 @@ Only generate this step's script. Do not modify other steps.`;
   const result = await client.chat([
     { role: 'system', content: 'You are a web scraping expert. Return JSON only.' + globalContext },
     { role: 'user', content: prompt }
-  ], { jsonMode: true, maxTokens: 8192 });
+  ], { jsonMode: true });
 
   wizardState.llmHistory.push(
     { role: 'user', content: (() => {
@@ -1483,13 +1484,14 @@ URL Template Detection (optional). If the user's Page Operations *explicitly* de
 
 Do NOT infer templates from implicit patterns like "search for keyword" or "show results for X" — only extract when the user *explicitly* describes URL rewriting. When in doubt, return null. Returning a wrong template breaks the service; returning null falls back to the safe type/click flow.`;
 
-  // RC52: sibling-parity maxTokens (see confirmSelectorsWithFullHtml note) —
-  // this prompt embeds the full DSL guide; the 4096 default can deterministically
-  // fail with finish_reason:length.
+  // RC52/RC53: this prompt embeds the full DSL guide — a 4096 completion cap
+  // can deterministically fail with finish_reason:length (see the
+  // confirmSelectorsWithFullHtml note). Budget now comes from the Settings
+  // maxOutputTokens config (llm-client fallback 8192).
   const result = await client.chat([
     { role: 'system', content: buildSystemMessageWithGlobalContext('You are a web scraping expert. Return JSON only.') },
     { role: 'user', content: prompt }
-  ], { jsonMode: true, maxTokens: 8192 });
+  ], { jsonMode: true });
 
   return parseLLMJson(cleanLLMResponse(result), 'generateExplorationScript', result);
 }
@@ -2236,7 +2238,7 @@ ${detailSnapshotSection}`;
     const systemMsg = { role: 'system', content: buildSystemMessageWithGlobalContext('You are a web scraping script improver. Return only JavaScript code.') };
     const userMsg = { role: 'user', content: prompt };
     const messages = [systemMsg, ...wizardState.llmHistory, userMsg];
-    const result = await client.chat(messages, { maxTokens: 8192 });
+    const result = await client.chat(messages, {});
 
     wizardState.llmHistory.push(
       { role: 'user', content: (() => {
@@ -3329,7 +3331,7 @@ ${RETURN_FORMAT_FEEDBACK}`;
     if (typeof summarizeAllStepDiagnostics === 'function') signalsIncluded.push('RUNTIME_DIAGNOSTICS');
     console.log('[autoFix] Signals emitted:', { signalsIncluded, emptyFieldsChars: emptyFieldsSignal.length, shapeDistributionChars: shapeDistributionSignal.length, fieldCandidatesChars: fieldCandidatesSignal.length, annotationCount: (wizardState.annotations || []).length });
     appendLog(`Prompt size: ${promptSizeStats.totalChars} chars (history ${promptSizeStats.historyMessages} msgs / ${promptSizeStats.historyChars} chars + current ${promptSizeStats.promptChars} chars, snapshot budget ${promptSizeStats.snapshotBudget}); signals: ${signalsIncluded.join(',') || '(none)'}`, 'info');
-    const result = await client.chat(messages, { maxTokens: 8192 });
+    const result = await client.chat(messages, {});
 
     wizardState.llmHistory.push(
       { role: 'user', content: summarizeFixIteration({

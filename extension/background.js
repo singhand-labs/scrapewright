@@ -816,7 +816,7 @@ Return ONLY the fixed JavaScript code, no explanation.`;
     const fixedCode = await client.chat([
       { role: 'system', content: buildAutoFixSystemMessage(service.userDescription || service.displayName || '') },
       { role: 'user', content: prompt }
-    ], { maxTokens: 8192 });
+    ], {});
 
     const cleaned = cleanLLMResponse(fixedCode);
     if (!cleaned || !cleaned.trim()) {

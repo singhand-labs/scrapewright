@@ -87,6 +87,8 @@
       <input type="text" id="apiBaseUrl" placeholder="Base URL (optional)" />
       <input type="number" id="llmTimeout" placeholder="Request timeout in seconds (default 120)" min="10" max="600" step="5" />
       <p class="hint">Per-request timeout for LLM calls. Blank = 120s. Increase if your model is slow; lower for faster failure.</p>
+      <input type="number" id="llmMaxTokens" placeholder="Max output tokens (default 8192)" min="1024" max="131072" step="1024" />
+      <p class="hint">Completion token budget for every LLM call (max_tokens). Blank = 8192. Raise it if your model spends tokens on reasoning or truncates long JSON outputs (finish_reason=length).</p>
       <button id="saveLlm">Save LLM Config</button>
 
       <h3>Server Configuration</h3>
