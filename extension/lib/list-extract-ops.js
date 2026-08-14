@@ -223,6 +223,15 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
     const hovercards = [];
     for (let j = 0; j < anchors.length; j++) {
       const anchorEl = anchors[j];
+      // RC51 (console.log 2026-08-14): anchorHref is the primary downstream
+      // classification signal — step scripts bucket hovercards by the source
+      // anchor link. The hover layer was fully working (18/18 picks, 68/68
+      // dismisses) yet every result had hovercards:[] because the entry shape
+      // omitted the href and the classification regex read undefined.
+      let anchorHref = '';
+      try { anchorHref = anchorEl.getAttribute('href') || ''; } catch (_) {}
+      let anchorText = '';
+      try { anchorText = (anchorEl.textContent || '').trim().slice(0, 120); } catch (_) {}
       try {
         const r = await hoverFn(anchorEl, popoverSel, perHoverOpts);
         hovercards.push({
@@ -231,7 +240,9 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
           popoverSelector: (r && r.popoverSelector) || null,
           autoDiscovered: !!(r && r.autoDiscovered),
           reason: (r && r.reason) || null,
-          anchorIndex: j
+          anchorIndex: j,
+          anchorHref: anchorHref,
+          anchorText: anchorText
         });
       } catch (err) {
         hovercards.push({
@@ -240,7 +251,9 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
           popoverSelector: null,
           autoDiscovered: false,
           reason: 'hover_error: ' + (err && err.message || String(err)),
-          anchorIndex: j
+          anchorIndex: j,
+          anchorHref: anchorHref,
+          anchorText: anchorText
         });
       }
     }

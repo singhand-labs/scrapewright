@@ -173,6 +173,10 @@
           var hovercards = [];
           for (var j = 0; j < anchors.length; j++) {
             var anchorEl = anchors[j];
+            var anchorHref = '';
+            try { anchorHref = anchorEl.getAttribute('href') || ''; } catch (_) {}
+            var anchorText = '';
+            try { anchorText = (anchorEl.textContent || '').trim().slice(0, 120); } catch (_) {}
             try {
               var r = await hoverFn(anchorEl, popoverSel, perHoverOpts);
               hovercards.push({
@@ -181,7 +185,9 @@
                 popoverSelector: (r && r.popoverSelector) || null,
                 autoDiscovered: !!(r && r.autoDiscovered),
                 reason: (r && r.reason) || null,
-                anchorIndex: j
+                anchorIndex: j,
+                anchorHref: anchorHref,
+                anchorText: anchorText
               });
             } catch (err) {
               hovercards.push({
@@ -190,7 +196,9 @@
                 popoverSelector: null,
                 autoDiscovered: false,
                 reason: 'hover_error: ' + (err && err.message || String(err)),
-                anchorIndex: j
+                anchorIndex: j,
+                anchorHref: anchorHref,
+                anchorText: anchorText
               });
             }
           }
