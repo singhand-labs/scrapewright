@@ -305,6 +305,8 @@ async function loadLlmConfig() {
   // timeoutMs is stored in ms; the UI is in seconds. Blank → default (120).
   const timeoutSeconds = config.timeoutMs ? Math.round(config.timeoutMs / 1000) : '';
   document.getElementById('llmTimeout').value = timeoutSeconds;
+  // maxOutputTokens is stored as a plain token count. Blank → default (8192).
+  document.getElementById('llmMaxTokens').value = config.maxOutputTokens || '';
 }
 
 async function saveLlmConfig() {
@@ -312,13 +314,22 @@ async function saveLlmConfig() {
   const timeoutSeconds = Number.isFinite(rawTimeout) && rawTimeout >= 10 && rawTimeout <= 600
     ? rawTimeout
     : 120;
+  // Completion budget (RC53). Blank or out-of-range → undefined, so
+  // llm-client falls back to its 8192 default at the use site. Range floor
+  // 1024: a smaller budget reintroduces the finish_reason:length truncation
+  // class (RC52).
+  const rawMaxTokens = parseInt(document.getElementById('llmMaxTokens').value, 10);
+  const maxOutputTokens = Number.isFinite(rawMaxTokens) && rawMaxTokens >= 1024 && rawMaxTokens <= 131072
+    ? rawMaxTokens
+    : undefined;
   const config = {
     provider: document.getElementById('provider').value,
     model: document.getElementById('model').value,
     apiKey: document.getElementById('apiKey').value,
     apiBaseUrl: document.getElementById('apiBaseUrl').value || undefined,
     temperature: 0.1,
-    timeoutMs: timeoutSeconds * 1000
+    timeoutMs: timeoutSeconds * 1000,
+    maxOutputTokens
   };
   await chrome.runtime.sendMessage({ type: 'SAVE_LLM_CONFIG', config });
   showToast('Saved', 'success');
