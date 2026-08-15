@@ -199,13 +199,26 @@ class LLMClient {
           { finish_reason: finishReason, usage }
         );
       }
-      const hint = finishReason === 'length'
-        ? ' (finish_reason=length — raise maxTokens; the model could not fit a complete response in the token budget)'
-        : finishReason === 'content_filter'
-          ? ' (finish_reason=content_filter — the response was filtered)'
-          : '';
-      // Empty content with no overflow signal is often transient under load —
-      // retry before surfacing.
+      // RC55 (console.log 2026-08-15 07:35-07:38): finish_reason=length with
+      // EMPTY content means the ENTIRE completion budget was consumed before
+      // any content (glm-5.1 invisible reasoning via the proxy —
+      // completion_tokens exactly equals the cap, content length 0). This is
+      // deterministic under fixed (prompt, cap): RC52 4/4 at 4096, RC55 2/2
+      // at 16000, and the user confirmed 8192 AND 16000 both fail. Identical
+      // retries can never succeed and each burns another full budget.
+      // Non-retryable, with the effective budget in the message so the user
+      // knows which knob (Settings maxOutputTokens) to raise.
+      if (finishReason === 'length') {
+        throw new LLMError(
+          `LLM API returned empty content and consumed the ENTIRE ${body.max_tokens}-token completion budget before emitting any content (finish_reason=length). This failure is deterministic — identical retries cannot succeed, so no retry was attempted. Raise the Settings maxOutputTokens (effective budget was ${body.max_tokens}) or use a provider/model with lower reasoning overhead. Detail: ${detail}`,
+          { retryable: false, finish_reason: finishReason, usage, effectiveMaxTokens: body.max_tokens }
+        );
+      }
+      const hint = finishReason === 'content_filter'
+        ? ' (finish_reason=content_filter — the response was filtered)'
+        : '';
+      // Empty content with no overflow/length signal is often transient under
+      // load — retry before surfacing.
       throw new LLMError(`LLM API returned empty content${hint}. Detail: ${detail}`, { retryable: true });
     }
 
