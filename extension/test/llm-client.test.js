@@ -302,7 +302,10 @@ describe('LLMClient.chat retry behavior', () => {
       calls++;
       if (calls < 2) return mockResponse({
         body: {
-          choices: [{ message: { role: 'assistant', content: '' }, finish_reason: 'length' }],
+          // RC55: finish_reason='length' + empty is now NON-retryable
+          // (deterministic budget burn). This test covers TRANSIENT empty —
+          // no finish_reason — which must keep retrying.
+          choices: [{ message: { role: 'assistant', content: '' } }],
           usage: { prompt_tokens: 5, completion_tokens: 0, total_tokens: 5 }
         }
       });
