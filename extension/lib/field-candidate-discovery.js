@@ -60,7 +60,14 @@
 
   const COUNT_TEXT_RE = /^\d+([.,]\d+)?[KkMm]?$/;
   const COUNT_PLAIN_RE = /^\d+$/;
-  const COUNT_LABEL_RE = /(comment|like|share|reaction|view|download)s?[^0-9]*\d|\d[^0-9]*(comment|like|share|reaction|view|download)/i;
+  // RC59 (console.log 2026-08-18): CJK labels added — the incident site
+  // exposes engagement counts ONLY via Chinese aria-labels (93 则评论 /
+  // 8 人赞), and the English-only pattern classified zero count-like
+  // leaves, so count-field discovery never fired.
+  const COUNT_LABEL_WORDS = 'comment|like|share|reaction|view|download' +
+    '|评论|留言|赞|分享|转发|查看|浏览|下载|收藏';
+  const COUNT_LABEL_RE = new RegExp(
+    '(' + COUNT_LABEL_WORDS + ')s?[^0-9]*\\d|\\d[^0-9]*(' + COUNT_LABEL_WORDS + ')', 'i');
 
   const ID_NUMERIC_RE = /^\d{5,}$/;
   const ID_HASH_RE = /^[a-z0-9]{10,}$/i;
