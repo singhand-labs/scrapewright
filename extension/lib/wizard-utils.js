@@ -2230,6 +2230,33 @@ function dedupeStepIterations(testResult) {
   return { ...testResult, steps: [...seen.values()] };
 }
 
+// elideDuplicateFinalResults(testResult) — applied LAST in the serialization
+// chain (after dedupe → strip snapshots → strip pages). The terminal step's
+// steps[].result and testResult.finalResult are frequently the SAME object:
+// the orchestrator derives finalResult from the last successful step, so the
+// autoFix prompt embedded every output record twice (~250K chars × 2 in the
+// 2026-08-18 console.log incident — on top of the history copy). Steps whose
+// result deep-equals finalResult get their result replaced with a marker;
+// finalResult itself is kept full so the output appears exactly once.
+// Non-mutating: returns a shallow-cloned steps array with cloned step entries
+// only where elision occurred — wizardState.testResult is never touched.
+function elideDuplicateFinalResults(testResult) {
+  if (!testResult || typeof testResult !== 'object') return testResult;
+  const finalResult = testResult.finalResult;
+  if (finalResult === undefined || finalResult === null) return testResult;
+  if (!Array.isArray(testResult.steps)) return testResult;
+  let finalJson = null;
+  return {
+    ...testResult,
+    steps: testResult.steps.map((step) => {
+      if (!step || typeof step !== 'object' || !('result' in step)) return step;
+      if (finalJson === null) finalJson = JSON.stringify(finalResult);
+      if (JSON.stringify(step.result) !== finalJson) return step;
+      return { ...step, result: '[elided — identical to finalResult]' };
+    })
+  };
+}
+
 function formatDomActivitySummary(activities) {
   if (!Array.isArray(activities) || activities.length === 0) return '(no DOM calls)';
   const groups = new Map();
@@ -3566,7 +3593,7 @@ function formatElementsForPrompt(elements, opts) {
 
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
@@ -3593,6 +3620,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.stripSnapshotsFromTestResult = stripSnapshotsFromTestResult;
   window.stripPagesFromLLMContext = stripPagesFromLLMContext;
   window.dedupeStepIterations = dedupeStepIterations;
+  window.elideDuplicateFinalResults = elideDuplicateFinalResults;
   window.formatDomActivitySummary = formatDomActivitySummary;
   window.summarizeExecutionDiagnostics = summarizeExecutionDiagnostics;
   window.summarizeAllStepDiagnostics = summarizeAllStepDiagnostics;
@@ -3652,6 +3680,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.stripSnapshotsFromTestResult = stripSnapshotsFromTestResult;
   self.stripPagesFromLLMContext = stripPagesFromLLMContext;
   self.dedupeStepIterations = dedupeStepIterations;
+  self.elideDuplicateFinalResults = elideDuplicateFinalResults;
   self.formatDomActivitySummary = formatDomActivitySummary;
   self.summarizeExecutionDiagnostics = summarizeExecutionDiagnostics;
   self.summarizeAllStepDiagnostics = summarizeAllStepDiagnostics;

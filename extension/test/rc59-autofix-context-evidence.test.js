@@ -35,7 +35,8 @@ const path = require('path');
 
 const {
   stripSnapshotsFromTestResult,
-  summarizeFixIteration
+  summarizeFixIteration,
+  elideDuplicateFinalResults
 } = require('../lib/wizard-utils');
 
 describe('RC59: stripSnapshotsFromTestResult head+tail truncation', () => {
@@ -126,6 +127,49 @@ describe('RC59: summarizeFixIteration history digest', () => {
 });
 
 // Source-text wiring checks live in rc59-wiring tests below.
+describe('RC59: elideDuplicateFinalResults', () => {
+  const ELISION = /elided|identical to finalResult/;
+
+  it('replaces step results that deep-equal finalResult with an elision marker', () => {
+    // Incident: currentOutput serialized the SAME posts array twice — once as
+    // the terminal step's steps[].result, once as finalResult (~250K chars
+    // each after capping). Identical bytes, zero added signal.
+    const posts = [{ content: 'p1', likes: '8' }, { content: 'p2', likes: '3' }];
+    const testResult = {
+      finalResult: { posts },
+      steps: [
+        { stepId: '1', result: { url: 'https://example.test/' } },
+        { stepId: '2', result: { posts } }
+      ]
+    };
+    const out = elideDuplicateFinalResults(testResult);
+    assert.equal(out.steps[0].result.url, 'https://example.test/',
+      'differing results kept verbatim');
+    assert.ok(ELISION.test(String(out.steps[1].result)),
+      'duplicating result replaced by marker, got: ' + JSON.stringify(out.steps[1].result));
+    assert.deepEqual(out.finalResult, { posts },
+      'finalResult itself stays full — serialized exactly once');
+  });
+
+  it('does not mutate the input testResult', () => {
+    const posts = [{ content: 'p' }];
+    const testResult = { finalResult: { posts }, steps: [{ stepId: '2', result: { posts } }] };
+    elideDuplicateFinalResults(testResult);
+    assert.deepEqual(testResult.steps[0].result, { posts },
+      'stored wizardState.testResult must be untouched (elision is serialization-only)');
+  });
+
+  it('is a no-op when finalResult is absent, null, or steps is missing', () => {
+    const noFinal = { steps: [{ stepId: '1', result: { a: 1 } }] };
+    assert.deepEqual(elideDuplicateFinalResults(noFinal), noFinal);
+    const nullFinal = { finalResult: null, steps: [{ stepId: '1', result: null }] };
+    assert.deepEqual(elideDuplicateFinalResults(nullFinal), nullFinal);
+    const noSteps = { finalResult: { a: 1 } };
+    assert.deepEqual(elideDuplicateFinalResults(noSteps), noSteps);
+    assert.equal(elideDuplicateFinalResults(null), null);
+  });
+});
+
 describe('RC59: wizard.js wiring (source-text)', () => {
   const readSrc = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
 
@@ -134,5 +178,18 @@ describe('RC59: wizard.js wiring (source-text)', () => {
     const count = (src.match(/stripPagesFromLLMContext\(stripSnapshotsFromTestResult\(/g) || []).length;
     assert.ok(count >= 2,
       'both serialization sites (testResultSection + currentOutput) must strip; found ' + count);
+  });
+
+  it('both serialization sites elide steps[].result duplicating finalResult', () => {
+    const src = readSrc('wizard.js');
+    const count = (src.match(/elideDuplicateFinalResults\(stripPagesFromLLMContext\(/g) || []).length;
+    assert.ok(count >= 2,
+      'both sites must wrap the chain with elideDuplicateFinalResults; found ' + count);
+  });
+
+  it('elideDuplicateFinalResults is exported from wizard-utils', () => {
+    const src = readSrc('lib/wizard-utils.js');
+    assert.match(src, /function elideDuplicateFinalResults\(/);
+    assert.match(src, /module\.exports[^\n]*elideDuplicateFinalResults/);
   });
 });
