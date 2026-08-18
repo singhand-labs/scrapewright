@@ -221,6 +221,5 @@ Snapshots are cleaned/sanitized for the LLM by `lib/dom-cleaner.js` (`cleanHtmlF
 
 **Concurrency:** Only one service execution runs at a time. The `ExecutionQueue` in `background.js` serializes all calls. This is required because the offscreen document hosts a single shared sandbox iframe and `tabIdStack` — concurrent executions would route DOM requests to the wrong tab. For higher throughput, scale horizontally: run multiple host instances on different ports behind a load balancer (`deploy/scrapewright-manager.sh`, `deploy/Dockerfile`, `deploy/k8s.yaml`) — see README "Distributed deployment".
 
-**Git Push:** The repo uses `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` env vars for commits (git identity is not configured in this environment). `push.sh` pushes to the remote; do not embed credentials in new scripts.
 
 **Step-chain integrity:** Any code that mutates a service's `steps` array (wizard deploy, options reorder, import, auto-fix, HTTP step CRUD) must go through the relink helpers in `wizard-utils.js` and will be re-validated by `ServiceRegistry.save`/`validateChain`. Editing the array directly produces a service that saves but silently mis-executes.
