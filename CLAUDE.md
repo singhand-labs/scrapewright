@@ -205,11 +205,11 @@ Routes are matched by regex in `host.js` (more-specific routes first). The exter
 - `LOGIN_REQUIRED` → fail fast with a helpful message
 - Other errors → retry up to `config.maxRetries`
 
-Snapshots come from `lib/dom-snapshot.js`, cleaned/sanitized for the LLM by `lib/html-cleaner.js`. When a failure originates inside `$openTab`, the orchestrator prefers `error.subTabSnapshot` (the actual detail page) over re-capturing the main tab (usually the wrong page). Execution logs are stored in `chrome.storage.local` under `executionLogs` (max 100).
+Snapshots are cleaned/sanitized for the LLM by `lib/dom-cleaner.js` (`cleanHtmlForLLM`), with snapshot budgeting in `lib/wizard-utils.js` (`truncateSnapshotForLLM`/`stripSnapshotsFromTestResult`). When a failure originates inside `$openTab`, the orchestrator prefers `error.subTabSnapshot` (the actual detail page) over re-capturing the main tab (usually the wrong page). Execution logs are stored in `chrome.storage.local` under `executionLogs` (max 100).
 
 ### LLM Integration
 
-`extension/lib/llm-client.js` uses OpenAI-compatible `/chat/completions`. Supported providers: OpenAI, Moonshot, Kimi (Moonshot Platform), Anthropic, GLM (Zhipu AI). Custom base URLs supported. Specific messages for 404 (check URL/model), 401/403 (check API key); request/response details logged to console. The wizard (`wizard.js`, ~80KB) drives the interactive 7-step service creation flow and is paired with `wizard-utils.js` for chain validation/manipulation.
+`extension/lib/llm-client.js` uses OpenAI-compatible `/chat/completions`. Supported providers: OpenAI, Moonshot, Kimi (Moonshot Platform), Anthropic, GLM (Zhipu AI). Custom base URLs supported. Specific messages for 404 (check URL/model), 401/403 (check API key); request/response details logged to console. The wizard (`wizard.js`, ~80KB) drives the interactive 5-phase service creation flow and is paired with `wizard-utils.js` for chain validation/manipulation.
 
 ## Important Constraints
 

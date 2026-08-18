@@ -527,7 +527,7 @@ User scripts run inside a sandboxed iframe and interact with the target page thr
 | `$scrollToBottom(selector?)` | Scroll to bottom; `scrolled:false` = feed exhausted |
 | `$scrollIntoView(selector)` | Reveal an element (e.g. "Load more") before clicking |
 | `$hover(anchorSelector, popoverSelector?, opts?)` | Trusted hover at an anchor, capture the popover HTML before it closes (`opts.index` addresses the Nth match) |
-| `$extractWithHover(containerSel, fieldMap, opts?)` | Atomic extract + hover enrichment per container — record↔hovercard alignment guaranteed |
+| `$extractWithHover(containerSel, fieldMap, opts?)` | Atomic extract + hover enrichment per container — record↔hovercard alignment kept by one atomic per-container call |
 | `$openTab(url, functionBody)` | Open a detail page in a new tab, scrape, return its result |
 
 All selectors support the iframe prefix `iframe<iframe-css>::<inner-css>` (chainable for nested iframes) to pin a specific iframe on multi-iframe pages.
