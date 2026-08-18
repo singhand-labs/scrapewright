@@ -3437,6 +3437,8 @@ const RC54_TOTAL_ELEMENTS_BUDGET_CHARS = 200000;
 // RC58 Fix B pre-pass: mark candidates whose full outerHTML is a substring of
 // another candidate's (child field inside its container, or literal duplicate
 // selectors matching the same node) so their HTML is embedded only once.
+// Mutates the input array (adds _containedIn) — single-use per prompt build.
+const MIN_CONTAINED_HTML_CHARS = 24;
 function markContainedElements(elements) {
   const found = [];
   elements.forEach((e, i) => { if (e.found && e.outerHTML) found.push({ e, i }); });
@@ -3444,20 +3446,38 @@ function markContainedElements(elements) {
     const container = found.find(({ e: y, i: yi }) => {
       if (y === x) return false;
       if (y.outerHTML.indexOf(x.outerHTML) === -1) return false;
-      // Strictly shorter HTML → contained. Equal HTML (duplicate selectors
-      // matching the same node) → the LATER entry is the duplicate.
-      return x.outerHTML.length < y.outerHTML.length ||
-        (x.outerHTML.length === y.outerHTML.length && xi > yi);
+      // Equal HTML (duplicate selectors matching the same node) → the LATER
+      // entry is the duplicate, always deduped. Strictly shorter HTML counts
+      // as contained only above a floor: tiny fragments (<br>, <input ...>)
+      // are coincidental substrings of many candidates, not real children.
+      if (x.outerHTML.length === y.outerHTML.length) return xi > yi;
+      return x.outerHTML.length < y.outerHTML.length &&
+        x.outerHTML.length >= MIN_CONTAINED_HTML_CHARS;
     });
     if (container) x._containedIn = container.e.selector;
   }
   return elements;
 }
 
+// Content-hash for stability keys. Length-only keys false-settle when a feed
+// swaps items during pagination (equal-length churn); hashing the actual
+// structure/text content makes any content change produce a different key.
+function hashString(s) {
+  const str = String(s == null ? '' : s);
+  let h1 = 0x811c9dc5;
+  let h2 = 0x01000193;
+  for (let i = 0; i < str.length; i++) {
+    const c = str.charCodeAt(i);
+    h1 = ((h1 ^ c) * 0x01000193) >>> 0;
+    h2 = ((h2 + c * (i + 1)) * 0x85ebca6b) >>> 0;
+  }
+  return h1.toString(36) + '-' + h2.toString(36);
+}
+
 // RC58 Fix A: poll an injected async key function until the page settles.
-// getKey returns a short stability key (e.g. structureLen + ':' + textLen) or
-// null when the probe itself fails (tab navigating), which counts as NOT
-// settled and keeps polling. Returns { settled, polls }.
+// getKey returns a short stability key (hash of structure + text content —
+// see hashString) or null when the probe itself fails (tab navigating),
+// which counts as NOT settled and keeps polling. Returns { settled, polls }.
 async function waitForPageSettle(getKey, opts) {
   const maxMs = (opts && opts.maxMs) || 30000;
   const pollMs = (opts && opts.pollMs) || 1000;
@@ -3493,7 +3513,7 @@ function formatElementsForPrompt(elements, opts) {
       continue;
     }
     if (e._containedIn) {
-      lines.push(header + "\n[CONTAINED: this element's HTML appears inside '" + e._containedIn + "' above]");
+      lines.push(header + "\n[CONTAINED: this element's HTML appears inside '" + e._containedIn + "']");
       continue;
     }
     if (budgetExhausted) {
@@ -3520,7 +3540,7 @@ function formatElementsForPrompt(elements, opts) {
 
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
@@ -3533,6 +3553,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.getFirstRecordHtmlFromAnyStep = getFirstRecordHtmlFromAnyStep;
   window.formatElementsForPrompt = formatElementsForPrompt;
   window.waitForPageSettle = waitForPageSettle;
+  window.hashString = hashString;
   window.detectEmptyOutputFieldsByRatio = detectEmptyOutputFieldsByRatio;
   window.formatEmptyOutputFieldsSignal = formatEmptyOutputFieldsSignal;
   window.detectDuplicateRecords = detectDuplicateRecords;

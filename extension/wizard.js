@@ -1502,6 +1502,13 @@ Do NOT infer templates from implicit patterns like "search for keyword" or "show
   return parseLLMJson(cleanLLMResponse(result), 'generateExplorationScript', result);
 }
 
+// RC58: hash-based stability key — length-only keys false-settle when a feed
+// swaps equal-length items; hashing the content makes churn visible to the poll.
+function snapshotStabilityKey(snapshot) {
+  const s = snapshot || {};
+  return hashString(s.structure || '') + ':' + hashString(s.textSummary || '');
+}
+
 async function explorePageInteraction(tabId, script, sampleInput) {
   const executor = new OffscreenExecutor(tabId);
   executor.timeoutMs = 60000;
@@ -1520,8 +1527,7 @@ async function explorePageInteraction(tabId, script, sampleInput) {
   showLoading('Waiting for page to settle (up to 30s)...');
   const settle = await waitForPageSettle(async () => {
     const r = await sendMessageWithRetry(tabId, { type: 'GET_DOM_SNAPSHOT', mode: 'compressed' }, 2);
-    const s = r && r.snapshot;
-    return (s && s.structure ? s.structure.length : 0) + ':' + (s && s.textSummary ? s.textSummary.length : 0);
+    return snapshotStabilityKey(r && r.snapshot);
   }, { maxMs: 30000, pollMs: 1500, stableCount: 2 });
   debugLogger.log('info', 'wizard', 'Post-exploration settle', { settled: settle.settled, polls: settle.polls });
 
@@ -1705,8 +1711,7 @@ async function continueResearch(tabId, config, pageInfo, postPageInfo) {
         // RC58: poll-based settle wait (cap 10s) replaces a fixed 8s sleep.
         await waitForPageSettle(async () => {
           const r = await chrome.tabs.sendMessage(detailTab.id, { type: 'GET_DOM_SNAPSHOT', mode: 'compressed' });
-          const s = r && r.snapshot;
-          return (s && s.structure ? s.structure.length : 0) + ':' + (s && s.textSummary ? s.textSummary.length : 0);
+          return snapshotStabilityKey(r && r.snapshot);
         }, { maxMs: 10000, pollMs: 1000, stableCount: 2 });
         const detailResponse = await chrome.tabs.sendMessage(detailTab.id, {
           type: 'GET_DOM_SNAPSHOT', mode: 'compressed'

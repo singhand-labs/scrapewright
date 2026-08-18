@@ -142,17 +142,28 @@ describe('RC54: wizard.js wires the capped formatter', () => {
 // repeats the same bytes (a second root cause of the RC54-scale prompt).
 describe('RC58: formatElementsForPrompt containment dedup', () => {
   it('emits CONTAINED marker for a child whose HTML is inside an earlier container', () => {
-    const containerHtml = '<div class="container"><span class="field">data</span><span class="other">x</span></div>';
-    const childHtml = '<span class="field">data</span>';
+    const containerHtml = '<div class="container"><span class="field">data payload one</span><span class="other">x</span></div>';
+    const childHtml = '<span class="field">data payload one</span>';
     const out = formatElementsForPrompt([
       { selector: 'div.container', found: true, outerHTML: containerHtml },
       { selector: 'span.field', found: true, outerHTML: childHtml }
     ]);
     assert.ok(out.includes(containerHtml), 'container HTML emitted in full');
-    assert.match(out, /--- span\.field ---\n\[CONTAINED: this element's HTML appears inside 'div\.container' above\]/,
+    assert.match(out, /--- span\.field ---\n\[CONTAINED: this element's HTML appears inside 'div\.container'\]/,
       'child gets a CONTAINED marker naming its container');
     assert.ok(!out.includes('--- span.field ---\n' + childHtml),
       'child HTML must not be embedded again');
+  });
+
+  it('does not mark trivially-tiny HTML as contained (coincidental substrings)', () => {
+    const containerHtml = '<div class="container"><br>content</div>';
+    const out = formatElementsForPrompt([
+      { selector: 'div.container', found: true, outerHTML: containerHtml },
+      { selector: 'br', found: true, outerHTML: '<br>' }
+    ]);
+    assert.ok(out.includes('--- br ---\n<br>'),
+      'tiny elements keep their real HTML — exempt from containment');
+    assert.ok(!out.includes('CONTAINED'));
   });
 
   it('marks later duplicates of identical HTML as CONTAINED, keeping the first', () => {
@@ -222,5 +233,32 @@ describe('RC58: waitForPageSettle', () => {
     }, { maxMs: 5000, pollMs: 1, stableCount: 2, sleep: () => Promise.resolve() });
     assert.equal(r.settled, true);
     assert.ok(r.polls >= 3, 'null key must not count toward stability');
+  });
+
+  it('treats a throwing key probe the same as null (keeps polling)', async () => {
+    let calls = 0;
+    const r = await waitForPageSettle(async () => {
+      calls++;
+      if (calls < 2) throw new Error('content script absent');
+      return 'stable';
+    }, { maxMs: 5000, pollMs: 1, stableCount: 2, sleep: () => Promise.resolve() });
+    assert.equal(r.settled, true);
+    assert.ok(r.polls >= 3, 'thrown probe must not count toward stability');
+  });
+});
+
+// RC58 review followup: content-hash stability key — equal-length content
+// churn (feed swapping items during pagination) must change the key, so
+// raw-length keys cannot false-settle.
+describe('RC58: hashString stability key', () => {
+  const { hashString } = require('../lib/wizard-utils');
+
+  it('is deterministic and distinguishes equal-length content', () => {
+    assert.equal(hashString('aaaa'), hashString('aaaa'));
+    assert.notEqual(hashString('aaaa'), hashString('bbbb'));
+  });
+
+  it('handles empty input', () => {
+    assert.equal(typeof hashString(''), 'string');
   });
 });
