@@ -2947,8 +2947,12 @@ If your script does NOT use $openTab, $wait / $ / $extract will run against the 
   // iteration entries to the LAST per stepId. Without this, a 9-iteration
   // step-5 with growing updatedPosts bloated the prompt to 1.83MB even
   // after the 5K-per-field cap. Order: dedupe → strip pages → strip snapshots.
+  // elideDuplicateFinalResults (console.log 2026-08-18): the terminal step's
+  // result and finalResult are the same object — the autoFix prompt embedded
+  // every output record twice (~250K chars × 2 on top of the history copy).
+  // Applied LAST so it dedupes exactly the bytes about to be serialized.
   const testResultSection = wizardState.testResult
-    ? '\n\nPREVIOUS TEST RESULT:\n' + JSON.stringify(stripPagesFromLLMContext(stripSnapshotsFromTestResult(dedupeStepIterations(wizardState.testResult))), null, 2)
+    ? '\n\nPREVIOUS TEST RESULT:\n' + JSON.stringify(elideDuplicateFinalResults(stripPagesFromLLMContext(stripSnapshotsFromTestResult(dedupeStepIterations(wizardState.testResult)))), null, 2)
     : '';
 
   const RETURN_FORMAT = `RETURN FORMAT — choose ONE:
@@ -3137,8 +3141,10 @@ ${RETURN_FORMAT}`;
     // accumulators (updatedPosts etc.) bypassed the per-field cap and ballooned
     // the prompt to 1.83MB on a 9-iteration step-5. See testResultSection above
     // for ordering rationale.
+    // RC59: elideDuplicateFinalResults applied last — see testResultSection
+    // above; currentOutput embedded the same output twice otherwise.
     const currentOutput = wizardState.testResult
-      ? JSON.stringify(stripPagesFromLLMContext(stripSnapshotsFromTestResult(dedupeStepIterations(wizardState.testResult))), null, 2)
+      ? JSON.stringify(elideDuplicateFinalResults(stripPagesFromLLMContext(stripSnapshotsFromTestResult(dedupeStepIterations(wizardState.testResult)))), null, 2)
       : '(no output)';
 
     // RC11 regression guard. The user-feedback path runs MAX_ATTEMPTS=1 per
