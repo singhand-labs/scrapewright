@@ -135,7 +135,14 @@ extension/                # Chrome 扩展 (Manifest V3)
     service-registry.js   # 服务注册表 — chrome.storage.local 持久化
     wizard-utils.js       # 向导工具函数 — DSL 指南、JSON 清洗、Schema 渲染
     import-utils.js       # 导入工具函数 — 数据验证、去重过滤
-    dom-snapshot.js       # DOM 快照 — 压缩结构提取（测试用）
+    dom-cleaner.js        # HTML 分层清洗 — cleanPageHtml/cleanHtmlForLLM/extractAnnotationContext
+    tab-activation.js     # 粘性标签页激活 — 保证抓取标签页产出合成器帧
+    scroll-ops.js         # 滚动操作 — $scrollBy/$scrollToBottom + 可信滚轮回退
+    renderer-activation.js # 增强抓取模式 — chrome.debugger 可信输入回退
+    visibility-keepalive.js # 页面可见性保活 — MAIN world visibilityState 覆盖
+    selector-generator.js # 选择器生成 — 短执行选择器与完整 domPath 分离
+    annotation-cluster.js # 标注聚类 — 按容器聚类多采样标注
+    record-shape-distribution.js # 记录形态分布 — 实证信号优先的字段候选
     debug-logger.js       # 调试日志 — 结构化日志 + 自动清理
     script-executor.js    # 旧版执行器（保留兼容 $openTab）
   test/                   # 扩展单元测试
@@ -532,7 +539,7 @@ score = requiredCoverage * 100 + listItemCount * 10 + avgFieldsPerItem * 5
 
 `cleanLLMResponse` 会剥离开头的协议行（通过 debugLogger 记录以便观测），让下游的代码围栏 / JSON 抽取逻辑能在干净脚本上运行。若同一条提示在 `llmHistory` 中已被 NACK 过两次，反馈块会追加升级提醒："你的页面模型可能错了"。
 
-**限制：** 最多 `MAX_ATTEMPTS` 次（静默 3 次，或带用户反馈 1 次）。仅对 `ELEMENT_NOT_FOUND` 和 `SCRIPT_ERROR` 类型错误触发；`LOGIN_REQUIRED` 立即失败。
+**限制：** 最多自动修复 3 轮（静默路径 `MAX_ATTEMPTS=3`，即 3 轮完整的 LLM 修复+测试迭代；带用户反馈 1 轮）。仅对 `ELEMENT_NOT_FOUND` 和 `SCRIPT_ERROR` 类型错误触发；`LOGIN_REQUIRED` 立即失败。
 
 ## 6. HTTP API 详解
 
@@ -820,7 +827,7 @@ MV3 的 Service Worker 会在 30s 无活动后休眠。通过 `chrome.alarms.cre
 ### 13.4 修改 DOM 快照策略
 
 `content-script.js:getDomSnapshot()` 控制完整快照，`getCompressedSnapshot()` 控制压缩快照。修改时注意：
-- 同步更新 `lib/dom-snapshot.js`（测试用副本）
+- 同步更新 `lib/dom-cleaner.js` 的清洗入口与 `lib/wizard-utils.js` 的快照预算函数（`truncateSnapshotForLLM` / `stripSnapshotsFromTestResult`）
 - 保持 `data-iframe-src` 标记约定（LLM 依赖此标记识别 iframe 内容）
 
 ### 13.5 调试技巧
@@ -837,7 +844,7 @@ MV3 的 Service Worker 会在 30s 无活动后休眠。通过 `chrome.alarms.cre
 | 同时只能执行一个任务 | Offscreen 文档使用全局 tabIdStack | 并发请求排队等待 |
 | 无法采集跨域 iframe 内容 | 浏览器同源策略 | 跨域内容不可见 |
 | Service Worker 可能休眠 | MV3 限制，30s 无活动 | 通过 alarm 保活，极端情况可能延迟 |
-| AI 修复最多重试 2 次 | 防止无限重试循环 | 复杂错误可能需要手动修复 |
+| AI 自动修复最多 3 轮 | 防止无限重试循环 | 复杂错误可能需要手动修复 |
 | 不支持登录态采集 | 无 Cookie 管理功能 | 需要登录的页面需手动登录后执行 |
 | 默认 API Key 为 dev-key | 开发便利性 | 生产环境必须设置 `SCRAPEWRIGHT_API_KEY` |
 | IO 驱动的懒加载在后台标签上会停住 | Chrome 对非可见标签的渲染端帧产出节流 | 懒加载站点需要 `scrapewright throttle on` + 重启 Chrome（见 §9 渲染节流对抗栈）|
