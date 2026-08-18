@@ -66,8 +66,19 @@ describe('RC20 tab-activation integration drift guard', () => {
     assert.ok(/TabActivation\.requestActivation\(/.test(src),
       'TAB_ACTIVATION_REQUEST handler must call TabActivation.requestActivation');
     // RC56: listeners must register at top level (SW startup), not lazily.
-    assert.ok(/TabActivation\.initTabActivationListeners\(\)/.test(src),
-      'background.js must call TabActivation.initTabActivationListeners()');
+    // Pin the guarded block itself — a bare /TabActivation\.initTabActivationListeners\(\)/
+    // would also match a call lazily nested inside some function.
+    const guarded =
+      /typeof TabActivation !== 'undefined'[\s\S]{0,120}?TabActivation\.initTabActivationListeners\(\)/;
+    assert.ok(guarded.test(src),
+      'background.js must contain the guarded top-level TabActivation.initTabActivationListeners() block');
+    // Heuristic: top-level init runs before the first message listener is
+    // registered (if listener registration ever moves above it, that's fine —
+    // the guarded-block assert above is the real invariant).
+    const initIdx = src.search(guarded);
+    const listenerIdx = src.indexOf('chrome.runtime.onMessage.addListener');
+    assert.ok(initIdx !== -1 && (listenerIdx === -1 || initIdx < listenerIdx),
+      'initTabActivationListeners block must appear before the first chrome.runtime.onMessage.addListener');
   });
 
   it('RC56: TAB_ACTIVATION_RELEASE channel is fully removed', () => {
