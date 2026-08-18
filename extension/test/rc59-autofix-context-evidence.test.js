@@ -219,6 +219,37 @@ describe('RC59: firstContainerHtml head+tail capture', () => {
   });
 });
 
+// RC59-5: COUNT_LABEL_RE was English-only; the incident site exposes counts
+// exclusively via CJK aria-labels (93 则评论 / 8 人赞), so field-candidate
+// discovery classified zero count-like leaves — combined with the head-only
+// snippet cap (fixed above), the LLM had neither the evidence NOR the
+// discovery signal for count fields.
+describe('RC59: CJK count labels in field-candidate discovery', () => {
+  const { JSDOM } = require('jsdom');
+  const domGlobals = new JSDOM('<!DOCTYPE html><html><body></body></html>');
+  global.DOMParser = domGlobals.window.DOMParser;
+  global.Node = domGlobals.window.Node;
+  global.NodeFilter = domGlobals.window.NodeFilter;
+  const { findFieldCandidates } = require('../lib/field-candidate-discovery');
+
+  it('classifies CJK aria-label counts as count-like (incident labels)', () => {
+    const html = '<div>' +
+      '<a aria-label="93 则评论" role="button"></a>' +
+      '<a aria-label="8 人赞" role="button"></a>' +
+      '<a aria-label="分享 5" role="button"></a>' +
+      '</div>';
+    const c = findFieldCandidates(html, 'count-like');
+    assert.ok(c.length >= 3,
+      'all three CJK count labels must be discovered, got ' + c.length);
+  });
+
+  it('English count labels still discovered (no regression)', () => {
+    const html = '<div><span aria-label="12 comments">Comments</span></div>';
+    const c = findFieldCandidates(html, 'count-like');
+    assert.ok(c.length >= 1);
+  });
+});
+
 describe('RC59: wizard.js wiring (source-text)', () => {
   const readSrc = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
 
