@@ -167,6 +167,38 @@ button { padding: 8px 16px; cursor: pointer; }
   margin-top: 4px;
 }
 
+/* Address + shell selectors above the curl examples. The global select rule
+   (block/100%) is for forms — inside the modal they sit inline side by side. */
+.api-doc-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 12px 0 4px 0;
+  font-size: 13px;
+  color: #374151;
+}
+
+.api-doc-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.api-doc-controls select {
+  display: inline-block;
+  width: auto;
+  margin: 0;
+  padding: 4px 8px;
+}
+
+.api-doc-controls .hint {
+  flex-basis: 100%;
+  font-size: 12px;
+  color: #6b7280;
+}
+
 /* === Native Host Status card ============================================== */
 
 .native-host-status .native-status-row {
