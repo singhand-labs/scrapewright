@@ -101,16 +101,22 @@ describe('RC13 — firstContainerHtml capture (Issue #2 fix)', () => {
     assert.equal(diag.firstContainerHtml, null);
   });
 
-  it('firstContainerHtml is capped at 2000 chars + appends truncation marker', () => {
-    // Build a record whose outerHTML exceeds the cap.
+  it('firstContainerHtml is capped near 2000 chars, head+tail with truncation marker (RC59)', () => {
+    // Build a record whose outerHTML exceeds the cap. RC59: the cap is a
+    // head+tail split (metric attributes cluster at the END of record
+    // markup; the old head-only cap amputated that evidence).
     const longBody = 'x'.repeat(3000);
     const dom = new JSDOM('<!DOCTYPE html><body><div class="post"><p>' + longBody + '</p></div></body>');
     const record = dom.window.document.querySelector('.post');
     const diag = computeExtractListDiagnostics([record], { body: 'p' }, '.post');
-    assert.ok(diag.firstContainerHtml.length <= 2030,
+    assert.ok(diag.firstContainerHtml.length <= 2060,
       'firstContainerHtml must be capped (got ' + diag.firstContainerHtml.length + ')');
-    assert.ok(diag.firstContainerHtml.endsWith('…[truncated]'),
-      'truncated payload must end with …[truncated]');
+    assert.match(diag.firstContainerHtml, /…\[truncated \d+ chars, middle cut\]…/,
+      'marker must disclose the original length');
+    assert.ok(diag.firstContainerHtml.startsWith('<div class="post">'),
+      'head prefix kept');
+    assert.ok(diag.firstContainerHtml.endsWith('</div>'),
+      'tail suffix kept — end-of-record evidence survives (RC59)');
   });
 
   it('firstContainerHtml collapses whitespace runs (no huge indented blocks)', () => {

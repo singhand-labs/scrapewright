@@ -255,19 +255,30 @@
         }
         return { field, subSelector, attr, matchCount, sampleTexts, sampleHrefs };
       });
-      // Mirror lib/list-extract-ops.js RC13: capture up to 2000 chars of the
-      // first container's outerHTML. WITHOUT this, field-candidate discovery
-      // silently suppresses because getFirstRecordHtmlFromAnyStep requires
-      // firstContainerHtml — autoFix then iterates blind to where in the DOM
-      // neighborhood of a record the missing fields actually live. This inline
-      // fallback fires on Chrome MV3 injection glitches; the same drift hit
-      // RC8 (extractListMultiRecords missing) and RC19 (ScrollOps missing).
+      // Mirror lib/list-extract-ops.js RC13 + RC59: capture ~2000 chars of
+      // the first container outerHTML with a head+tail split. WITHOUT this,
+      // field-candidate discovery silently suppresses because
+      // getFirstRecordHtmlFromAnyStep requires firstContainerHtml — autoFix
+      // then iterates blind to where in the DOM neighborhood of a record
+      // the missing fields actually live. RC59: metric attributes cluster
+      // at the END of record markup, so a head-only cap amputated exactly
+      // that evidence. This inline fallback fires on Chrome MV3 injection
+      // glitches; the same drift hit RC8 (extractListMultiRecords missing)
+      // and RC19 (ScrollOps missing).
       let firstContainerHtml = null;
       if (containerArr.length > 0) {
         const c0 = containerArr[0];
         if (c0 && typeof c0.outerHTML === 'string') {
           const collapsed = c0.outerHTML.replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, ' ');
-          firstContainerHtml = collapsed.length > 2000 ? collapsed.slice(0, 2000) + '…[truncated]' : collapsed;
+          if (collapsed.length <= 2000) {
+            firstContainerHtml = collapsed;
+          } else {
+            const tail = 1200;
+            const head = 2000 - tail - 60; // marker budget
+            firstContainerHtml = collapsed.slice(0, head) +
+              ' …[truncated ' + collapsed.length + ' chars, middle cut]… ' +
+              collapsed.slice(collapsed.length - tail);
+          }
         }
       }
       return {
