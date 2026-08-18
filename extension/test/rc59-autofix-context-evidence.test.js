@@ -170,6 +170,55 @@ describe('RC59: elideDuplicateFinalResults', () => {
   });
 });
 
+// RC59-4: firstContainerHtml head+tail capture. The 2000-char cap was
+// HEAD-ONLY in both copies (lib + inline fallback); the record action-bar
+// (where aria-label metric counts live) sits at the END of the markup, so
+// the FIELD_CANDIDATES evidence snippet amputated exactly the region the
+// LLM needed to see (incident: fieldCandidates gate showed recordHtmlChars
+// 2012 with zero metric evidence through 10 rounds).
+describe('RC59: firstContainerHtml head+tail capture', () => {
+  const { JSDOM } = require('jsdom');
+  const listExtractOps = require('../lib/list-extract-ops');
+
+  it('lib capture keeps head AND tail of oversized container HTML', () => {
+    const html = '<div class="record">' + 'm'.repeat(4000) +
+      '<a aria-label="93 则评论" role="button"></a></div>';
+    const dom = new JSDOM('<!DOCTYPE html>' + html);
+    const c = dom.window.document.querySelector('.record');
+    const out = listExtractOps.computeExtractListDiagnostics([c], {}, '.record')
+      .firstContainerHtml;
+    assert.ok(out.length < 2300, 'still capped near 2000, got ' + out.length);
+    assert.ok(out.startsWith('<div class="record">'), 'head prefix survives');
+    assert.ok(out.includes('aria-label="93 则评论"'),
+      'TAIL evidence (metric count attribute) must survive the cap');
+    const lenMatch = out.match(/truncated (\d+) chars/);
+    assert.ok(lenMatch && Number(lenMatch[1]) >= 4000,
+      'marker must disclose the original length, got: ' + (lenMatch && lenMatch[1]));
+  });
+
+  it('short container HTML is kept whole (no marker)', () => {
+    const dom = new JSDOM('<!DOCTYPE html><div class="r"><span>x</span></div>');
+    const c = dom.window.document.querySelector('.r');
+    const out = listExtractOps.computeExtractListDiagnostics([c], {}, '.r')
+      .firstContainerHtml;
+    assert.ok(out.includes('<span>x</span>'));
+    assert.ok(!/truncated/i.test(out));
+  });
+
+  it('inline fallback copy mirrors the head+tail split (source-text)', () => {
+    // content-script.js is a strict-mode IIFE — source-text audit only.
+    // (The inline copy lives inside createInlineListExtractOps; RC8/RC19/RC35
+    // drift incidents all had lib gain a fix the fallback missed.)
+    const cs = fs.readFileSync(path.join(__dirname, '..', 'content-script.js'), 'utf8');
+    assert.ok(!/collapsed\.slice\(0,\s*2000\)/.test(cs),
+      'head-only 2000-char cap must be gone from the inline fallback copy');
+    assert.ok(/collapsed\.slice\(collapsed\.length\s*-\s*[A-Za-z0-9_$]+\)/.test(cs),
+      'inline fallback must keep a tail slice so end-of-record evidence survives');
+    assert.ok(cs.includes('chars, middle cut]'),
+      'inline fallback marker must disclose the truncation like the lib copy');
+  });
+});
+
 describe('RC59: wizard.js wiring (source-text)', () => {
   const readSrc = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
 
