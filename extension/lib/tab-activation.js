@@ -7,7 +7,8 @@
 //   - requestActivation switches to the scrape tab and KEEPS it active.
 //   - The user's last manually-clicked tab is tracked via
 //     chrome.tabs.onActivated; our own programmatic activations are
-//     distinguished by a suppression token set before tabs.update.
+//     distinguished by a suppression set (tabIds of pending tabs.update)
+//     recorded before each tabs.update.
 //   - When a tab closes while it is the active tab of its window (scrape
 //     tab auto-close), focus lands back on the last-clicked tab (focusing
 //     its window if different). No valid target → Chrome default.
@@ -17,8 +18,8 @@
 (function (global) {
   let lastUserTabId = null;           // user-clicked tab (survives our activations)
   let activeByWindow = new Map();     // windowId -> active tabId (every onActivated)
-  let suppressActivatedTabId = null;  // our own tabs.update token
-  let suppressTimer = null;
+  const suppressTabs = new Set();     // tabIds of our own pending activations
+  const suppressTimers = new Map();   // tabId -> safety timer
   let hydratePromise = null;          // once-only storage.session hydrate
 
   function hasTabsApi() {
@@ -68,9 +69,10 @@
   async function handleTabActivated(activeInfo) {
     await hydrate();
     activeByWindow.set(activeInfo.windowId, activeInfo.tabId);
-    if (activeInfo.tabId === suppressActivatedTabId) {
-      suppressActivatedTabId = null;              // our own activation — not a user click
-      if (suppressTimer) { clearTimeout(suppressTimer); suppressTimer = null; }
+    if (suppressTabs.has(activeInfo.tabId)) {
+      suppressTabs.delete(activeInfo.tabId);    // our own activation — not a user click
+      const t = suppressTimers.get(activeInfo.tabId);
+      if (t) { clearTimeout(t); suppressTimers.delete(activeInfo.tabId); }
       persist();
       return;
     }
@@ -80,9 +82,15 @@
 
   async function handleTabRemoved(tabId, removeInfo) {
     await hydrate();
-    if (removeInfo && removeInfo.isWindowClosing) return;
+    if (removeInfo && removeInfo.isWindowClosing) {
+      // The window is gone — its activeByWindow entry is stale.
+      if (activeByWindow.delete(removeInfo.windowId)) persist();
+      return;
+    }
+    const windowId = removeInfo && removeInfo.windowId;
+    if (windowId === undefined) return;
     if (lastUserTabId === tabId) { lastUserTabId = null; persist(); }
-    if (activeByWindow.get(removeInfo.windowId) !== tabId) return; // closing tab wasn't active
+    if (activeByWindow.get(windowId) !== tabId) return; // closing tab wasn't active
     const target = lastUserTabId;
     if (target === null || target === undefined || target === tabId) return; // Chrome default
     let tab;
@@ -90,7 +98,7 @@
     catch (e) { lastUserTabId = null; persist(); return; } // stale id
     try { await chrome.tabs.update(target, { active: true }); }
     catch (e) { return; }
-    if (tab.windowId !== removeInfo.windowId && chrome.windows &&
+    if (tab.windowId !== windowId && chrome.windows &&
         typeof chrome.windows.update === 'function') {
       try { await chrome.windows.update(tab.windowId, { focused: true }); } catch (e) {}
     }
@@ -128,17 +136,19 @@
       }
     }
 
-    // Suppression token: onActivated fires for our own tabs.update too.
-    suppressActivatedTabId = tabId;
-    if (suppressTimer) clearTimeout(suppressTimer);
-    suppressTimer = setTimeout(function () {
-      suppressActivatedTabId = null; suppressTimer = null;
-    }, 1000); // safety: update no-op'd / event never arrived
+    // Suppression set: onActivated fires for our own tabs.update too.
+    suppressTabs.add(tabId);
+    const oldTimer = suppressTimers.get(tabId);
+    if (oldTimer) clearTimeout(oldTimer);
+    suppressTimers.set(tabId, setTimeout(function () {
+      suppressTabs.delete(tabId); suppressTimers.delete(tabId);
+    }, 1000)); // safety: update no-op'd / event never arrived
 
     try { await chrome.tabs.update(tabId, { active: true }); }
     catch (e) {
-      suppressActivatedTabId = null;
-      if (suppressTimer) { clearTimeout(suppressTimer); suppressTimer = null; }
+      suppressTabs.delete(tabId);
+      const t = suppressTimers.get(tabId);
+      if (t) { clearTimeout(t); suppressTimers.delete(tabId); }
       return { ok: false, reason: 'tabs.update failed: ' + (e && e.message || String(e)) };
     }
     return { ok: true, activated: true }; // sticky: no restore

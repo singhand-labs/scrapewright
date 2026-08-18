@@ -295,6 +295,28 @@ describe('lib/tab-activation.js — user-click tracking (onActivated)', () => {
     assert.equal(s.activeByWindow.get(1), 101, 'activeByWindow still tracks every activation');
   });
 
+  it('concurrent suppressions: overlapping requestActivation calls do not leak each other\'s onActivated into lastUserTabId', async () => {
+    // RC56 review Fix 1: two overlapping requestActivation calls (wizard
+    // research tab + service execution tab) with a single suppression token
+    // meant the first call's onActivated missed the match and got recorded
+    // as a user click. Per-tab suppression set must cover both.
+    const ctx = loadModule();
+    ctx.tabsById.set(5, { id: 5, windowId: 1, active: false });
+    ctx.tabsById.set(6, { id: 6, windowId: 1, active: false });
+    ctx.api.initTabActivationListeners();
+    await ctx.api.requestActivation(5);
+    await ctx.api.requestActivation(6);
+    // Both programmatic activations arrive — neither may be recorded
+    await ctx.fireActivated(5, 1);
+    await ctx.fireActivated(6, 1);
+    assert.equal(ctx.api._getUserState().lastUserTabId, null,
+      'neither scrape tab may pollute lastUserTabId');
+    // A genuine user click afterwards IS recorded
+    ctx.tabsById.set(9, { id: 9, windowId: 1, active: false });
+    await ctx.fireActivated(9, 1);
+    assert.equal(ctx.api._getUserState().lastUserTabId, 9);
+  });
+
   it('unsuppressed activation after ours IS treated as a user click', async () => {
     const ctx = loadModule();
     ctx.api.initTabActivationListeners();
