@@ -85,7 +85,7 @@ If a field returns data for some items but null/empty for others in the same lis
 
 FIELD COLLISION ON GENERALIZATION — After generalizing an annotation selector per the rule above, VERIFY that no two outputFields end up matching the SAME element. The most common collision is on sites where multiple semantic elements share the same attribute (e.g. BOTH the author link and the timestamp link carry aria-label). When two fields would collapse onto the same selector:
 - Add a STRUCTURAL discriminator to one of them. Patterns that work in practice:
-  * href content: author links usually have href*="/user/" or href*="/profile.php"; timestamp links often have href*="/posts/" or no href at all.
+  * href content: author links usually have href*="/user/" or href*="/profile/"; timestamp links often have href*="/items/" or no href at all.
   * ancestor tag: timestamp links are usually NOT inside <h3>; author links are.
   * attribute value pattern: aria-label on a timestamp matches date/time regexes (e.g. /^\\d{1,2}:\\d{2}$|^\\d+\\s+(?:hours?|days?)\\s+ago$|^yesterday$/i); aria-label on an author is a person name.
 - Do NOT use bare attribute-presence selectors ([aria-label], [href]) for BOTH fields — that guarantees collision. Pick one field to make specific.

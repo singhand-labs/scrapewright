@@ -22,7 +22,7 @@ describe('SCRIPT_DSL_GUIDE — FIELD COLLISION ON GENERALIZATION', () => {
 
   it('lists href-content as a discriminator', () => {
     assert.match(SCRIPT_DSL_GUIDE, /href\*="\/user\//);
-    assert.match(SCRIPT_DSL_GUIDE, /href\*="\/posts\//);
+    assert.match(SCRIPT_DSL_GUIDE, /href\*="\/items\//);
   });
 
   it('lists ancestor-tag as a discriminator', () => {

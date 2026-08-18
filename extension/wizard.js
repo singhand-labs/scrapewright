@@ -450,14 +450,14 @@ function updatePhaseUI(state) {
     testStatus.className = 'success';
     btnPhase5Deploy.classList.remove('hidden');
     btnAutoFix.classList.remove('hidden');
-    feedbackInput.placeholder = 'Point out the problem with the extracted data — e.g. "publishTime is missing", "only 3 posts extracted", "images should have multiple URLs"';
+    feedbackInput.placeholder = 'Point out the problem with the extracted data — e.g. "createdAt is missing", "only 3 records extracted", "images should have multiple URLs"';
   } else if (state === 'empty-result') {
     testStatus.textContent = 'Test passed but extracted data is empty — extraction may not be working correctly.';
     testStatus.className = 'fixing';
     btnRetryTest.classList.remove('hidden');
     btnAutoFix.classList.remove('hidden');
     btnDeployAnyway.classList.remove('hidden');
-    feedbackInput.placeholder = 'Point out the problem — e.g. "expected ~20 posts but got 0", "the list selector is wrong", "the page needs more scroll time"';
+    feedbackInput.placeholder = 'Point out the problem — e.g. "expected ~20 records but got 0", "the list selector is wrong", "the page needs more scroll time"';
     debugLogger.log('warn', 'wizard', 'Empty result detected, showing fix controls');
   } else if (state === 'failure') {
     const stepInfo = wizardState.lastErrorStepId ? ' (step: ' + wizardState.lastErrorStepId + ')' : '';
@@ -1486,7 +1486,7 @@ Return JSON with:
 - targetUrlTemplate: string or null (see URL Template Detection below)
 
 URL Template Detection (optional). If the user's Page Operations *explicitly* describe substituting part of the URL with an input parameter (e.g., "replace 'keyword' in the URL with the input keyword" or "open URL with parameter page=N"), return a targetUrlTemplate derived from the URL by replacing the relevant substring with {{paramName}} — where paramName matches the input parameter name from the requirements. Examples:
-- URL https://facebook.com/search/top?q=keyword + user says "replace keyword with input keyword" → targetUrlTemplate: "https://facebook.com/search/top?q={{keyword}}"
+- URL https://example.com/search?q=keyword + user says "replace keyword with input keyword" → targetUrlTemplate: "https://example.com/search?q={{keyword}}"
 - URL https://example.com/list?page=1 + user says "go to page N" → targetUrlTemplate: "https://example.com/list?page={{pageNumber}}"
 
 Do NOT infer templates from implicit patterns like "search for keyword" or "show results for X" — only extract when the user *explicitly* describes URL rewriting. When in doubt, return null. Returning a wrong template breaks the service; returning null falls back to the safe type/click flow.`;
@@ -2957,7 +2957,7 @@ If your script does NOT use $openTab, $wait / $ / $extract will run against the 
 REDIRECTING THE FIX (important when user reports extraction-quality issues):
 - The step marked "<<< FAILING" below is the step that raised the runtime error. The actual root cause frequently lives in an EARLIER step whose output flowed into the failing step.
 - If your analysis of the error + the step scripts shows the root cause is in a different step, set "stepId" to that step's id. Your patch will be applied there instead.
-- Example: step 5 fails with "publishTime is undefined" because it reads __stepResults__['4'].posts[0].publishTime — but step 4 never extracted publishTime in the first place. The fix belongs in step 4, not step 5. Return {"stepId":"4", "script":"<fixed step-4 script>"}.
+- Example: step 5 fails with "createdAt is undefined" because it reads __stepResults__['4'].records[0].createdAt — but step 4 never extracted createdAt in the first place. The fix belongs in step 4, not step 5. Return {"stepId":"4", "script":"<fixed step-4 script>"}.
 - If the marked step IS the right one to fix, omit "stepId" (or set it to the marked step's id).`;
 
   // Multi-patch format for user-feedback path. bugx.log 2026-07-24 07:04:16:
@@ -2984,12 +2984,12 @@ Rules (READ ALL):
 - Each "script" REPLACES that step's script entirely — do not emit diffs.
 - If a step's flow also needs to change, add "onSuccess"/"onFailure"/"maxIterations" to that patch. Do NOT add or remove steps. The chain must stay valid.
 - Single-step fix is fine: return one-element "patches".
-- FORBIDDEN: re-extracting a field in a LATER step to "ensure it's captured" when an EARLIER step's extraction is broken. If step 4 extracts publishTime with a bad selector and step 5 is the finalizer, FIX STEP 4's selector — do not add a parallel publishTime extraction in step 5. Re-extracting in the finalizer duplicates work, leaves the original bug latent, and the next user complaint will be about the same field.
+- FORBIDDEN: re-extracting a field in a LATER step to "ensure it's captured" when an EARLIER step's extraction is broken. If step 4 extracts createdAt with a bad selector and step 5 is the finalizer, FIX STEP 4's selector — do not add a parallel createdAt extraction in step 5. Re-extracting in the finalizer duplicates work, leaves the original bug latent, and the next user complaint will be about the same field.
 - Common root-cause locations for user feedback:
   * "field X missing or wrong" → the step whose $extractList fieldMap includes field X (usually the extract step, NOT the finalizer).
   * "only N items extracted" → the scroll/paginate step (under-loaded) OR the extract step (container selector too narrow).
   * "image URLs incomplete" → the step that reads images. If it uses $extract('img', src) for a field declared array, switch to $list('img') — $extract returns ONE.
-  * "posts have wrong author/content" → the extract step's sub-selectors are matching the wrong element.
+  * "records have wrong author/content" → the extract step's sub-selectors are matching the wrong element.
   * "scroll/poll step returned the same postCount on every iteration with a stalled counter increasing" → the scroll mechanism itself did not progress (page did not actually scroll). NOT a selector problem. Check RUNTIME DIAGNOSTICS above: if scrollRoot is not 'window' or stalled is true, the site uses an inner scroll container — the framework auto-probes one, but if the auto-probe picked the wrong container, pin it explicitly with $scrollToBottom('<inner container selector>').`;
 
   // Signal-block tracking (RC30 part-1): these are assigned in the
@@ -3271,7 +3271,7 @@ Identify EVERY step in the workflow below whose script contains a root cause for
 - "only N items extracted" → the scroll/paginate step (under-loaded) OR the extract step (container selector too narrow).
 - "field X has wrong value" → the step that extracts that field — its selector matches the wrong element.
 - "image URLs incomplete" → if the field is declared array and the script uses $extract('img','src'), switch to $list('img') (one src vs array of srcs).
-- "field X populated in an earlier step but empty in final output" → INTER-STEP FIELD-NAME DRIFT. When a step consumes another step's result via __lastResult__ / __stepResults__, it MUST use the EXACT property names the upstream step writes. Cross-check the upstream step's return statement before reading any field off its output — a single renamed property silently erases the field (e.g. upstream returns {authorName, publishTime} but downstream reads p.author / p.time → both become undefined).
+- "field X populated in an earlier step but empty in final output" → INTER-STEP FIELD-NAME DRIFT. When a step consumes another step's result via __lastResult__ / __stepResults__, it MUST use the EXACT property names the upstream step writes. Cross-check the upstream step's return statement before reading any field off its output — a single renamed property silently erases the field (e.g. upstream returns {authorName, createdAt} but downstream reads p.author / p.time → both become undefined).
 - "RECORD SHAPE DISTRIBUTION shows fields appearing in SOME shapes only" → SHAPE-SWITCHING. Multiple distinct entity types coexist in the same list (e.g. records with group.* vs records with account.* vs records with both — these are different real-world shapes, not extraction failures). Detect which marker field is present per record and conditionally populate the shape-specific fields, rather than forcing every record into one flat schema or conflating one shape's value into another shape's field. The conflation pattern (logical-or fallback like "x || y") is WRONG when x and y belong to different shapes — write explicit shape detection instead.
 ${compactedNote}
 

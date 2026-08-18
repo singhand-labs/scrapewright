@@ -90,11 +90,52 @@ describe('SCRIPT_DSL_GUIDE is free of site-specific tokens (RC24 B)', () => {
   });
 });
 
+// RC57 (2026-08-18 audit): wizard.js inline prompts had leaked a real FB
+// search URL (exploration targetUrlTemplate example) and publishTime/posts
+// autoFix examples; wizard.html UI copy had publishTime/posts placeholders.
+// The existing guard only checked cosd-markdown-loading in wizard.js — the
+// gap that let the URL example survive. Sweep non-comment wizard.js source,
+// the full DSL guide, and wizard.html visible text for site names and
+// site-fingerprint tokens. (options.html intentionally unguarded: its
+// "Facebook feeds" limitation hint is docs-class descriptive copy, same as
+// the README lazy-load heading.)
+const SITE_NAME_RE = /facebook|twitter|linkedin|tiktok|reddit|instagram|\bfb\.com|weibo|zhihu|douyin/i;
+
 describe('wizard.js inline prompt sections are free of site-specific tokens', () => {
   const src = fs.readFileSync(WIZARD_PATH, 'utf8');
+  const withoutComments = src.replace(/\/\/[^\n]*\n/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
 
   it('does not reference cosd-markdown-loading in inline prompts', () => {
-    const withoutComments = src.replace(/\/\/[^\n]*\n/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
     assert.doesNotMatch(withoutComments, /cosd-markdown-loading/);
+  });
+
+  it('has no site names anywhere outside comments', () => {
+    assert.doesNotMatch(withoutComments, SITE_NAME_RE);
+  });
+
+  it('has no FB-fingerprint endpoint profile.php anywhere outside comments', () => {
+    assert.doesNotMatch(withoutComments, /profile\.php/i);
+  });
+
+  it('has no publishTime field name outside comments', () => {
+    // publishTime is FB-shaped (guard already bans it in the DSL guide);
+    // wizard.js autoFix examples and UI placeholders must use neutral names.
+    assert.doesNotMatch(withoutComments, /publishTime/);
+  });
+});
+
+describe('SCRIPT_DSL_GUIDE has no FB-fingerprint href patterns (RC57)', () => {
+  const guide = loadScriptDslGuide();
+  it('does not use profile.php as an href discriminator example', () => {
+    assert.doesNotMatch(guide, /profile\.php/i);
+  });
+});
+
+describe('wizard.html visible text is free of site-specific tokens (RC57)', () => {
+  it('has no site names or FB-fingerprint tokens in UI copy', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'wizard.html'), 'utf8');
+    assert.doesNotMatch(src, SITE_NAME_RE);
+    assert.doesNotMatch(src, /profile\.php/i);
+    assert.doesNotMatch(src, /publishTime/);
   });
 });
