@@ -38,7 +38,9 @@ try {
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { logger, resolveLogPath } = require('./lib/logger');
+const { collectLocalIpv4 } = require('./lib/network-info');
 
 // Logger is up — boot phase is over. The runtime trap below takes over.
 __bootReady = true;
@@ -218,7 +220,10 @@ async function handleHealthCheck(req, res) {
     extensionConnected,
     queueLength,
     queueRunning,
-    uptime: Math.floor(process.uptime())
+    uptime: Math.floor(process.uptime()),
+    // Non-internal IPv4 addresses of this machine — the options-page API doc
+    // offers these as curl-example hosts for remote (LAN) callers.
+    ips: collectLocalIpv4(os.networkInterfaces())
   }));
 }
 
