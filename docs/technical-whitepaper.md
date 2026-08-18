@@ -136,7 +136,7 @@ extension/                # Chrome 扩展 (Manifest V3)
     wizard-utils.js       # 向导工具函数 — DSL 指南、JSON 清洗、Schema 渲染
     import-utils.js       # 导入工具函数 — 数据验证、去重过滤
     dom-cleaner.js        # HTML 分层清洗 — cleanPageHtml/cleanHtmlForLLM/extractAnnotationContext
-    tab-activation.js     # 粘性标签页激活 — 保证抓取标签页产出合成器帧
+    tab-activation.js     # 粘性激活（sticky tab activation）— 保证抓取标签页产出合成器帧
     scroll-ops.js         # 滚动操作 — $scrollBy/$scrollToBottom + 可信滚轮回退
     renderer-activation.js # 增强抓取模式 — chrome.debugger 可信输入回退
     visibility-keepalive.js # 页面可见性保活 — MAIN world visibilityState 覆盖
@@ -670,7 +670,7 @@ iframe#iframe1::iframe#iframe2::#deep        // 嵌套 iframe（前缀链式）
 
 ## 8. 悬浮卡增强（Hover 富采集）
 
-**文件：** `extension/content-script.js:domHover()`（约 1660-2330 行）+ `extension/lib/renderer-activation.js`（CDP 派发）
+**文件：** `extension/content-script.js` 的 `domHover()` / `hoverDismiss()` 实现+ `extension/lib/renderer-activation.js`（CDP 派发）
 
 许多站点的列表 DOM 只有摘要字段，完整信息（账号简介、实体预览卡）在 hover 悬浮卡里。本章是该子系统的原理性描述，全部常数来自事故驱动调优。
 
@@ -710,7 +710,7 @@ source ('added' 优于 'efp') > posAbsolute > z-index > dist > area
 dismiss（把可信光标移到 (1,1) 触发 mouseout 关闭弹层）与 hover 走**同一条 CDP 命令链**，因此必须共享全部基础设施。两次事故各自造成接近 100% 的 dismiss 失败：
 
 - **RC48（超时对称）**：dismiss 路径曾把 CDP mouseMoved + detach 超时压到 500ms，而 hover 用 2000ms——同一命令、同一标签页，结果 98% dismiss 超时。修复：删除覆盖，两侧统一默认 2000ms（`CDP_STEP_TIMEOUT_MS`，勿压回 1500 以下）。
-- **RC50（激活对称）**：RC48 之后 dismiss 仍 100% 失败——根因是后台标签不产合成器帧，CDP 输入挂起；hover 路径在 RC20 就包了 `withTabActivation`，dismiss 路径漏了。修复：dismiss 同样包 `withTabActivation('hoverDismiss', ...)`。
+- **RC50（激活对称）**：RC48 之后 dismiss 仍 100% 失败——根因是后台标签不产合成器帧，CDP 输入挂起；hover 路径在 RC20 就包了 `withTabActivation`（见 §9.1），dismiss 路径漏了。修复：dismiss 同样包 `withTabActivation('hoverDismiss', ...)`。
 
 失败的 dismiss 会级联恶化：上一张悬浮卡残留挂载 → 站点抑制后续 hover。原则：**同一 CDP 命令 → 同一基础设施**，任何只改一侧的"优化"都是待发生的事故。
 
@@ -725,10 +725,10 @@ dismiss（把可信光标移到 (1,1) 触发 mouseout 关闭弹层）与 hover �
 | 层 | 模块 / CLI | 机制 | 对抗的节流类型 |
 |----|-----------|------|---------------|
 | 1. visibility-keepalive | `lib/visibility-keepalive.js`（默认开启）| 往页面 MAIN world 注入 `document.visibilityState='visible'` 覆盖 + rAF 保活循环 | 仅页面 JS **自己**检查可见性决定是否继续加载的行为。**不**产生合成器帧 |
-| 2. Enhanced Scraping Mode | `lib/renderer-activation.js`（选项页开关，`enhancedModeEnabled` 标志）| 现在只门控第 4 层可信滚轮兜底的可用性。RC20 删除了 `Page.setWebLifecycleState`（RC18 Plan A）——短暂激活（第 5 层）已让生命周期在输入窗口内自然 ACTIVE，该调用变纯开销 | 检测风险最小化：标志开启时只发 `Input.*` CDP 命令，绝不发 `Runtime.*`/`Network.*`/`DOM.*` |
+| 2. Enhanced Scraping Mode | `lib/renderer-activation.js`（选项页开关，`enhancedModeEnabled` 标志）| 现在只门控第 4 层可信滚轮兜底的可用性。RC20 删除了 `Page.setWebLifecycleState`（RC18 Plan A）——短暂激活（第 5 层）已让生命周期在输入窗口内自然 ACTIVE，该调用变纯开销；标志开启时只发 `Input.*` CDP 命令，绝不发 `Runtime.*`/`Network.*`/`DOM.*`（检测风险最小化） | 输入事件可信度门槛——站点把渲染生命周期降级到 frozen/discard、仅对可信输入恢复交互的行为（历史方案曾直接对抗此层，现由第 5 层激活天然覆盖） |
 | 3. Chrome 启动参数 | `scrapewright throttle on\|off\|status`（`native-host/lib/throttle-config/`）| 按平台重写 Chrome 启动器（Linux `.desktop`、macOS 包装 AppleScript 应用、Windows `.lnk`），加 `--disable-background-timer-throttling` `--disable-backgrounding-occluded-windows` `--disable-renderer-backgrounding` `--disable-features=CalculateNativeWinOcclusion` | 渲染端后台节流与原生窗口遮挡计算。需重启 Chrome，全局生效；必要但**不充分**（不解决 `isTrusted` 过滤与帧产出） |
 | 4. 可信滚轮兜底（RC19）| `renderer-activation.js:dispatchTrustedWheelScroll` + `scroll-ops.js` | 程序化 `scrollBy` 卡住（scrollHeight 停止增长）时，瞬态挂载 `chrome.debugger`，发 `Input.dispatchMouseEvent` mouseMoved + `mouseWheel`。CDP 输入产生 `isTrusted=true` 的滚轮事件——程序化产生可信滚轮的**唯一**途径。`DEFAULT_MAX_TRUSTED_WHEEL_ATTEMPTS=3`/次调用；中继链 content-script → `TRUSTED_WHEEL_SCROLL_REQUEST` → background → `RendererActivation` | 懒加载 loader 过滤非可信滚轮事件的站点。LLM 照常写 `$scrollToBottom`，基础设施透明兜底——无站点特定逻辑 |
-| 5. 粘性标签激活（RC56）| `lib/tab-activation.js`（默认开启）| 见下 | **唯一**针对帧产出的层：Chrome 硬性架构规则——合成器帧只为焦点窗口的活动标签产出，IO 回调与 CDP `Input.dispatchMouseEvent` 都要求激活 |
+| 5. 粘性激活（RC56）| `lib/tab-activation.js`（默认开启）| 见下 | **唯一**针对帧产出的层：Chrome 硬性架构规则——合成器帧只为焦点窗口的活动标签产出，IO 回调与 CDP `Input.dispatchMouseEvent` 都要求激活 |
 
 ### 9.1 粘性激活（RC56）
 
@@ -752,7 +752,7 @@ RC20 的"激活→操作→恢复"在背靠背操作间产生激活/恢复抖动
 
 **完成预算链**：`max_tokens = options.maxTokens ?? maxOutputTokens 配置 ?? 8192`（`llm-client.js`）。设置页的 `maxOutputTokens`（1024-131072，留空 8192）是全局权威值。
 
-**不可重试错误分类**（详见 §4.5）：`LLMContextOverflow`（提示词超上下文窗口）与**空内容 + finish_reason=length**（推理型模型把整个 completion 预算烧在不可见推理上、0 字符产出——确定性失败，重试必然同样失败；错误消息中带生效预算，提示应调大 `maxOutputTokens` 或换推理开销更低的模型）。瞬态空内容（无溢出/length 信号）仍可重试。
+**不可重试错误分类**（详见 §4.5）：空内容 + finish_reason=length 属确定性失败，直接归类为不可重试，不再烧重试预算。
 
 ## 11. DOM 混淆适配（选择器生成）
 
@@ -770,7 +770,6 @@ RC20 的"激活→操作→恢复"在背靠背操作间产生激活/恢复抖动
 **LLM 选择器泛化纪律**（DSL 规则）：优先属性**存在性**（`a[data-kind]`）而非字面值匹配；`FIELD COLLISION ON GENERALIZATION`——把选择器泛化到能匹配多种实体时，必须在脚本里加消歧逻辑，否则多类记录字段互相串。
 
 ## 12. 配置与部署
-
 
 ### 12.1 环境变量
 
