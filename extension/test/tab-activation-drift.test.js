@@ -32,7 +32,8 @@ describe('RC20 tab-activation integration drift guard', () => {
     assert.ok(/\(function\s*\(\s*global\s*\)\s*\{/.test(src),
       'tab-activation.js must be IIFE-wrapped to avoid lexical collisions');
     assert.ok(/requestActivation/.test(src), 'requestActivation not found');
-    assert.ok(/releaseActivation/.test(src), 'releaseActivation not found');
+    // RC56: sticky activation removed releaseActivation from the lib; the
+    // background RELEASE handler remains until Task 2 removes it.
   });
 
   it('background.js imports lib/tab-activation.js via importScripts', () => {
