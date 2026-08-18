@@ -33,8 +33,6 @@ const vm = require('node:vm');
 
 const MODULE_PATH = path.join(__dirname, '..', 'lib', 'tab-activation.js');
 
-function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
-
 // Fresh module + fresh chrome mock per test. Options:
 //   storage: false      — omit chrome.storage entirely (in-memory fallback)
 //   seed: {...}         — pre-seed the storage.session store
@@ -103,10 +101,29 @@ function loadModule(opts) {
     };
   }
 
+  // Manual clock: record timer callbacks instead of scheduling real time.
+  const timers = [];
+  let timerIdSeq = 0;
+  const fakeSetTimeout = (fn, delay) => {
+    const id = ++timerIdSeq;
+    timers.push({ id, fn, delay: delay || 0 });
+    return id;
+  };
+  const fakeClearTimeout = (id) => {
+    const i = timers.findIndex((t) => t.id === id);
+    if (i >= 0) timers.splice(i, 1);
+  };
+  const runExpired = (elapsedMs) => {
+    for (const t of timers.filter((t) => t.delay <= elapsedMs)) {
+      fakeClearTimeout(t.id);
+      t.fn();
+    }
+  };
+
   const sandbox = {
     chrome: chromeMock,
     console: { log: () => {}, warn: () => {}, error: () => {} },
-    setTimeout, clearTimeout,
+    setTimeout: fakeSetTimeout, clearTimeout: fakeClearTimeout,
     module: { exports: {} }
   };
   vm.createContext(sandbox);
@@ -116,6 +133,7 @@ function loadModule(opts) {
   return {
     api: sandbox.module.exports,
     calls, tabsById, activatedListeners, removedListeners, store,
+    timers, runExpired,
     setFocusedWindow: (id) => { focusedWindowId = id; },
     fireActivated: async (tabId, windowId) => {
       for (const fn of activatedListeners) await fn({ tabId, windowId });
@@ -170,8 +188,9 @@ describe('RC56 — suppression set', () => {
     addTab(ctx, 5, 1, false);
     ctx.api.initTabActivationListeners();
     await ctx.api.requestActivation(5);
-    // Never fire the event; let the 1000ms safety timer clear the token.
-    await sleep(1050);
+    // Never fire the event; advance the manual clock past the 1000ms safety
+    // timer so the token expires, then fire onActivated.
+    ctx.runExpired(1001);
     await ctx.fireActivated(5, 1);
     assert.equal(ctx.api._getUserState().lastUserTabId, 5,
       'after timer expiry the same activation is treated as user click');
