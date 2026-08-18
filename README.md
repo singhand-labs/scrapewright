@@ -76,6 +76,9 @@ How Scrapewright answers each — this is what makes it a different kind of **AI
 | **Service management** | Import/export, enable/disable, edit existing services, and one-click export of Markdown API docs (handy for sharing or feeding to AI agents) |
 | **Unified ops CLI** | `./bin/scrapewright` (install / start / stop / restart / status / doctor / logs) manages the host as an OS background service across Linux, macOS, and Windows |
 | **Async execution queue** | Concurrent requests queue automatically and return asynchronously; well suited to batch scraping |
+| **Hovercard enrichment** | `$hover` / `$extractWithHover` enrich list records with fields that only appear in hover popovers — a trusted CDP mouse event opens the card, multi-signal detection captures the portal-rendered DOM before it closes, and one atomic call keeps record↔hovercard alignment |
+| **Obfuscated-DOM stable selectors** | Generates selectors that survive hashed CSS-module classes and auto-generated attributes (`mount_0_0_*`, `react-aria-*`, `x1y2z3`-style hashes are stripped or skipped, anonymous wrapper chains collapsed) — robust on modern component-framework sites |
+| **Prompt-size resilience** | Element HTML fed to the LLM is tier-cleaned and budget-capped (per-element and total), so huge rendered feeds can't blow up the model's context |
 
 ## System Requirements
 
@@ -138,6 +141,8 @@ After install, open the extension → **Options** → under **Server Configurati
    - **Model** — model name (e.g. `gpt-4o`, `kimi-for-coding`, `glm-5.1`)
    - **API Key** — your API key
    - **Base URL** (optional) — custom API endpoint, useful for corporate proxies or OpenAI-compatible gateways. Must include the path prefix (e.g. `https://api.openai.com/v1`), not just the domain
+   - **Max output tokens** — completion budget for the model (default 8192, range 1024–131072). Raise it for reasoning models that spend tokens on invisible thinking before answering
+   - **Timeout** — per-request timeout in seconds (default 120, range 10–600). Raise it for slow providers or very long prompts
 3. Click **Save**
 
 ### 4. Create a Scraping Service
@@ -151,6 +156,8 @@ On the Options page click **+ New Service** to enter the AI wizard (5 phases):
 | **Phase 3: I/O Schema & Test Input** | Confirm input/output parameter shapes (JSON Schema) and edit the test input data. |
 | **Phase 4: Execute Test (step by step)** | Watch the live step-by-step execution log (open page → load → each step → success/failure). |
 | **Phase 5: Results** | Review test results. On failure, choose **Auto-Fix** (AI self-repair) or **Deploy Anyway** (deploy despite the error). |
+
+During Research, the wizard drives the LLM through several rounds: page exploration (does the page need interaction to reach the content?), candidate-selector discovery from your annotations and the DOM, selector confirmation against real element HTML, and finally step-script generation. Each round feeds the previous round's verified results, so the generated steps rest on selectors that were confirmed against the live page.
 
 #### Auto-Fix loop dynamics
 
@@ -208,14 +215,15 @@ You can also run the host in the foreground for debugging:
 
 Scrapewright drives a real Chrome tab, and by default that tab is opened as a **background tab** (`chrome.tabs.create({active:false})`) so your keyboard focus stays in your editor. For most sites this is fine. For sites that lazy-load content via `IntersectionObserver` — Facebook feeds, infinite-scroll lists, virtualized tables — background tabs hit Chrome's renderer-level frame-production throttle: no compositor frame is produced for a non-visible tab, so `IntersectionObserver` callbacks never fire and lazy-load never triggers.
 
-Scrapewright addresses this in four stacked layers (each targets a distinct throttle or filter mechanism, so they combine rather than replace):
+Scrapewright addresses this in five stacked layers (each targets a distinct throttle or filter mechanism, so they combine rather than replace):
 
 | Layer | What it does | What it does NOT fix |
 |-------|--------------|----------------------|
 | **visibility-keepalive** (on by default) | Injects an override into the page's MAIN world so `document.visibilityState='visible'`, `document.hidden=false`, `document.hasFocus()=true`, plus a `requestAnimationFrame` keep-alive loop. Fixes page-JS that gates further loading on its own visibility check. | Does NOT cause Chrome's compositor to produce frames for a non-visible tab. |
-| **Enhanced Scraping Mode** (opt-in, options page) | Transiently attaches `chrome.debugger` to each scrape tab (sub-100ms) and issues `Page.setWebLifecycleState({state:'active'})` to lift Chrome's page-lifecycle freeze (intensive throttling of JS execution, timers, rAF). | Does NOT cause Chrome's compositor to produce frames for a non-visible tab. Empirically confirmed: the CDP command reports `ok:true` while `IntersectionObserver`-driven lazy-load still flatlines. |
+| **Enhanced Scraping Mode** (opt-in, options page) | Gates the **trusted-wheel fallback** (layer 4 below). The `debugger` permission it relies on is declared at install time (Chrome does not allow it as an optional permission). | Does NOT by itself cause Chrome's compositor to produce frames for a non-visible tab — that's what layer 5 is for. |
 | **Chrome launch flags** (necessary for IO-driven lazy-load) | `scrapewright throttle on` rewrites your Chrome launcher (Linux `.desktop`, macOS wrapper AppleScript app, Windows `.lnk` shortcuts) to add `--disable-background-timer-throttling`, `--disable-backgrounding-occluded-windows`, `--disable-renderer-backgrounding`, `--disable-features=CalculateNativeWinOcclusion`. Then restart Chrome. | Requires a Chrome restart and applies globally to all Chrome windows. Alone does NOT fix sites whose lazy-load loader filters on `event.isTrusted`. |
-| **Trusted-wheel fallback** (opt-in via Enhanced Scraping Mode) | When programmatic `scrollBy` stalls (no content growth), dispatches CDP `Input.dispatchMouseEvent({type:'mouseWheel'})` through the same transient `chrome.debugger` attach. CDP input runs through Chrome's real input pipeline, producing an `event.isTrusted=true` wheel event — the only programmatic way to do so. Triggered automatically by `$scrollToBottom` when the page's loader rejects JS-only scroll. | Requires Enhanced Scraping Mode on. Only fires on stall — sites that respond to programmatic scroll are unaffected. |
+| **Trusted-wheel fallback** (opt-in via Enhanced Scraping Mode) | When programmatic `scrollBy` stalls (no content growth), dispatches CDP `Input.dispatchMouseEvent({type:'mouseWheel'})` through a transient `chrome.debugger` attach. CDP input runs through Chrome's real input pipeline, producing an `event.isTrusted=true` wheel event — the only programmatic way to do so. Triggered automatically by `$scrollToBottom` when the page's loader rejects JS-only scroll. | Requires Enhanced Scraping Mode on. Only fires on stall — sites that respond to programmatic scroll are unaffected. |
+| **Sticky tab activation** (default on) | Before input-required DOM ops (scroll / hover / hover-dismiss), the scrape tab is activated and STAYS active — Chrome produces compositor frames only for the active tab of the focused window. If you manually switch away, the next op re-activates it; when the scrape tab auto-closes, focus lands back on the tab you last clicked. | Momentarily makes the scrape tab the visible one during those ops (your typing focus can be interrupted briefly). |
 
 **Recommended setup for IO-driven lazy-load sites:**
 
@@ -231,7 +239,7 @@ To undo (e.g. before a Chrome update or to use a different launcher):
 ./bin/scrapewright throttle off      # restore the original launcher from backup
 ```
 
-The Enhanced Scraping Mode toggle on the options page enables two distinct mechanisms that both run through `chrome.debugger`: the **page-lifecycle activation** described above (layer 2) AND the **trusted-wheel fallback** (layer 4) — when scroll stalls, this layer dispatches a real wheel event via CDP so that sites filtering on `event.isTrusted` (programmatic `scrollBy` is non-trusted) still load more content. Enable it for any IO-driven lazy-load site. The toggle grants no new Chrome permission at click time: the `debugger` permission is declared at install time (Chrome does not allow it as an optional permission), so the toggle only controls whether the extension actually uses it at runtime.
+The Enhanced Scraping Mode toggle on the options page enables the **trusted-wheel fallback** (layer 4) — when scroll stalls, this layer dispatches a real wheel event via `chrome.debugger`'s CDP channel so that sites filtering on `event.isTrusted` (programmatic `scrollBy` is non-trusted) still load more content. Enable it for any IO-driven lazy-load site. The toggle grants no new Chrome permission at click time: the `debugger` permission is declared at install time (Chrome does not allow it as an optional permission), so the toggle only controls whether the extension actually uses it at runtime.
 
 ## Troubleshooting / FAQ
 
@@ -421,6 +429,14 @@ Response:
 }
 ```
 
+#### Manage service steps
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/v1/services/{name}/steps` | Add a step to a service (body: a step object; returns 201) |
+| PUT | `/api/v1/services/{name}/steps/{stepId}` | Update a step (script / flow fields such as `onSuccess`, `condition`) |
+| DELETE | `/api/v1/services/{name}/steps/{stepId}` | Delete a step — the chain is automatically relinked and re-validated |
+
 #### Health check
 
 ```
@@ -494,16 +510,27 @@ User scripts run inside a sandboxed iframe and interact with the target page thr
 
 | API | Description |
 |-----|-------------|
-| `$(selector)` | Wait for an element to appear (up to 30s); returns element data |
+| `$(selector)` | Wait up to 30s, return element data object |
+| `$exists(selector, timeoutMs?)` | Check if a VISIBLE element exists; for polling loops |
 | `$click(selector)` | Click an element |
-| `$type(selector, text)` | Type text (supports INPUT, TEXTAREA, contenteditable) |
-| `$extract(selector, attr?)` | Extract text content or an attribute value |
-| `$wait(selector, delayMs?)` | Wait for an element to appear, with optional delay |
-| `$exists(selector, timeoutMs?)` | Check whether an element exists (recommended for polling) |
-| `$check(selector, property)` | Read an element property (e.g. `checked`) |
-| `$list(selector)` | Get all matching elements (including same-origin iframes) |
-| `$count(selector)` | Count matching elements |
-| `$openTab(url, fn)` | Open a new tab and run a function body in it; returns the result |
+| `$type(selector, text)` | Type text (INPUT/TEXTAREA/contenteditable) |
+| `$extract(selector, attr?, timeoutMs?)` | Read textContent or attribute (incl. `outerHTML`/`innerHTML` DOM properties); fails fast (5s default) |
+| `$wait(selector, delayMs?)` | Wait for element (MutationObserver, up to 30s) |
+| `$check(selector, property)` | Read element property (e.g. `checked`) |
+| `$count(selector)` | Count matches across main document + same-origin iframes |
+| `$list(selector)` | All matching element data objects (main doc + iframes) |
+| `$extractList(containerSel, fieldMap, opts?)` | Multi-field list extraction in ONE call — fields stay aligned per record |
+| `$extractListMulti(containerSel, fieldMap, opts?)` | Like `$extractList` but each field value is an ARRAY of all matches (pick in JS when CSS can't disambiguate) |
+| `$clickInList(containerSel, subSel, opts?)` | Click a sub-element inside EVERY container (e.g. expanders), with settle delay |
+| `$waitForStable(selector, opts?)` | Poll until content stops changing — streaming/AI-answer completion |
+| `$scrollBy(deltaY, selector?)` | Scroll window or inner container by N pixels |
+| `$scrollToBottom(selector?)` | Scroll to bottom; `scrolled:false` = feed exhausted |
+| `$scrollIntoView(selector)` | Reveal an element (e.g. "Load more") before clicking |
+| `$hover(anchorSelector, popoverSelector?, opts?)` | Trusted hover at an anchor, capture the popover HTML before it closes (`opts.index` addresses the Nth match) |
+| `$extractWithHover(containerSel, fieldMap, opts?)` | Atomic extract + hover enrichment per container — record↔hovercard alignment guaranteed |
+| `$openTab(url, functionBody)` | Open a detail page in a new tab, scrape, return its result |
+
+All selectors support the iframe prefix `iframe<iframe-css>::<inner-css>` (chainable for nested iframes) to pin a specific iframe on multi-iframe pages.
 
 Scripts also have access to injected context:
 - `__input__` — parameters passed in by the external caller
