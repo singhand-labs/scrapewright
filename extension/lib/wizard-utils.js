@@ -1319,20 +1319,6 @@ function resolveAutoFixTargets(patches, targetStepId, allSteps) {
   return { resolved, errors };
 }
 
-function buildResearchPrompt(url, description, html, text) {
-  // `text` argument kept for backward compatibility but no longer rendered —
-  // the cleaned HTML carries both structure and short text content.
-  return `I need to create a web scraping script for this page.\n\nURL: ${url}\nRequirements: ${description}\n\nPage HTML (cleaned):\n${html}\n\nPlease analyze the page and return a JSON object with:\n- findings: string describing what you found\n- needsAnnotation: boolean, true if you need user to identify specific elements\n- draftScript: string with JavaScript code using $, $click, $type, $extract, $wait, $check, $openTab APIs\n- inputSchema: JSON Schema object describing the script's input parameters\n- outputSchema: JSON Schema object describing the script's output structure\n- sampleInput: a JSON object with example values matching inputSchema`;
-}
-
-function buildFixPrompt(error, url, description, script, html, text, annotations, feedback) {
-  // `text` argument kept for backward compatibility but no longer rendered.
-  let prompt = `The following scraping script failed with error: ${error}\n\nTarget URL: ${url}\nOriginal requirement: ${description}\n\nCurrent script:\n${script}\n\nPage HTML (cleaned):\n${html}\n\nAnnotations: ${JSON.stringify(annotations)}`;
-  if (feedback) prompt += '\n\nUser feedback: ' + feedback;
-  prompt += '\n\nPlease fix the script. Return ONLY the fixed JavaScript code, no explanation.';
-  return prompt;
-}
-
 // --- framework guardrails (WS3) ---------------------------------------------
 
 // Coarse static estimate of a script's single-iteration wall-clock delay from
@@ -3534,7 +3520,7 @@ function formatElementsForPrompt(elements, opts) {
 
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;

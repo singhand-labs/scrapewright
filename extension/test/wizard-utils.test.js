@@ -8,7 +8,7 @@ const _dom = new JSDOM('<!DOCTYPE html><html><body></body></html>', { url: 'http
 global.DOMParser = _dom.window.DOMParser;
 global.NodeFilter = _dom.window.NodeFilter;
 global.Node = _dom.window.Node;
-const { parseSchemaFields, buildIORenderString, validateTestInput, cleanLLMResponse, buildResearchPrompt, buildFixPrompt, validateSteps, validateForExecution, validateChain, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, buildRequirementsBlock, suggestServiceName, SCRIPT_DSL_GUIDE, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, scoreAnnotationBrittleness, scoreAnnotationChain, checkSelectorFidelity } = require('../lib/wizard-utils');
+const { parseSchemaFields, buildIORenderString, validateTestInput, cleanLLMResponse, validateSteps, validateForExecution, validateChain, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, buildRequirementsBlock, suggestServiceName, SCRIPT_DSL_GUIDE, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, scoreAnnotationBrittleness, scoreAnnotationChain, checkSelectorFidelity } = require('../lib/wizard-utils');
 
 describe('parseSchemaFields', () => {
   it('returns field names with types', () => {
@@ -72,31 +72,6 @@ describe('cleanLLMResponse', () => {
   it('returns plain JSON unchanged', () => {
     const raw = '{"findings":"test"}';
     assert.equal(cleanLLMResponse(raw), '{"findings":"test"}');
-  });
-});
-
-describe('buildResearchPrompt', () => {
-  it('includes URL and description', () => {
-    const prompt = buildResearchPrompt('https://example.com', 'get data', '<html>', 'text');
-    assert.ok(prompt.includes('https://example.com'));
-    assert.ok(prompt.includes('get data'));
-    assert.ok(prompt.includes('inputSchema'));
-    assert.ok(prompt.includes('outputSchema'));
-    assert.ok(prompt.includes('sampleInput'));
-  });
-});
-
-describe('buildFixPrompt', () => {
-  it('includes error and script', () => {
-    const prompt = buildFixPrompt('elm not found', 'https://x.com', 'scrape', 'await $()', '', '', [], null);
-    assert.ok(prompt.includes('elm not found'));
-    assert.ok(prompt.includes('await $()'));
-    assert.ok(prompt.includes('fix the script'));
-  });
-
-  it('includes feedback when provided', () => {
-    const prompt = buildFixPrompt('err', 'url', 'desc', 'code', '', '', [], 'click faster');
-    assert.ok(prompt.includes('click faster'));
   });
 });
 
