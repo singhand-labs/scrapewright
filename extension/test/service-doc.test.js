@@ -1,6 +1,6 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { generateExampleFromSchema, schemaFieldsTable, generateServiceMarkdown } = require('../lib/service-doc');
+const { generateExampleFromSchema, schemaFieldsTable, generateServiceMarkdown, buildCurlExamples } = require('../lib/service-doc');
 
 describe('schemaFieldsTable', () => {
   it('renders type, required flag, and description per field', () => {
@@ -93,5 +93,73 @@ describe('generateServiceMarkdown', () => {
 
   it('notes the SCRAPEWRIGHT_API_KEY override', () => {
     assert.match(md, /SCRAPEWRIGHT_API_KEY/);
+  });
+});
+
+describe('buildCurlExamples', () => {
+  const ex = buildCurlExamples({
+    base: 'http://192.168.1.5:8765/api/v1',
+    apiKey: 'dev-key',
+    serviceName: 'ai',
+    sampleInput: { q: 'hi' }
+  });
+
+  it('unix dialect: multiline continuations, single-quoted JSON body', () => {
+    assert.match(ex.unix.execute,
+      /curl -X POST http:\/\/192\.168\.1\.5:8765\/api\/v1\/services\/ai\/execute \\/);
+    assert.ok(ex.unix.execute.includes("-d '{\"input\":{\"q\":\"hi\"}}'"),
+      'single-quoted compact JSON body, got: ' + ex.unix.execute);
+    assert.ok(ex.unix.execute.includes('-H "X-API-Key: dev-key"'));
+  });
+
+  it('windows dialect: curl.exe one-liner with escaped double-quoted JSON', () => {
+    // cmd/PowerShell treat single quotes differently — body must be a
+    // double-quoted arg with inner quotes escaped.
+    assert.ok(ex.windows.execute.startsWith('curl.exe '));
+    assert.ok(!ex.windows.execute.includes('\\\n'),
+      'no bash line continuations in the Windows dialect');
+    assert.ok(ex.windows.execute.includes('-d "{\\"input\\":{\\"q\\":\\"hi\\"}}"'),
+      'escaped double-quoted JSON body, got: ' + ex.windows.execute);
+    assert.ok(ex.windows.execute.includes('"http://192.168.1.5:8765/api/v1/services/ai/execute"'));
+  });
+
+  it('windows dialect covers the GET endpoints too', () => {
+    assert.ok(ex.windows.wait.includes('curl.exe') && ex.windows.wait.includes('/jobs/<jobId>/wait'));
+    assert.ok(ex.windows.status.includes('curl.exe'));
+    assert.ok(ex.windows.cancel.includes('curl.exe'));
+    assert.ok(ex.windows.jobs.includes('curl.exe'));
+    assert.ok(ex.windows.services.includes('curl.exe'));
+  });
+});
+
+describe('generateServiceMarkdown with local IPs', () => {
+  const svc = {
+    name: 'ai',
+    displayName: 'AI Service',
+    targetUrl: 'https://example.com',
+    inputSchema: { type: 'object', properties: { q: { type: 'string' } } },
+    outputSchema: { type: 'object', properties: { a: { type: 'string' } } },
+    sampleInput: { q: 'hello' },
+    steps: []
+  };
+
+  it('lists every detected LAN address so agents can pick a reachable base URL', () => {
+    const md = generateServiceMarkdown(svc, 8765, { ips: ['192.168.1.5', '10.0.0.7'] });
+    assert.match(md, /## Server addresses/);
+    assert.ok(md.includes('http://192.168.1.5:8765'));
+    assert.ok(md.includes('http://10.0.0.7:8765'));
+    assert.ok(md.includes('http://localhost:8765'));
+  });
+
+  it('includes BOTH curl dialects for submit and wait', () => {
+    const md = generateServiceMarkdown(svc, 8765, { ips: ['192.168.1.5'] });
+    assert.ok(md.includes('curl -X POST'));
+    assert.ok(md.includes('curl.exe'));
+  });
+
+  it('works without ips (backward compatible) and notes the localhost base', () => {
+    const md = generateServiceMarkdown(svc, 8765);
+    assert.match(md, /http:\/\/localhost:8765\/api\/v1/);
+    assert.match(md, /## Server addresses/);
   });
 });

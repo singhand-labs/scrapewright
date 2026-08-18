@@ -42,24 +42,69 @@ function schemaFieldsTable(schema) {
           ...rows].join('\n');
 }
 
+// Build every curl example for one service in BOTH shell dialects:
+//   unix    — bash/zsh on Linux/macOS: multiline with `\` continuations,
+//             single-quoted JSON body.
+//   windows — cmd.exe / PowerShell: `curl.exe` one-liner (avoids the
+//             Invoke-WebRequest `curl` alias), double-quoted args with the
+//             JSON body's inner quotes `\"`-escaped — single quotes are not
+//             string delimiters in cmd.
+function buildCurlExamples(opts) {
+  const base = opts.base;
+  const apiKey = opts.apiKey || 'dev-key';
+  const serviceName = opts.serviceName;
+  const sampleInput = opts.sampleInput || {};
+  const execUrl = `${base}/services/${serviceName}/execute`;
+  const body = JSON.stringify({ input: sampleInput });
+  const auth = `-H "X-API-Key: ${apiKey}"`;
+  const authWin = `-H "X-API-Key: ${apiKey}"`;
+  const bodyWin = String(body).replace(/"/g, '\\"');
+  return {
+    unix: {
+      execute: `curl -X POST ${execUrl} \\\n  -H "Content-Type: application/json" \\\n  ${auth}\n  -d '${body}'`,
+      wait: `curl "${base}/jobs/<jobId>/wait?timeout=120" \\\n  ${auth}`,
+      status: `curl ${base}/jobs/<jobId> \\\n  ${auth}`,
+      cancel: `curl -X POST ${base}/jobs/<jobId>/cancel \\\n  ${auth}`,
+      jobs: `curl ${base}/jobs \\\n  ${auth}`,
+      services: `curl ${base}/services \\\n  ${auth}`
+    },
+    windows: {
+      execute: `curl.exe -X POST "${execUrl}" -H "Content-Type: application/json" ${authWin} -d "${bodyWin}"`,
+      wait: `curl.exe "${base}/jobs/<jobId>/wait?timeout=120" ${authWin}`,
+      status: `curl.exe "${base}/jobs/<jobId>" ${authWin}`,
+      cancel: `curl.exe -X POST "${base}/jobs/<jobId>/cancel" ${authWin}`,
+      jobs: `curl.exe "${base}/jobs" ${authWin}`,
+      services: `curl.exe "${base}/services" ${authWin}`
+    }
+  };
+}
+
 // Full Markdown API doc for a service. `port` is a parameter (caller resolves
-// it via GET_SERVER_PORT) so this stays pure / testable.
-function generateServiceMarkdown(svc, port) {
+// it via GET_SERVER_PORT) so this stays pure / testable. `opts.ips` is the
+// host machine's non-internal IPv4 addresses (from the host /health
+// endpoint) — listed in a Server addresses section so remote callers (human
+// or agent) can substitute a reachable base URL without guessing.
+function generateServiceMarkdown(svc, port, opts) {
   const apiKey = 'dev-key';
   const base = `http://localhost:${port}/api/v1`;
-  const execUrl = `${base}/services/${svc.name}/execute`;
   const sampleInput = svc.sampleInput || generateExampleFromSchema(svc.inputSchema);
   const sampleOutput = generateExampleFromSchema(svc.outputSchema);
   const displayName = svc.displayName || svc.name;
   const desc = svc.userDescription || `Scraping service targeting ${svc.targetUrl}`;
+  const execUrl = `${base}/services/${svc.name}/execute`;
 
-  const h = (key) => `-H "X-API-Key: ${apiKey}"`;
-  const curlExec = `curl -X POST ${execUrl} \\\n  -H "Content-Type: application/json" \\\n  ${h()}\n  -d '${JSON.stringify({ input: sampleInput })}'`;
-  const curlWait = `curl "${base}/jobs/<jobId>/wait?timeout=120" \\\n  ${h()}`;
-  const curlStatus = `curl ${base}/jobs/<jobId> \\\n  ${h()}`;
-  const curlCancel = `curl -X POST ${base}/jobs/<jobId>/cancel \\\n  ${h()}`;
-  const curlJobs = `curl ${base}/jobs \\\n  ${h()}`;
-  const curlServices = `curl ${base}/services \\\n  ${h()}`;
+  const curl = buildCurlExamples({ base, apiKey, serviceName: svc.name, sampleInput });
+
+  const ips = (opts && Array.isArray(opts.ips))
+    ? opts.ips.filter(ip => /^\d+\.\d+\.\d+\.\d+$/.test(ip))
+    : [];
+  const addressRows = [
+    `| \`http://localhost:${port}\` | Calls from the host machine itself |`,
+    ...ips.map(ip => `| \`http://${ip}:${port}\` | Calls from other machines on the LAN |`)
+  ];
+  const lanNote = ips.length > 0
+    ? `Addresses are the host machine's network interfaces at doc-generation time. For remote calls, the caller must be able to reach the host machine (VPN, same LAN, or exposed port) and the port must be open in the host machine's firewall.`
+    : `No LAN addresses were detected when this doc was generated (host unreachable) — regenerate from the options page while the host is running to list this machine's LAN addresses.`;
 
   const submitResp = JSON.stringify({ success: true, jobId: '<jobId>', status: 'queued', queuePosition: 1 }, null, 2);
   const completedResp = JSON.stringify({ success: true, job: { id: '<jobId>', status: 'completed', result: sampleOutput, error: null } }, null, 2);
@@ -88,6 +133,16 @@ function generateServiceMarkdown(svc, port) {
 - **Service name (route):** \`${svc.name}\`
 - **Target URL:** ${svc.targetUrl}
 - **Base URL:** \`${base}\`
+
+## Server addresses
+
+The host listens on every network interface, port ${port}. Pick the address that matches where the caller runs and substitute it for \`localhost\` in the examples below:
+
+| Base URL | Reachable from |
+|----------|----------------|
+${addressRows.join('\n')}
+
+${lanNote}
 
 ## Authentication
 
@@ -118,10 +173,16 @@ ${FENCE}json
 ${exampleBody}
 ${FENCE}
 
-### Submit job (curl)
+### Submit job (curl — Linux/macOS)
 
 ${FENCE}bash
-${curlExec}
+${curl.unix.execute}
+${FENCE}
+
+### Submit job (curl — Windows cmd/PowerShell)
+
+${FENCE}
+${curl.windows.execute}
 ${FENCE}
 
 ### Response (202 Accepted)
@@ -139,7 +200,13 @@ ${FENCE}
 Long-polls until the job finishes. \`?timeout=N\` is in seconds (max 300, default 120). On timeout the current status is returned with \`timedOut: true\`.
 
 ${FENCE}bash
-${curlWait}
+${curl.unix.wait}
+${FENCE}
+
+Windows:
+
+${FENCE}
+${curl.windows.wait}
 ${FENCE}
 
 ## Result
@@ -171,13 +238,22 @@ ${FENCE}
 
 ${FENCE}bash
 # status
-${curlStatus}
+${curl.unix.status}
 # cancel (queued jobs only)
-${curlCancel}
+${curl.unix.cancel}
 # list jobs
-${curlJobs}
+${curl.unix.jobs}
 # list services
-${curlServices}
+${curl.unix.services}
+${FENCE}
+
+Windows (cmd/PowerShell) — one command per line:
+
+${FENCE}
+${curl.windows.status}
+${curl.windows.cancel}
+${curl.windows.jobs}
+${curl.windows.services}
 ${FENCE}
 
 ## Error types
@@ -191,9 +267,10 @@ ${stepsSection}
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { generateExampleFromSchema, schemaFieldsTable, generateServiceMarkdown };
+  module.exports = { generateExampleFromSchema, schemaFieldsTable, buildCurlExamples, generateServiceMarkdown };
 } else if (typeof window !== 'undefined') {
   window.generateExampleFromSchema = generateExampleFromSchema;
   window.schemaFieldsTable = schemaFieldsTable;
+  window.buildCurlExamples = buildCurlExamples;
   window.generateServiceMarkdown = generateServiceMarkdown;
 }
