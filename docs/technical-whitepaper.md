@@ -345,7 +345,7 @@ interface Service {
   config: {
     enabled: boolean;
     timeoutMs: number;  // 默认 30000
-    maxRetries: number; // 默认 2
+    maxRetries: number; // 默认 1
     autoCloseTab: boolean;
   };
 }
@@ -539,7 +539,7 @@ score = requiredCoverage * 100 + listItemCount * 10 + avgFieldsPerItem * 5
 
 `cleanLLMResponse` 会剥离开头的协议行（通过 debugLogger 记录以便观测），让下游的代码围栏 / JSON 抽取逻辑能在干净脚本上运行。若同一条提示在 `llmHistory` 中已被 NACK 过两次，反馈块会追加升级提醒："你的页面模型可能错了"。
 
-**限制：** 最多自动修复 3 轮（静默路径 `MAX_ATTEMPTS=3`，即 3 轮完整的 LLM 修复+测试迭代；带用户反馈 1 轮）。仅对 `ELEMENT_NOT_FOUND` 和 `SCRIPT_ERROR` 类型错误触发；`LOGIN_REQUIRED` 立即失败。
+**限制：** 向导测试循环内最多自动修复 3 轮（静默路径 `MAX_ATTEMPTS=3`，即 3 轮完整的 LLM 修复+测试迭代；带用户反馈 1 轮）。运行时执行的自动修复另受 `config.maxRetries` 约束（默认 1，见 §14）。仅对 `ELEMENT_NOT_FOUND` 和 `SCRIPT_ERROR` 类型错误触发；`LOGIN_REQUIRED` 立即失败。
 
 ## 6. HTTP API 详解
 
@@ -844,7 +844,7 @@ MV3 的 Service Worker 会在 30s 无活动后休眠。通过 `chrome.alarms.cre
 | 同时只能执行一个任务 | Offscreen 文档使用全局 tabIdStack | 并发请求排队等待 |
 | 无法采集跨域 iframe 内容 | 浏览器同源策略 | 跨域内容不可见 |
 | Service Worker 可能休眠 | MV3 限制，30s 无活动 | 通过 alarm 保活，极端情况可能延迟 |
-| AI 自动修复最多 3 轮 | 防止无限重试循环 | 复杂错误可能需要手动修复 |
+| 自动修复轮数有上限：向导测试循环静默路径最多 3 轮、带用户反馈 1 轮；运行时执行受 `config.maxRetries` 约束（默认 1） | 防止无限重试循环 | 复杂错误可能需要手动修复 |
 | 不支持登录态采集 | 无 Cookie 管理功能 | 需要登录的页面需手动登录后执行 |
 | 默认 API Key 为 dev-key | 开发便利性 | 生产环境必须设置 `SCRAPEWRIGHT_API_KEY` |
 | IO 驱动的懒加载在后台标签上会停住 | Chrome 对非可见标签的渲染端帧产出节流 | 懒加载站点需要 `scrapewright throttle on` + 重启 Chrome（见 §9 渲染节流对抗栈）|
