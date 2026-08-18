@@ -70,6 +70,11 @@ describe('HTTP Server', () => {
     assert.strictEqual(typeof body.status, 'string');
     assert.strictEqual(typeof body.extensionConnected, 'boolean');
     assert.strictEqual(typeof body.uptime, 'number');
+    // Options-page API doc reads this to offer non-localhost curl examples.
+    assert.ok(Array.isArray(body.ips), '/health must list local IPs');
+    for (const ip of body.ips) {
+      assert.match(ip, /^\d+\.\d+\.\d+\.\d+$/, 'IPv4 dotted-quad only: ' + ip);
+    }
   });
 
   it('should respond 401 for step-CRUD endpoints without API key', async () => {
