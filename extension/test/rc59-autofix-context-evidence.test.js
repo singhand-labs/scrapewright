@@ -250,6 +250,21 @@ describe('RC59: CJK count labels in field-candidate discovery', () => {
   });
 });
 
+// RC59-6: teach the LLM the aria-label count pattern — the model iterated
+// blind through 10 rounds because nothing in the guide told it that metric
+// counts are frequently attribute-only.
+describe('RC59: DSL guide teaches aria-label metric extraction', () => {
+  const { SCRIPT_DSL_GUIDE } = require('../lib/wizard-utils');
+
+  it('has a dedicated rule for count metrics living only in aria-label', () => {
+    assert.match(SCRIPT_DSL_GUIDE, /COUNT METRICS OFTEN LIVE ONLY IN ARIA-LABEL/);
+    assert.ok(SCRIPT_DSL_GUIDE.includes("attr: 'aria-label'"),
+      'rule must show the attribute-read fieldMap form');
+    assert.ok(/textContent never includes attributes/.test(SCRIPT_DSL_GUIDE),
+      'rule must explain WHY text-based extraction cannot ever see the value');
+  });
+});
+
 describe('RC59: wizard.js wiring (source-text)', () => {
   const readSrc = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
 
