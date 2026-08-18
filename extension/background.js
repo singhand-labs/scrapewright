@@ -15,6 +15,14 @@ importScripts(
 
 const registry = new ServiceRegistry();
 
+// RC56: track user tab switches + land focus on the last-clicked tab when a
+// scrape tab closes. Listeners must register at top level so the MV3
+// service worker re-registers them on every wake.
+if (typeof TabActivation !== 'undefined' &&
+    typeof TabActivation.initTabActivationListeners === 'function') {
+  TabActivation.initTabActivationListeners();
+}
+
 // Execution queue — serializes concurrent service calls to prevent offscreen document conflicts
 class ExecutionQueue {
   constructor() {
@@ -1225,10 +1233,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'TAB_ACTIVATION_REQUEST') {
     // RC20 (console.log 2026-07-30): content-script is about to perform an
     // input-required DOM op (scroll, trusted-wheel) on a background tab.
-    // Briefly activate the tab so Chrome's renderer produces compositor frames,
-    // without which IntersectionObserver + CDP Input both fail. The caller
-    // MUST later send TAB_ACTIVATION_RELEASE to restore the user's previous
-    // active tab. Background-tab path is the default, so this is the
+    // Activate the tab so Chrome's renderer produces compositor frames,
+    // without which IntersectionObserver + CDP Input both fail. RC56: the
+    // activation is sticky — no release message; listeners in
+    // lib/tab-activation.js track user switches and land focus when the
+    // scrape tab closes. Background-tab path is the default, so this is the
     // disambiguating layer that visibility-keepalive + launch flags + Enhanced
     // Mode could not be (necessary but not sufficient — frame production
     // requires active-tab state, not just lifecycle/throttle adjustments).
@@ -1247,31 +1256,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse(result);
       } catch (e) {
         debugLogger.log('error', 'background', 'Tab activation threw', {
-          tabId, error: e && e.message
-        });
-        sendResponse({ ok: false, reason: 'error: ' + (e && e.message || String(e)) });
-      }
-    })();
-    return true;
-  }
-  if (message.type === 'TAB_ACTIVATION_RELEASE') {
-    // RC20: counterpart to TAB_ACTIVATION_REQUEST. Restores the user's
-    // previous active tab unless they manually changed tabs during the op
-    // (don't fight the user — see lib/tab-activation.js releaseActivation).
-    const tabId = sender.tab && sender.tab.id;
-    if (!tabId) {
-      sendResponse({ ok: false, reason: 'no sender.tab.id' });
-      return false;
-    }
-    (async () => {
-      try {
-        const result = await TabActivation.releaseActivation(tabId);
-        debugLogger.log('info', 'background', 'Tab activation release', {
-          tabId, ok: result.ok, restored: result.restored, reason: result.reason
-        });
-        sendResponse(result);
-      } catch (e) {
-        debugLogger.log('error', 'background', 'Tab activation release threw', {
           tabId, error: e && e.message
         });
         sendResponse({ ok: false, reason: 'error: ' + (e && e.message || String(e)) });
