@@ -61,7 +61,7 @@ function buildCurlExamples(opts) {
   const bodyWin = String(body).replace(/"/g, '\\"');
   return {
     unix: {
-      execute: `curl -X POST ${execUrl} \\\n  -H "Content-Type: application/json" \\\n  ${auth}\n  -d '${body}'`,
+      execute: `curl -X POST ${execUrl} \\\n  -H "Content-Type: application/json" \\\n  ${auth} \\\n  -d '${body}'`,
       wait: `curl "${base}/jobs/<jobId>/wait?timeout=120" \\\n  ${auth}`,
       status: `curl ${base}/jobs/<jobId> \\\n  ${auth}`,
       cancel: `curl -X POST ${base}/jobs/<jobId>/cancel \\\n  ${auth}`,

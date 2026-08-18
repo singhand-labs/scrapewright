@@ -418,30 +418,111 @@ async function loadServices() {
   }
 }
 
+// Reads the host machine's non-internal IPv4s from /health (reported by
+// native-host/lib/network-info.js). Returns [] when the host is unreachable
+// — the modal then offers localhost only.
+async function fetchLocalIps(port) {
+  try {
+    const r = await fetch(`http://localhost:${port}/health`, { signal: AbortSignal.timeout(3000) });
+    if (!r.ok) return [];
+    const body = await r.json();
+    return Array.isArray(body.ips)
+      ? body.ips.filter(ip => /^\d+\.\d+\.\d+\.\d+$/.test(ip))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+// Modal state for the currently-shown API doc. Address + platform selectors
+// re-render the examples from this state without refetching.
+let apiDocState = null;
+
+function renderApiDocExamples() {
+  if (!apiDocState) return;
+  const { svc, port, host, platform, apiKey } = apiDocState;
+  const base = `http://${host}:${port}/api/v1`;
+  const url = `${base}/services/${svc.name}/execute`;
+  const sampleInput = svc.sampleInput || generateExampleFromSchema(svc.inputSchema);
+  const curl = buildCurlExamples({ base, apiKey, serviceName: svc.name, sampleInput });
+  const dialect = platform === 'windows' ? curl.windows : curl.unix;
+  const container = document.getElementById('apiDocExamples');
+  if (!container) return;
+  container.innerHTML = `
+    <div class="api-doc-section">
+      <h3>Endpoint</h3>
+      <div class="endpoint">POST ${escapeHtml(url)}</div>
+    </div>
+
+    <div class="api-doc-section">
+      <h3>curl — Submit Job</h3>
+      <pre><code>${escapeHtml(dialect.execute)}</code></pre>
+    </div>
+
+    <div class="api-doc-section">
+      <h3>Wait for Result (blocking)</h3>
+      <p class="hint">Long-polls until job completes. Timeout: ?timeout=N (max 300s, default 120s).</p>
+      <pre><code>GET ${escapeHtml(base)}/jobs/&lt;jobId&gt;/wait</code></pre>
+      <pre><code>${escapeHtml(dialect.wait)}</code></pre>
+    </div>
+
+    <div class="api-doc-section">
+      <h3>Check Job Status</h3>
+      <pre><code>${escapeHtml(dialect.status)}</code></pre>
+    </div>
+
+    <div class="api-doc-section">
+      <h3>Cancel Job</h3>
+      <pre><code>${escapeHtml(dialect.cancel)}</code></pre>
+    </div>
+
+    <div class="api-doc-section">
+      <h3>List All Jobs</h3>
+      <pre><code>${escapeHtml(dialect.jobs)}</code></pre>
+    </div>
+
+    <div class="api-doc-section">
+      <h3>List All Services</h3>
+      <pre><code>${escapeHtml(dialect.services)}</code></pre>
+    </div>
+  `;
+}
+
 async function showApiDoc(svc) {
   const portResponse = await chrome.runtime.sendMessage({ type: 'GET_SERVER_PORT' });
   const port = portResponse.port || 8765;
   const apiKey = 'dev-key';
+  const ips = await fetchLocalIps(port);
 
-  const url = `http://localhost:${port}/api/v1/services/${svc.name}/execute`;
+  apiDocState = { svc, port, ips, host: 'localhost', platform: 'unix', apiKey };
+
   const sampleInput = svc.sampleInput || generateExampleFromSchema(svc.inputSchema);
-
   const executeBody = JSON.stringify({ input: sampleInput }, null, 2);
   const executeResponse = JSON.stringify({ success: true, jobId: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', status: 'queued', queuePosition: 1 }, null, 2);
   const completedResponse = JSON.stringify({ success: true, job: { id: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', status: 'completed', result: generateExampleFromSchema(svc.outputSchema), error: null, queuePosition: 0 } }, null, 2);
   const failedResponse = JSON.stringify({ success: true, job: { id: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', status: 'failed', result: null, error: 'ELEMENT_NOT_FOUND: .item', queuePosition: 0 } }, null, 2);
 
-  const curlExecute = `curl -X POST ${url} \\\n  -H "Content-Type: application/json" \\\n  -H "X-API-Key: ${apiKey}" \\\n  -d '${JSON.stringify({ input: sampleInput })}'`;
-
-  const curlWait = `curl "http://localhost:${port}/api/v1/jobs/<jobId>/wait?timeout=120" \\\n  -H "X-API-Key: ${apiKey}"`;
-
-  const curlStatus = `curl http://localhost:${port}/api/v1/jobs/<jobId> \\\n  -H "X-API-Key: ${apiKey}"`;
+  const addressOptions = ['localhost', ...ips]
+    .map(h => `<option value="${escapeHtml(h)}" ${h === apiDocState.host ? 'selected' : ''}>${escapeHtml(h)}${h === 'localhost' ? ' (this machine)' : ''}</option>`)
+    .join('');
 
   const bodyHtml = `
-    <div class="api-doc-section">
-      <h3>Endpoint</h3>
-      <div class="endpoint">POST ${url}</div>
+    <div class="api-doc-controls">
+      <label>Address
+        <select id="apiDocAddress">${addressOptions}</select>
+      </label>
+      <label>Shell
+        <select id="apiDocPlatform">
+          <option value="unix" selected>Linux / macOS (bash)</option>
+          <option value="windows">Windows (cmd / PowerShell)</option>
+        </select>
+      </label>
+      <span class="hint">${ips.length > 0
+        ? 'Addresses detected from the host — pick the one your caller can reach.'
+        : 'Host unreachable — only localhost offered. Start the host to detect LAN addresses.'}</span>
     </div>
+
+    <div id="apiDocExamples"></div>
 
     <div class="api-doc-section">
       <h3>Headers</h3>
@@ -461,23 +542,6 @@ X-API-Key: ${apiKey}</code></pre>
     </div>
 
     <div class="api-doc-section">
-      <h3>curl — Submit Job</h3>
-      <pre><code>${escapeHtml(curlExecute)}</code></pre>
-    </div>
-
-    <div class="api-doc-section">
-      <h3>Wait for Result (blocking)</h3>
-      <p class="hint">Long-polls until job completes. Timeout: ?timeout=N (max 300s, default 120s).</p>
-      <pre><code>GET http://localhost:${port}/api/v1/jobs/&lt;jobId&gt;/wait</code></pre>
-      <pre><code>${escapeHtml(curlWait)}</code></pre>
-    </div>
-
-    <div class="api-doc-section">
-      <h3>Check Job Status</h3>
-      <pre><code>${escapeHtml(curlStatus)}</code></pre>
-    </div>
-
-    <div class="api-doc-section">
       <h3>Completed Response</h3>
       <pre><code>${escapeHtml(completedResponse)}</code></pre>
     </div>
@@ -486,25 +550,23 @@ X-API-Key: ${apiKey}</code></pre>
       <h3>Failed Response</h3>
       <pre><code>${escapeHtml(failedResponse)}</code></pre>
     </div>
-
-    <div class="api-doc-section">
-      <h3>Cancel Job</h3>
-      <pre><code>curl -X POST http://localhost:${port}/api/v1/jobs/&lt;jobId&gt;/cancel \\\n  -H "X-API-Key: ${apiKey}"</code></pre>
-    </div>
-
-    <div class="api-doc-section">
-      <h3>List All Jobs</h3>
-      <pre><code>curl http://localhost:${port}/api/v1/jobs \\\n  -H "X-API-Key: ${apiKey}"</code></pre>
-    </div>
-
-    <div class="api-doc-section">
-      <h3>List All Services</h3>
-      <pre><code>curl http://localhost:${port}/api/v1/services \\\n  -H "X-API-Key: ${apiKey}"</code></pre>
-    </div>
   `;
 
   document.getElementById('apiDocTitle').textContent = 'API Doc — ' + (svc.displayName || svc.name);
   document.getElementById('apiDocBody').innerHTML = bodyHtml;
+  renderApiDocExamples();
+
+  const addressSelect = document.getElementById('apiDocAddress');
+  addressSelect.addEventListener('change', () => {
+    apiDocState.host = addressSelect.value;
+    renderApiDocExamples();
+  });
+  const platformSelect = document.getElementById('apiDocPlatform');
+  platformSelect.addEventListener('change', () => {
+    apiDocState.platform = platformSelect.value;
+    renderApiDocExamples();
+  });
+
   const dlBtn = document.getElementById('apiDocDownloadMd');
   if (dlBtn) dlBtn.onclick = () => downloadServiceMarkdown(svc);
   document.getElementById('apiDocModal').classList.remove('hidden');
@@ -547,7 +609,10 @@ async function downloadServiceMarkdown(svc) {
     const r = await chrome.runtime.sendMessage({ type: 'GET_SERVER_PORT' });
     if (r && r.port) port = r.port;
   } catch { /* default port */ }
-  const md = generateServiceMarkdown(svc, port);
+  // Re-query the host so the doc lists current LAN addresses even if the
+  // modal was opened while the host was down.
+  const ips = await fetchLocalIps(port);
+  const md = generateServiceMarkdown(svc, port, { ips });
   const blob = new Blob([md], { type: 'text/markdown' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

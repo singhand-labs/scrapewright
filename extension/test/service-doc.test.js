@@ -109,7 +109,10 @@ describe('buildCurlExamples', () => {
       /curl -X POST http:\/\/192\.168\.1\.5:8765\/api\/v1\/services\/ai\/execute \\/);
     assert.ok(ex.unix.execute.includes("-d '{\"input\":{\"q\":\"hi\"}}'"),
       'single-quoted compact JSON body, got: ' + ex.unix.execute);
-    assert.ok(ex.unix.execute.includes('-H "X-API-Key: dev-key"'));
+    assert.ok(ex.unix.execute.includes('-H "X-API-Key: dev-key" \\\n'),
+      'EVERY continued line ends in a backslash — a bare newline splits the command (copied-curl bug present since the first markdown exporter)');
+    assert.ok(!/[^\\\\]\n\s+-d /.test(ex.unix.execute.replace(/\\\\\n/g, '')),
+      'no non-continued line may precede -d');
   });
 
   it('windows dialect: curl.exe one-liner with escaped double-quoted JSON', () => {
