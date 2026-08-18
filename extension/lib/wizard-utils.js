@@ -2096,7 +2096,14 @@ function summarizeFixIteration({ stepId, stepName, script, annotations, userFeed
       // even after the 5K-per-field cap; the accumulator arrays bypassed the
       // cap because each individual field was small. The LLM timed out 4× then
       // hit model_context_window_exceeded.
-      lines.push('Result: ' + JSON.stringify(stripPagesFromLLMContext(stripSnapshotsFromTestResult(dedupeStepIterations(result)))));
+      //
+      // RC59 HISTORY DIGEST (console.log 2026-08-18): history entries kept the
+      // full 5K-capped output JSON (~300K chars each); trimLlmHistory's
+      // `length > 4` floor left 4 such entries stuck at ~950K chars, and the
+      // same posts appeared 3-4× per round. History only needs structure +
+      // scalar values (what was tried, what came out) — the CURRENT prompt
+      // re-sends the fresh full output. Cap history fields at 200 chars.
+      lines.push('Result: ' + JSON.stringify(stripPagesFromLLMContext(stripSnapshotsFromTestResult(dedupeStepIterations(result), { fieldCharCap: TEST_RESULT_HISTORY_FIELD_CHAR_CAP }))));
     } catch {
       lines.push('Result: (unserializable)');
     }
@@ -2119,13 +2126,32 @@ function summarizeFixIteration({ stepId, stepName, script, annotations, userFeed
 //   - per-snapshot: REMOVED entirely (the failing step's DOM is provided
 //     separately via the truncated `pageSnapshot` passed alongside).
 const TEST_RESULT_FIELD_CHAR_CAP = 5000;
-function stripSnapshotsFromTestResult(testResult) {
+// RC59: head+tail split for capped fields. Engagement-count evidence (and
+// attribute-bearing chrome generally) clusters at the END of a record's HTML
+// — action-bar aria-labels sit after tens of K of content markup. A head-only
+// cap amputated that region in EVERY copy the LLM saw, so missing-field fixes
+// iterated blind for ~9 rounds (console.log 2026-08-18). The tail keeps the
+// larger share because the head (container open tag + header block) needs
+// fewer chars to be recognizable.
+const TEST_RESULT_FIELD_TAIL_SHARE = 0.6;
+const TEST_RESULT_FIELD_MARKER_BUDGET = 60;
+// RC59: per-field cap for RESULT values inside llmHistory summaries. History
+// is "what was tried and what came out", not a second copy of the output —
+// the current autoFix prompt always carries the fresh full output.
+const TEST_RESULT_HISTORY_FIELD_CHAR_CAP = 200;
+function capTestResultField(s, cap) {
+  if (s.length <= cap) return s;
+  const budget = Math.max(0, cap - TEST_RESULT_FIELD_MARKER_BUDGET);
+  const head = Math.floor(budget * (1 - TEST_RESULT_FIELD_TAIL_SHARE));
+  const tail = budget - head;
+  return `[TRUNCATED ${s.length} chars — middle cut, first ${head} + last ${tail} kept] ` +
+    s.slice(0, head) + ' …[cut]… ' + s.slice(s.length - tail);
+}
+function stripSnapshotsFromTestResult(testResult, opts) {
   if (!testResult || typeof testResult !== 'object') return testResult;
-  const capStr = (s) => {
-    if (typeof s !== 'string') return s;
-    if (s.length <= TEST_RESULT_FIELD_CHAR_CAP) return s;
-    return `[TRUNCATED ${s.length} chars] ` + s.substring(0, TEST_RESULT_FIELD_CHAR_CAP - 30);
-  };
+  const cap = (opts && typeof opts.fieldCharCap === 'number' && opts.fieldCharCap > 0)
+    ? opts.fieldCharCap : TEST_RESULT_FIELD_CHAR_CAP;
+  const capStr = (s) => (typeof s !== 'string') ? s : capTestResultField(s, cap);
   // Recursively walk plain data, capping strings + dropping `snapshot` keys.
   const walk = (node) => {
     if (Array.isArray(node)) return node.map(walk);
