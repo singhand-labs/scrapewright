@@ -469,7 +469,7 @@ User describes the need
       → LLM refines the script based on the annotations
 ```
 
-Research actually consists of multiple LLM rounds:
+Research spans multiple LLM rounds:
 
 1. **Page exploration** — send a tiered-cleaned, compressed DOM structural summary to the LLM and get back candidate selectors plus a page model (`buildResearchPrompt`).
 2. **Candidate-selector discovery** — combine user annotations with the DOM's own structural signals (field-candidate discovery in `lib/field-candidate-discovery.js`) to enumerate candidate containers.
@@ -626,7 +626,7 @@ Authoritative semantics: `SCRIPT_DSL_GUIDE` in `extension/lib/wizard-utils.js` (
 | `$extractList(containerSel, fieldMap, opts?)` | object[] | Extract a record list in **one call**: each sub-selector of fieldMap is evaluated inside each container, first match wins; avoids per-field `$list` misalignment; `opts.allowEmpty` suppresses the `empty list` throw |
 | `$extractListMulti(containerSel, fieldMap, opts?)` | object[][] | Each field returns an **array of all matches within the container** (`Array<string\|null>`, not element objects). Use only when CSS cannot disambiguate; field values are arrays — index `[0]` before `.trim()` |
 | `$clickInList(containerSel, subSel, opts?)` | `{clicked, errors}` | Click a sub-element inside each container; default `delayMs=500` to let animations settle (the "expand everything first, then extract" pattern) |
-| `$waitForStable(selector, opts?)` | boolean | Sample textContent every `interval` (default 1500ms); true after `stableChecks` (default 2) consecutive non-empty, unchanged samples; default 20000ms timeout. Streaming-content completion detection |
+| `$waitForStable(selector, opts?)` | boolean | Sample textContent every `interval` (default 1500ms); true after `stableChecks` (default 2) consecutive non-empty, unchanged samples; default 20000ms timeout. Use for streaming-content completion detection |
 | `$scrollBy(deltaY, selector?)` | `{scrolled, prevY, newY}` | Scroll the window or an element |
 | `$scrollToBottom(selector?)` | `{scrolled, prevY, newY}` | Scroll to the bottom; `scrolled:false` means the feed is exhausted. Triggers the trusted-wheel fallback when stuck (see §9) |
 | `$scrollIntoView(selector)` | `{found:true}` | Scroll an element to the viewport top (reveal a "load more" button) |
@@ -673,11 +673,11 @@ The `<css>` part is a CSS selector for the `<iframe>` element evaluated in the p
 
 **Files:** `domHover()` / `hoverDismiss()` in `extension/content-script.js`, plus `extension/lib/renderer-activation.js` (CDP dispatch)
 
-On many sites the list DOM carries only summary fields; the complete information (account bios, entity preview cards) lives in hover popovers. This chapter is a principled description of that subsystem; every constant comes from incident-driven tuning.
+On many sites the list DOM carries only summary fields; the complete information (account bios, entity preview cards) lives in hover popovers. This chapter is a principled description of that subsystem; every constant comes from incident-driven tuning. Throughout this section, *popover* refers to the transient DOM element that appears on hover, while *hovercard* refers to the enriched record data extracted from it.
 
 ### 8.1 Trusted-event dispatch
 
-`domHover` first `scrollIntoView({block:'center'})` the anchor (otherwise the bounding rect of a collapsed element below the fold is out-of-bounds coordinates and CDP would hit the wrong pixel), takes the center of its bounding box, then goes through `withTabActivation('hover', ...)` → `chrome.runtime.sendMessage({type:'TRUSTED_HOVER_REQUEST', x, y})` → background → `RendererActivation`, which transiently attaches `chrome.debugger` and issues CDP `Input.dispatchMouseEvent({type:'mouseMoved'})`. CDP input enters through Chrome's real input pipeline, so the resulting event has `event.isTrusted=true` — many sites' hover handlers filter synthetic events outright (`dispatchEvent` produces `isTrusted=false`), which makes this the only reliable way to trigger hover programmatically. Every CDP step is wrapped in a `CDP_STEP_TIMEOUT_MS=2000` timeout (so a detached state can't hang the orchestrator).
+`domHover` first scrolls the anchor into view via `scrollIntoView({block:'center'})` (otherwise the bounding rect of a collapsed element below the fold is out-of-bounds coordinates and CDP would hit the wrong pixel), takes the center of its bounding box, then goes through `withTabActivation('hover', ...)` → `chrome.runtime.sendMessage({type:'TRUSTED_HOVER_REQUEST', x, y})` → background → `RendererActivation`, which transiently attaches `chrome.debugger` and issues CDP `Input.dispatchMouseEvent({type:'mouseMoved'})`. CDP input enters through Chrome's real input pipeline, so the resulting event has `event.isTrusted=true` — many sites' hover handlers filter synthetic events outright (`dispatchEvent` produces `isTrusted=false`), which makes this the only reliable way to trigger hover programmatically. Every CDP step is wrapped in a `CDP_STEP_TIMEOUT_MS=2000` timeout (so a detached state can't hang the orchestrator).
 
 ### 8.2 Dual-channel popover discovery
 
@@ -766,7 +766,7 @@ Modern component frameworks produce DOM loaded with auto-generated identifiers t
 - **Leaf `:nth-of-type` retained:** when the walk reaches body without uniqueness, append `:nth-of-type(N)` only on the **leaf segment** (the clicked element itself, not a top-level shared segment) to disambiguate — this is a design trade-off, not an omission.
 - **Anonymous-parent collapse:** when walking upward to build a path, **skip bare-tag segments** (pure `div` wrappers with no id/role/aria/data-/semantic class), bridging real anchor segments with the **descendant combinator** (space, not `>`) — tolerating changes in intermediate wrappers. A deeply nested portal marker once produced a 19-segment `> div >` chain (fragility score 115+); after the collapse the same element gets a 2-segment descendant selector. The upward walk stops once a document-unique partial selector is found.
 
-**selector vs. domPath decoupling:** `generateSelector(el)` is short and optimized for execution (stops at uniqueness — a globally unique aria-label element yields a 1-segment path); `generateFullDomPath(el)` has no early stop, returns the full structural chain to body, and attaches no `:nth-of-type`, serving `clusterAnnotationsByContainer`'s context analysis (which once lost parent list-item context through short-circuiting, silently degrading multi-sample clustering to single-sample). Contract: `annotation.selector` for execution, `annotation.domPath` for analysis.
+**selector vs. domPath decoupling:** `generateSelector(el)` is short and optimized for execution (stops at uniqueness — a globally unique aria-label element yields a 1-segment path); `generateFullDomPath(el)` has no early stop, returns the full structural chain to body, and attaches no `:nth-of-type`; serving `clusterAnnotationsByContainer`'s context analysis (which once lost parent list-item context through short-circuiting, silently degrading multi-sample clustering to single-sample). Contract: `annotation.selector` for execution, `annotation.domPath` for analysis.
 
 **LLM selector-generalization discipline** (DSL rules): prefer attribute **existence** (`a[data-kind]`) over literal-value matching; `FIELD COLLISION ON GENERALIZATION` — when a selector is generalized to match multiple entity kinds, the script must add disambiguation logic, or fields of different record kinds bleed into each other.
 
