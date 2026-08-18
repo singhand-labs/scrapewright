@@ -71,11 +71,13 @@ describe('RC54: formatElementsForPrompt per-element truncation', () => {
 
 describe('RC54: formatElementsForPrompt total budget', () => {
   it('marks elements past the budget as SKIPPED but keeps their selectors listed', () => {
-    const html = 'z'.repeat(120000); // truncated to 30K per element
+    // RC58: distinct non-overlapping HTMLs — identical HTMLs are now deduped
+    // as CONTAINED (see RC58 suite below), which bypasses the budget.
+    const mk = (ch) => ch.repeat(120000); // truncated to 30K per element
     const out = formatElementsForPrompt([
-      { selector: 'div.first', found: true, outerHTML: html },
-      { selector: 'div.second', found: true, outerHTML: html },
-      { selector: 'div.third', found: true, outerHTML: html }
+      { selector: 'div.first', found: true, outerHTML: mk('z') },
+      { selector: 'div.second', found: true, outerHTML: mk('y') },
+      { selector: 'div.third', found: true, outerHTML: mk('x') }
     ], { totalBudgetChars: 40000 });
     assert.ok(out.includes('--- div.first ---'));
     assert.ok(out.includes('z'.repeat(30000)), 'first element still embedded (truncated)');
@@ -132,5 +134,93 @@ describe('RC54: wizard.js wires the capped formatter', () => {
       'formatter must be defined in wizard-utils.js');
     assert.match(src, /module\.exports[^\n]*formatElementsForPrompt/,
       'formatter must appear in module.exports');
+  });
+});
+
+// RC58 Fix B: containment dedup — a child candidate's outerHTML appears
+// verbatim inside its container candidate's outerHTML; embedding both
+// repeats the same bytes (a second root cause of the RC54-scale prompt).
+describe('RC58: formatElementsForPrompt containment dedup', () => {
+  it('emits CONTAINED marker for a child whose HTML is inside an earlier container', () => {
+    const containerHtml = '<div class="container"><span class="field">data</span><span class="other">x</span></div>';
+    const childHtml = '<span class="field">data</span>';
+    const out = formatElementsForPrompt([
+      { selector: 'div.container', found: true, outerHTML: containerHtml },
+      { selector: 'span.field', found: true, outerHTML: childHtml }
+    ]);
+    assert.ok(out.includes(containerHtml), 'container HTML emitted in full');
+    assert.match(out, /--- span\.field ---\n\[CONTAINED: this element's HTML appears inside 'div\.container' above\]/,
+      'child gets a CONTAINED marker naming its container');
+    assert.ok(!out.includes('--- span.field ---\n' + childHtml),
+      'child HTML must not be embedded again');
+  });
+
+  it('marks later duplicates of identical HTML as CONTAINED, keeping the first', () => {
+    const html = '<input type="search">';
+    const out = formatElementsForPrompt([
+      { selector: 'input[type="search"]', found: true, outerHTML: html },
+      { selector: 'input[placeholder="q"]', found: true, outerHTML: html }
+    ]);
+    assert.ok(out.includes('--- input[type="search"] ---\n' + html));
+    assert.match(out, /--- input\[placeholder="q"\] ---\n\[CONTAINED[^\n]*'input\[type="search"\]'/);
+  });
+
+  it('leaves non-overlapping elements unchanged', () => {
+    const out = formatElementsForPrompt([
+      { selector: 'div.a', found: true, outerHTML: '<div class="a">A</div>' },
+      { selector: 'div.b', found: true, outerHTML: '<div class="b">B</div>' }
+    ]);
+    assert.ok(out.includes('--- div.a ---\n<div class="a">A</div>'));
+    assert.ok(out.includes('--- div.b ---\n<div class="b">B</div>'));
+    assert.ok(!out.includes('CONTAINED'));
+  });
+
+  it('CONTAINED markers bypass the total budget (never become SKIPPED)', () => {
+    const containerHtml = 'c'.repeat(30000);
+    const childHtml = 'c'.repeat(15000);
+    const elements = [
+      { selector: 'div.big1', found: true, outerHTML: containerHtml },
+      { selector: 'div.big2', found: true, outerHTML: 'd'.repeat(30000) },
+      { selector: 'span.child', found: true, outerHTML: childHtml }
+    ];
+    // Budget fits big1 only; big2 exhausts it; child (contained in big1)
+    // must still get a CONTAINED marker, not SKIPPED.
+    const out = formatElementsForPrompt(elements, { totalBudgetChars: 35000 });
+    assert.match(out, /--- span\.child ---\n\[CONTAINED[^\n]*'div\.big1'/);
+    assert.ok(!out.match(/--- span\.child ---\n\[SKIPPED/));
+  });
+});
+
+// RC58 Fix A: condition-based settle wait replaces fixed sleeps.
+describe('RC58: waitForPageSettle', () => {
+  const { waitForPageSettle } = require('../lib/wizard-utils');
+
+  it('settles early once the key is stable for stableCount polls', async () => {
+    const key = '10:20';
+    const sleepCalls = [];
+    const r = await waitForPageSettle(() => key, {
+      maxMs: 10000, pollMs: 1, stableCount: 2,
+      sleep: (ms) => { sleepCalls.push(ms); return Promise.resolve(); }
+    });
+    assert.equal(r.settled, true);
+    assert.equal(r.polls, 2);
+    assert.equal(sleepCalls.length, 2);
+  });
+
+  it('returns settled:false when the key keeps changing past maxMs', async () => {
+    let n = 0;
+    const r = await waitForPageSettle(() => 'k' + (++n), { maxMs: 5, pollMs: 1 });
+    assert.equal(r.settled, false);
+    assert.ok(r.polls >= 1);
+  });
+
+  it('treats a null key (probe failure) as not settled and recovers', async () => {
+    let calls = 0;
+    const r = await waitForPageSettle(async () => {
+      calls++;
+      return calls < 2 ? null : 'stable';
+    }, { maxMs: 5000, pollMs: 1, stableCount: 2, sleep: () => Promise.resolve() });
+    assert.equal(r.settled, true);
+    assert.ok(r.polls >= 3, 'null key must not count toward stability');
   });
 });

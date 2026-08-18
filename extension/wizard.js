@@ -23,7 +23,6 @@ let wizardState = {
   editingServiceId: null,
   originalName: null,
   researchTabId: null,
-  postSnapshot: null,
   explorationData: null,
   llmHistory: [],
   stepAnnotationTabs: {},
@@ -1516,29 +1515,33 @@ async function explorePageInteraction(tabId, script, sampleInput) {
     debugLogger.log('warn', 'wizard', 'Exploration script failed, continuing anyway', { error: e.message });
   }
 
-  // Wait up to 30 seconds for page to settle after interaction
-  showLoading('Waiting for page to settle (30s)...');
-  await new Promise(r => setTimeout(r, 30000));
+  // RC58: poll-based settle wait (compressed snapshot key) replaces the old
+  // fixed 30s sleep — settled pages continue in ~3s, worst case unchanged.
+  showLoading('Waiting for page to settle (up to 30s)...');
+  const settle = await waitForPageSettle(async () => {
+    const r = await sendMessageWithRetry(tabId, { type: 'GET_DOM_SNAPSHOT', mode: 'compressed' }, 2);
+    const s = r && r.snapshot;
+    return (s && s.structure ? s.structure.length : 0) + ':' + (s && s.textSummary ? s.textSummary.length : 0);
+  }, { maxMs: 30000, pollMs: 1500, stableCount: 2 });
+  debugLogger.log('info', 'wizard', 'Post-exploration settle', { settled: settle.settled, polls: settle.polls });
 
   let response;
   try {
-    response = await sendMessageWithRetry(tabId, { type: 'GET_DOM_SNAPSHOT' }, 5);
+    response = await sendMessageWithRetry(tabId, { type: 'GET_DOM_SNAPSHOT', mode: 'compressed' }, 5);
   } catch (e) {
     debugLogger.log('error', 'wizard', 'Failed to capture post-interaction snapshot', { error: e.message });
     return null;
   }
 
   debugLogger.log('info', 'wizard', 'Post-interaction snapshot captured', {
-    htmlLength: response.snapshot?.html?.length,
-    textLength: response.snapshot?.textContent?.length
+    structureLength: response.snapshot?.structure?.length,
+    textSummaryLength: response.snapshot?.textSummary?.length
   });
 
   return {
     url: wizardState.targetUrl,
-    html: response.snapshot.html || '',
-    textContent: response.snapshot.textContent || '',
     structure: response.snapshot.structure || '',
-    textSummary: response.snapshot.textContent || ''
+    textSummary: response.snapshot.textSummary || ''
   };
 }
 
@@ -1564,7 +1567,6 @@ async function onRunExploration() {
   let postPageInfo = null;
   try {
     postPageInfo = await explorePageInteraction(tabId, exploration.explorationScript, sampleInput);
-    wizardState.postSnapshot = postPageInfo;
   } catch (e) {
     console.error('Exploration failed:', e);
     showToast('Exploration failed: ' + e.message + '. Continuing with initial snapshot only.', 'error', 5000);
@@ -1699,11 +1701,13 @@ async function continueResearch(tabId, config, pageInfo, postPageInfo) {
       }
       if (detailUrl) {
         showLoading('Capturing detail page structure...');
-        // RC12: popup window so the detail page's lazy-loaded content (FB
-        // post comments, product image galleries, etc.) actually renders
-        // before we capture the snapshot.
         const detailTab = await createScrapeTab(detailUrl);
-        await new Promise(r => setTimeout(r, 8000));
+        // RC58: poll-based settle wait (cap 10s) replaces a fixed 8s sleep.
+        await waitForPageSettle(async () => {
+          const r = await chrome.tabs.sendMessage(detailTab.id, { type: 'GET_DOM_SNAPSHOT', mode: 'compressed' });
+          const s = r && r.snapshot;
+          return (s && s.structure ? s.structure.length : 0) + ':' + (s && s.textSummary ? s.textSummary.length : 0);
+        }, { maxMs: 10000, pollMs: 1000, stableCount: 2 });
         const detailResponse = await chrome.tabs.sendMessage(detailTab.id, {
           type: 'GET_DOM_SNAPSHOT', mode: 'compressed'
         });
@@ -1778,8 +1782,8 @@ async function startResearch() {
   wizardState.description = buildRequirementsBlock(wizardState.requirements);
   if (!wizardState.userDescription) wizardState.userDescription = wizardState.description;
 
-  // RC12: popup window so the research page renders its lazy-loaded content
-  // during the initial snapshot capture (FB feed, search results, etc.).
+  // Background scrape tab (createScrapeTab) with visibility-keepalive
+  // injection; rendering-dependent ops later go through sticky activation.
   const tab = await createScrapeTab(wizardState.targetUrl);
   wizardState.researchTabId = tab.id;
 
@@ -1803,8 +1807,7 @@ async function startResearch() {
   const pageInfo = {
     url: wizardState.targetUrl,
     description: wizardState.description,
-    structure: response.snapshot.structure || '',
-    textSummary: response.snapshot.textSummary || ''
+    structure: response.snapshot.structure || ''
   };
   wizardState.researchPageInfo = pageInfo;
 
@@ -1930,15 +1933,9 @@ async function testScript() {
 
     const result = await StepOrchestrator.execute(service, wizardState.testInput || {}, {
       createTab: async (url) => {
-        // RC12: use a popup window instead of a background tab so the page
-        // actually renders. The legacy `active:false` tab pattern leaves the
-        // renderer in a low-priority state where IntersectionObserver-based
-        // lazy-load (FB feed, Twitter, infinite scroll) doesn't fire — the
-        // page loads initial content only and the scroll loop's uniqueCount
-        // stays flat. console.log 2026-07-26 16:30 (BG) vs 16:32 (FG) shows
-        // the same scrape landing 3 posts in a background tab vs 10 in a
-        // foreground tab. Popup window with focused:false keeps the user's
-        // keyboard focus intact while letting the page render normally.
+        // Background tab via createScrapeTab (RC20 removed the popup path);
+        // rendering is handled by the five-layer throttle stack — sticky
+        // activation wraps input-required ops.
         tab = await withTimeout(createScrapeTab(url), 10000, 'Failed to create tab (10s timeout)');
         appendLog('Opening ' + url + '...');
         return tab;
