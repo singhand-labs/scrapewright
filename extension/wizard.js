@@ -2198,7 +2198,8 @@ async function improveStepWithAI(stepIndex, userFeedback) {
     if (typeof detailUrl === 'string' && /^https?:\/\//.test(detailUrl)) {
       try {
         showLoading('Capturing detail page for improvement...');
-        // RC12: popup window so the detail page actually renders.
+        // Background scrape tab; rendering is handled by the throttle stack
+        // (visibility-keepalive here, sticky activation during input-required ops).
         const detailTab = await createScrapeTab(detailUrl);
         await new Promise(r => setTimeout(r, 8000));
         const response = await chrome.tabs.sendMessage(detailTab.id, { type: 'GET_DOM_SNAPSHOT', mode: 'compressed' });
@@ -2780,8 +2781,8 @@ async function runFixIteration(userFeedback, config, options = {}) {
     } else {
       try {
         showLoading('Capturing detail page snapshot for better fix...');
-        // RC12: popup window so the detail page actually renders its lazy-
-        // loaded content before we snapshot it.
+        // Background scrape tab; lazy-load rendering relies on the throttle
+        // stack (visibility-keepalive + sticky activation), not a popup window.
         const detailTab = await createScrapeTab(detailUrl);
         // Wait for page + iframe content to load (8s for dynamic iframe chains)
         await new Promise(r => setTimeout(r, 8000));

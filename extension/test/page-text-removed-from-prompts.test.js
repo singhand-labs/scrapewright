@@ -22,10 +22,10 @@ describe('Page text sections removed from LLM prompts', () => {
       'wizard.js must not render "Page text (after interaction):" into prompts');
   });
 
-  it('wizard-utils.js buildResearchPrompt and buildFixPrompt do not include "Page text:"', () => {
+  it('wizard-utils.js does not include "Page text:" in any prompt builder', () => {
     const src = fs.readFileSync(WIZARD_UTILS_PATH, 'utf8');
     const withoutComments = src.replace(/\/\/[^\n]*\n/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
     assert.doesNotMatch(withoutComments, /Page text:/,
-      'buildResearchPrompt/buildFixPrompt must not include "Page text:" section');
+      'wizard-utils.js must not include "Page text:" sections — they duplicate the cleaned HTML');
   });
 });
