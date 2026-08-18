@@ -154,14 +154,8 @@
     return { ok: true, activated: true }; // sticky: no restore
   }
 
-  async function withActivation(tabId, fn) {
-    await requestActivation(tabId);
-    return await fn();
-  }
-
   const api = {
     requestActivation: requestActivation,
-    withActivation: withActivation,
     initTabActivationListeners: initTabActivationListeners,
     _getUserState: function () { return { lastUserTabId: lastUserTabId, activeByWindow: activeByWindow }; }
   };

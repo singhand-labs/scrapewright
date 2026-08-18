@@ -138,7 +138,6 @@ describe('lib/tab-activation.js — module shape', () => {
     const { api } = loadModule();
     assert.equal(typeof api.requestActivation, 'function');
     assert.equal(typeof api.initTabActivationListeners, 'function');
-    assert.equal(typeof api.withActivation, 'function');
     assert.equal(typeof api._getUserState, 'function');
     const userState = api._getUserState();
     assert.ok(userState && typeof userState === 'object');
@@ -414,59 +413,5 @@ describe('lib/tab-activation.js — scrape-tab close lands on last-clicked tab',
     await ctx.fireActivated(100, 1);
     await ctx.fireRemoved(100, { windowId: 1, isWindowClosing: false });
     assert.equal(ctx.api._getUserState().lastUserTabId, null);
-  });
-});
-
-describe('lib/tab-activation.js — withActivation (sticky)', () => {
-  it('runs fn after request; does NOT restore after fn (sticky)', async () => {
-    const ctx = loadModule();
-    ctx.tabsById.set(100, { id: 100, windowId: 1, active: true });
-    ctx.tabsById.set(101, { id: 101, windowId: 1, active: false });
-    let fnRan = false;
-    const result = await ctx.api.withActivation(101, async () => {
-      fnRan = true;
-      return 'fn-return-value';
-    });
-    assert.equal(fnRan, true);
-    assert.equal(result, 'fn-return-value');
-    // Only the single activation — sticky, no restore update
-    assert.equal(ctx.calls.tabsUpdate.length, 1);
-    assert.equal(ctx.tabsById.get(101).active, true);
-  });
-
-  it('propagates fn rejection', async () => {
-    const ctx = loadModule();
-    ctx.tabsById.set(101, { id: 101, windowId: 1, active: false });
-    await assert.rejects(
-      ctx.api.withActivation(101, async () => { throw new Error('scrape blew up'); }),
-      /scrape blew up/
-    );
-  });
-
-  it('skips activation when request returned activated:false (already active)', async () => {
-    const ctx = loadModule();
-    ctx.tabsById.set(101, { id: 101, windowId: 1, active: true });
-    const result = await ctx.api.withActivation(101, async () => 'ok');
-    assert.equal(result, 'ok');
-    // No tabs.update at all
-    assert.equal(ctx.calls.tabsUpdate.length, 0);
-  });
-
-  it('still runs fn when request returns ok:false (cross-window)', async () => {
-    // withActivation still runs fn even if activation failed — graceful
-    // degradation. The caller should still get fn's result; we just didn't
-    // activate the tab.
-    const ctx = loadModule();
-    ctx.setFocusedWindow(1);
-    ctx.tabsById.set(101, { id: 101, windowId: 2, active: false });
-    let fnRan = false;
-    const result = await ctx.api.withActivation(101, async () => {
-      fnRan = true;
-      return 'degraded';
-    });
-    assert.equal(fnRan, true);
-    assert.equal(result, 'degraded');
-    // No activation
-    assert.equal(ctx.calls.tabsUpdate.length, 0);
   });
 });
