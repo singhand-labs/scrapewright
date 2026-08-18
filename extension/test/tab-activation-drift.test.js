@@ -1,19 +1,23 @@
-// Drift guard: RC20 (console.log 2026-07-30) introduces a tab-activation
-// layer that briefly activates the scrape tab during input-required DOM ops.
-// Content scripts can't call chrome.tabs.* directly, so the integration is
-// split across three files:
+// Drift guard: RC20 introduced a tab-activation layer that activates the
+// scrape tab during input-required DOM ops; RC56 (sticky activation) removed
+// the release/restore half. Content scripts can't call chrome.tabs.* directly,
+// so the integration is split across three files:
 //
-//   1. extension/lib/tab-activation.js — request/release/with helpers
-//   2. extension/background.js — TAB_ACTIVATION_REQUEST / TAB_ACTIVATION_RELEASE
-//      handlers that call the lib
-//   3. extension/content-script.js — withTabActivation(fn) helper that uses
-//      chrome.runtime.sendMessage to invoke the background handlers; wraps
-//      domScrollToBottom's body
+//   1. extension/lib/tab-activation.js — requestActivation +
+//      initTabActivationListeners (chrome.tabs.onActivated/onRemoved:
+//      user-switch tracking + landing focus when a scrape tab closes)
+//   2. extension/background.js — TAB_ACTIVATION_REQUEST handler + a top-level
+//      TabActivation.initTabActivationListeners() call (must run at SW startup
+//      so listeners re-register on every MV3 wake)
+//   3. extension/content-script.js — withTabActivation(label, fn) helper that
+//      sends ONLY TAB_ACTIVATION_REQUEST via chrome.runtime.sendMessage
+//      (sticky: activation persists, no release message); wraps the
+//      scrollToBottom / hover / hoverDismiss call sites
 //
 // If any of these pieces drift (e.g. someone refactors and forgets to wrap a
-// new scroll entry point, or the message-type strings get renamed on one
-// side but not the other), the scrape silently reverts to the RC12-RC19
-// "BG tab stuck at 4 posts" symptom. Source-text audit (no execution)
+// new entry point, or the message-type strings get renamed on one side but
+// not the other), the scrape silently reverts to the RC12-RC19
+// "BG tab stuck at 4 items" symptom. Source-text audit (no execution)
 // because content-script.js is an IIFE that doesn't export anything.
 
 const { describe, it } = require('node:test');
@@ -42,19 +46,36 @@ describe('RC20 tab-activation integration drift guard', () => {
       "background.js importScripts block must include 'lib/tab-activation.js'");
   });
 
-  it('background.js wires both TAB_ACTIVATION_REQUEST and TAB_ACTIVATION_RELEASE handlers', () => {
+  it('lib/tab-activation.js registers onActivated/onRemoved listeners', () => {
+    const src = fs.readFileSync(LIB_PATH, 'utf8');
+    assert.ok(/chrome\.tabs\.onActivated\.addListener/.test(src),
+      'lib/tab-activation.js must register chrome.tabs.onActivated listener');
+    assert.ok(/chrome\.tabs\.onRemoved\.addListener/.test(src),
+      'lib/tab-activation.js must register chrome.tabs.onRemoved listener');
+    assert.ok(/initTabActivationListeners/.test(src),
+      'lib/tab-activation.js must define initTabActivationListeners');
+  });
+
+  it('background.js wires the TAB_ACTIVATION_REQUEST handler + listener init', () => {
     const src = fs.readFileSync(BG_PATH, 'utf8');
     // Message-type strings must appear as the dispatch keys, not just in
     // comments. Match the dispatch pattern "message.type === '...'".
     assert.ok(/message\.type\s*===\s*['"]TAB_ACTIVATION_REQUEST['"]/.test(src),
       "background.js must dispatch on message.type === 'TAB_ACTIVATION_REQUEST'");
-    assert.ok(/message\.type\s*===\s*['"]TAB_ACTIVATION_RELEASE['"]/.test(src),
-      "background.js must dispatch on message.type === 'TAB_ACTIVATION_RELEASE'");
-    // Both handlers must call the TabActivation API (not just define stubs).
+    // The handler must call the TabActivation API (not just define a stub).
     assert.ok(/TabActivation\.requestActivation\(/.test(src),
       'TAB_ACTIVATION_REQUEST handler must call TabActivation.requestActivation');
-    assert.ok(/TabActivation\.releaseActivation\(/.test(src),
-      'TAB_ACTIVATION_RELEASE handler must call TabActivation.releaseActivation');
+    // RC56: listeners must register at top level (SW startup), not lazily.
+    assert.ok(/TabActivation\.initTabActivationListeners\(\)/.test(src),
+      'background.js must call TabActivation.initTabActivationListeners()');
+  });
+
+  it('RC56: TAB_ACTIVATION_RELEASE channel is fully removed', () => {
+    for (const p of [BG_PATH, CS_PATH, LIB_PATH]) {
+      const src = fs.readFileSync(p, 'utf8');
+      assert.ok(!src.includes('TAB_ACTIVATION_RELEASE'),
+        `${path.basename(p)} must not reference TAB_ACTIVATION_RELEASE`);
+    }
   });
 
   it('content-script.js defines withTabActivation helper', () => {
@@ -63,7 +84,7 @@ describe('RC20 tab-activation integration drift guard', () => {
       'content-script.js must define withTabActivation');
   });
 
-  it('content-script.js withTabActivation sends both message types', () => {
+  it('content-script.js withTabActivation sends only TAB_ACTIVATION_REQUEST', () => {
     const src = fs.readFileSync(CS_PATH, 'utf8');
     // Slice the withTabActivation body so we don't match unrelated mentions.
     const start = src.indexOf('function withTabActivation');
@@ -93,8 +114,16 @@ describe('RC20 tab-activation integration drift guard', () => {
     const body = src.slice(start, bodyEnd + 1);
     assert.ok(/type:\s*['"]TAB_ACTIVATION_REQUEST['"]/.test(body),
       "withTabActivation must send {type: 'TAB_ACTIVATION_REQUEST'}");
-    assert.ok(/type:\s*['"]TAB_ACTIVATION_RELEASE['"]/.test(body),
-      "withTabActivation must send {type: 'TAB_ACTIVATION_RELEASE'}");
+  });
+
+  it('content-script.js wraps scrollToBottom / hover / hoverDismiss call sites', () => {
+    const src = fs.readFileSync(CS_PATH, 'utf8');
+    assert.ok(/withTabActivation\(\s*['"]scrollToBottom['"]/.test(src),
+      "scrollToBottom must be wrapped via withTabActivation('scrollToBottom', ...)");
+    assert.ok(/withTabActivation\(\s*['"]hover['"]/.test(src),
+      "hover must be wrapped via withTabActivation('hover', ...)");
+    assert.ok(/withTabActivation\(\s*['"]hoverDismiss['"]/.test(src),
+      "hoverDismiss must be wrapped via withTabActivation('hoverDismiss', ...)");
   });
 
   it('content-script.js wraps domScrollToBottom body via withTabActivation', () => {

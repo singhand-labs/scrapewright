@@ -670,60 +670,36 @@
   }
 
   // RC20 (console.log 2026-07-30): wrap input-required DOM ops so the scrape
-  // tab is briefly the active tab during the op. Chrome's renderer only
+  // tab is the active tab during the op. Chrome's renderer only
   // produces compositor frames for the active tab in the focused window, and
   // both IntersectionObserver callbacks AND CDP Input.dispatchMouseEvent
   // require frame production. This is the one layer that visibility-keepalive,
   // launch flags, and Enhanced Mode could not be (necessary but not
   // sufficient). See lib/tab-activation.js for the rationale and the
-  // background TAB_ACTIVATION_REQUEST / _RELEASE handlers.
+  // background TAB_ACTIVATION_REQUEST handler.
   //
   // Content scripts can't call chrome.tabs.* — this helper uses message-
   // passing to ask background to do it. It runs `fn` regardless of whether
   // activation succeeded (graceful degradation — fgPath already active,
   // cross-window refusals, missing chrome.tabs, etc.). Errors in the message
-  // channel do NOT abort `fn`; we just skip release if request never
-  // activated.
+  // channel do NOT abort `fn`.
   async function withTabActivation(label, fn) {
-    let activated = false;
     try {
       const req = await chrome.runtime.sendMessage({ type: 'TAB_ACTIVATION_REQUEST' });
-      activated = !!(req && req.ok && req.activated);
       notifyBackgroundDiagnostic('tabActivation_request', {
         label: label,
         ok: !!(req && req.ok),
-        activated: activated,
+        activated: !!(req && req.ok && req.activated),
         crossWindow: !!(req && req.crossWindow),
         reason: (req && req.reason) || null
       });
     } catch (e) {
       notifyBackgroundDiagnostic('tabActivation_request', {
-        label: label,
-        ok: false,
+        label: label, ok: false,
         reason: 'sendMessage error: ' + (e && e.message || String(e))
       });
     }
-    try {
-      return await fn();
-    } finally {
-      if (activated) {
-        try {
-          const rel = await chrome.runtime.sendMessage({ type: 'TAB_ACTIVATION_RELEASE' });
-          notifyBackgroundDiagnostic('tabActivation_release', {
-            label: label,
-            ok: !!(rel && rel.ok),
-            restored: !!(rel && rel.restored),
-            reason: (rel && rel.reason) || null
-          });
-        } catch (e) {
-          notifyBackgroundDiagnostic('tabActivation_release', {
-            label: label,
-            ok: false,
-            reason: 'sendMessage error: ' + (e && e.message || String(e))
-          });
-        }
-      }
-    }
+    return await fn(); // RC56 sticky: activation persists, no release message
   }
 
   sendDebugLog('info', 'content-script', 'Content script loaded', { url: location.href, readyState: document.readyState });
