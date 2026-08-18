@@ -103,7 +103,9 @@ const SITE_NAME_RE = /facebook|twitter|linkedin|tiktok|reddit|instagram|\bfb\.co
 
 describe('wizard.js inline prompt sections are free of site-specific tokens', () => {
   const src = fs.readFileSync(WIZARD_PATH, 'utf8');
-  const withoutComments = src.replace(/\/\/[^\n]*\n/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  // `//` preceded by `:` is a URL scheme (https://...), not a comment start —
+  // stripping it would let site URLs inside string literals pass vacuously.
+  const withoutComments = src.replace(/(^|[^:])\/\/[^\n]*\n/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
 
   it('does not reference cosd-markdown-loading in inline prompts', () => {
     assert.doesNotMatch(withoutComments, /cosd-markdown-loading/);
@@ -133,6 +135,7 @@ describe('SCRIPT_DSL_GUIDE has no FB-fingerprint href patterns (RC57)', () => {
 
 describe('wizard.html visible text is free of site-specific tokens (RC57)', () => {
   it('has no site names or FB-fingerprint tokens in UI copy', () => {
+    // wizard.html is read raw (no comment-stripping): errs strict, since HTML comments are swept too.
     const src = fs.readFileSync(path.join(__dirname, '..', 'wizard.html'), 'utf8');
     assert.doesNotMatch(src, SITE_NAME_RE);
     assert.doesNotMatch(src, /profile\.php/i);
