@@ -76,6 +76,9 @@ Scrapewright 的应对之道 —— 这也是它作为 **AI 网页采集器**的
 | **服务管理** | 导入/导出、启用/禁用、编辑已有服务、一键导出 Markdown API 文档（方便分享和喂给 AI 智能体） |
 | **统一运维 CLI** | `./bin/scrapewright`（install / start / stop / restart / status / doctor / logs）跨 Linux、macOS、Windows 把主机作为操作系统后台服务管理 |
 | **异步执行队列** | 并发请求自动排队，异步返回结果，适合批量采集场景 |
+| **悬浮卡片增强（Hovercard enrichment）** | `$hover` / `$extractWithHover` 用悬浮弹窗中才出现的字段增强列表记录 —— 通过可信 CDP 鼠标事件打开卡片，多信号检测在弹窗关闭前捕获其 portal 渲染的 DOM，单一原子调用保证记录与悬浮卡片的对应关系 |
+| **混淆 DOM 稳定选择器** | 生成的选择器能抵御哈希化的 CSS-module 类名和自动生成属性（`mount_0_0_*`、`react-aria-*`、`x1y2z3` 式哈希会被剥离或跳过，匿名包装层链会被折叠）—— 在现代组件框架站点上依然稳健 |
+| **提示词体积韧性** | 喂给 LLM 的元素 HTML 经过分层清洗和预算封顶（单元素与总量双重上限），超大渲染信息流也不会撑爆模型上下文 |
 
 ## 系统要求
 
@@ -138,6 +141,8 @@ Scrapewright 的应对之道 —— 这也是它作为 **AI 网页采集器**的
    - **Model**：模型名称（如 `gpt-4o`、`kimi-for-coding`、`glm-5.1`）
    - **API Key**：你的 API 密钥
    - **Base URL**（可选）：自定义 API 地址，适用于公司中转站或兼容 OpenAI 格式的代理。注意需要包含路径前缀（如 `https://api.openai.com/v1`），不要只填域名
+   - **Max output tokens**：模型的补全预算（默认 8192，范围 1024–131072）。推理模型会在回答前消耗不可见的思考 token，此时应调高
+   - **Timeout**：单次请求超时，单位秒（默认 120，范围 10–600）。慢速服务商或超长提示词可调高
 3. 点击 **Save**
 
 ### 4. 创建采集服务
@@ -151,6 +156,8 @@ Scrapewright 的应对之道 —— 这也是它作为 **AI 网页采集器**的
 | **阶段 3：I/O Schema 与测试输入** | 确认输入输出参数格式（JSON Schema），编辑测试输入数据。 |
 | **阶段 4：执行测试（逐步）** | 实时查看逐步执行日志（打开页面 → 加载 → 每个步骤 → 成功/失败）。 |
 | **阶段 5：结果** | 查看测试结果。失败时可 **Auto-Fix**（AI 自动修复）或 **Deploy Anyway**（忽略错误部署）。 |
+
+Research 期间，向导会驱动 LLM 经历多个轮次：页面探索（要到达目标内容，页面是否需要交互？）、基于你的标注和 DOM 的候选选择器发现、用真实元素 HTML 确认选择器，最后生成步骤脚本。每一轮都以上一轮的已验证结果为输入，因此生成的步骤建立在经过真实页面确认的选择器之上。
 
 #### Auto-Fix 循环动力学
 
@@ -208,14 +215,15 @@ Options 页底部显示 **Execution History**（最近 20 条执行记录），�
 
 Scrapewright 驱动的是一个真实的 Chrome 标签页，默认以**后台标签**方式打开（`chrome.tabs.create({active:false})`），保证你的键盘焦点不会离开当前编辑器。对大多数网站来说都没问题。但对那些依赖 `IntersectionObserver` 懒加载的站点——Facebook 信息流、无限滚动列表、虚拟化表格——后台标签会撞上 Chrome 的渲染端帧产出节流：非可见标签不会触发合成器帧，`IntersectionObserver` 回调永远不会触发，懒加载自然就停了。
 
-Scrapewright 通过四层叠加方案来应对（每一层针对一种不同的节流或过滤机制，所以是叠加而非替代）：
+Scrapewright 通过五层叠加方案来应对（每一层针对一种不同的节流或过滤机制，所以是叠加而非替代）：
 
 | 层 | 做了什么 | 不能解决什么 |
 |----|---------|-------------|
 | **visibility-keepalive**（默认开启）| 往页面 MAIN world 注入一段覆盖：让 `document.visibilityState='visible'`、`document.hidden=false`、`document.hasFocus()=true`，再跑一个 `requestAnimationFrame` 保活循环。修复那些**自己**检查可见性来决定是否继续加载的页面 JS。 | 并不能让 Chrome 合成器为非可见标签产生帧。 |
-| **Enhanced Scraping Mode**（选项页可开启）| 给每个采集标签瞬态挂载 `chrome.debugger`（<100ms），发送 `Page.setWebLifecycleState({state:'active'})`，解除 Chrome 的页面级生命周期冻结（JS 执行、定时器、rAF 的"强节流"）。 | 并不能让 Chrome 合成器为非可见标签产生帧。经实测确认：CDP 命令返回 `ok:true`，但 `IntersectionObserver` 驱动的懒加载依然不工作。 |
+| **Enhanced Scraping Mode**（选项页可开启）| 为下述**可信滚轮事件兜底**（第 4 层）提供开关。它依赖的 `debugger` 权限在安装时已声明（Chrome 不允许把它作为可选权限）。 | 本身并不能让 Chrome 合成器为非可见标签产生帧 —— 那是第 5 层的职责。 |
 | **Chrome 启动参数**（IO 类懒加载的必要前提）| `scrapewright throttle on` 重写你的 Chrome 启动器（Linux `.desktop`、macOS 包装 AppleScript 应用、Windows `.lnk` 快捷方式），加入 `--disable-background-timer-throttling`、`--disable-backgrounding-occluded-windows`、`--disable-renderer-backgrounding`、`--disable-features=CalculateNativeWinOcclusion`。然后重启 Chrome。 | 需要重启 Chrome，且对所有 Chrome 窗口全局生效。**单独并不能**解决那些懒加载 loader 过滤 `event.isTrusted` 的站点。|
-| **可信滚轮事件兜底**（通过 Enhanced Scraping Mode 开启）| 当程序化 `scrollBy` 卡住（内容不再增长）时，通过同一个瞬态 `chrome.debugger` 通道发送 CDP `Input.dispatchMouseEvent({type:'mouseWheel'})`。CDP 输入走的是和真实 OS 输入相同的管线，产生的事件 `event.isTrusted=true`——这是程序化产生可信滚轮事件的**唯一**途径。`$scrollToBottom` 在卡住时自动触发，绕过那些拒绝 JS 滚动的站点 loader。 | 需要 Enhanced Scraping Mode 处于开启状态。只在"卡住"时触发，对响应程序化滚动的站点无副作用。|
+| **可信滚轮事件兜底**（通过 Enhanced Scraping Mode 开启）| 当程序化 `scrollBy` 卡住（内容不再增长）时，通过瞬态 `chrome.debugger` 通道发送 CDP `Input.dispatchMouseEvent({type:'mouseWheel'})`。CDP 输入走的是和真实 OS 输入相同的管线，产生的事件 `event.isTrusted=true`——这是程序化产生可信滚轮事件的**唯一**途径。`$scrollToBottom` 在卡住时自动触发，绕过那些拒绝 JS 滚动的站点 loader。 | 需要 Enhanced Scraping Mode 处于开启状态。只在"卡住"时触发，对响应程序化滚动的站点无副作用。|
+| **粘性标签激活（Sticky tab activation）**（默认开启）| 在需要输入的 DOM 操作（滚动 / 悬浮 / 关闭悬浮卡片）之前，采集标签会被激活并**保持**激活 —— Chrome 只为聚焦窗口的活跃标签产生合成器帧。如果你手动切走，下一个操作会重新激活它；采集标签自动关闭时，焦点会落回你最后点击的标签。 | 这些操作期间采集标签会短暂成为可见标签（你的输入焦点可能被短暂打断）。|
 
 **IO 驱动的懒加载站点推荐配置：**
 
@@ -231,7 +239,7 @@ Scrapewright 通过四层叠加方案来应对（每一层针对一种不同的�
 ./bin/scrapewright throttle off      # 从备份恢复原始启动器
 ```
 
-选项页上的 Enhanced Scraping Mode 开关会同时启用两个机制（都走 `chrome.debugger`）：上面描述的**页面生命周期激活**（第 2 层）**以及可信滚轮事件兜底**（第 4 层）——当滚动卡住时，这一层会通过 CDP 发送真实的滚轮事件，让那些过滤 `event.isTrusted` 的站点（程序化 `scrollBy` 是 non-trusted 的）也能继续加载。对任何 IO 驱动的懒加载站点都应该开启。开关点击时不会申请新的 Chrome 权限：`debugger` 权限在安装时已声明（Chrome 不允许把它作为可选权限），这个开关只控制扩展在运行时是否实际使用它。
+选项页上的 Enhanced Scraping Mode 开关启用的是**可信滚轮事件兜底**（第 4 层）——当滚动卡住时，这一层会通过 `chrome.debugger` 的 CDP 通道发送真实的滚轮事件，让那些过滤 `event.isTrusted` 的站点（程序化 `scrollBy` 是 non-trusted 的）也能继续加载。对任何 IO 驱动的懒加载站点都应该开启。开关点击时不会申请新的 Chrome 权限：`debugger` 权限在安装时已声明（Chrome 不允许把它作为可选权限），这个开关只控制扩展在运行时是否实际使用它。
 
 ## 故障排查 / 常见问题
 
@@ -421,6 +429,14 @@ GET /api/v1/services
 }
 ```
 
+#### 管理服务步骤
+
+| 方法 | 路径 | 作用 |
+|---|---|---|
+| POST | `/api/v1/services/{name}/steps` | 为服务添加一个步骤（请求体为步骤对象；返回 201） |
+| PUT | `/api/v1/services/{name}/steps/{stepId}` | 更新一个步骤（脚本 / 流程字段如 `onSuccess`、`condition`） |
+| DELETE | `/api/v1/services/{name}/steps/{stepId}` | 删除一个步骤 —— 链路自动重连并重新校验 |
+
 #### 健康检查
 
 ```
@@ -494,16 +510,27 @@ curl -s "http://localhost:8765/api/v1/jobs/$JOB_ID" \
 
 | API | 说明 |
 |-----|------|
-| `$(selector)` | 等待元素出现（最长 30s），返回元素数据 |
+| `$(selector)` | 最多等 30s，返回元素数据对象 |
+| `$exists(selector, timeoutMs?)` | 检查是否存在**可见**元素；轮询循环专用 |
 | `$click(selector)` | 点击元素 |
-| `$type(selector, text)` | 输入文本（支持 INPUT、TEXTAREA、contenteditable） |
-| `$extract(selector, attr?)` | 提取文本内容或属性值 |
-| `$wait(selector, delayMs?)` | 等待元素出现后可选延迟 |
-| `$exists(selector, timeoutMs?)` | 检查元素是否存在（轮询场景推荐） |
+| `$type(selector, text)` | 输入文本（INPUT/TEXTAREA/contenteditable） |
+| `$extract(selector, attr?, timeoutMs?)` | 读取 textContent 或属性（含 `outerHTML`/`innerHTML` DOM 属性）；快速失败（默认 5s） |
+| `$wait(selector, delayMs?)` | 等待元素（MutationObserver，最多 30s） |
 | `$check(selector, property)` | 读取元素属性（如 `checked`） |
-| `$list(selector)` | 获取所有匹配元素（含同源 iframe） |
-| `$count(selector)` | 计数匹配元素 |
-| `$openTab(url, fn)` | 打开新标签页并执行函数体，返回结果 |
+| `$count(selector)` | 统计主文档 + 同源 iframe 中的匹配数 |
+| `$list(selector)` | 所有匹配的元素数据对象（主文档 + iframe） |
+| `$extractList(containerSel, fieldMap, opts?)` | 一次调用完成多字段列表提取 —— 每条记录的字段保持对齐 |
+| `$extractListMulti(containerSel, fieldMap, opts?)` | 类似 `$extractList`，但每个字段值是全部匹配组成的数组（CSS 无法区分时在 JS 里挑选） |
+| `$clickInList(containerSel, subSel, opts?)` | 点击**每个**容器内的子元素（如展开按钮），带等待间隔 |
+| `$waitForStable(selector, opts?)` | 轮询直到内容停止变化 —— 流式输出 / AI 回答完成检测 |
+| `$scrollBy(deltaY, selector?)` | 窗口或内部容器滚动 N 像素 |
+| `$scrollToBottom(selector?)` | 滚动到底部；`scrolled:false` 表示信息流已耗尽 |
+| `$scrollIntoView(selector)` | 让元素可见（如"加载更多"按钮）再点击 |
+| `$hover(anchorSelector, popoverSelector?, opts?)` | 在锚点上执行可信悬浮，在弹窗关闭前捕获其 HTML（`opts.index` 指定第 N 个匹配） |
+| `$extractWithHover(containerSel, fieldMap, opts?)` | 每个容器原子化地提取 + 悬浮增强 —— 记录与悬浮卡片保证对齐 |
+| `$openTab(url, functionBody)` | 在新标签页打开详情页并采集，返回其结果 |
+
+所有选择器都支持 iframe 前缀 `iframe<iframe-css>::<inner-css>`（可链式嵌套 iframe），在多 iframe 页面上锁定特定 iframe。
 
 脚本可访问：
 - `__input__` — 外部调用传入的参数
