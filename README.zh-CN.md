@@ -78,7 +78,7 @@ Scrapewright 的应对之道 —— 这也是它作为 **AI 网页采集器**的
 | **异步执行队列** | 并发请求自动排队，异步返回结果，适合批量采集场景 |
 | **悬浮卡片增强（Hovercard enrichment）** | `$hover` / `$extractWithHover` 用悬浮弹窗中才出现的字段增强列表记录 —— 通过可信 CDP 鼠标事件打开卡片，多信号检测在弹窗关闭前捕获其 portal 渲染的 DOM，单一原子调用保证记录与悬浮卡片的对应关系 |
 | **混淆 DOM 稳定选择器** | 生成的选择器能抵御哈希化的 CSS-module 类名和自动生成属性（`mount_0_0_*`、`react-aria-*`、`x1y2z3` 式哈希会被剥离或跳过，匿名包装层链会被折叠）—— 在现代组件框架站点上依然稳健 |
-| **提示词体积韧性** | 喂给 LLM 的元素 HTML 经过分层清洗和预算封顶（单元素与总量双重上限），超大渲染信息流也不会撑爆模型上下文 |
+| **提示词体积防护** | 喂给 LLM 的元素 HTML 经过分层清洗和预算封顶（单元素与总量双重上限），超大渲染信息流也不会撑爆模型上下文 |
 
 ## 系统要求
 
@@ -527,7 +527,7 @@ curl -s "http://localhost:8765/api/v1/jobs/$JOB_ID" \
 | `$scrollToBottom(selector?)` | 滚动到底部；`scrolled:false` 表示信息流已耗尽 |
 | `$scrollIntoView(selector)` | 让元素可见（如"加载更多"按钮）再点击 |
 | `$hover(anchorSelector, popoverSelector?, opts?)` | 在锚点上执行可信悬浮，在弹窗关闭前捕获其 HTML（`opts.index` 指定第 N 个匹配） |
-| `$extractWithHover(containerSel, fieldMap, opts?)` | 每个容器原子化地提取 + 悬浮增强 —— 记录与悬浮卡片保证对齐 |
+| `$extractWithHover(containerSel, fieldMap, opts?)` | 每个容器原子化地提取 + 悬浮增强 —— 通过单次原子调用保持记录与悬浮卡片的对应 |
 | `$openTab(url, functionBody)` | 在新标签页打开详情页并采集，返回其结果 |
 
 所有选择器都支持 iframe 前缀 `iframe<iframe-css>::<inner-css>`（可链式嵌套 iframe），在多 iframe 页面上锁定特定 iframe。
