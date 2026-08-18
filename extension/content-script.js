@@ -1544,7 +1544,9 @@
     };
 
     // RC20 (console.log 2026-07-30): wrap the scroll work in withTabActivation
-    // so the scrape tab is briefly the active tab during the op. Chrome's
+    // so the scrape tab is the active tab during the op (RC56: activation is
+    // sticky — it persists after the op; landing on the user's last-clicked
+    // tab happens when the scrape tab closes). Chrome's
     // renderer only produces compositor frames for the active tab; both the
     // IntersectionObserver-based growth probe AND the CDP trusted-wheel
     // fallback depend on frame production. This is the one layer that the
