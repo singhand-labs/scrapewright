@@ -600,6 +600,26 @@ interface ExtensionResponse {
 
 由于每个 HTTP 请求相互独立，连接不存在"建立/维持/断开"状态机；瞬时故障（service worker 重启、网络抖动、Chrome 版本升级）只会导致单次 `fetch()` 失败，下一次重试即可恢复。
 
+### 6.5 结果中的页面记录（`pages[]` 与 `sourcePageId`）
+
+任务结果中的 `pages[]` 记录采集过程中见过的每一个网页，每条字段如下：
+
+| 字段 | 说明 |
+|------|------|
+| `id` | `page_NNNN_HHHHHHHH` 格式。`NNNN` 为捕获顺序；`HHHHHHHH` 为 `SHA-256(url + 归一化HTML)` 前 8 位十六进制。同 URL 同内容（归一化后）的两次捕获生成相同 ID 并去重；URL 或内容不同则生成新条目 |
+| `url` / `title` | 捕获时的页面地址与 `<title>` |
+| `capturedAt` | Unix 毫秒时间戳 |
+| `sourceStepId` | 捕获此页面的步骤 |
+| `captureReason` | `step_iteration`（步骤执行后）或 `subtab_pre_destroy`（`$openTab` 子标签页关闭前） |
+| `hash` | 完整 64 字符 SHA-256 |
+| `html` | 清洗后的页面 HTML，单页上限 80,000 字符（超限截断并加 `[TRUNCATED N chars]` 前缀，`truncated: true`） |
+
+**容量上限：** 列表默认上限 50 个唯一页面；超出时保留前 5 + 后 45 条，`pagesTruncated` 报告丢弃数量。`config.maxPagesCaptured` 可调；`config.capturePages: false` 关闭。
+
+**字节预算：** 每个任务的 HTML 总载荷默认上限 2MB（控制 `chrome.storage.local` 增长）。触及上限时丢弃中间条目（首尾两条始终保留）。`config.maxPagesBytes` 可调（`0` = 关闭字节预算，仅用条数上限）。扩展声明了 `unlimitedStorage` 权限，浏览器 10MB 配额不是硬上限，字节预算防止长时运行服务失控占盘。
+
+**`sourcePageId`：** 对象数组结果中的每条记录自动附加 `sourcePageId` 指向其数据来源页面；扁平对象结果在顶层附加。非破坏性——脚本自己设置了该字段时编排器保留脚本值。
+
 ## 7. 采集脚本 DSL
 
 ### 7.1 执行环境
@@ -795,6 +815,45 @@ RC20 的"激活→操作→恢复"在背靠背操作间产生激活/恢复抖动
 
 MV3 的 Service Worker 会在 30s 无活动后休眠。通过 `chrome.alarms.create('keepalive', { periodInMinutes: 0.4 })` 每 24s 唤醒一次，检查连接状态并在断开时重连。
 
+### 12.4 分布式部署（多实例）
+
+单实例同时只执行一个任务（§14）。更高吞吐的扩展方式是**多实例并行**：每个实例独立的 Chrome Profile（Cookie/登录态）、独立的 host.js 进程、独立的执行队列，**零扩展改造**——利用 Chrome 原生多进程能力。Chrome MV3 限制每个扩展只能有 1 个 offscreen document（脚本执行面），扩展内部并发需重写整个脚本执行路径，成本极高；多 Profile 方案完全绕开。
+
+```
+调度平台
+  ├── POST localhost:8760/api/v1/services/{name}/execute  → 实例 0
+  ├── POST localhost:8761/api/v1/services/{name}/execute  → 实例 1
+  └── POST localhost:8762/api/v1/services/{name}/execute  → 实例 2
+```
+
+**本地多实例**（`deploy/scrapewright-manager.sh`）：
+
+```bash
+vim deploy/config.yaml        # basePort=8760, baseDebugPort=9220, instances=5, headless=false
+cd deploy && ./scrapewright-manager.sh start    # 启动 N 个实例
+./scrapewright-manager.sh status
+./scrapewright-manager.sh stop
+```
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `basePort` | `8760` | 起始 HTTP 端口（实例 N 使用 basePort+N） |
+| `baseDebugPort` | `9220` | 起始 Chrome 远程调试端口 |
+| `instances` | `5` | 实例数量 |
+| `headless` | `false` | 无头模式（不需要登录态时设 true） |
+
+**Docker / K8s**（`deploy/Dockerfile`、`deploy/k8s.yaml`）：
+
+```bash
+docker build -f deploy/Dockerfile -t scrapewright .
+kubectl apply -f deploy/k8s.yaml
+kubectl scale deployment scrapewright --replicas=10
+```
+
+每个 Pod 运行 1 个 Chrome + 1 个 host.js，`/health` 作存活/就绪探针。需登录态的站点：本地部署用有头模式人工登录一次（Cookie 持久化到 Profile）；K8s 把已登录 Profile 打包为 PersistentVolume 挂载。
+
+**吞吐量参考：** 1 实例约 2 任务/分（2GB 内存）；5 实例约 10 任务/分（8GB）；10 实例约 20 任务/分（16GB）；K8s 20 Pod 约 40 任务/分。
+
 ## 13. 扩展与二次开发指南
 
 ### 13.1 添加新的 $ API
@@ -899,13 +958,53 @@ cd native-host && node host.js --port=19880
 
 修改扩展代码后，在 `chrome://extensions/` 页面点击扩展卡片上的刷新图标即可生效。修改后台服务代码后执行 `./bin/scrapewright restart` 重启服务即可，无需重启 Chrome —— 因为 HTTP 是无状态的，扩展下一次 `fetch()` 就会连上新进程。
 
-**Windows (PowerShell):**
-```powershell
-# 强制重启服务
-./bin/scrapewright restart
-```
+## 16. 方案对比与选型
 
-**Linux / macOS:**
-```bash
-./bin/scrapewright restart
-```
+AI 辅助的网页采集/浏览器自动化有四条技术路线，Scrapewright 定位在**客户端扩展**路线，与其他三条互补而非替代。核心区别是**用谁的浏览器**：Scrapewright 复用用户日常 Chrome（含登录态/Cookie/指纹）；其他方案通常用单独部署的 headless/服务器端 Chromium（干净 Profile）。
+
+| 路线 | 代表产品 | 运行位置 | 登录态处理 |
+|------|---------|---------|-----------|
+| 服务器端 headless 采集 | Firecrawl、Crawl4AI、Spider | 服务器上的 Chromium | 需注入 Cookie 或提供 auth token |
+| 服务器端 AI agent | Skyvern、Browser-use | 服务器上的浏览器 | 自动化登录（表单填充 + 验证码识别） |
+| 开发者编程式 | Claude Code + Puppeteer/Playwright | 开发者本机或 CI 服务器 | 手动处理（Cookie 注入/登录脚本） |
+| 客户端扩展（本项目） | **Scrapewright** | 用户日常使用的 Chrome | **天然复用用户已登录的会话** |
+
+### 16.1 vs CDP + AI 编程（Claude Code / Cursor + Puppeteer/Playwright）
+
+开发者可以用 AI 编程工具为目标网站写 Puppeteer/Playwright 爬虫——最灵活的路线，但工作模式不同：
+
+| 维度 | Scrapewright | CDP + AI 编程 |
+|------|---------------|--------------|
+| 使用方式 | AI 向导配置一次 → HTTP API 服务，长期复用 | 每个网站编写/维护一份代码 |
+| 谁能用 | 非技术用户（向导式标注 + 生成） | 需要开发者 |
+| 浏览器 | 用户日常 Chrome（共享 Profile/登录态/指纹） | headless 或单独 Chromium（干净 Profile） |
+| 登录态 | 直接复用用户已登录会话，零额外成本 | 需注入 Cookie / 写登录脚本 / 处理验证码 |
+| 反爬检测 | 扩展内容脚本，无 `navigator.webdriver` 痕迹 | CDP 可被 `navigator.webdriver` 等指纹检测 |
+| 灵活性 | 步骤图 DSL（结构化，覆盖大多数采集逻辑） | 任意代码（最灵活，可拦截/Mock 网络请求） |
+| 可维护性 | auto-fix（脚本失败时 LLM 自动修复选择器和逻辑） | 代码维护（AI 可辅助，但需人工 review） |
+| 部署 | 用户本机 Chrome + 轻量 Node.js host | 服务器 Node + Chromium |
+| 并发 | 单浏览器串行（水平扩展需多实例，§12.4） | 多 headless 实例并行 |
+| 适合场景 | 低频高价值、需登录态、非技术用户可用 | 大规模、灵活逻辑、开发者团队、CI/CD 集成 |
+
+Scrapewright 的优势：配置一次即成服务 + 登录态天然复用 + 非技术用户可用 + auto-fix 自愈。
+CDP + AI 编程的优势：代码完全灵活 + Git 版本控制 + 服务器端高并发 + 精细网络层控制。
+
+### 16.2 vs 同类 AI 采集产品
+
+| 产品 | 类型 | 运行位置 | 登录态 | LLM 角色 | 与 Scrapewright 的核心差异 |
+|------|------|---------|--------|---------|---------------------------|
+| [Firecrawl](https://www.firecrawl.dev/) | 托管 API | 云服务器 | 需提供 Cookie/token | LLM 提取结构化数据 | 我们复用用户登录态 + 生成可执行步骤图脚本（非仅 HTML→Markdown 提取）；本机部署（数据不出本地） |
+| [Crawl4AI](https://github.com/unclecode/crawl4ai) | 开源 Python 库 | 服务器（Playwright） | 支持传 Cookie | LLM 提取为 Markdown | 我们是客户端扩展 + AI 向导（非技术可用 vs 需 Python 开发者） |
+| [Skyvern](https://www.skyvern.com/) | AI agent | 服务器 | 自动化登录（表单+验证码） | LLM 驱动每步操作 | 我们是配置式 HTTP 服务（vs 交互式 agent）；复用真实登录态（vs 模拟登录） |
+| [Browser-use](https://browser-use.com/) | AI agent | 服务器 | 手动 | LLM 实时驱动浏览器 | 我们配置一次成服务可重复调用（vs 每次交互式驱动） |
+| [AgentQL](https://agentql.com/) | 智能 selector API | 服务器 | 需处理 | LLM 选择元素 | 我们提供完整步骤图编排 + auto-fix（vs 单点 selector 智能） |
+
+> 以上信息基于各产品 2025–2026 年公开文档；产品迭代快，建议交叉验证最新状态。
+
+### 16.3 客观定位
+
+**擅长：** 需要登录态的采集（企业内部系统、付费内容平台、个人账户数据——零登录成本是最大差异化：Skyvern 需模拟登录、Firecrawl 需注入 Cookie、CDP 需写登录脚本）；非技术用户自定义采集（可视化标注 + HTTP API 服务化）；低频高价值查询（AI 问答采集、机构/人物信息查询、知识图谱构建）；复杂页面结构（iframe 嵌套、动态加载、流式内容）。
+
+**不擅长：** 大规模高并发采集（万级 URL，单浏览器瓶颈——用 Firecrawl / Crawl4AI / CDP 多实例）；7×24 无人值守（依赖用户 Chrome 运行——用服务器端方案）；精细网络层控制（拦截/Mock 请求、自定义 header——用 CDP）。
+
+**一句话定位：** 不是通用爬虫引擎，而是"个人/团队浏览器里的 AI 采集助手"——把"打开浏览器 → 登录 → 操作 → 提取"配置成可被外部程序调用的 HTTP 服务。

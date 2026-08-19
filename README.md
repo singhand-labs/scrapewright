@@ -1,712 +1,390 @@
 # <img src="logo.png" width="44" style="vertical-align:middle" alt="Scrapewright"> Scrapewright
 
-**The open-source, self-hosted AI web scraper that turns natural language into HTTP API services.**
+**Describe the data you want in plain language — AI turns it into an HTTP endpoint you can call again and again.**
 
 **English** | [简体中文](./README.zh-CN.md)
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](./LICENSE)
-![Node](https://img.shields.io/badge/Node.js-%3E%3D18-green)
+![Node](https://img.shields.io/badge/Node.js-%3E%3E18-green)
 ![Chrome](https://img.shields.io/badge/Chrome-MV3-brightgreen)
 ![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
-> Developed and maintained by [Hunan Singhand Intelligent Data Technology Co.,Ltd](https://www.singhand.com) · Released under [**GPLv3**](./LICENSE)
+Open source · Self-hosted · Your data never leaves your machine
 
-Scrapewright is an **LLM-powered web scraping platform** and **AI web crawler** that converts plain-English descriptions of what you want to extract into reusable, HTTP-callable scraping services. Describe the target page and fields in natural language, and a large language model analyzes the site, generates the scraping script, runs it inside a real Chrome browser, and returns structured JSON — no CSS selectors to hand-write, no Playwright or Puppeteer code to maintain. The same step-graph engine also doubles as a lightweight **web test automation** / browser automation tool: click, type, wait, assert, branch — declarative, replayable, self-healing.
+Ever found yourself copying data out of web pages over and over — a logged-in dashboard, search results, a news feed? The traditional answer is writing a scraper: learn a framework, hunt for CSS selectors, fight anti-bot walls, and redo everything when the site redesigns. **Scrapewright hands this job to AI**: describe what you want in the wizard, and the AI opens the target page, analyzes its structure, generates the scraping script, and test-runs it on the spot. Once you're happy with the result, it becomes a standard HTTP endpoint that any program, script, or AI agent can call.
 
-Because it runs as a **Chrome Extension (Manifest V3)** plus a lightweight **Node.js background service (HTTP)**, Scrapewright executes inside a genuine browser — its core advantage for hard targets. JavaScript-heavy SPAs, asynchronously loaded (XHR / fetch / streaming) content, deeply nested same-origin iframes, and complex multi-step interactions (pagination, detail-page drill-down, modal dismissal, login flows) all just work, with full DOM rendering and no `navigator.webdriver` footprint. Your logins, cookies, and fingerprint carry over as-is, so login-required and anti-bot-protected sites work out of the box. Every scraping service is exposed through a standard **REST / HTTP API** with JSON Schema I/O, so it drops cleanly into any backend, data pipeline, RPA flow, or AI agent stack.
+It runs inside the **Chrome you already use every day**, which gives it three structural advantages:
 
-**Great for:** login-required sites (intranets, paid content, SaaS dashboards), AI chatbot answer capture, paginated list + detail-page crawling, iframe-heavy government / portal pages, low-frequency high-value queries, knowledge-graph building, web test automation, and no-code data extraction for non-developers.
+- **Your logins just work** — scrape sites you're already logged into; no cookie juggling, no scripted logins
+- **What you see is what it gets** — JS-rendered content, nested iframes, pagination, hover popups, even per-item detail pages
+- **No automation footprint** — no headless-browser fingerprints; it's a real browser
 
-Design whitepaper: **[English](docs/technical-whitepaper.en.md)** · [中文](docs/technical-whitepaper.md)
+When a script fails, the AI reads the DOM snapshot and repairs it automatically. After a site redesign, let it repair again. Every service can also export a Markdown API doc to hand to other AI agents.
 
-> ### Quick start
+> **60-second start**
 >
-> After loading the `extension/` folder at `chrome://extensions/` (Developer mode → Load unpacked):
+> 1. At `chrome://extensions/`, enable Developer mode → "Load unpacked" → select the project's `extension/` folder
+> 2. `./bin/scrapewright install` to install the background service (`.\bin\scrapewright.cmd install` on Windows)
+> 3. Extension icon → Options → Settings → configure your LLM → **+ New Service** → describe what you want → test → deploy
 >
-> ```bash
-> ./bin/scrapewright install     # install host as an OS background service (default port 8765)
-> ```
->
-> Then open the extension → **Options** → configure your LLM (OpenAI / Moonshot Kimi / Anthropic / GLM) → **+ New Service** → describe what you want to scrape in natural language → test → deploy → call it from anywhere:
+> Now any program can call it:
 >
 > ```bash
 > curl -X POST http://localhost:8765/api/v1/services/my-service/execute \
->   -H "X-API-Key: $SCRAPEWRIGHT_API_KEY" -H "Content-Type: application/json" \
+>   -H "X-API-Key: dev-key" -H "Content-Type: application/json" \
 >   -d '{"input": {"query": "hello"}}'
 > ```
 
+For internals, see the [Technical Whitepaper](docs/technical-whitepaper.en.md) (architecture, modules, customization guide).
+
 ## Table of Contents
 
-- [Background: Why Scrapewright](#background-why-scrapewright)
-- [Core Features](#core-features)
+- [Background](#background)
 - [System Requirements](#system-requirements)
-- [Installation](#installation) · [Host Status](#host-status) · [Troubleshooting](#troubleshooting--faq)
-- [HTTP API](#http-api) · [Script DSL](#script-dsl)
-- [Comparison with Other Solutions](#comparison-with-other-solutions)
-- [Distributed Deployment](#distributed-deployment) · [Technical Architecture](#technical-architecture)
+- [Quick Start](#quick-start) — [Installation](#installation) · [Create a Scraping Service](#create-a-scraping-service) · [Manage Services](#manage-services) · [Call a Service](#call-a-service)
+- [scrapewright CLI Reference](#scrapewright-cli-reference)
+- [Scraping Service Interface (HTTP API)](#scraping-service-interface-http-api)
+- [Troubleshooting](#troubleshooting)
+- [Core Features](#core-features) — [Why It's Valuable](#why-its-valuable) · [Comparison](#comparison) · [Typical Scenarios](#typical-scenarios)
 - [Copyright & License](#copyright--license)
 
-## Background: Why Scrapewright
+## Background
 
-Traditional web scraping tools and browser-automation frameworks — Scrapy, Puppeteer, Playwright, Selenium, BeautifulSoup, Cheerio — share several pain points that make web data extraction harder than it should be:
+Traditional tools for extracting web data (Scrapy, Selenium, Puppeteer/Playwright, BeautifulSoup) share the same pain points:
 
-1. **High development cost** — every target site needs hand-written CSS selectors, pagination handling, and anti-bot countermeasures. Maintenance cost keeps accumulating as sites change.
-2. **Painful dynamic pages** — SPA frameworks (React, Vue, Angular), nested iframes, and JavaScript-rendered content are hard to reach via plain HTTP requests or simple HTML parsers.
-3. **Poor reusability** — scraping scripts are typically bespoke per site; they don't transfer to structurally similar pages, so the spider you wrote for site A won't help with site B.
-4. **No unified interface** — different scraping jobs have no standardized input/output shape, which makes orchestration, scheduling, and scaling hard.
+| Pain point | What it looks like |
+|------------|--------------------|
+| **Expensive to build** | Hand-written selectors, pagination and anti-bot handling per site; every redesign restarts the maintenance clock |
+| **Dynamic pages** | React/Vue SPAs, nested iframes, async-loaded content are out of reach for HTTP + HTML parsing |
+| **Not reusable** | The spider you wrote for site A won't help with structurally similar site B |
+| **No uniform interface** | Every job has its own I/O shape; orchestration goes nowhere |
 
-How Scrapewright answers each — this is what makes it a different kind of **AI web scraper**:
+Scrapewright's answer: **let AI configure the scrape inside a real browser, and standardize the result as an HTTP service.**
 
-- **AI-driven** — describe *what* you want in natural language; the LLM analyzes page structure, generates the scraping script, and self-repairs on errors. Think "AI agent for the browser," but config-time instead of run-time.
-- **Real browser environment** — runs as a Chrome extension inside a full browser, with first-class JavaScript rendering, iframe traversal, and dynamic loading. No headless-detected footprint.
-- **Standardized API** — every scraping service is callable through a uniform HTTP API, with JSON Schema constraints on both input and output. The same shape every time, no matter how gnarly the target site.
-- **Visual no-code wizard** — a 5-phase flow takes you from describing the requirement to a tested deployment, no code required. Non-technical users can ship a scraper.
-
-
-## Core Features
-
-| Feature | Description |
-|---------|-------------|
-| **AI script generation** | Provide the target URL + a natural-language description; the LLM analyzes the page and generates a scraping script |
-| **Multi-step orchestration** | Conditional branches, loops, pagination, and per-detail-page crawling are first class |
-| **Cross-iframe scraping** | Automatically searches and scrapes same-origin iframe content (e.g. nested announcement pages on government sites) |
-| **Deep detail-page scraping** | The `$openTab` API opens each list item's detail page in turn and extracts structured data |
-| **AI auto-repair** | On execution failure, captures a DOM snapshot, analyzes the error, and asks the LLM to rewrite the script before retrying |
-| **Element intent annotation** | Visually annotate page elements with intent (click / type / extract / wait), specify wait conditions (appear / disappear / content-stable) and output field mappings, so the LLM consumes your intent directly instead of guessing |
-| **Service management** | Import/export, enable/disable, edit existing services, and one-click export of Markdown API docs (handy for sharing or feeding to AI agents) |
-| **Unified ops CLI** | `./bin/scrapewright` (install / start / stop / restart / status / doctor / logs) manages the host as an OS background service across Linux, macOS, and Windows |
-| **Async execution queue** | Concurrent requests queue automatically and return asynchronously; well suited to batch scraping |
-| **Hovercard enrichment** | `$hover` / `$extractWithHover` enrich list records with fields that only appear in hover popovers — a trusted CDP mouse event opens the card, multi-signal detection captures the portal-rendered DOM before it closes, and one atomic call keeps record↔hovercard alignment |
-| **Obfuscated-DOM stable selectors** | Generates selectors that survive hashed CSS-module classes and auto-generated attributes (`mount_0_0_*`, `react-aria-*`, `x1y2z3`-style hashes are stripped or skipped, anonymous wrapper chains collapsed) — robust on modern component-framework sites |
-| **Prompt-size resilience** | Element HTML fed to the LLM is tier-cleaned and budget-capped (per-element and total), so huge rendered feeds can't blow up the model's context |
+- **AI-driven** — describe the need in natural language; the LLM analyzes the page, writes the script, and self-repairs on failure
+- **Real browser** — a Chrome extension running in your daily browser, reusing logins, cookies, and fingerprint as-is
+- **Uniform interface** — JSON Schema on both input and output; the external shape never changes
+- **Visual wizard** — a 5-phase flow from description to deployment; non-technical users can do it
 
 ## System Requirements
 
 - Chrome browser (latest stable)
 - Node.js >= 18
+- An API key for any LLM: OpenAI / Moonshot Kimi / Anthropic / GLM (or any OpenAI-compatible endpoint)
 
-## Installation
+## Quick Start
 
-### 1. Load the Chrome Extension
+### Installation
 
-1. Open Chrome and navigate to `chrome://extensions/`
-2. Toggle on **Developer mode** in the top-right corner
+#### 1. Load the Chrome Extension
+
+1. Open Chrome and go to `chrome://extensions/`
+2. Toggle on **Developer mode** (top-right)
 3. Click **Load unpacked** and select the project's `extension/` directory
-4. After it loads, note the **Extension ID** shown on the extension card (e.g. `dmbnejooocdfjmnebpglhedhfcgncgdl`) — for your own reference; the host install does not require it
 
-### 2. Install the Host
+#### 2. Install the Host
 
-The host runs as an OS background service so the extension can reach it over HTTP. It auto-starts at login, restarts on crash, and survives Chrome restarts and version updates.
-
-**Linux / macOS:**
+The host is a lightweight Node.js service that exposes the HTTP API. One command registers it as an OS background service — auto-start at login, auto-restart on crash:
 
 ```bash
-./bin/scrapewright install                    # default port 8765
-./bin/scrapewright install --port=9123        # custom port
+./bin/scrapewright install                    # Linux / macOS, default port 8765
+.\bin\scrapewright.cmd install                # Windows (PowerShell)
+./bin/scrapewright install --port=9123        # custom port (all platforms)
 ```
 
-**Windows (PowerShell):**
+Then open the extension → **Options** → **Server Configuration**, confirm the port matches (default `8765`), and click **Test Connection**. A **Connected** badge means you're done.
 
-```powershell
-.\bin\scrapewright.cmd install                # default port 8765
-.\bin\scrapewright.cmd install --port=9123
+#### 3. Configure the LLM
+
+1. Extension icon → **Options** → **Settings** (top-right)
+2. Under **LLM Configuration**, fill in:
+   - **Provider / Model / API Key** — any of OpenAI, Moonshot / Kimi, Anthropic, GLM
+   - **Base URL** (optional) — custom or OpenAI-compatible gateway; must include the path prefix (e.g. `https://api.openai.com/v1`)
+   - **Max output tokens** (default 8192) — raise for reasoning models that burn "thinking" tokens and truncate output
+   - **Timeout** (default 120s) — raise for slow models or very long prompts
+3. Click **Save**
+
+### Create a Scraping Service
+
+On the Options page click **+ New Service** to enter the 5-phase AI wizard:
+
+| Phase | What you do |
+|-------|-------------|
+| **1. Target & requirements** | Enter the target URL + a one-line requirement (which fields, pagination or not). Click **Research**; the AI opens the page, analyzes it, and drafts the service |
+| **2. Name & steps** | Name the service; review/edit the AI-generated steps (each step is a script you can tweak) |
+| **3. Interface definition** | Confirm input/output JSON Schemas and the test input |
+| **4. Test run** | Watch the live step-by-step execution: open page → each step → success/failure |
+| **5. Results** | Inspect the extracted data. Not happy? Hit **Auto-Fix** and let the AI repair it — or deploy |
+
+<p align="center">
+  <img src="docs/phase1.png" width="49%" alt="Wizard phase 1: describe target and requirements">
+  <img src="docs/phase2.png" width="49%" alt="Wizard phase 2: review and edit steps">
+</p>
+<p align="center">
+  <em>Phase 1 describes the need in natural language; phase 2 reviews the AI-generated step graph</em>
+</p>
+
+<p align="center">
+  <img src="docs/phase3.png" width="49%" alt="Wizard phase 3: interface definition">
+  <img src="docs/phase4.png" width="49%" alt="Wizard phase 4: step-by-step test execution">
+</p>
+<p align="center">
+  <em>Phase 3 confirms the I/O shapes; phase 4 watches each step execute live</em>
+</p>
+
+<p align="center">
+  <img src="docs/phase5.png" width="80%" alt="Wizard phase 5: results and auto-fix">
+</p>
+<p align="center">
+  <em>Phase 5 inspects results; on failure the AI can auto-fix (Auto-Fix)</em>
+</p>
+
+During Research the AI works in rounds: explore the page structure, discover candidate selectors, confirm each one against real element HTML, then generate the step scripts — each round builds on the previous round's verified results. If the page needs a login or other human action, the wizard surfaces a banner with the matching button.
+
+When a test fails, **Auto-Fix** kicks in: the AI gets the error, the DOM snapshot, and diagnostics data, rewrites the script, and retests; the best-scoring attempt across the loop is kept. In phase 5 you can also describe the problem in your own words (e.g. "publish date is missing") and the AI fixes accordingly. See [Whitepaper §5](docs/technical-whitepaper.en.md) for how it works.
+
+### Manage Services
+
+Everything lives on the Options page:
+
+- **Enable / Disable** — toggle a service
+- **Edit** — back to the wizard (pre-filled)
+- **API Doc** — view / download the service's Markdown API documentation
+- **Export / Import / Export All** — JSON import & export for moving between machines
+- **Delete** — remove a service
+
+The bottom of the page is **Execution History** (last 20 runs: time, service, success/failure).
+
+<p align="center">
+  <img src="docs/option.png" width="90%" alt="Service management page (Options)">
+</p>
+<p align="center">
+  <em>Options page: host status, service list, execution history</em>
+</p>
+
+### Call a Service
+
+Once deployed, a service is a local HTTP endpoint. Three steps:
+
+```bash
+# 1. Submit a job (returns a jobId immediately)
+JOB_ID=$(curl -s -X POST http://localhost:8765/api/v1/services/my-service/execute \
+  -H "X-API-Key: dev-key" -H "Content-Type: application/json" \
+  -d '{"input": {"query": "wireless mouse"}}' | jq -r '.jobId')
+
+# 2. Wait for the result (blocks until done)
+curl -s "http://localhost:8765/api/v1/jobs/$JOB_ID/wait?timeout=120" \
+  -H "X-API-Key: dev-key" | jq '.job.result'
 ```
 
-This registers a systemd user unit (Linux), a launchd LaunchAgent (macOS), or a scheduled task at logon (Windows). The port is baked into the service file at install time — re-running `install` with a new port rewrites the service file and restarts the host.
+**Not a programmer? Hand it to an AI agent.** Every service can export its Markdown API doc via the **API Doc** button on the Options page. Give that document to agents like Hermes Agent, WorkBuddy, or Lobster, and they can call your scraping service directly — you say "look up X for me," the agent makes the call.
 
-`scrapewright` command overview (full text at `./bin/scrapewright help`):
+Full interface details (parameters, states, error codes, page records): see [Scraping Service Interface (HTTP API)](#scraping-service-interface-http-api).
+
+## scrapewright CLI Reference
+
+`./bin/scrapewright` (Windows: `.\bin\scrapewright.cmd`, same commands):
 
 | Command | Purpose |
 |---------|---------|
-| `scrapewright install [--port=N]` | Install the host as an OS service and start it (first choice on a new machine) |
-| `scrapewright status` | Show service state, `/health`, and port match |
-| `scrapewright doctor` | Full diagnostic: service installed? running? `/health` reachable? port match? path drift? orphaned manifest? |
-| `scrapewright start` / `stop` / `restart` | Service control (use `restart` after editing `host.js`) |
-| `scrapewright run [--port=N]` | Run host in the foreground (for debugging / one-off runs) |
-| `scrapewright logs [-f]` | Tail the host log in real time |
-| `scrapewright throttle on\|off\|status` | Toggle Chrome launch flags that disable renderer throttling for lazy-load sites (see [Scraping lazy-load sites](#scraping-lazy-load-sites-facebook-infinite-scroll)) |
-| `scrapewright uninstall` | Stop and remove the OS service |
+| `install [--port=N]` | Install the host as an OS background service and start it |
+| `status` | Service state + `/health` + port match |
+| `doctor` | Full diagnostics (service, port, path drift, leftover artifacts) |
+| `start` / `stop` / `restart` | Service control |
+| `run [--port=N]` | Run in the foreground (debugging) |
+| `logs [-f]` | Tail the host log |
+| `throttle on / off / status` | Toggle Chrome anti-throttling launch flags (for [lazy-load sites](#lazy-load--infinite-scroll-sites-under-scrape)) |
+| `uninstall` | Stop and remove the service |
 
-> On Windows use `.\bin\scrapewright.cmd ...` (same commands).
+## Scraping Service Interface (HTTP API)
 
-After install, open the extension → **Options** → under **Server Configuration**, verify the port field matches what you installed with (default `8765`), then click **Test Connection**. The host status badge should read **Connected**.
-
-> **Note:** If you later **move or rename the project directory**, the service file still points at the old absolute path. Re-run `./bin/scrapewright install` from the new location to rewrite it. `./bin/scrapewright doctor` detects this drift and prints the fix command.
-
-### 3. Configure the LLM
-
-1. Click the extension icon → the **Options** (service management) page opens
-2. Click **Settings** (top-right) → under **LLM Configuration**, fill in:
-   - **Provider** — pick an LLM provider (OpenAI / Moonshot / Kimi / Anthropic / GLM)
-   - **Model** — model name (e.g. `gpt-4o`, `kimi-for-coding`, `glm-5.1`)
-   - **API Key** — your API key
-   - **Base URL** (optional) — custom API endpoint, useful for corporate proxies or OpenAI-compatible gateways. Must include the path prefix (e.g. `https://api.openai.com/v1`), not just the domain
-   - **Max output tokens** — completion budget for the model (default 8192, range 1024–131072). Raise it for reasoning models that spend tokens on invisible thinking before answering
-   - **Timeout** — per-request timeout in seconds (default 120, range 10–600). Raise it for slow providers or very long prompts
-3. Click **Save**
-
-### 4. Create a Scraping Service
-
-On the Options page click **+ New Service** to enter the AI wizard (5 phases):
-
-| Phase | Description |
-|-------|-------------|
-| **Phase 1: Target URL & Requirements** | Enter the target site URL plus three requirement fields — input parameters, page operations & data to collect, and (optional) output structure. Click **Research** (or Ctrl+Enter); the AI analyzes the page and generates a draft service. Each field has an inline placeholder example. If the AI needs help, an interactive exploration/annotation panel appears inline. |
-| **Phase 2: Service Name & Steps** | Name the service; review and **edit** the AI-generated step graph (each step is a script with success/failure transitions). |
-| **Phase 3: I/O Schema & Test Input** | Confirm input/output parameter shapes (JSON Schema) and edit the test input data. |
-| **Phase 4: Execute Test (step by step)** | Watch the live step-by-step execution log (open page → load → each step → success/failure). |
-| **Phase 5: Results** | Review test results. On failure, choose **Auto-Fix** (AI self-repair) or **Deploy Anyway** (deploy despite the error). |
-
-During Research, the wizard drives the LLM through several rounds: page exploration (does the page need interaction to reach the content?), candidate-selector discovery from your annotations and the DOM, selector confirmation against real element HTML, and finally step-script generation. Each round feeds the previous round's verified results, so the generated steps rest on selectors that were confirmed against the live page.
-
-#### Auto-Fix loop dynamics
-
-When **Auto-Fix** runs (either automatically after a test failure or manually with a user hint), the loop now behaves as follows:
-
-- **Best-of-N retention** — every iteration is scored against the output schema (required-field coverage × list density × per-item field fill). If a later iteration regresses, the wizard silently restores the highest-scoring script instead of committing the degraded one. No user action required.
-- **User-feedback ACK protocol** — when you provide a hint, it appears as Section 1 of the LLM prompt with an explicit ACK/NACK requirement. The model must output `// ACK: <paraphrased hint>` or `// NACK: <reason>` before writing code. If the model NACKs the same hint twice, the prompt escalates with a "you may be wrong" note.
-- **Intervention banners** — instead of silently exhausting retries, the wizard surfaces specific "I need human help" conditions as a banner above the results:
-  - **Needs annotation** — extraction returns empty and the failing step has no annotations. Action: *Go to annotation*.
-  - **Needs annotation relax** — annotations exist but their selectors match nothing on the live page (often caused by positional `:nth-of-type` paths that don't generalize). Action: *Go to annotation*.
-  - **Needs login** — the page redirected to a login flow. Action: *Open target tab*.
-  - **Rate limited** — the LLM provider returned 429. Action: *Open settings*.
-  - **Page state stale** — the same error has persisted across multiple attempts and the captured snapshot is over 60 seconds old. Action: *Refresh tab*.
-
-  Each banner has an **Ignore and continue** button to dismiss the intervention and let autoFix keep trying.
-
-### 5. Manage Services
-
-In the **Services** section of the Options page:
-
-- **Enable / Disable** — toggle a service on or off
-- **Edit** — return to the wizard to edit (pre-filled with the existing config)
-- **Export** — export a single service as JSON
-- **Export All** — export every service
-- **Import** — import services from JSON (duplicates are skipped automatically)
-- **Delete** — delete a service
-
-The bottom of the Options page shows **Execution History** (the most recent 20 runs) with timestamp, service name, and success/failure status.
-
-## Host Status
-
-There is one transport between the host and the extension: **HTTP long-polling**. The extension pulls requests via `GET /api/v1/extension/poll` and replies via `POST /api/v1/extension/response`. The host is brought up by the OS service supervisor (installed in step 2) — no manual start needed.
-
-The extension's options page shows one of two states:
-
-- **Connected** — host reachable at the configured port.
-- **Disconnected** — host not running, or the port doesn't match.
-
-If disconnected, check in order:
-
-1. `./bin/scrapewright status` — is the service installed and running?
-2. The port in the extension's options page under **Server Configuration** matches what `scrapewright install --port=N` was given (default `8765`).
-3. `./bin/scrapewright doctor` — full diagnostics.
-
-You can also run the host in the foreground for debugging:
-
-```bash
-./bin/scrapewright run                       # default port 8765
-./bin/scrapewright run --port=19880          # custom port
-```
-
-> **Note:** In foreground mode, make sure the port on the extension's options page matches the `--port` argument.
-
-## Scraping lazy-load sites (Facebook, infinite scroll)
-
-Scrapewright drives a real Chrome tab, and by default that tab is opened as a **background tab** (`chrome.tabs.create({active:false})`) so your keyboard focus stays in your editor. For most sites this is fine. For sites that lazy-load content via `IntersectionObserver` — Facebook feeds, infinite-scroll lists, virtualized tables — background tabs hit Chrome's renderer-level frame-production throttle: no compositor frame is produced for a non-visible tab, so `IntersectionObserver` callbacks never fire and lazy-load never triggers.
-
-Scrapewright addresses this in five stacked layers (each targets a distinct throttle or filter mechanism, so they combine rather than replace):
-
-| Layer | What it does | What it does NOT fix |
-|-------|--------------|----------------------|
-| **visibility-keepalive** (on by default) | Injects an override into the page's MAIN world so `document.visibilityState='visible'`, `document.hidden=false`, `document.hasFocus()=true`, plus a `requestAnimationFrame` keep-alive loop. Fixes page-JS that gates further loading on its own visibility check. | Does NOT cause Chrome's compositor to produce frames for a non-visible tab. |
-| **Enhanced Scraping Mode** (opt-in, options page) | Gates the **trusted-wheel fallback** (layer 4 below). The `debugger` permission it relies on is declared at install time (Chrome does not allow it as an optional permission). | Does NOT by itself cause Chrome's compositor to produce frames for a non-visible tab — that's what layer 5 is for. |
-| **Chrome launch flags** (necessary for IO-driven lazy-load) | `scrapewright throttle on` rewrites your Chrome launcher (Linux `.desktop`, macOS wrapper AppleScript app, Windows `.lnk` shortcuts) to add `--disable-background-timer-throttling`, `--disable-backgrounding-occluded-windows`, `--disable-renderer-backgrounding`, `--disable-features=CalculateNativeWinOcclusion`. Then restart Chrome. | Requires a Chrome restart and applies globally to all Chrome windows. Alone does NOT fix sites whose lazy-load loader filters on `event.isTrusted`. |
-| **Trusted-wheel fallback** (opt-in via Enhanced Scraping Mode) | When programmatic `scrollBy` stalls (no content growth), dispatches CDP `Input.dispatchMouseEvent({type:'mouseWheel'})` through a transient `chrome.debugger` attach. CDP input runs through Chrome's real input pipeline, producing an `event.isTrusted=true` wheel event — the only programmatic way to do so. Triggered automatically by `$scrollToBottom` when the page's loader rejects JS-only scroll. | Requires Enhanced Scraping Mode on. Only fires on stall — sites that respond to programmatic scroll are unaffected. |
-| **Sticky tab activation** (default on) | Before input-required DOM ops (scroll / hover / hover-dismiss), the scrape tab is activated and STAYS active — Chrome produces compositor frames only for the active tab of the focused window. If you manually switch away, the next op re-activates it; when the scrape tab auto-closes, focus lands back on the tab you last clicked. | Momentarily makes the scrape tab the visible one during those ops (your typing focus can be interrupted briefly). |
-
-**Recommended setup for IO-driven lazy-load sites:**
-
-```bash
-./bin/scrapewright throttle on       # rewrite Chrome launcher with the four flags
-# Quit Chrome completely (Cmd-Q / Ctrl-Shift-Q) and relaunch, then scrape normally.
-./bin/scrapewright throttle status   # verify the flags are in place
-```
-
-To undo (e.g. before a Chrome update or to use a different launcher):
-
-```bash
-./bin/scrapewright throttle off      # restore the original launcher from backup
-```
-
-The Enhanced Scraping Mode toggle on the options page enables the **trusted-wheel fallback** (layer 4) — when scroll stalls, this layer dispatches a real wheel event via `chrome.debugger`'s CDP channel so that sites filtering on `event.isTrusted` (programmatic `scrollBy` is non-trusted) still load more content. Enable it for any IO-driven lazy-load site. The toggle grants no new Chrome permission at click time: the `debugger` permission is declared at install time (Chrome does not allow it as an optional permission), so the toggle only controls whether the extension actually uses it at runtime.
-
-## Troubleshooting / FAQ
-
-### Service won't start
-
-Run `./bin/scrapewright doctor`. Common causes:
-
-- **Node not found** — the service file pins an absolute path to `node`; if you upgraded Node or moved it, re-run `./bin/scrapewright install` to rewrite the path.
-- **Port already in use** — pick another with `./bin/scrapewright install --port=N` (and update the port in the extension's options page to match).
-- **Project moved** — the service file points at the old absolute path; re-run `./bin/scrapewright install` from the new directory. Doctor detects this drift and prints the fix command.
-- **Orphaned Native Messaging artifacts from a previous install** — doctor detects and removes leftover manifests automatically, with a one-line notice.
-
-### Port mismatch
-
-If the host is listening on `:9123` but the extension is polling `:8765`, the options page shows **Disconnected**. Update the port field under **Server Configuration** to match what you installed with, then click **Test Connection**.
-
-### Tail the host log
-
-```bash
-./bin/scrapewright logs -f                       # all platforms (CLI)
-tail -f ~/Library/Logs/scrapewright/host.log      # macOS
-tail -f ~/.cache/scrapewright/host.log            # Linux
-Get-Content -Wait "$env:LOCALAPPDATA\scrapewright\host.log" -Tail 20   # Windows
-```
-
-Boot crashes (before the logger initializes) land in `startup-error.log` next to `host.log` — that's the real stack trace behind an opaque startup failure.
-
-### Picking up code changes
-
-After editing `host.js`, run `./bin/scrapewright restart` to bring up the new code. After editing extension files, reload the extension at `chrome://extensions/` (click the refresh icon on the extension card).
-
-## HTTP API
-
-All execution is **asynchronous**. A call returns a `jobId` immediately; fetch the result via the status or wait endpoint. Concurrent requests queue automatically; only one job runs at a time.
+All endpoints live under `http://localhost:{port}/api/v1` and require the `X-API-Key` header, except `/health`.
 
 ### Configuration
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `--port=N` | `8765` | HTTP listen port (CLI argument) |
-| `SCRAPEWRIGHT_PORT` | `8765` | HTTP listen port (env var; CLI argument takes precedence) |
-| `SCRAPEWRIGHT_API_KEY` | `dev-key` | API authentication key |
+| `--port=N` / `SCRAPEWRIGHT_PORT` | `8765` | Listen port (CLI argument wins) |
+| `SCRAPEWRIGHT_API_KEY` | `dev-key` | API key (change this in production) |
 
-You can also change the port dynamically from the extension Options page under **Server Configuration** (applies immediately, no restart needed).
-
-### Authentication
-
-All external API requests must carry the `X-API-Key` header.
-
-### Endpoints
-
-#### Submit a job
+### Submit a job
 
 ```
 POST /api/v1/services/{service-name}/execute
 ```
 
-Request body:
+Body: `{ "input": { ... } }` (match the service's inputSchema)
+
+Response (202):
+
 ```json
-{ "input": { "query": "hello" } }
+{ "success": true, "jobId": "xxxxxxxx-xxxx-…", "status": "queued", "queuePosition": 1 }
 ```
 
-Response (202 Accepted):
-```json
-{
-  "success": true,
-  "jobId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-  "status": "queued",
-  "queuePosition": 1
-}
-```
+Concurrent requests queue automatically; `queuePosition` is your place in line (0 = executing).
 
-> Concurrent requests queue automatically; `queuePosition` is your place in line (0 = currently executing).
-
-#### Wait for result (blocking)
+### Get the result
 
 ```
-GET /api/v1/jobs/{jobId}/wait?timeout=120
+GET /api/v1/jobs/{jobId}/wait?timeout=120   # blocks until done (timeout seconds, max 300)
+GET /api/v1/jobs/{jobId}                    # returns current state immediately
 ```
 
-Long-polls until the job completes. `timeout` is in seconds (max 300, default 120).
+Response once the job finishes (abridged):
 
-Response (once the job finishes):
 ```json
 {
   "success": true,
   "job": {
-    "id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-    "status": "completed",
+    "id": "…", "status": "completed",
     "result": {
-      "thinking": "...",
-      "answer": "...",
       "posts": [
-        {
-          "author": "...",
-          "likes": "4",
-          "sourcePageId": "page_0007_a1b2c3d4"
-        }
+        { "author": "…", "likes": "4", "sourcePageId": "page_0007_a1b2c3d4" }
       ]
     },
-    "pages": [
-      {
-        "id": "page_0007_a1b2c3d4",
-        "url": "https://example.com/...",
-        "title": "Example",
-        "capturedAt": 1717123456789,
-        "sourceStepId": "extract",
-        "captureReason": "step_iteration",
-        "hash": "a1b2c3d4...",
-        "html": "<html>...</html>",
-        "truncated": false
-      }
-    ],
-    "pagesTruncated": 0,
-    "error": null,
-    "queuePosition": 0,
-    "createdAt": 1717700000000,
-    "startedAt": 1717700001000,
-    "completedAt": 1717700015000
+    "pages": [ { "id": "page_0007_a1b2c3d4", "url": "…", "title": "…", "html": "…" } ],
+    "error": null
   }
 }
 ```
 
-#### `pages[]`
+- `result` — the structured data, shaped by the service's outputSchema
+- `pages[]` — every page seen during the scrape (URL, title, cleaned HTML), for verifying where data came from
+- `sourcePageId` — stamped on every extracted record, linking it to its source page
 
-Every web page the scraper saw during execution. Each entry includes:
-
-- `id` — `page_NNNN_HHHHHHHH` format. `NNNN` is the capture sequence (0001, 0002, …); `HHHHHHHH` is the first 8 hex chars of `SHA-256(url + normalizedHtml)`. Two captures of the same URL with identical normalized content produce the same ID and are deduplicated; different URL or different content produces a new entry.
-- `url`, `title` — page location and `<title>` at capture time.
-- `capturedAt` — Unix millisecond timestamp.
-- `sourceStepId` — which step captured this page.
-- `captureReason` — `step_iteration` (after a step runs) or `subtab_pre_destroy` (before an `$openTab` sub-tab is closed).
-- `hash` — full 64-char SHA-256 hex of the dedup input.
-- `html` — cleaned page HTML. Capped at 80,000 chars per page (over-cap: truncated with a `[TRUNCATED N chars]` prefix, `truncated: true`).
-- `truncated` — boolean, true if HTML was over the cap.
-
-**Size cap:** the list is capped at 50 unique pages by default. If a scrape produces more, the first 5 and last 45 entries are kept; `pagesTruncated` reports how many were dropped. Override via `config.maxPagesCaptured`. Disable entirely via `config.capturePages: false`.
-
-**Byte budget:** to bound `chrome.storage.local` growth, the total HTML payload per job is capped at 2MB by default. When the cap is hit, middle entries are dropped (first + last are always preserved so you keep both initial state and most-recent activity). Override via `config.maxPagesBytes` (set to `0` to disable the byte budget entirely; count cap alone applies). The extension declares the `unlimitedStorage` permission so the 10MB browser quota is not a hard ceiling, but the byte budget prevents runaway disk usage on long-running services.
-
-#### `sourcePageId` on extracted records
-
-Every record in an array-of-objects result (e.g. each element of `result.posts[]`) gets an auto-attached `sourcePageId` linking back to the page its data was extracted from. Flat-object results (`{answer: "..."}`) get a top-level `sourcePageId`. Stamping is non-destructive — if your script sets `sourcePageId` itself, the orchestrator preserves it.
-
-#### Query job status
-
-```
-GET /api/v1/jobs/{jobId}
-```
-
-Same response shape as `/wait`, but non-blocking — returns the current state immediately.
-
-#### Cancel a job
-
-```
-POST /api/v1/jobs/{jobId}/cancel
-```
-
-Only queued jobs (`status: "queued"`) can be cancelled. In-flight jobs cannot be cancelled.
-
-#### List all jobs
-
-```
-GET /api/v1/jobs
-```
-
-#### List all services
-
-```
-GET /api/v1/services
-```
-
-Response:
-```json
-{
-  "success": true,
-  "services": [
-    {
-      "name": "baidu-chat",
-      "displayName": "Baidu AI Chat",
-      "targetUrl": "https://chat.baidu.com",
-      "enabled": true,
-      "inputSchema": { ... },
-      "outputSchema": { ... }
-    }
-  ]
-}
-```
-
-#### Manage service steps
+### Other endpoints
 
 | Method | Path | Purpose |
-|---|---|---|
-| POST | `/api/v1/services/{name}/steps` | Add a step to a service (body: a step object; returns 201) |
-| PUT | `/api/v1/services/{name}/steps/{stepId}` | Update a step (script / flow fields such as `onSuccess`, `condition`) |
-| DELETE | `/api/v1/services/{name}/steps/{stepId}` | Delete a step — the chain is automatically relinked and re-validated |
+|--------|------|---------|
+| POST | `/api/v1/jobs/{jobId}/cancel` | Cancel a queued job |
+| GET | `/api/v1/jobs` | List all jobs |
+| GET | `/api/v1/services` | List all services (with I/O schemas) |
+| POST | `/api/v1/services/{name}/steps` | Add a step to a service |
+| PUT | `/api/v1/services/{name}/steps/{stepId}` | Update a step (script / flow fields) |
+| DELETE | `/api/v1/services/{name}/steps/{stepId}` | Delete a step (chain auto-relinks) |
+| GET | `/health` | Health check (no auth; for LB/K8s probes) |
 
-#### Health check
+### Job states and errors
 
-```
-GET /health
-```
-
-No API key required. Use it for load-balancer, K8s, or scheduler liveness probes.
-
-Response:
-```json
-{
-  "status": "ok",
-  "extensionConnected": true,
-  "queueLength": 0,
-  "queueRunning": false,
-  "uptime": 3600
-}
-```
-
-| Field | Description |
-|-------|-------------|
-| `status` | `"ok"` = extension connected; `"degraded"` = extension not connected |
-| `extensionConnected` | Whether the extension is currently connected to the host via HTTP long-polling |
-| `queueLength` | Number of queued jobs |
-| `queueRunning` | Whether a job is currently executing |
-| `uptime` | Host process uptime in seconds |
-
-### curl example
-
-```bash
-# Submit a job
-JOB_ID=$(curl -s -X POST http://localhost:8765/api/v1/services/my-service/execute \
-  -H "X-API-Key: dev-key" \
-  -H "Content-Type: application/json" \
-  -d '{"input": {"query": "hello"}}' | jq -r '.jobId')
-
-echo "Job ID: $JOB_ID"
-
-# Wait for the result (blocks until completion)
-curl -s "http://localhost:8765/api/v1/jobs/$JOB_ID/wait?timeout=60" \
-  -H "X-API-Key: dev-key" | jq .
-
-# Or poll status manually
-curl -s "http://localhost:8765/api/v1/jobs/$JOB_ID" \
-  -H "X-API-Key: dev-key" | jq '.job.status'
-```
-
-### Job states
-
-| State | Description |
-|-------|-------------|
-| `queued` | Waiting in the queue |
-| `running` | Currently executing |
-| `completed` | Finished successfully; result is in the `result` field |
-| `failed` | Failed; error details in the `error` field |
+| State | Meaning |
+|-------|---------|
+| `queued` / `running` | Waiting in queue / executing |
+| `completed` | Success; result is in `result` |
+| `failed` | Failed; reason is in `error` |
 | `cancelled` | Cancelled |
 
-### Error types
+| Error | Meaning |
+|-------|---------|
+| `ELEMENT_NOT_FOUND` / `SCRIPT_ERROR` | Element missing / script error — the AI attempts auto-repair |
+| `SCRIPT_TIMEOUT` | Script timed out (default 60s) |
+| `LOGIN_REQUIRED` | Target site needs login; log in and retry |
+| `Extension timeout` | Host can't reach the extension — check it's loaded and ports match |
 
-| Error | Description |
-|-------|-------------|
-| `ELEMENT_NOT_FOUND` | Target element not found; the AI will attempt to auto-repair the script |
-| `SCRIPT_ERROR` | Script execution error; the AI will attempt to auto-repair the script |
-| `SCRIPT_TIMEOUT` | Script execution timed out (default 60s) |
-| `LOGIN_REQUIRED` | The target site requires login; the user must log in manually and retry |
-| `Extension timeout` | Host cannot reach the extension — verify the extension is loaded and the port matches |
+## Troubleshooting
 
-## Script DSL
+**Always start with the Host Status card at the top of the Options page** (red = host unreachable) and `./bin/scrapewright doctor`.
 
-User scripts run inside a sandboxed iframe and interact with the target page through async APIs:
+### Host unreachable (Disconnected)
 
-| API | Description |
-|-----|-------------|
-| `$(selector)` | Wait up to 30s, return element data object |
-| `$exists(selector, timeoutMs?)` | Check if a VISIBLE element exists; for polling loops |
-| `$click(selector)` | Click an element |
-| `$type(selector, text)` | Type text (INPUT/TEXTAREA/contenteditable) |
-| `$extract(selector, attr?, timeoutMs?)` | Read textContent or attribute (incl. `outerHTML`/`innerHTML` DOM properties); fails fast (5s default) |
-| `$wait(selector, delayMs?)` | Wait for element (MutationObserver, up to 30s) |
-| `$check(selector, property)` | Read element property (e.g. `checked`) |
-| `$count(selector)` | Count matches across main document + same-origin iframes |
-| `$list(selector)` | All matching element data objects (main doc + iframes) |
-| `$extractList(containerSel, fieldMap, opts?)` | Multi-field list extraction in ONE call — fields stay aligned per record |
-| `$extractListMulti(containerSel, fieldMap, opts?)` | Like `$extractList` but each field value is an ARRAY of all matches (pick in JS when CSS can't disambiguate) |
-| `$clickInList(containerSel, subSel, opts?)` | Click a sub-element inside EVERY container (e.g. expanders), with settle delay |
-| `$waitForStable(selector, opts?)` | Poll until content stops changing — streaming/AI-answer completion |
-| `$scrollBy(deltaY, selector?)` | Scroll window or inner container by N pixels |
-| `$scrollToBottom(selector?)` | Scroll to bottom; `scrolled:false` = feed exhausted |
-| `$scrollIntoView(selector)` | Reveal an element (e.g. "Load more") before clicking |
-| `$hover(anchorSelector, popoverSelector?, opts?)` | Trusted hover at an anchor, capture the popover HTML before it closes (`opts.index` addresses the Nth match) |
-| `$extractWithHover(containerSel, fieldMap, opts?)` | Atomic extract + hover enrichment per container — record↔hovercard alignment kept by one atomic per-container call |
-| `$openTab(url, functionBody)` | Open a detail page in a new tab, scrape, return its result |
+1. `./bin/scrapewright status` — is the service installed and running?
+2. Does the port under **Server Configuration** on the Options page match the install (default `8765`)?
+3. `./bin/scrapewright doctor` — full diagnostics; most problems come with the fix command.
 
-All selectors support the iframe prefix `iframe<iframe-css>::<inner-css>` (chainable for nested iframes) to pin a specific iframe on multi-iframe pages.
+### Service won't start
 
-Scripts also have access to injected context:
-- `__input__` — parameters passed in by the external caller
-- `__stepResults__` — a map of return values from all steps, keyed by step id
-- `__lastResult__` — the previous step's return value
+- **Node not found** — after upgrading/moving Node, re-run `./bin/scrapewright install` to rewrite the path
+- **Port in use** — pick another with `./bin/scrapewright install --port=N` (update the extension side too)
+- **Project directory moved** — re-run `install` from the new location; doctor detects path drift
 
-## Comparison with Other Solutions
-
-AI-assisted web scraping / browser automation falls into four technical lanes. Scrapewright sits in the **client-side extension** lane, complementary to the other three rather than a replacement.
-
-> **Honest premise:** every approach needs a browser. The difference is **whose browser** — Scrapewright reuses the user's daily Chrome (with login state / cookies / fingerprint intact); the others typically use a separately deployed headless / server-side Chromium (clean profile).
-
-### The four lanes
-
-| Lane | Representative products | Runs in | Login state |
-|------|-------------------------|---------|-------------|
-| **Server-side headless scraping** | Firecrawl, Crawl4AI, Spider | Chromium on a server | Requires Cookie / auth token injection |
-| **Server-side AI agent** | Skyvern, Browser-use | Browser on a server | Automated login (form fill + CAPTCHA solving) |
-| **Developer coding-style** | Claude Code + Puppeteer/Playwright | Developer's machine or CI | Manual (Cookie injection / login script) |
-| **Client-side extension (this project)** | **Scrapewright** | The user's daily Chrome | **Natively reuses the user's logged-in session** |
-
-### vs CDP + AI coding (Claude Code / Cursor + Puppeteer/Playwright)
-
-Developers can use AI coding tools like Claude Code to write Puppeteer/Playwright scrapers for a target site. That's the most flexible option, but the working mode and fit differ:
-
-| Dimension | Scrapewright | CDP + AI coding |
-|-----------|--------------|-----------------|
-| **Usage** | One-time AI wizard config → HTTP API service, reused long-term | Write / maintain code for every site |
-| **Who can use it** | Non-technical users (wizard-style annotation + generation) | Developers only |
-| **Browser** | User's daily Chrome (shared profile / login / fingerprint) | Headless or standalone Chromium (clean profile) |
-| **Login state** | Directly reuses the user's logged-in session, zero extra cost | Needs Cookie injection / login scripts / CAPTCHA handling |
-| **Anti-bot detection** | Extension content script; no `navigator.webdriver` footprint | CDP can be fingerprinted via `navigator.webdriver` and similar signals |
-| **Flexibility** | Step-graph DSL (structured, covers most scraping logic) | Arbitrary code (most flexible; can intercept / mock network requests) |
-| **Maintainability** | auto-fix (LLM repairs selectors and logic on script failure) | Code maintenance (Claude Code can help, but human review needed) |
-| **Deployment** | User's local Chrome + lightweight Node.js host | Server-side Node + Chromium |
-| **Concurrency** | Single browser, serialized (scale out via multi-instance) | Multiple headless instances in parallel |
-| **Best for** | Low-frequency high-value jobs, login-required, non-technical users | Large-scale, flexible logic, dev teams, CI/CD integration |
-
-**Scrapewright's edge:** configure once → reusable service (not "write code every time") + native login-state reuse + non-technical users + auto-fix self-healing.
-**CDP + AI coding's edge:** fully flexible code + Git versioning + server-side concurrency + fine-grained network-layer control.
-
-### vs sibling AI scraping products
-
-| Product | Type | Runs in | Login state | LLM role | Core difference vs Scrapewright |
-|---------|------|---------|-------------|----------|---------------------------------|
-| **[Firecrawl](https://www.firecrawl.dev/)** | Hosted API | Cloud server | Cookie / token required | LLM extracts structured data | We reuse the user's login + generate executable step-graph scripts (not just HTML→Markdown extraction); local deploy (data never leaves the machine) |
-| **[Crawl4AI](https://github.com/unclecode/crawl4ai)** | Open-source Python library | Server (Playwright) | Cookie passthrough supported | LLM extracts as Markdown | We're a client-side extension + AI wizard (non-technical users vs Python developers) |
-| **[Skyvern](https://www.skyvern.com/)** | AI agent | Server | Automated login (form + CAPTCHA) | LLM drives every step | We're a configurable HTTP service (vs interactive agent); reuse real login state (vs simulated login) |
-| **[Browser-use](https://browser-use.com/)** | AI agent | Server | Manual | LLM drives the browser in real time | We configure once into a repeatable service (vs interactive driving every time) |
-| **[AgentQL](https://agentql.com/)** | Smart selector API | Server | Handled separately | LLM picks elements | We provide full step-graph orchestration + auto-fix (vs single-point selector intelligence) |
-
-> The above is based on each product's 2025–2026 public docs. These products iterate fast — cross-check the current state.
-
-### Where Scrapewright honestly fits
-
-**Good at (recommended):**
-- **Login-required scraping** — enterprise intranets, paid content platforms, personal account data. Your already-logged-in browser just works, zero login cost (this is the biggest differentiator: Skyvern has to simulate login, Firecrawl needs Cookie injection, CDP needs a login script).
-- **Non-technical users customizing scrapes** — AI wizard (visual element intent annotation) + HTTP API service, no code.
-- **Low-frequency high-value queries** — AI Q&A capture, organization / person lookups, knowledge graph construction. Not mass crawling — automation of specific queries.
-- **Complex page structures** — iframe nesting (e.g. government announcements), dynamic loading, streaming content (AI answers via `$waitForStable`).
-
-**Not good at (use something else):**
-- **Large-scale high-concurrency scraping** (10k+ URLs) — single-browser bottleneck; use Firecrawl / Crawl4AI / multi-instance CDP.
-- **24x7 unattended** — depends on the user's Chrome running; use a server-side approach.
-- **Fine-grained network-layer control** — intercept / mock requests, custom headers; use CDP (Puppeteer / Playwright).
-
-**One-line positioning:** Scrapewright is not a general-purpose crawler engine — it's an **"AI scraping assistant inside your team's browser"**. It turns the repetitive "open browser → log in → operate → extract" workflow into an HTTP service callable by external programs. It shines for login-required, low-frequency high-value scraping that non-technical users also want to do.
-
-## Distributed Deployment
-
-Scrapewright supports parallel multi-instance deployment; each instance uses an independent Chrome Profile for complete isolation. The core idea: **zero extension changes** — N independent Chrome instances, each with its own Profile and port.
-
-### Architecture
-
-```
-Scheduler
-  ├── POST localhost:8760/api/v1/services/{name}/execute  → instance 0
-  ├── POST localhost:8761/api/v1/services/{name}/execute  → instance 1
-  └── POST localhost:8762/api/v1/services/{name}/execute  → instance 2
-```
-
-Each instance has its own Chrome Profile (cookies / login state), its own `host.js` process, and its own execution queue.
-
-### Why not make the extension itself concurrent?
-
-Chrome MV3 limits each extension to **1 offscreen document** (the script execution surface) — a hard platform-level cap. Making the extension internally concurrent would require rewriting the entire script execution path at very high cost. The multi-Profile approach instead uses Chrome's native multi-process capability: every instance is fully independent, with no extension code changes at all.
-
-### Local multi-instance deployment
+### Read the host log
 
 ```bash
-# 1. Edit the config
-vim deploy/config.yaml
-
-# 2. Start 5 instances
-cd deploy && ./scrapewright-manager.sh start
-
-# 3. Check status
-./scrapewright-manager.sh status
-
-# 4. Stop all instances
-./scrapewright-manager.sh stop
+./bin/scrapewright logs -f                        # all platforms
+tail -f ~/Library/Logs/scrapewright/host.log      # macOS
+tail -f ~/.cache/scrapewright/host.log            # Linux
 ```
 
-Config keys (`deploy/config.yaml`):
+The full stack trace of a boot crash lands in `startup-error.log` next to `host.log`.
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `basePort` | `8760` | Starting HTTP port (instance N uses basePort+N) |
-| `baseDebugPort` | `9220` | Starting Chrome remote debugging port |
-| `instances` | `5` | Number of instances |
-| `headless` | `false` | Headless mode (set to true when no login state is needed) |
+### Lazy-load / infinite-scroll sites under-scrape
 
-### Docker / K8s deployment
+Background tabs are throttled by Chrome, so `IntersectionObserver` lazy-loading (social feeds, infinite-scroll lists) may never trigger. Two measures:
 
 ```bash
-# Build the image
-docker build -f deploy/Dockerfile -t scrapewright .
-
-# K8s deployment
-kubectl apply -f deploy/k8s.yaml
-
-# Scale to 10 instances
-kubectl scale deployment scrapewright --replicas=10
+./bin/scrapewright throttle on    # write anti-throttling flags into the Chrome launcher
+# Quit Chrome completely, relaunch, then scrape normally
+./bin/scrapewright throttle status  # verify; throttle off undoes it
 ```
 
-In K8s each Pod runs 1 Chrome + 1 `host.js`, with the `/health` endpoint serving as liveness and readiness probe. The scheduler reaches the service via `scrapewright.default.svc.cluster.local:8765`.
+Also enable **Enhanced Scraping Mode** under Options → Settings (dispatches real wheel events when scrolling stalls). How the five-layer anti-throttle stack works: [Whitepaper §9](docs/technical-whitepaper.en.md).
 
-### Login-required sites
+### Code changes not taking effect
 
-- **Local deployment:** start Chrome in headed mode → manually log in to the target site → cookies persist into the Profile directory
-- **K8s deployment:** pack the logged-in Profile as a PersistentVolume and mount it into the Pod
+- Extension code → reload at `chrome://extensions/` (refresh icon on the card)
+- Host code → `./bin/scrapewright restart`
 
-### Throughput reference
+## Core Features
 
-| Instances | Throughput | Memory |
-|-----------|------------|--------|
-| 1 | ~2 jobs/min | 2GB |
-| 5 | ~10 jobs/min | 8GB |
-| 10 | ~20 jobs/min | 16GB |
-| K8s 20 Pods | ~40 jobs/min | Per-node |
+### Why It's Valuable
 
-## Technical Architecture
+- **Configure once, reuse forever** — the scrape logic becomes a service, not a script you rewrite each time; schemas on both ends mean callers never care what the target site looks like
+- **Zero-cost login state** — reuses your logged-in browser session; the hardest thing for server-side tools to replicate
+- **Self-healing** — auto-fix analyzes failures and rewrites scripts at config time and at runtime; after a redesign, repair beats rewrite
+- **Data stays local** — self-hosted; the LLM only sees page structure at configuration time (never needed at run time)
+- **Non-technical friendly** — wizard-driven with visual element annotation; annotate your intent and the AI generates from it
+- **More than scraping** — the same step-graph engine works as lightweight web test automation (click, type, wait, assert, branch)
+- **Scalable** — multi-instance parallel deployment (Docker/K8s) when you need more throughput (see [Whitepaper §12](docs/technical-whitepaper.en.md))
 
-Scrapewright is built on four pillars: a **three-layer bridge** (external program → Node.js HTTP Host → Chrome Extension → target page) that works around MV3's ban on HTTP servers in the service worker; a **step-graph orchestration engine** (`StepOrchestrator`) that runs a directed graph of named steps with conditional edges, polling/retry budgets, and cross-step data flow; **sandboxed script execution** via a single offscreen-hosted iframe where `eval`/`new Function` is permitted under MV3 CSP; and a **single HTTP-based transport** (long-polling both ways) between the Host and the extension, with the Host running as a per-OS background service. AI-driven script generation, step-level auto-repair, and visual element annotation sit on top of these pillars.
+Under the hood: cross-iframe scraping, per-item detail-page drill-down (`$openTab`), hovercard field enrichment (`$extractWithHover`), streaming-content completion detection (`$waitForStable`), obfuscation-resistant stable selectors, and prompt-size guards. The script DSL has 19 primitives — all AI-generated and hand-editable; see [Whitepaper §7](docs/technical-whitepaper.en.md).
 
-See the [Technical Whitepaper](docs/technical-whitepaper.en.md) for the full architecture, data flow, module reference, file-tree layout, Chrome MV3 constraint table, and development/contributing guide.
+### Comparison
 
+AI-assisted scraping has four technical lanes. The core question is **whose browser**:
+
+| Lane | Representatives | Browser | Login state |
+|------|-----------------|---------|-------------|
+| Server-side headless | Firecrawl, Crawl4AI | Chromium on a server | Cookie injection required |
+| Server-side AI agent | Skyvern, Browser-use | Browser on a server | Scripted login |
+| Developer coding-style | Claude Code + Playwright | Local/CI headless | Manual handling |
+| **Client-side extension (this project)** | **Scrapewright** | **Your daily Chrome** | **Natively reused** |
+
+Differences vs sibling products:
+
+| Product | Core difference |
+|---------|-----------------|
+| [Firecrawl](https://www.firecrawl.dev/) | We reuse your login state + generate executable scripts (not just HTML→Markdown); deployed locally |
+| [Crawl4AI](https://github.com/unclecode/crawl4ai) | We're a visual wizard (no Python required) |
+| [Skyvern](https://www.skyvern.com/) / [Browser-use](https://browser-use.com/) | We configure once into a repeatable service (vs interactive driving every time) |
+| [AgentQL](https://agentql.com/) | We provide full multi-step orchestration + auto-fix (vs single-point selector intelligence) |
+
+**Fits you, if:** you need login-required scraping (intranets / paid content / SaaS dashboards), non-technical users customizing scrapes, low-frequency high-value queries (AI answers, people/org lookups, knowledge graphs), or complex pages (iframes, dynamic loading, streaming output).
+
+**Doesn't fit, if:** you need 10k+ URL high-concurrency scraping (single-browser bottleneck — use server-side), 24×7 unattended operation (depends on your Chrome running), or network-layer intercept/mock (use Playwright/CDP).
+
+**One-line positioning: an AI scraping assistant living in your (or your team's) browser — turning "open browser → log in → operate → extract" into an HTTP service programs can call.**
+
+### Typical Scenarios
+
+- **Internal reporting automation** — logged-in admin panels and dashboards; pull key metrics on schedule
+- **AI answer collection** — send identical prompts to multiple AI chatbots, gather answers for evals or knowledge bases
+- **List + detail pages** — search results / product lists with per-item detail drill-down for complete fields
+- **Portal / government sites** — announcements buried in nested iframes
+- **Intelligence & knowledge graphs** — low-frequency high-value lookups on people, orgs, topics
+- **Web test automation** — step graphs as "click → type → assert" regression tests
 
 ## Copyright & License
 
-This project is released under the [**GNU General Public License v3.0**](./LICENSE) (GPLv3).
+This project is open-sourced under [**GPLv3**](./LICENSE).
 
-### What you can and must do
+- Free to use, modify, and distribute, including commercially
+- Distribution or SaaS-style deployment **must** open-source your derivative code under the same GPLv3 terms
+- Preserve the original copyright and license notices
 
-- ✅ **Allowed:** free use, copy, modification, and distribution of this program, including commercial use
-- ✅ **Allowed:** integrate this project into a larger system
-- ⚠️ **Obligation:** any distribution or public deployment **must** include the complete corresponding source code
-- ⚠️ **Obligation:** modified versions **must** be open-sourced under the same license (GPLv3), with clear marking of changes
-- ⚠️ **Obligation:** preserve the original copyright and license notices
-
-> In short: **you can use it free, sell it, and build on it — but the moment you distribute (including SaaS-style network deployment), you must open-source your derivative code under the same terms.**
-
-The full legal text is in [`LICENSE`](./LICENSE). Official GPLv3 summary: <https://www.gnu.org/licenses/gpl-3.0.html>
-
-### Developer
-
-**Hunan Singhand Intelligent Data Technology Co.,Ltd**
-Website: <https://www.singhand.com>
-
-### Contributing
-
-Bug reports and feature suggestions via Issues are welcome. Submitting a Pull Request means you agree to release your contribution under the GPLv3 license.
+Full legal text in [`LICENSE`](./LICENSE). Bug reports and PRs are welcome (submitting means agreeing to release under GPLv3).
 
 ```text
 Scrapewright
-Copyright (C) 2026 Hunan Singhand Intelligent Data Technology Co.,Ltd
+Copyright (C) 2026 Scrapewright Contributors
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by

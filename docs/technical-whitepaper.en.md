@@ -601,6 +601,26 @@ interface ExtensionResponse {
 
 Because each HTTP request is independent, there is no connection "establish / maintain / disconnect" state machine. A transient failure (service worker restart, network blip, Chrome version upgrade) takes down at most a single `fetch()`; the next retry recovers.
 
+### 6.5 Page Records in Results (`pages[]` and `sourcePageId`)
+
+The `pages[]` array in a job's result records every web page seen during the scrape. Fields per entry:
+
+| Field | Description |
+|-------|-------------|
+| `id` | `page_NNNN_HHHHHHHH` format. `NNNN` is the capture sequence; `HHHHHHHH` is the first 8 hex chars of `SHA-256(url + normalizedHtml)`. Two captures of the same URL with identical normalized content produce the same ID and are deduplicated; different URL or content produces a new entry |
+| `url` / `title` | Page location and `<title>` at capture time |
+| `capturedAt` | Unix millisecond timestamp |
+| `sourceStepId` | Which step captured this page |
+| `captureReason` | `step_iteration` (after a step runs) or `subtab_pre_destroy` (before an `$openTab` sub-tab is closed) |
+| `hash` | Full 64-char SHA-256 hex |
+| `html` | Cleaned page HTML, capped at 80,000 chars per page (over-cap: truncated with a `[TRUNCATED N chars]` prefix, `truncated: true`) |
+
+**Size cap:** the list is capped at 50 unique pages by default; if a scrape produces more, the first 5 and last 45 entries are kept and `pagesTruncated` reports how many were dropped. Override via `config.maxPagesCaptured`; disable via `config.capturePages: false`.
+
+**Byte budget:** the total HTML payload per job is capped at 2MB by default (bounding `chrome.storage.local` growth). When the cap is hit, middle entries are dropped (first + last are always preserved). Override via `config.maxPagesBytes` (`0` disables the byte budget; the count cap alone applies). The extension declares `unlimitedStorage`, so the browser's 10MB quota is not a hard ceiling, but the byte budget prevents runaway disk usage on long-running services.
+
+**`sourcePageId`:** every record in an array-of-objects result gets an auto-attached `sourcePageId` linking back to its source page; flat-object results get a top-level one. Non-destructive — if the script sets `sourcePageId` itself, the orchestrator preserves the script's value.
+
 ## 7. Scraping Script DSL
 
 ### 7.1 Execution Environment
@@ -796,6 +816,45 @@ Data is stored in `chrome.storage.local`:
 
 An MV3 Service Worker sleeps after 30s of inactivity. A `chrome.alarms.create('keepalive', { periodInMinutes: 0.4 })` wakes it every 24s to check connection state and reconnect on disconnect.
 
+### 12.4 Distributed Deployment (Multi-Instance)
+
+A single instance executes one job at a time (§14). The path to higher throughput is **parallel multi-instance deployment**: each instance gets its own Chrome Profile (cookies / login state), its own `host.js` process, and its own execution queue — **zero extension changes**, riding Chrome's native multi-process capability. Chrome MV3 caps each extension at 1 offscreen document (the script execution surface), so making the extension internally concurrent would mean rewriting the entire script execution path at very high cost; the multi-Profile approach sidesteps it entirely.
+
+```
+Scheduler
+  ├── POST localhost:8760/api/v1/services/{name}/execute  → instance 0
+  ├── POST localhost:8761/api/v1/services/{name}/execute  → instance 1
+  └── POST localhost:8762/api/v1/services/{name}/execute  → instance 2
+```
+
+**Local multi-instance** (`deploy/scrapewright-manager.sh`):
+
+```bash
+vim deploy/config.yaml        # basePort=8760, baseDebugPort=9220, instances=5, headless=false
+cd deploy && ./scrapewright-manager.sh start    # launch N instances
+./scrapewright-manager.sh status
+./scrapewright-manager.sh stop
+```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `basePort` | `8760` | Starting HTTP port (instance N uses basePort+N) |
+| `baseDebugPort` | `9220` | Starting Chrome remote-debugging port |
+| `instances` | `5` | Number of instances |
+| `headless` | `false` | Headless mode (set true when no login state is needed) |
+
+**Docker / K8s** (`deploy/Dockerfile`, `deploy/k8s.yaml`):
+
+```bash
+docker build -f deploy/Dockerfile -t scrapewright .
+kubectl apply -f deploy/k8s.yaml
+kubectl scale deployment scrapewright --replicas=10
+```
+
+Each Pod runs 1 Chrome + 1 `host.js`, with `/health` as liveness/readiness probe. For login-required sites: in local deployment, start Chrome headed and log in once manually (cookies persist into the Profile); in K8s, pack the logged-in Profile as a PersistentVolume and mount it.
+
+**Throughput reference:** 1 instance ≈ 2 jobs/min (2GB RAM); 5 ≈ 10 jobs/min (8GB); 10 ≈ 20 jobs/min (16GB); K8s 20 Pods ≈ 40 jobs/min.
+
 ## 13. Extension & Customization Guide
 
 ### 13.1 Adding a New `$` API
@@ -900,13 +959,53 @@ The service starts automatically at user login; on crash the OS supervisor (syst
 
 After editing extension files, reload the extension at `chrome://extensions/` (click the refresh icon on the extension card). After editing background-service code, run `./bin/scrapewright restart` to restart the service — no Chrome restart is needed, because HTTP is stateless: the extension's next `fetch()` hits the new process.
 
-**Windows (PowerShell):**
-```powershell
-# Force-restart the service
-./bin/scrapewright restart
-```
+## 16. Solution Comparison and Positioning
 
-**Linux / macOS:**
-```bash
-./bin/scrapewright restart
-```
+AI-assisted web scraping / browser automation has four technical lanes; Scrapewright sits in the **client-side extension** lane, complementary to the other three. The core question is **whose browser**: Scrapewright reuses the user's daily Chrome (login state / cookies / fingerprint intact); the others typically use a separately deployed headless / server-side Chromium (clean profile).
+
+| Lane | Representative products | Runs in | Login state |
+|------|-------------------------|---------|-------------|
+| Server-side headless scraping | Firecrawl, Crawl4AI, Spider | Chromium on a server | Requires Cookie / auth token injection |
+| Server-side AI agent | Skyvern, Browser-use | Browser on a server | Automated login (form fill + CAPTCHA solving) |
+| Developer coding-style | Claude Code + Puppeteer/Playwright | Developer's machine or CI | Manual (Cookie injection / login script) |
+| Client-side extension (this project) | **Scrapewright** | The user's daily Chrome | **Natively reuses the user's logged-in session** |
+
+### 16.1 vs CDP + AI coding (Claude Code / Cursor + Puppeteer/Playwright)
+
+Developers can use AI coding tools to write Puppeteer/Playwright scrapers — the most flexible lane, but with a different working model:
+
+| Dimension | Scrapewright | CDP + AI coding |
+|-----------|--------------|-----------------|
+| Usage | One-time AI wizard config → HTTP API service, reused long-term | Write / maintain code for every site |
+| Who can use it | Non-technical users (wizard-style annotation + generation) | Developers only |
+| Browser | User's daily Chrome (shared profile / login / fingerprint) | Headless or standalone Chromium (clean profile) |
+| Login state | Directly reuses the user's logged-in session, zero extra cost | Needs Cookie injection / login scripts / CAPTCHA handling |
+| Anti-bot detection | Extension content script; no `navigator.webdriver` footprint | CDP can be fingerprinted via `navigator.webdriver` and similar signals |
+| Flexibility | Step-graph DSL (structured, covers most scraping logic) | Arbitrary code (most flexible; can intercept / mock network requests) |
+| Maintainability | auto-fix (LLM repairs selectors and logic on script failure) | Code maintenance (AI can help, but human review needed) |
+| Deployment | User's local Chrome + lightweight Node.js host | Server-side Node + Chromium |
+| Concurrency | Single browser, serialized (scale out via multi-instance, §12.4) | Multiple headless instances in parallel |
+| Best for | Low-frequency high-value jobs, login-required, non-technical users | Large-scale, flexible logic, dev teams, CI/CD integration |
+
+Scrapewright's edge: configure once → reusable service + native login-state reuse + non-technical users + auto-fix self-healing.
+CDP + AI coding's edge: fully flexible code + Git versioning + server-side concurrency + fine-grained network-layer control.
+
+### 16.2 vs sibling AI scraping products
+
+| Product | Type | Runs in | Login state | LLM role | Core difference vs Scrapewright |
+|---------|------|---------|-------------|----------|---------------------------------|
+| [Firecrawl](https://www.firecrawl.dev/) | Hosted API | Cloud server | Cookie / token required | LLM extracts structured data | We reuse the user's login + generate executable step-graph scripts (not just HTML→Markdown); local deploy (data never leaves the machine) |
+| [Crawl4AI](https://github.com/unclecode/crawl4ai) | Open-source Python library | Server (Playwright) | Cookie passthrough supported | LLM extracts as Markdown | We're a client-side extension + AI wizard (non-technical users vs Python developers) |
+| [Skyvern](https://www.skyvern.com/) | AI agent | Server | Automated login (form + CAPTCHA) | LLM drives every step | We're a configurable HTTP service (vs interactive agent); reuse real login state (vs simulated login) |
+| [Browser-use](https://browser-use.com/) | AI agent | Server | Manual | LLM drives the browser in real time | We configure once into a repeatable service (vs interactive driving every time) |
+| [AgentQL](https://agentql.com/) | Smart selector API | Server | Handled separately | LLM picks elements | We provide full step-graph orchestration + auto-fix (vs single-point selector intelligence) |
+
+> Based on each product's 2025–2026 public docs; these products iterate fast — cross-check the current state.
+
+### 16.3 Honest positioning
+
+**Good at:** login-required scraping (enterprise intranets, paid content, personal account data — zero login cost is the biggest differentiator: Skyvern has to simulate login, Firecrawl needs Cookie injection, CDP needs a login script); non-technical users customizing scrapes (visual annotation + HTTP API service); low-frequency high-value queries (AI Q&A capture, org/person lookups, knowledge graphs); complex page structures (iframe nesting, dynamic loading, streaming content).
+
+**Not good at:** large-scale high-concurrency scraping (10k+ URLs, single-browser bottleneck — use Firecrawl / Crawl4AI / multi-instance CDP); 24×7 unattended operation (depends on the user's Chrome — use a server-side approach); fine-grained network-layer control (intercept / mock, custom headers — use CDP).
+
+**One-line positioning:** not a general-purpose crawler engine, but an "AI scraping assistant inside your (or your team's) browser" — turning "open browser → log in → operate → extract" into an HTTP service callable by external programs.
