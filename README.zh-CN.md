@@ -1,6 +1,6 @@
 # <img src="logo.png" width="44" style="vertical-align:middle" alt="Scrapewright"> Scrapewright
 
-**像说话一样描述你要的数据，AI 把它变成一个可以反复调用的 HTTP 接口。**
+**用自然语言描述你要的数据，Scrapewright 把它变成可重复调用的 HTTP 采集服务。**
 
 [English](./README.md) | **简体中文**
 
@@ -11,15 +11,15 @@
 
 开源 · 自部署 · 数据不出本机
 
-你有没有反复从网页上搬数据的经历——登录后的后台报表、搜索结果、资讯列表？传统做法是写爬虫：学框架、找选择器、处理验证码，网站一改版全部重来。**Scrapewright 把这件事交给 AI**：在向导里用自然语言描述"我要什么"，AI 亲自打开目标网页、分析结构、生成采集脚本并当场试跑；确认效果后，它就变成一个标准 HTTP 接口，随时供你的程序、脚本或 AI 智能体调用。
+从网页中提取数据，传统做法是编写爬虫：学习框架、编写选择器、应对反爬，且网站每次改版都要重新维护。**Scrapewright 将这一过程交给 AI**：在向导中用自然语言描述需求，AI 打开目标网页、分析结构、生成采集脚本并当场试跑；验证效果后，它即成为一个标准 HTTP 接口，供程序、脚本或 AI 智能体调用。
 
-它运行在你**日常使用的 Chrome** 里，因此拥有三大先天优势：
+它以 Chrome 扩展的形式运行在**日常使用的浏览器**中，因而具备三个天然优势：
 
-- **登录即所用** — 已登录的网站直接采，无需配置 Cookie、无需模拟登录
-- **所见即所得** — 页面上看得到的内容它都采得到：JS 动态渲染、iframe 嵌套、翻页、悬浮卡片，甚至逐条打开详情页
-- **无自动化痕迹** — 没有 headless 浏览器的指纹特征，通过真实浏览器的完整性检查
+- **登录态直接复用** — 已登录的网站直接采集，无需配置 Cookie、无需模拟登录
+- **页面完整可见** — 浏览器中显示的内容均可采集：JS 动态渲染、iframe 嵌套、翻页、悬浮卡片，以及逐条打开的详情页
+- **无自动化痕迹** — 没有 headless 浏览器的指纹特征，请求来自真实浏览器
 
-脚本失败时 AI 会自动分析 DOM 快照并修复重试；网站改版后，同样可以让它再修一次。同一个服务还可以导出 Markdown 接口文档，直接交给其他 AI 智能体使用。
+脚本执行失败时，AI 会分析 DOM 快照并自动修复重试；网站改版后，同样可以再次修复。每个服务还可导出 Markdown 接口文档，供其他 AI 智能体使用。
 
 > **60 秒上手**
 >
@@ -117,31 +117,22 @@ Scrapewright 的回答是：**让 AI 在真实浏览器里替你配置采集，�
 | **5. 结果** | 检查提取的数据。不满意就点 **Auto-Fix** 让 AI 修，或直接部署 |
 
 <p align="center">
-  <img src="docs/phase1.png" width="49%" alt="向导阶段 1：描述目标与需求">
-  <img src="docs/phase2.png" width="49%" alt="向导阶段 2：查看与编辑步骤">
+  <img src="docs/phase1.png" width="72%" alt="向导阶段 1：描述目标与需求">
 </p>
 <p align="center">
-  <em>阶段 1 用自然语言描述需求；阶段 2 检查 AI 生成的步骤图</em>
-</p>
-
-<p align="center">
-  <img src="docs/phase3.png" width="49%" alt="向导阶段 3：接口定义">
-  <img src="docs/phase4.png" width="49%" alt="向导阶段 4：逐步执行测试">
-</p>
-<p align="center">
-  <em>阶段 3 确认输入输出格式；阶段 4 实时观看每一步的执行</em>
-</p>
-
-<p align="center">
-  <img src="docs/phase5.png" width="80%" alt="向导阶段 5：结果与自动修复">
-</p>
-<p align="center">
-  <em>阶段 5 检查结果，失败时可让 AI 自动修复（Auto-Fix）</em>
+  <em>阶段 1：用自然语言描述采集需求，AI 分析页面并生成草稿</em>
 </p>
 
 Research 期间 AI 会经历多个轮次：探索页面结构、发现候选选择器、用真实元素 HTML 逐一确认、最后生成步骤脚本——每轮都以上一轮的验证结果为输入。如果页面需要登录、验证码等人工操作，向导会弹出提示并给出对应按钮。
 
-测试失败时 **Auto-Fix** 自动介入：AI 拿到错误信息、DOM 快照与诊断数据，重写脚本并重新测试；多次尝试中得分最高的版本会被保留。你还可以在阶段 5 的输入框里用自然语言告诉它问题所在（如"缺少发布时间"），AI 会照着修。原理详见[白皮书 §5](docs/technical-whitepaper.md)。
+测试失败时 **Auto-Fix** 自动介入：AI 拿到错误信息、DOM 快照与诊断数据，重写脚本并重新测试；多次尝试中得分最高的版本会被保留。你还可以在阶段 5 的输入框里用自然语言告诉它问题所在（如"缺少发布时间"），AI 会据此修复。原理详见[白皮书 §5](docs/technical-whitepaper.md)。
+
+<p align="center">
+  <img src="docs/phase5.png" width="72%" alt="向导阶段 5：结果与自动修复">
+</p>
+<p align="center">
+  <em>阶段 5：检查提取结果，必要时使用 Auto-Fix 修复</em>
+</p>
 
 ### 管理服务
 
@@ -154,13 +145,6 @@ Research 期间 AI 会经历多个轮次：探索页面结构、发现候选选�
 - **Delete** — 删除
 
 页面底部是 **Execution History**（最近 20 次执行记录：时间、服务、成败）。
-
-<p align="center">
-  <img src="docs/option.png" width="90%" alt="服务管理页（Options）">
-</p>
-<p align="center">
-  <em>Options 页：主机状态、服务列表、执行历史</em>
-</p>
 
 ### 调用服务
 
@@ -177,7 +161,7 @@ curl -s "http://localhost:8765/api/v1/jobs/$JOB_ID/wait?timeout=120" \
   -H "X-API-Key: dev-key" | jq '.job.result'
 ```
 
-**不会编程？交给 AI 智能体。** 每个服务都可以在 Options 页点 **API Doc** 下载 Markdown 接口文档，把文档发给 Hermes Agent、WorkBuddy、龙虾 等智能体，它们就能直接调用你的采集服务——你说"帮我查一下××"，它来调接口。
+**交给 AI 智能体调用。** 每个服务都可以在 Options 页通过 **API Doc** 按钮下载 Markdown 接口文档；将文档提供给 Hermes Agent、WorkBuddy、龙虾 等智能体后，它们即可直接调用该服务。
 
 完整接口说明（参数、状态、错误码、页面记录字段）见 [采集服务接口（HTTP API）](#采集服务接口http-api)。
 
@@ -282,7 +266,7 @@ GET /api/v1/jobs/{jobId}                    # 立即返回当前状态
 
 ## 故障排查
 
-**第一站永远是 Options 页顶部的 Host Status 卡片**（红色 = 主机不可达）和 `./bin/scrapewright doctor`。
+排查首先查看 Options 页顶部的 **Host Status 卡片**（红色 = 主机不可达），并运行 `./bin/scrapewright doctor`。
 
 ### 连不上主机（Disconnected）
 
@@ -357,9 +341,9 @@ AI 辅助采集主要有四条技术路线。核心区别是**用谁的浏览器
 | [Skyvern](https://www.skyvern.com/) / [Browser-use](https://browser-use.com/) | 我们配置一次成服务可重复调用（vs 每次交互式驱动） |
 | [AgentQL](https://agentql.com/) | 我们提供完整多步骤编排 + auto-fix（vs 单点选择器智能） |
 
-**适合你，如果：** 需要登录态的采集（内网/付费内容/SaaS 后台）、非技术人员要自定义采集、低频高价值查询（AI 问答、人物/机构信息、知识图谱）、复杂页面（iframe、动态加载、流式输出）。
+**适用于：** 需要登录态的采集（内网 / 付费内容 / SaaS 后台）、非技术人员自定义采集、低频高价值查询（AI 问答、人物/机构信息、知识图谱）、复杂页面（iframe、动态加载、流式输出）。
 
-**不适合，如果：** 万级 URL 大规模高并发（单浏览器瓶颈，用服务器端方案）、7×24 无人值守（依赖你的 Chrome 运行）、需要拦截/Mock 网络请求（用 Playwright/CDP）。
+**不适用于：** 万级 URL 大规模高并发（单浏览器瓶颈，建议使用服务器端方案）、7×24 无人值守（依赖本机 Chrome 运行）、拦截 / Mock 网络请求（建议使用 Playwright / CDP）。
 
 **一句话定位：个人/团队浏览器里的 AI 采集助手——把"打开浏览器 → 登录 → 操作 → 提取"配置成可被程序调用的 HTTP 服务。**
 

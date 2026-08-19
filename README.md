@@ -1,6 +1,6 @@
 # <img src="logo.png" width="44" style="vertical-align:middle" alt="Scrapewright"> Scrapewright
 
-**Describe the data you want in plain language — AI turns it into an HTTP endpoint you can call again and again.**
+**Describe the data you want in natural language; Scrapewright turns it into a reusable HTTP service.**
 
 **English** | [简体中文](./README.zh-CN.md)
 
@@ -11,15 +11,15 @@
 
 Open source · Self-hosted · Your data never leaves your machine
 
-Ever found yourself copying data out of web pages over and over — a logged-in dashboard, search results, a news feed? The traditional answer is writing a scraper: learn a framework, hunt for CSS selectors, fight anti-bot walls, and redo everything when the site redesigns. **Scrapewright hands this job to AI**: describe what you want in the wizard, and the AI opens the target page, analyzes its structure, generates the scraping script, and test-runs it on the spot. Once you're happy with the result, it becomes a standard HTTP endpoint that any program, script, or AI agent can call.
+Extracting data from web pages traditionally means writing a scraper: learning a framework, hand-writing selectors, dealing with anti-bot measures, and redoing the work at every site redesign. **Scrapewright automates this process with AI**: in the wizard you describe the requirement in natural language; the AI opens the target page, analyzes its structure, generates the scraping script, and test-runs it on the spot. Once verified, it becomes a standard HTTP endpoint for programs, scripts, or AI agents to call.
 
-It runs inside the **Chrome you already use every day**, which gives it three structural advantages:
+It runs as a Chrome extension inside the **browser you already use**, which gives it three inherent advantages:
 
-- **Your logins just work** — scrape sites you're already logged into; no cookie juggling, no scripted logins
-- **What you see is what it gets** — JS-rendered content, nested iframes, pagination, hover popups, even per-item detail pages
-- **No automation footprint** — no headless-browser fingerprints; it's a real browser
+- **Login state reused as-is** — scrape sites you are already logged into, without cookie configuration or scripted logins
+- **Full page fidelity** — anything visible in the browser is extractable: JS-rendered content, nested iframes, pagination, hover popups, and per-item detail pages
+- **No automation fingerprint** — no headless-browser markers; requests come from a genuine browser
 
-When a script fails, the AI reads the DOM snapshot and repairs it automatically. After a site redesign, let it repair again. Every service can also export a Markdown API doc to hand to other AI agents.
+When a script fails, the AI analyzes the DOM snapshot and repairs it automatically; the same mechanism applies after a site redesign. Every service can also export a Markdown API doc for other AI agents to consume.
 
 > **60-second start**
 >
@@ -117,31 +117,22 @@ On the Options page click **+ New Service** to enter the 5-phase AI wizard:
 | **5. Results** | Inspect the extracted data. Not happy? Hit **Auto-Fix** and let the AI repair it — or deploy |
 
 <p align="center">
-  <img src="docs/phase1.png" width="49%" alt="Wizard phase 1: describe target and requirements">
-  <img src="docs/phase2.png" width="49%" alt="Wizard phase 2: review and edit steps">
+  <img src="docs/phase1.png" width="72%" alt="Wizard phase 1: describe target and requirements">
 </p>
 <p align="center">
-  <em>Phase 1 describes the need in natural language; phase 2 reviews the AI-generated step graph</em>
-</p>
-
-<p align="center">
-  <img src="docs/phase3.png" width="49%" alt="Wizard phase 3: interface definition">
-  <img src="docs/phase4.png" width="49%" alt="Wizard phase 4: step-by-step test execution">
-</p>
-<p align="center">
-  <em>Phase 3 confirms the I/O shapes; phase 4 watches each step execute live</em>
-</p>
-
-<p align="center">
-  <img src="docs/phase5.png" width="80%" alt="Wizard phase 5: results and auto-fix">
-</p>
-<p align="center">
-  <em>Phase 5 inspects results; on failure the AI can auto-fix (Auto-Fix)</em>
+  <em>Phase 1: describe the requirement in natural language; the AI analyzes the page and drafts the service</em>
 </p>
 
 During Research the AI works in rounds: explore the page structure, discover candidate selectors, confirm each one against real element HTML, then generate the step scripts — each round builds on the previous round's verified results. If the page needs a login or other human action, the wizard surfaces a banner with the matching button.
 
 When a test fails, **Auto-Fix** kicks in: the AI gets the error, the DOM snapshot, and diagnostics data, rewrites the script, and retests; the best-scoring attempt across the loop is kept. In phase 5 you can also describe the problem in your own words (e.g. "publish date is missing") and the AI fixes accordingly. See [Whitepaper §5](docs/technical-whitepaper.en.md) for how it works.
+
+<p align="center">
+  <img src="docs/phase5.png" width="72%" alt="Wizard phase 5: results and auto-fix">
+</p>
+<p align="center">
+  <em>Phase 5: inspect the extracted data; Auto-Fix repairs issues when needed</em>
+</p>
 
 ### Manage Services
 
@@ -154,13 +145,6 @@ Everything lives on the Options page:
 - **Delete** — remove a service
 
 The bottom of the page is **Execution History** (last 20 runs: time, service, success/failure).
-
-<p align="center">
-  <img src="docs/option.png" width="90%" alt="Service management page (Options)">
-</p>
-<p align="center">
-  <em>Options page: host status, service list, execution history</em>
-</p>
 
 ### Call a Service
 
@@ -177,7 +161,7 @@ curl -s "http://localhost:8765/api/v1/jobs/$JOB_ID/wait?timeout=120" \
   -H "X-API-Key: dev-key" | jq '.job.result'
 ```
 
-**Not a programmer? Hand it to an AI agent.** Every service can export its Markdown API doc via the **API Doc** button on the Options page. Give that document to agents like Hermes Agent, WorkBuddy, or Lobster, and they can call your scraping service directly — you say "look up X for me," the agent makes the call.
+**Calling from AI agents.** Every service can export its Markdown API doc via the **API Doc** button on the Options page. Provide the document to agents such as Hermes Agent, WorkBuddy, or Lobster, and they can call the service directly.
 
 Full interface details (parameters, states, error codes, page records): see [Scraping Service Interface (HTTP API)](#scraping-service-interface-http-api).
 
@@ -282,7 +266,7 @@ Response once the job finishes (abridged):
 
 ## Troubleshooting
 
-**Always start with the Host Status card at the top of the Options page** (red = host unreachable) and `./bin/scrapewright doctor`.
+Start by checking the **Host Status card** at the top of the Options page (red = host unreachable) and running `./bin/scrapewright doctor`.
 
 ### Host unreachable (Disconnected)
 
@@ -357,11 +341,11 @@ Differences vs sibling products:
 | [Skyvern](https://www.skyvern.com/) / [Browser-use](https://browser-use.com/) | We configure once into a repeatable service (vs interactive driving every time) |
 | [AgentQL](https://agentql.com/) | We provide full multi-step orchestration + auto-fix (vs single-point selector intelligence) |
 
-**Fits you, if:** you need login-required scraping (intranets / paid content / SaaS dashboards), non-technical users customizing scrapes, low-frequency high-value queries (AI answers, people/org lookups, knowledge graphs), or complex pages (iframes, dynamic loading, streaming output).
+**Well suited to:** login-required scraping (intranets / paid content / SaaS dashboards), non-technical users customizing scrapes, low-frequency high-value queries (AI answers, people/org lookups, knowledge graphs), complex pages (iframes, dynamic loading, streaming output).
 
-**Doesn't fit, if:** you need 10k+ URL high-concurrency scraping (single-browser bottleneck — use server-side), 24×7 unattended operation (depends on your Chrome running), or network-layer intercept/mock (use Playwright/CDP).
+**Not suited to:** 10k+ URL high-concurrency scraping (single-browser bottleneck — use server-side tools), 24×7 unattended operation (depends on the local Chrome running), network-layer intercept / mock (use Playwright / CDP).
 
-**One-line positioning: an AI scraping assistant living in your (or your team's) browser — turning "open browser → log in → operate → extract" into an HTTP service programs can call.**
+**One-line positioning: an AI scraping assistant inside your (or your team's) browser — it turns "open browser → log in → operate → extract" into an HTTP service that programs can call.**
 
 ### Typical Scenarios
 
