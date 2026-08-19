@@ -1,6 +1,6 @@
 # <img src="logo.png" width="44" style="vertical-align:middle" alt="Scrapewright"> Scrapewright
 
-**开源、自部署的 AI 网页采集平台 —— 用自然语言生成可被外部程序调用的 HTTP API 采集服务。**
+**像说话一样描述你要的数据，AI 把它变成一个可以反复调用的 HTTP 接口。**
 
 [English](./README.md) | **简体中文**
 
@@ -9,704 +9,382 @@
 ![Chrome](https://img.shields.io/badge/Chrome-MV3-brightgreen)
 ![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
-> 由 [湖南星汉数智科技有限公司](https://www.singhand.com) 开发与维护 · 采用 [**GPLv3**](./LICENSE) 开源协议发布
+开源 · 自部署 · 数据不出本机
 
-Scrapewright 是一个 **基于大语言模型（LLM）的智能网页数据采集平台**，也是一个 **AI 网络爬虫**：用自然语言描述"想采集什么"，LLM 会自动分析目标网页、生成采集脚本、在真实的 Chrome 浏览器中执行，并返回结构化 JSON 数据 —— 无需手写 CSS 选择器，无需维护 Playwright / Puppeteer 爬虫代码。同一套步骤图（step-graph）引擎还可作为轻量级的 **Web 测试自动化** / 浏览器自动化工具：点击、输入、等待、断言、分支，声明式、可重放、可自愈。
+你有没有反复从网页上搬数据的经历——登录后的后台报表、搜索结果、资讯列表？传统做法是写爬虫：学框架、找选择器、处理验证码，网站一改版全部重来。**Scrapewright 把这件事交给 AI**：在向导里用自然语言描述"我要什么"，AI 亲自打开目标网页、分析结构、生成采集脚本并当场试跑；确认效果后，它就变成一个标准 HTTP 接口，随时供你的程序、脚本或 AI 智能体调用。
 
-项目以 **Chrome 扩展（Manifest V3）** + 轻量级 **Node.js 后台服务（HTTP）** 实现，**直接在真实浏览器中执行 —— 这是它处理"难啃"页面的核心优势**：重 JS 的 SPA 单页应用、异步加载（XHR / fetch / 流式）的内容、深层嵌套的同源 iframe、以及复杂的多步交互（翻页、详情页逐条下钻、弹窗关闭、登录流程）都能完整渲染 DOM、正常运行，且没有 `navigator.webdriver` 痕迹。已有的登录态、Cookie、浏览器指纹直接复用，因此需要登录的网站、有反爬检测的网站都能"开箱即用"。每个采集服务都通过统一的 **REST / HTTP API** 对外暴露，输入输出均有 JSON Schema 约束，可便捷集成到任意后端系统、数据管道、RPA 流程或 AI 智能体（Agent）工作流中。
+它运行在你**日常使用的 Chrome** 里，因此拥有三大先天优势：
 
-**典型场景：** 需要登录态的网站采集（企业内网、付费内容平台、SaaS 后台）、AI 对话机器人回答采集、列表分页 + 详情页逐条采集、iframe 嵌套的政府/门户类网站、低频高价值查询、知识图谱构建、Web 测试自动化，以及面向非技术用户的无代码数据提取。
+- **登录即所用** — 已登录的网站直接采，无需配置 Cookie、无需模拟登录
+- **所见即所得** — 页面上看得到的内容它都采得到：JS 动态渲染、iframe 嵌套、翻页、悬浮卡片，甚至逐条打开详情页
+- **无自动化痕迹** — 没有 headless 浏览器的指纹特征，通过真实浏览器的完整性检查
 
-技术白皮书：**[中文](docs/technical-whitepaper.md)** · [English](docs/technical-whitepaper.en.md)
+脚本失败时 AI 会自动分析 DOM 快照并修复重试；网站改版后，同样可以让它再修一次。同一个服务还可以导出 Markdown 接口文档，直接交给其他 AI 智能体使用。
 
-> ### 快速开始
+> **60 秒上手**
 >
-> 在 `chrome://extensions/` 页面加载本项目的 `extension/` 目录（开启"开发者模式"→"加载已解压的扩展程序"）后：
+> 1. `chrome://extensions/` 开启开发者模式 → "加载已解压的扩展程序" → 选择本项目 `extension/` 目录
+> 2. `./bin/scrapewright install` 安装后台服务（Windows 用 `.\bin\scrapewright.cmd install`）
+> 3. 扩展图标 → Options → Settings 配置 LLM → **+ New Service** → 用一句话描述需求 → 测试 → 部署
 >
-> ```bash
-> ./bin/scrapewright install     # 以操作系统后台服务形式安装主机（默认端口 8765）
-> ```
->
-> 然后点击扩展图标 → **Options** → 配置 LLM（支持 OpenAI / Moonshot Kimi / Anthropic / GLM 智谱）→ **+ New Service** → 用自然语言描述采集需求 → 测试 → 部署 → 即可在任意程序中调用：
+> 现在任何程序都能调用它：
 >
 > ```bash
 > curl -X POST http://localhost:8765/api/v1/services/my-service/execute \
->   -H "X-API-Key: $SCRAPEWRIGHT_API_KEY" -H "Content-Type: application/json" \
+>   -H "X-API-Key: dev-key" -H "Content-Type: application/json" \
 >   -d '{"input": {"query": "你好"}}'
 > ```
 
+技术细节请看[技术白皮书](docs/technical-whitepaper.md)（架构、模块、二次开发指南）。
+
 ## 目录
 
-- [背景：为什么需要 Scrapewright](#背景为什么需要-scrapewright)
-- [核心功能](#核心功能)
+- [背景](#背景)
 - [系统要求](#系统要求)
-- [安装](#安装) · [主机状态](#主机状态) · [故障排查](#故障排查--常见问题)
-- [HTTP API](#http-api) · [采集脚本 DSL](#采集脚本-dsl)
-- [与其他方案的对比](#与其他方案的对比)
-- [分布式部署](#分布式部署) · [技术架构要点](#技术架构要点)
+- [快速开始](#快速开始) — [安装](#安装) · [创建采集服务](#创建采集服务) · [管理服务](#管理服务) · [调用服务](#调用服务)
+- [scrapewright 命令一览](#scrapewright-命令一览)
+- [采集服务接口（HTTP API）](#采集服务接口http-api)
+- [故障排查](#故障排查)
+- [核心特性](#核心特性) — [系统价值](#系统价值) · [与其他方案对比](#与其他方案对比) · [典型场景](#典型场景)
 - [版权与许可证](#版权与许可证)
 
-## 背景：为什么需要 Scrapewright
+## 背景
 
-传统的网页采集工具和浏览器自动化框架 —— Scrapy、Puppeteer、Playwright、Selenium、BeautifulSoup、Cheerio —— 都有几个共同痛点，让网页数据提取比想象中更难：
+从网页提取数据，传统工具（Scrapy、Selenium、Puppeteer/Playwright、BeautifulSoup）有几个共同的痛点：
 
-1. **开发成本高** — 每个目标网站都需要手写 CSS 选择器、处理翻页、应对反爬，维护成本随网站变化不断累积
-2. **动态页面难以处理** — SPA 框架（React / Vue / Angular）、iframe 嵌套、JavaScript 动态渲染的内容，传统基于 HTTP 请求或简单 HTML 解析的方式难以覆盖
-3. **难以复用** — 针对每个网站的采集脚本都是定制的，无法快速迁移到结构类似的页面，给网站 A 写的爬虫帮不到网站 B
-4. **缺乏统一接口** — 不同采集任务之间没有标准化的输入输出格式，难以编排、调度和扩展
-
-Scrapewright 的应对之道 —— 这也是它作为 **AI 网页采集器**的根本不同：
-
-- **AI 驱动**：用户只需用自然语言描述"要什么"，LLM 自动分析页面结构、生成采集脚本、遇到错误自动修复。可以理解为"浏览器里的 AI 智能体"，但发生在配置时而非运行时
-- **真实浏览器环境**：基于 Chrome 扩展，在完整的浏览器中执行，天然支持 JavaScript 渲染、iframe 穿透与动态加载，没有 headless 浏览器的指纹特征
-- **标准化 API**：所有采集服务通过统一的 HTTP API 调用，输入输出均有 JSON Schema 约束。无论目标网站多复杂，对外接口形状始终一致
-- **可视化无代码向导**：5 阶段向导流程，从描述需求到测试部署全程可视化，非技术人员也能搭出一个采集服务
-
-
-## 核心功能
-
-| 功能 | 说明 |
+| 痛点 | 表现 |
 |------|------|
-| **AI 脚本生成** | 输入目标 URL + 自然语言描述，LLM 自动分析页面并生成采集脚本 |
-| **多步骤编排** | 支持条件分支、循环、翻页、详情页逐个采集等复杂采集流程 |
-| **跨 iframe 采集** | 自动搜索并采集同源 iframe 中的内容（如政府网站的嵌套公告页面） |
-| **详情页深度采集** | `$openTab` API 支持打开列表中每个条目的详情页，逐个提取结构化数据 |
-| **AI 自动修复** | 脚本执行失败时，自动捕获 DOM 快照、分析错误、LLM 重写脚本并重试 |
-| **元素标注意图** | 可视化标注页面元素 + 意图（点击/输入/提取/等待），指定等待条件（出现/消失/内容稳定）和输出字段映射，让 LLM 直接使用用户意图而非猜测 |
-| **服务管理** | 导入/导出、启用/禁用、编辑已有服务、一键导出 Markdown API 文档（方便分享和喂给 AI 智能体） |
-| **统一运维 CLI** | `./bin/scrapewright`（install / start / stop / restart / status / doctor / logs）跨 Linux、macOS、Windows 把主机作为操作系统后台服务管理 |
-| **异步执行队列** | 并发请求自动排队，异步返回结果，适合批量采集场景 |
-| **悬浮卡片增强（Hovercard enrichment）** | `$hover` / `$extractWithHover` 用悬浮弹窗中才出现的字段增强列表记录 —— 通过可信 CDP 鼠标事件打开卡片，多信号检测在弹窗关闭前捕获其 portal 渲染的 DOM，单一原子调用保证记录与悬浮卡片的对应关系 |
-| **混淆 DOM 稳定选择器** | 生成的选择器能抵御哈希化的 CSS-module 类名和自动生成属性（`mount_0_0_*`、`react-aria-*`、`x1y2z3` 式哈希会被剥离或跳过，匿名包装层链会被折叠）—— 在现代组件框架站点上依然稳健 |
-| **提示词体积防护** | 喂给 LLM 的元素 HTML 经过分层清洗和预算封顶（单元素与总量双重上限），超大渲染信息流也不会撑爆模型上下文 |
+| **开发成本高** | 每个网站都要手写选择器、处理翻页和反爬；网站一改版，维护成本重新来一遍 |
+| **动态页面难** | React/Vue 单页应用、iframe 嵌套、异步加载的内容，HTTP 请求 + HTML 解析够不着 |
+| **难以复用** | 给网站 A 写的爬虫帮不到结构类似的网站 B |
+| **没有统一接口** | 每个采集任务的输入输出格式都不同，编排和调度无从下手 |
+
+Scrapewright 的回答是：**让 AI 在真实浏览器里替你配置采集，并把结果标准化成 HTTP 服务。**
+
+- **AI 驱动** — 自然语言描述需求，LLM 分析页面、生成脚本、失败自动修复
+- **真实浏览器** — Chrome 扩展运行在你日常的浏览器里，登录态、Cookie、指纹原样复用
+- **标准接口** — 每个服务的输入输出都有 JSON Schema 约束，对外形状永远一致
+- **可视化向导** — 5 阶段向导从描述到部署全程可见，非技术人员也能上手
 
 ## 系统要求
 
-- Chrome 浏览器（最新版）
+- Chrome 浏览器（最新稳定版）
 - Node.js >= 18
+- 任一 LLM 服务的 API Key：OpenAI / Moonshot Kimi / Anthropic / GLM 智谱（或任何 OpenAI 兼容接口）
 
-## 安装
+## 快速开始
 
-### 1. 加载 Chrome 扩展
+### 安装
+
+#### 1. 加载 Chrome 扩展
 
 1. 打开 Chrome，进入 `chrome://extensions/`
 2. 开启右上角**"开发者模式"**
 3. 点击**"加载已解压的扩展程序"**，选择本项目的 `extension/` 目录
-4. 加载成功后，记下扩展卡片上显示的 **Extension ID**（如 `dmbnejooocdfjmnebpglhedhfcgncgdl`）—— 仅供参考；安装主机不需要填写它
 
-### 2. 安装主机
+#### 2. 安装主机
 
-主机作为操作系统后台服务运行，扩展通过 HTTP 与其通信。它会在用户登录时自动启动、崩溃后自动重启，并能在 Chrome 重启和版本升级后继续运行。
-
-**Linux / macOS:**
+主机是一个轻量 Node.js 服务，负责对外提供 HTTP API。以下命令把它注册为操作系统后台服务——开机自启、崩溃自动重启：
 
 ```bash
-./bin/scrapewright install                    # 默认端口 8765
-./bin/scrapewright install --port=9123        # 自定义端口
+./bin/scrapewright install                    # Linux / macOS，默认端口 8765
+.\bin\scrapewright.cmd install                # Windows (PowerShell)
+./bin/scrapewright install --port=9123        # 自定义端口（所有平台）
 ```
 
-**Windows (PowerShell):**
+安装后打开扩展 → **Options** → **Server Configuration** 确认端口一致（默认 `8765`），点击 **Test Connection**，状态徽标显示 **Connected** 即成功。
 
-```powershell
-.\bin\scrapewright.cmd install                # 默认端口 8765
-.\bin\scrapewright.cmd install --port=9123
+#### 3. 配置 LLM
+
+1. 扩展图标 → **Options** → 右上角 **Settings**
+2. 在 **LLM Configuration** 区域填写：
+   - **Provider / Model / API Key** — 任选一家：OpenAI、Moonshot / Kimi、Anthropic、GLM
+   - **Base URL**（可选）— 自定义或兼容 OpenAI 格式的中转地址，需含路径前缀（如 `https://api.openai.com/v1`）
+   - **Max output tokens**（默认 8192）— 推理模型会先消耗"思考" token，输出被截断时调高
+   - **Timeout**（默认 120 秒）— 模型或提示词较慢时调高
+3. 点击 **Save**
+
+### 创建采集服务
+
+在 Options 页点击 **+ New Service**，进入 5 阶段 AI 向导：
+
+| 阶段 | 你做什么 |
+|------|---------|
+| **1. 目标与需求** | 填目标网址 + 一句话需求（要哪些字段、翻不翻页）。点 **Research**，AI 打开页面分析并生成草稿 |
+| **2. 名称与步骤** | 给服务命名，查看/编辑 AI 生成的步骤（每步一段脚本，可手动微调） |
+| **3. 接口定义** | 确认输入/输出的 JSON Schema 和测试数据 |
+| **4. 执行测试** | 实时观看逐步执行过程：打开页面 → 每一步 → 成功/失败 |
+| **5. 结果** | 检查提取的数据。不满意就点 **Auto-Fix** 让 AI 修，或直接部署 |
+
+<p align="center">
+  <img src="docs/phase1.png" width="49%" alt="向导阶段 1：描述目标与需求">
+  <img src="docs/phase2.png" width="49%" alt="向导阶段 2：查看与编辑步骤">
+</p>
+<p align="center">
+  <em>阶段 1 用自然语言描述需求；阶段 2 检查 AI 生成的步骤图</em>
+</p>
+
+<p align="center">
+  <img src="docs/phase3.png" width="49%" alt="向导阶段 3：接口定义">
+  <img src="docs/phase4.png" width="49%" alt="向导阶段 4：逐步执行测试">
+</p>
+<p align="center">
+  <em>阶段 3 确认输入输出格式；阶段 4 实时观看每一步的执行</em>
+</p>
+
+<p align="center">
+  <img src="docs/phase5.png" width="80%" alt="向导阶段 5：结果与自动修复">
+</p>
+<p align="center">
+  <em>阶段 5 检查结果，失败时可让 AI 自动修复（Auto-Fix）</em>
+</p>
+
+Research 期间 AI 会经历多个轮次：探索页面结构、发现候选选择器、用真实元素 HTML 逐一确认、最后生成步骤脚本——每轮都以上一轮的验证结果为输入。如果页面需要登录、验证码等人工操作，向导会弹出提示并给出对应按钮。
+
+测试失败时 **Auto-Fix** 自动介入：AI 拿到错误信息、DOM 快照与诊断数据，重写脚本并重新测试；多次尝试中得分最高的版本会被保留。你还可以在阶段 5 的输入框里用自然语言告诉它问题所在（如"缺少发布时间"），AI 会照着修。原理详见[白皮书 §5](docs/technical-whitepaper.md)。
+
+### 管理服务
+
+所有服务都在 Options 页统一管理：
+
+- **Enable / Disable** — 启用、停用
+- **Edit** — 回到向导修改（自动预填现有配置）
+- **API Doc** — 查看/下载该服务的 Markdown 接口文档
+- **Export / Import / Export All** — JSON 导入导出，跨设备迁移
+- **Delete** — 删除
+
+页面底部是 **Execution History**（最近 20 次执行记录：时间、服务、成败）。
+
+<p align="center">
+  <img src="docs/option.png" width="90%" alt="服务管理页（Options）">
+</p>
+<p align="center">
+  <em>Options 页：主机状态、服务列表、执行历史</em>
+</p>
+
+### 调用服务
+
+部署完成后，服务就是一个本地 HTTP 接口，三步调用：
+
+```bash
+# 1. 提交任务（立即返回 jobId）
+JOB_ID=$(curl -s -X POST http://localhost:8765/api/v1/services/my-service/execute \
+  -H "X-API-Key: dev-key" -H "Content-Type: application/json" \
+  -d '{"input": {"query": "无线鼠标"}}' | jq -r '.jobId')
+
+# 2. 等待结果（阻塞直到完成）
+curl -s "http://localhost:8765/api/v1/jobs/$JOB_ID/wait?timeout=120" \
+  -H "X-API-Key: dev-key" | jq '.job.result'
 ```
 
-该命令会注册一个 systemd 用户单元（Linux）、launchd LaunchAgent（macOS）或登录时启动的计划任务（Windows）。端口在安装时写入服务文件——再次带新端口运行 `install` 会重写服务文件并重启主机。
+**不会编程？交给 AI 智能体。** 每个服务都可以在 Options 页点 **API Doc** 下载 Markdown 接口文档，把文档发给 Hermes Agent、WorkBuddy、龙虾 等智能体，它们就能直接调用你的采集服务——你说"帮我查一下××"，它来调接口。
 
-`scrapewright` 命令一览（完整说明见 `./bin/scrapewright help`）：
+完整接口说明（参数、状态、错误码、页面记录字段）见 [采集服务接口（HTTP API）](#采集服务接口http-api)。
+
+## scrapewright 命令一览
+
+`./bin/scrapewright`（Windows 用 `.\bin\scrapewright.cmd`，命令相同）：
 
 | 命令 | 作用 |
 |------|------|
-| `scrapewright install [--port=N]` | 把主机安装为 OS 服务并启动（新设备首选）|
-| `scrapewright status` | 查看服务状态、`/health` 与端口是否一致 |
-| `scrapewright doctor` | 完整诊断：服务是否安装？是否运行？`/health` 是否可达？端口是否匹配？路径是否漂移？是否有遗留 manifest？ |
-| `scrapewright start` / `stop` / `restart` | 服务控制（改完 `host.js` 用 `restart`）|
-| `scrapewright run [--port=N]` | 前台运行主机（调试 / 一次性运行用）|
-| `scrapewright logs [-f]` | 实时查看主机日志 |
-| `scrapewright throttle on\|off\|status` | 切换 Chrome 启动参数，关闭渲染端节流（懒加载站点专用，详见 [采集懒加载站点](#采集懒加载站点facebook无限滚动)）|
-| `scrapewright uninstall` | 停止并移除 OS 服务 |
+| `install [--port=N]` | 安装主机为 OS 后台服务并启动 |
+| `status` | 服务状态 + `/health` + 端口一致性 |
+| `doctor` | 完整诊断（服务、端口、路径漂移、遗留文件） |
+| `start` / `stop` / `restart` | 服务控制 |
+| `run [--port=N]` | 前台运行（调试用） |
+| `logs [-f]` | 实时查看主机日志 |
+| `throttle on / off / status` | 切换 Chrome 抗节流启动参数（[懒加载站点](#懒加载--无限滚动站点采不全)用） |
+| `uninstall` | 停止并移除服务 |
 
-> Windows 用 `.\bin\scrapewright.cmd ...`（命令相同）。
+## 采集服务接口（HTTP API）
 
-安装完成后，打开扩展 → **Options** → 在 **Server Configuration** 区域确认端口与安装时一致（默认 `8765`），然后点击 **Test Connection**。主机状态徽标应显示为 **Connected**。
-
-> **注意：** 之后如果**移动或重命名了项目目录**，服务文件仍指向旧的绝对路径。请在新位置重新运行 `./bin/scrapewright install` 来重写它。`./bin/scrapewright doctor` 会检测这种漂移并给出修复命令。
-
-### 3. 配置 LLM
-
-1. 点击扩展图标 → 进入**服务管理（Options）**页面
-2. 点击右上角 **Settings** → 在 **LLM Configuration** 区域填写：
-   - **Provider**：选择 LLM 提供商（OpenAI / Moonshot / Kimi / Anthropic / GLM）
-   - **Model**：模型名称（如 `gpt-4o`、`kimi-for-coding`、`glm-5.1`）
-   - **API Key**：你的 API 密钥
-   - **Base URL**（可选）：自定义 API 地址，适用于公司中转站或兼容 OpenAI 格式的代理。注意需要包含路径前缀（如 `https://api.openai.com/v1`），不要只填域名
-   - **Max output tokens**：模型的补全预算（默认 8192，范围 1024–131072）。推理模型会在回答前消耗不可见的思考 token，此时应调高
-   - **Timeout**：单次请求超时，单位秒（默认 120，范围 10–600）。慢速服务商或超长提示词可调高
-3. 点击 **Save**
-
-### 4. 创建采集服务
-
-在 Options 页点击 **"+ New Service"**，进入 AI 向导（5 个阶段）：
-
-| 阶段 | 说明 |
-|------|------|
-| **阶段 1：目标 URL 与需求** | 输入目标网站 URL，并填写三项需求——输入参数、页面操作与采集数据、（可选）输出结构。每个字段都有内联的示例提示。点击 **Research**（或 Ctrl+Enter），AI 分析页面并生成草稿服务。如需辅助，页面内会展开交互式探索/标注面板。 |
-| **阶段 2：服务名称与步骤** | 设定服务名称，查看并**编辑** AI 生成的步骤图（每个步骤是一段脚本，带成功/失败转移）。 |
-| **阶段 3：I/O Schema 与测试输入** | 确认输入输出参数格式（JSON Schema），编辑测试输入数据。 |
-| **阶段 4：执行测试（逐步）** | 实时查看逐步执行日志（打开页面 → 加载 → 每个步骤 → 成功/失败）。 |
-| **阶段 5：结果** | 查看测试结果。失败时可 **Auto-Fix**（AI 自动修复）或 **Deploy Anyway**（忽略错误部署）。 |
-
-Research 期间，向导会驱动 LLM 经历多个轮次：页面探索（要到达目标内容，页面是否需要交互？）、基于你的标注和 DOM 的候选选择器发现、用真实元素 HTML 确认选择器，最后生成步骤脚本。每一轮都以上一轮的已验证结果为输入，因此生成的步骤建立在经过真实页面确认的选择器之上。
-
-#### Auto-Fix 循环动力学
-
-**Auto-Fix** 运行时（无论是由测试失败自动触发，还是用户带提示手动触发），循环按以下规则工作：
-
-- **最佳尝试保留（Best-of-N）**——每次迭代都按输出 schema 评分（必填字段覆盖率 × 列表密度 × 每条记录字段填充率）。若后一次迭代出现回退，向导会静默恢复得分最高的脚本，而不是提交退化的版本。无需用户干预。
-- **用户反馈 ACK 协议**——当你提供提示时，它会作为第 1 节出现在 LLM 提示词中，并要求显式 ACK/NACK。模型必须先输出 `// ACK: <用自己的话复述提示>` 或 `// NACK: <拒绝的理由>` 才能写代码。若模型对同一条提示连续 NACK 两次，提示词会升级为"你可能错了"的提醒。
-- **干预横幅（Intervention banners）**——系统不再静默耗尽重试，而是在结果区上方以横幅形式提示具体的"需要人工介入"情形：
-  - **需要标注（Needs annotation）**——抽取结果为空且失败步骤无任何标注。操作：*前往标注*。
-  - **需要放宽标注（Needs annotation relax）**——已有标注但选择器在当前页面上匹配不到任何元素（通常因为 `:nth-of-type` 这类位置型路径无法泛化）。操作：*前往标注*。
-  - **需要登录（Needs login）**——页面跳转到了登录流程。操作：*打开目标标签页*。
-  - **被限流（Rate limited）**——LLM 服务商返回 429。操作：*打开设置*。
-  - **页面状态过期（Page state stale）**——同一错误跨多次尝试仍然存在，且捕获的快照已超过 60 秒。操作：*刷新标签页*。
-
-  每条横幅都带 **忽略并继续** 按钮，可关闭干预提示让 autoFix 继续尝试。
-
-### 5. 管理服务
-
-在 Options 页的 **Services** 区域：
-
-- **Enable/Disable** — 一键切换服务启用状态
-- **Edit** — 回到向导编辑服务（预填充已有配置）
-- **Export** — 导出单个服务为 JSON 文件
-- **Export All** — 导出所有服务
-- **Import** — 从 JSON 文件导入服务（自动跳过重复项）
-- **Delete** — 删除服务
-
-Options 页底部显示 **Execution History**（最近 20 条执行记录），包含时间、服务名、成功/失败状态。
-
-## 主机状态
-
-主机与扩展之间只有一种传输方式：**HTTP 长轮询**。扩展通过 `GET /api/v1/extension/poll` 拉取请求，通过 `POST /api/v1/extension/response` 回复结果。主机由 OS 服务管理器（在第 2 步安装）拉起——无需手动启动。
-
-扩展选项页会显示以下两种状态之一：
-
-- **Connected** — 主机在配置端口可达。
-- **Disconnected** — 主机未运行，或端口不匹配。
-
-如显示未连接，依次检查：
-
-1. `./bin/scrapewright status` — 服务是否已安装并运行？
-2. 扩展选项页 **Server Configuration** 中的端口与 `scrapewright install --port=N` 指定的端口是否一致（默认 `8765`）。
-3. `./bin/scrapewright doctor` — 完整诊断。
-
-也可以前台运行主机用于调试：
-
-```bash
-./bin/scrapewright run                       # 默认端口 8765
-./bin/scrapewright run --port=19880          # 自定义端口
-```
-
-> **注意：** 前台运行时，确保扩展选项页中的端口与 `--port` 参数一致。
-
-## 采集懒加载站点（Facebook、无限滚动）
-
-Scrapewright 驱动的是一个真实的 Chrome 标签页，默认以**后台标签**方式打开（`chrome.tabs.create({active:false})`），保证你的键盘焦点不会离开当前编辑器。对大多数网站来说都没问题。但对那些依赖 `IntersectionObserver` 懒加载的站点——Facebook 信息流、无限滚动列表、虚拟化表格——后台标签会撞上 Chrome 的渲染端帧产出节流：非可见标签不会触发合成器帧，`IntersectionObserver` 回调永远不会触发，懒加载自然就停了。
-
-Scrapewright 通过五层叠加方案来应对（每一层针对一种不同的节流或过滤机制，所以是叠加而非替代）：
-
-| 层 | 做了什么 | 不能解决什么 |
-|----|---------|-------------|
-| **visibility-keepalive**（默认开启）| 往页面 MAIN world 注入一段覆盖：让 `document.visibilityState='visible'`、`document.hidden=false`、`document.hasFocus()=true`，再跑一个 `requestAnimationFrame` 保活循环。修复那些**自己**检查可见性来决定是否继续加载的页面 JS。 | 并不能让 Chrome 合成器为非可见标签产生帧。 |
-| **Enhanced Scraping Mode**（选项页可开启）| 为下述**可信滚轮事件兜底**（第 4 层）提供开关。它依赖的 `debugger` 权限在安装时已声明（Chrome 不允许把它作为可选权限）。 | 本身并不能让 Chrome 合成器为非可见标签产生帧 —— 那是第 5 层的职责。 |
-| **Chrome 启动参数**（IO 类懒加载的必要前提）| `scrapewright throttle on` 重写你的 Chrome 启动器（Linux `.desktop`、macOS 包装 AppleScript 应用、Windows `.lnk` 快捷方式），加入 `--disable-background-timer-throttling`、`--disable-backgrounding-occluded-windows`、`--disable-renderer-backgrounding`、`--disable-features=CalculateNativeWinOcclusion`。然后重启 Chrome。 | 需要重启 Chrome，且对所有 Chrome 窗口全局生效。**单独并不能**解决那些懒加载 loader 过滤 `event.isTrusted` 的站点。|
-| **可信滚轮事件兜底**（通过 Enhanced Scraping Mode 开启）| 当程序化 `scrollBy` 卡住（内容不再增长）时，通过瞬态 `chrome.debugger` 通道发送 CDP `Input.dispatchMouseEvent({type:'mouseWheel'})`。CDP 输入走的是和真实 OS 输入相同的管线，产生的事件 `event.isTrusted=true`——这是程序化产生可信滚轮事件的**唯一**途径。`$scrollToBottom` 在卡住时自动触发，绕过那些拒绝 JS 滚动的站点 loader。 | 需要 Enhanced Scraping Mode 处于开启状态。只在"卡住"时触发，对响应程序化滚动的站点无副作用。|
-| **粘性标签激活（Sticky tab activation）**（默认开启）| 在需要输入的 DOM 操作（滚动 / 悬浮 / 关闭悬浮卡片）之前，采集标签会被激活并**保持**激活 —— Chrome 只为聚焦窗口的活跃标签产生合成器帧。如果你手动切走，下一个操作会重新激活它；采集标签自动关闭时，焦点会落回你最后点击的标签。 | 这些操作期间采集标签会短暂成为可见标签（你的输入焦点可能被短暂打断）。|
-
-**IO 驱动的懒加载站点推荐配置：**
-
-```bash
-./bin/scrapewright throttle on       # 把四个参数写入 Chrome 启动器
-# 完全退出 Chrome（Cmd-Q / Ctrl-Shift-Q）后重新启动，再正常采集
-./bin/scrapewright throttle status   # 确认参数已生效
-```
-
-撤销（例如 Chrome 升级前，或想换回原始启动器）：
-
-```bash
-./bin/scrapewright throttle off      # 从备份恢复原始启动器
-```
-
-选项页上的 Enhanced Scraping Mode 开关启用的是**可信滚轮事件兜底**（第 4 层）——当滚动卡住时，这一层会通过 `chrome.debugger` 的 CDP 通道发送真实的滚轮事件，让那些过滤 `event.isTrusted` 的站点（程序化 `scrollBy` 是 non-trusted 的）也能继续加载。对任何 IO 驱动的懒加载站点都应该开启。开关点击时不会申请新的 Chrome 权限：`debugger` 权限在安装时已声明（Chrome 不允许把它作为可选权限），这个开关只控制扩展在运行时是否实际使用它。
-
-## 故障排查 / 常见问题
-
-### 服务无法启动
-
-运行 `./bin/scrapewright doctor`。常见原因：
-
-- **找不到 Node** — 服务文件里写死了 `node` 的绝对路径；如果你升级了 Node 或移动了它，重新运行 `./bin/scrapewright install` 来重写路径。
-- **端口被占用** — 用 `./bin/scrapewright install --port=N` 换一个端口（同时更新扩展选项页中的端口使其一致）。
-- **项目被移动过** — 服务文件指向旧的绝对路径；在新目录重新运行 `./bin/scrapewright install`。doctor 会检测这种漂移并给出修复命令。
-- **旧版 Native Messaging 遗留文件** — doctor 会自动检测并清理残留 manifest，附带一行提示。
-
-### 端口不匹配
-
-如果主机监听的是 `:9123`，而扩展在轮询 `:8765`，选项页会显示 **Disconnected**。把 **Server Configuration** 中的端口字段更新为安装时使用的端口，然后点击 **Test Connection**。
-
-### 查看主机日志
-
-```bash
-./bin/scrapewright logs -f                       # 全平台（CLI）
-tail -f ~/Library/Logs/scrapewright/host.log      # macOS
-tail -f ~/.cache/scrapewright/host.log            # Linux
-Get-Content -Wait "$env:LOCALAPPDATA\scrapewright\host.log" -Tail 20   # Windows
-```
-
-启动崩溃（logger 初始化前）会写到同目录的 `startup-error.log`——那是隐藏在晦涩启动失败背后的真实堆栈。
-
-### 代码改动后的生效方式
-
-修改 `host.js` 后，运行 `./bin/scrapewright restart` 拉起新代码。修改扩展文件后，在 `chrome://extensions/` 重新加载扩展（点击扩展卡片上的刷新图标）。
-
-## HTTP API
-
-所有执行均为**异步**模式。调用后立即返回 `jobId`，通过状态查询或等待接口获取结果。并发请求自动排队，同一时刻只有一个任务在执行。
+所有接口都在 `http://localhost:{port}/api/v1` 下，除 `/health` 外均需 `X-API-Key` 请求头认证。
 
 ### 配置
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `--port=N` | `8765` | HTTP 监听端口（CLI 参数） |
-| `SCRAPEWRIGHT_PORT` | `8765` | HTTP 监听端口（环境变量，CLI 参数优先） |
-| `SCRAPEWRIGHT_API_KEY` | `dev-key` | API 认证密钥 |
+| `--port=N` / `SCRAPEWRIGHT_PORT` | `8765` | 监听端口（CLI 参数优先） |
+| `SCRAPEWRIGHT_API_KEY` | `dev-key` | API 密钥（生产环境务必修改） |
 
-也可以在扩展 Options 页的 **Server Configuration** 区域动态修改端口（修改后立即生效，无需重启）。
-
-### 认证
-
-所有外部 API 请求需携带 `X-API-Key` 请求头。
-
-### 接口列表
-
-#### 提交执行任务
+### 提交任务
 
 ```
 POST /api/v1/services/{service-name}/execute
 ```
 
-请求体：
+请求体：`{ "input": { ... } }`（按服务的 inputSchema 传参）
+
+响应（202）：
+
 ```json
-{ "input": { "query": "你好" } }
+{ "success": true, "jobId": "xxxxxxxx-xxxx-…", "status": "queued", "queuePosition": 1 }
 ```
 
-响应（202 Accepted）：
-```json
-{
-  "success": true,
-  "jobId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-  "status": "queued",
-  "queuePosition": 1
-}
-```
+并发请求自动排队，`queuePosition` 是排队位置（0 = 正在执行）。
 
-> 并发请求会自动排队，`queuePosition` 表示在队列中的位置（0 = 正在执行）。
-
-#### 等待结果（阻塞）
+### 获取结果
 
 ```
-GET /api/v1/jobs/{jobId}/wait?timeout=120
+GET /api/v1/jobs/{jobId}/wait?timeout=120   # 阻塞直到完成（timeout 秒，最大 300）
+GET /api/v1/jobs/{jobId}                    # 立即返回当前状态
 ```
 
-长轮询直到任务完成。`timeout` 单位为秒，最大 300，默认 120。
+任务完成后的响应（节选）：
 
-响应（任务完成后）：
 ```json
 {
   "success": true,
   "job": {
-    "id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-    "status": "completed",
+    "id": "…", "status": "completed",
     "result": {
-      "thinking": "...",
-      "answer": "...",
       "posts": [
-        {
-          "author": "...",
-          "likes": "4",
-          "sourcePageId": "page_0007_a1b2c3d4"
-        }
+        { "author": "…", "likes": "4", "sourcePageId": "page_0007_a1b2c3d4" }
       ]
     },
-    "pages": [
-      {
-        "id": "page_0007_a1b2c3d4",
-        "url": "https://example.com/...",
-        "title": "Example",
-        "capturedAt": 1717123456789,
-        "sourceStepId": "extract",
-        "captureReason": "step_iteration",
-        "hash": "a1b2c3d4...",
-        "html": "<html>...</html>",
-        "truncated": false
-      }
-    ],
-    "pagesTruncated": 0,
-    "error": null,
-    "queuePosition": 0,
-    "createdAt": 1717700000000,
-    "startedAt": 1717700001000,
-    "completedAt": 1717700015000
+    "pages": [ { "id": "page_0007_a1b2c3d4", "url": "…", "title": "…", "html": "…" } ],
+    "error": null
   }
 }
 ```
 
-#### `pages[]` 字段
+- `result` — 采集到的结构化数据，形状由服务的 outputSchema 决定
+- `pages[]` — 采集过程中见过的每个页面（URL、标题、清洗后的 HTML），用于核对数据来源
+- `sourcePageId` — 每条提取记录自带此字段，指向其数据来源的页面
 
-采集过程中见过的每一个网页。每条记录包括：
-
-- `id` —— `page_NNNN_HHHHHHHH` 格式。`NNNN` 是捕获顺序（0001、0002……），`HHHHHHHH` 是 `SHA-256(url + 归一化HTML)` 的前 8 位十六进制。同一 URL 下内容相同（归一化后）的两次捕获会生成相同的 ID 并被去重；URL 不同或内容不同则生成新条目。
-- `url`、`title` —— 捕获时的页面地址和 `<title>`。
-- `capturedAt` —— Unix 毫秒时间戳。
-- `sourceStepId` —— 哪个步骤捕获了此页面。
-- `captureReason` —— `step_iteration`（步骤执行后）或 `subtab_pre_destroy`（`$openTab` 子标签页关闭前）。
-- `hash` —— 完整的 64 字符 SHA-256 十六进制值。
-- `html` —— 清洗后的页面 HTML。每页上限 80,000 字符（超限会被截断并加 `[TRUNCATED N chars]` 前缀，`truncated: true`）。
-- `truncated` —— 布尔值，HTML 是否超过上限。
-
-**容量上限：** 列表默认上限 50 个唯一页面。如果采集产生更多，会保留前 5 个和后 45 条；`pagesTruncated` 字段报告丢弃数量。可通过 `config.maxPagesCaptured` 调整；`config.capturePages: false` 完全关闭。
-
-**字节预算：** 为控制 `chrome.storage.local` 增长，每个任务的 HTML 总载荷默认上限为 2MB。触及上限时会丢弃中间条目（始终保留首尾两条，保证你既能看到初始状态又能看到最近一次活动）。可通过 `config.maxPagesBytes` 调整（设为 `0` 完全关闭字节预算，仅用条数上限）。扩展声明了 `unlimitedStorage` 权限，所以浏览器的 10MB 配额不再是硬上限，但字节预算仍能防止长时间运行的服务失控占盘。
-
-#### 抽取记录上的 `sourcePageId`
-
-对象数组结果中的每条记录（例如 `result.posts[]` 的每个元素）会自动附加 `sourcePageId`，指向其数据来源的页面。扁平对象结果（`{answer: "..."}`）会在顶层附加一个 `sourcePageId`。该字段不会被覆盖 —— 如果脚本自己设置了 `sourcePageId`，编排器会保留脚本的值。
-
-#### 查询任务状态
-
-```
-GET /api/v1/jobs/{jobId}
-```
-
-响应格式与 `/wait` 相同，但不阻塞，立即返回当前状态。
-
-#### 取消任务
-
-```
-POST /api/v1/jobs/{jobId}/cancel
-```
-
-仅可取消排队中的任务（`status: "queued"`）。
-
-#### 列出所有任务
-
-```
-GET /api/v1/jobs
-```
-
-#### 列出所有服务
-
-```
-GET /api/v1/services
-```
-
-响应：
-```json
-{
-  "success": true,
-  "services": [
-    {
-      "name": "baidu-chat",
-      "displayName": "百度AI对话",
-      "targetUrl": "https://chat.baidu.com",
-      "enabled": true,
-      "inputSchema": { ... },
-      "outputSchema": { ... }
-    }
-  ]
-}
-```
-
-#### 管理服务步骤
+### 其他接口
 
 | 方法 | 路径 | 作用 |
-|---|---|---|
-| POST | `/api/v1/services/{name}/steps` | 为服务添加一个步骤（请求体为步骤对象；返回 201） |
-| PUT | `/api/v1/services/{name}/steps/{stepId}` | 更新一个步骤（脚本 / 流程字段如 `onSuccess`、`condition`） |
-| DELETE | `/api/v1/services/{name}/steps/{stepId}` | 删除一个步骤 —— 链路自动重连并重新校验 |
+|------|------|------|
+| POST | `/api/v1/jobs/{jobId}/cancel` | 取消排队中的任务 |
+| GET | `/api/v1/jobs` | 列出所有任务 |
+| GET | `/api/v1/services` | 列出所有服务（含 I/O Schema） |
+| POST | `/api/v1/services/{name}/steps` | 为服务添加步骤 |
+| PUT | `/api/v1/services/{name}/steps/{stepId}` | 更新步骤（脚本/流程字段） |
+| DELETE | `/api/v1/services/{name}/steps/{stepId}` | 删除步骤（链路自动重连） |
+| GET | `/health` | 健康检查（免认证，供负载均衡/K8s 探活） |
 
-#### 健康检查
-
-```
-GET /health
-```
-
-无需 API Key 认证。用于负载均衡器、K8s 健康检查或调度平台探活。
-
-响应：
-```json
-{
-  "status": "ok",
-  "extensionConnected": true,
-  "queueLength": 0,
-  "queueRunning": false,
-  "uptime": 3600
-}
-```
-
-| 字段 | 说明 |
-|------|------|
-| `status` | `"ok"` = 扩展已连接，`"degraded"` = 扩展未连接 |
-| `extensionConnected` | 扩展当前是否通过 HTTP 长轮询连接到主机 |
-| `queueLength` | 排队中的任务数 |
-| `queueRunning` | 是否有任务正在执行 |
-| `uptime` | Host 进程运行秒数 |
-
-### curl 示例
-
-```bash
-# 提交任务
-JOB_ID=$(curl -s -X POST http://localhost:8765/api/v1/services/my-service/execute \
-  -H "X-API-Key: dev-key" \
-  -H "Content-Type: application/json" \
-  -d '{"input": {"query": "你好"}}' | jq -r '.jobId')
-
-echo "Job ID: $JOB_ID"
-
-# 等待结果（阻塞直到完成）
-curl -s "http://localhost:8765/api/v1/jobs/$JOB_ID/wait?timeout=60" \
-  -H "X-API-Key: dev-key" | jq .
-
-# 或手动轮询状态
-curl -s "http://localhost:8765/api/v1/jobs/$JOB_ID" \
-  -H "X-API-Key: dev-key" | jq '.job.status'
-```
-
-### 任务状态
+### 任务状态与错误
 
 | 状态 | 说明 |
 |------|------|
-| `queued` | 排队中，等待执行 |
-| `running` | 正在执行 |
-| `completed` | 执行成功，结果在 `result` 字段 |
-| `failed` | 执行失败，错误信息在 `error` 字段 |
+| `queued` / `running` | 排队中 / 执行中 |
+| `completed` | 成功，结果在 `result` |
+| `failed` | 失败，原因在 `error` |
 | `cancelled` | 已取消 |
-
-### 错误类型
 
 | 错误 | 说明 |
 |------|------|
-| `ELEMENT_NOT_FOUND` | 目标元素未找到，AI 会自动尝试修复脚本 |
-| `SCRIPT_ERROR` | 脚本执行出错，AI 会自动尝试修复脚本 |
-| `SCRIPT_TIMEOUT` | 脚本执行超时（默认 60s） |
-| `LOGIN_REQUIRED` | 目标网站需要登录，需用户手动登录后重试 |
-| `Extension timeout` | Host 无法连接到扩展 — 检查扩展是否已加载、端口是否匹配 |
+| `ELEMENT_NOT_FOUND` / `SCRIPT_ERROR` | 元素未找到 / 脚本出错 — AI 会自动尝试修复 |
+| `SCRIPT_TIMEOUT` | 脚本超时（默认 60s） |
+| `LOGIN_REQUIRED` | 目标网站需要登录，登录后重试 |
+| `Extension timeout` | 主机连不上扩展 — 检查扩展是否加载、端口是否一致 |
 
-## 采集脚本 DSL
+## 故障排查
 
-用户脚本在沙盒 iframe 中执行，通过异步 API 与目标页面交互：
+**第一站永远是 Options 页顶部的 Host Status 卡片**（红色 = 主机不可达）和 `./bin/scrapewright doctor`。
 
-| API | 说明 |
-|-----|------|
-| `$(selector)` | 最多等 30s，返回元素数据对象 |
-| `$exists(selector, timeoutMs?)` | 检查是否存在**可见**元素；轮询循环专用 |
-| `$click(selector)` | 点击元素 |
-| `$type(selector, text)` | 输入文本（INPUT/TEXTAREA/contenteditable） |
-| `$extract(selector, attr?, timeoutMs?)` | 读取 textContent 或属性（含 `outerHTML`/`innerHTML` DOM 属性）；快速失败（默认 5s） |
-| `$wait(selector, delayMs?)` | 等待元素（MutationObserver，最多 30s） |
-| `$check(selector, property)` | 读取元素属性（如 `checked`） |
-| `$count(selector)` | 统计主文档 + 同源 iframe 中的匹配数 |
-| `$list(selector)` | 所有匹配的元素数据对象（主文档 + iframe） |
-| `$extractList(containerSel, fieldMap, opts?)` | 一次调用完成多字段列表提取 —— 每条记录的字段保持对齐 |
-| `$extractListMulti(containerSel, fieldMap, opts?)` | 类似 `$extractList`，但每个字段值是全部匹配组成的数组（CSS 无法区分时在 JS 里挑选） |
-| `$clickInList(containerSel, subSel, opts?)` | 点击**每个**容器内的子元素（如展开按钮），带等待间隔 |
-| `$waitForStable(selector, opts?)` | 轮询直到内容停止变化 —— 流式输出 / AI 回答完成检测 |
-| `$scrollBy(deltaY, selector?)` | 窗口或内部容器滚动 N 像素 |
-| `$scrollToBottom(selector?)` | 滚动到底部；`scrolled:false` 表示信息流已耗尽 |
-| `$scrollIntoView(selector)` | 让元素可见（如"加载更多"按钮）再点击 |
-| `$hover(anchorSelector, popoverSelector?, opts?)` | 在锚点上执行可信悬浮，在弹窗关闭前捕获其 HTML（`opts.index` 指定第 N 个匹配） |
-| `$extractWithHover(containerSel, fieldMap, opts?)` | 每个容器原子化地提取 + 悬浮增强 —— 通过单次原子调用保持记录与悬浮卡片的对应 |
-| `$openTab(url, functionBody)` | 在新标签页打开详情页并采集，返回其结果 |
+### 连不上主机（Disconnected）
 
-所有选择器都支持 iframe 前缀 `iframe<iframe-css>::<inner-css>`（可链式嵌套 iframe），在多 iframe 页面上锁定特定 iframe。
+1. `./bin/scrapewright status` — 服务是否已安装并运行？
+2. Options 页 **Server Configuration** 的端口与安装时是否一致（默认 `8765`）？
+3. `./bin/scrapewright doctor` — 完整诊断，多数问题直接给出修复命令。
 
-脚本可访问：
-- `__input__` — 外部调用传入的参数
-- `__stepResults__` — 所有步骤的返回值字典
-- `__lastResult__` — 上一步的返回值
+### 服务无法启动
 
-## 与其他方案的对比
+- **找不到 Node** — 升级/移动过 Node 后重跑 `./bin/scrapewright install` 重写路径
+- **端口被占用** — `./bin/scrapewright install --port=N` 换端口（扩展侧同步修改）
+- **项目目录移动过** — 在新位置重跑 `install`；doctor 会检测路径漂移
 
-当前 AI 辅助的网页采集/浏览器自动化主要有四类技术路线。Scrapewright 的定位是**客户端扩展**路线，与其他三类互补而非替代。
-
-> **客观前提**：所有方案都需要浏览器。区别在于**用谁的浏览器**——Scrapewright 复用用户日常使用的 Chrome（含登录态/Cookie/指纹），其他方案通常使用单独部署的 headless/服务器端 Chromium（干净 Profile）。
-
-### 四类路线
-
-| 路线 | 代表产品 | 运行位置 | 登录态处理 |
-|------|---------|---------|-----------|
-| **服务器端 headless 采集** | Firecrawl、Crawl4AI、Spider | 服务器上的 Chromium | 需注入 Cookie 或提供 auth token |
-| **服务器端 AI agent** | Skyvern、Browser-use | 服务器上的浏览器 | 自动化登录（表单填充 + 验证码识别） |
-| **开发者编程式** | Claude Code + Puppeteer/Playwright | 开发者本机或 CI 服务器 | 手动处理（Cookie 注入/登录脚本） |
-| **客户端扩展（本项目）** | **Scrapewright** | 用户日常使用的 Chrome | **天然复用用户已登录的会话** |
-
-### vs CDP + AI 编程（Claude Code / Cursor + Puppeteer/Playwright）
-
-开发者可以用 Claude Code 等 AI 编程工具，为目标网站编写 Puppeteer/Playwright 爬虫程序。这是最灵活的方案，但两者的工作模式和适用场景不同：
-
-| 维度 | Scrapewright | CDP + AI 编程 |
-|------|---------------|--------------|
-| **使用方式** | AI 向导配置一次 → HTTP API 服务，长期复用 | 每个网站编写/维护一份代码 |
-| **谁能用** | 非技术用户（向导式标注 + 生成） | 需要开发者 |
-| **浏览器** | 用户日常 Chrome（共享 Profile/登录态/指纹） | headless 或单独 Chromium（干净 Profile） |
-| **登录态** | 直接复用用户已登录会话，零额外成本 | 需注入 Cookie / 写登录脚本 / 处理验证码 |
-| **反爬检测** | 扩展内容脚本，无 `navigator.webdriver` 痕迹 | CDP 可被 `navigator.webdriver` 等指纹检测 |
-| **灵活性** | 步骤图 DSL（结构化，覆盖大多数采集逻辑） | 任意代码（最灵活，可拦截/Mock 网络请求） |
-| **可维护性** | auto-fix（脚本失败时 LLM 自动修复选择器和逻辑） | 代码维护（Claude Code 可辅助，但需人工 review） |
-| **部署** | 用户本机 Chrome + 轻量 Node.js host | 服务器 Node + Chromium |
-| **并发** | 单浏览器串行（水平扩展需多实例） | 多 headless 实例并行 |
-| **适合场景** | 低频高价值、需登录态、非技术用户可用 | 大规模、灵活逻辑、开发者团队、CI/CD 集成 |
-
-**Scrapewright 的优势**：配置一次即成服务（非每次写代码）+ 登录态天然复用 + 非技术用户可用 + auto-fix 自愈合。
-**CDP + AI 编程的优势**：代码完全灵活 + Git 可版本控制 + 服务器端高并发 + 精细网络层控制。
-
-### vs 同类 AI 采集产品
-
-| 产品 | 类型 | 运行位置 | 登录态 | LLM 角色 | 与 Scrapewright 的核心差异 |
-|------|------|---------|--------|---------|---------------------------|
-| **[Firecrawl](https://www.firecrawl.dev/)** | 托管 API | 云服务器 | 需提供 Cookie/token | LLM 提取结构化数据 | 我们复用用户登录态 + 生成可执行步骤图脚本（非仅 HTML→Markdown 提取）；本机部署（数据不出本地） |
-| **[Crawl4AI](https://github.com/unclecode/crawl4ai)** | 开源 Python 库 | 服务器（Playwright） | 支持传 Cookie | LLM 提取为 Markdown | 我们是客户端扩展 + AI 向导（非技术可用 vs 需 Python 开发者） |
-| **[Skyvern](https://www.skyvern.com/)** | AI agent | 服务器 | 自动化登录（表单+验证码） | LLM 驱动每步操作 | 我们是配置式 HTTP 服务（vs 交互式 agent）；复用真实登录态（vs 模拟登录） |
-| **[Browser-use](https://browser-use.com/)** | AI agent | 服务器 | 手动 | LLM 实时驱动浏览器 | 我们配置一次成服务可重复调用（vs 每次交互式驱动） |
-| **[AgentQL](https://agentql.com/)** | 智能 selector API | 服务器 | 需处理 | LLM 选择元素 | 我们提供完整步骤图编排 + auto-fix（vs 单点 selector 智能） |
-
-> 以上信息基于各产品 2025–2026 年公开文档。产品功能迭代快，建议交叉验证最新状态。
-
-### Scrapewright 的客观定位
-
-**擅长（推荐使用）：**
-- **需要登录态的采集** —— 企业内部系统、付费内容平台、个人账户数据。用户已登录的浏览器直接用，零登录成本（这是最大的差异化，Skyvern 需模拟登录、Firecrawl 需注入 Cookie、CDP 需写登录脚本）
-- **非技术用户自定义采集** —— AI 向导配置（可视化标注元素意图），HTTP API 服务化，不用写代码
-- **低频高价值查询** —— AI 问答结果采集、机构/人物信息查询、知识图谱构建。不是大规模爬取，是特定查询的自动化
-- **复杂页面结构** —— iframe 嵌套（如政府公告）、动态加载、流式内容（AI 回答的 `$waitForStable`）
-
-**不擅长（推荐用其他方案）：**
-- **大规模高并发采集**（万级 URL）—— 单浏览器瓶颈，用 Firecrawl / Crawl4AI / CDP 多实例
-- **7×24 无人值守** —— 依赖用户 Chrome 运行，用服务器端方案
-- **精细网络层控制** —— 拦截/Mock 请求、自定义 header，用 CDP（Puppeteer/Playwright）
-
-**一句话定位**：Scrapewright 不是通用爬虫引擎，而是 **"个人/团队浏览器里的 AI 采集助手"** —— 把"打开浏览器 → 登录 → 操作 → 提取"这个重复劳动，配置成可被外部程序调用的 HTTP 服务。它最擅长需要登录态、低频高价值、非技术用户也想做的采集场景。
-
-## 分布式部署
-
-Scrapewright 支持多实例并行部署，通过独立的 Chrome Profile 实现实例间完全隔离。核心思路：**零扩展改造**，N 个独立 Chrome 实例各用独立 Profile、独立端口。
-
-### 架构
-
-```
-调度平台
-  ├── POST localhost:8760/api/v1/services/{name}/execute  → 实例 0
-  ├── POST localhost:8761/api/v1/services/{name}/execute  → 实例 1
-  └── POST localhost:8762/api/v1/services/{name}/execute  → 实例 2
-```
-
-每个实例拥有独立的 Chrome Profile（Cookie/登录态）、独立的 host.js 进程、独立的执行队列。
-
-### 为什么不改扩展内部并发？
-
-Chrome MV3 限制每个扩展只能有 **1 个 offscreen document**（脚本执行环境），这是平台级硬限制。扩展内部并发需要重写整个脚本执行路径，成本极高。而多 Profile 方案利用 Chrome 原生的多进程能力，每个实例完全独立，无需改动任何扩展代码。
-
-### 本地多实例部署
+### 查看主机日志
 
 ```bash
-# 1. 编辑配置
-vim deploy/config.yaml
-
-# 2. 启动 5 个实例
-cd deploy && ./scrapewright-manager.sh start
-
-# 3. 查看状态
-./scrapewright-manager.sh status
-
-# 4. 停止所有实例
-./scrapewright-manager.sh stop
+./bin/scrapewright logs -f                        # 全平台
+tail -f ~/Library/Logs/scrapewright/host.log      # macOS
+tail -f ~/.cache/scrapewright/host.log            # Linux
 ```
 
-配置项（`deploy/config.yaml`）：
+启动崩溃的完整堆栈在同目录的 `startup-error.log`。
 
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `basePort` | `8760` | 起始 HTTP 端口（实例 N 使用 basePort+N） |
-| `baseDebugPort` | `9220` | 起始 Chrome 远程调试端口 |
-| `instances` | `5` | 实例数量 |
-| `headless` | `false` | 无头模式（不需要登录态时设为 true） |
+### 懒加载 / 无限滚动站点采不全
 
-### Docker / K8s 部署
+后台标签页会被 Chrome 节流，`IntersectionObserver` 懒加载（社交信息流、无限滚动列表）可能不触发。两条措施：
 
 ```bash
-# 构建镜像
-docker build -f deploy/Dockerfile -t scrapewright .
-
-# K8s 部署
-kubectl apply -f deploy/k8s.yaml
-
-# 扩容到 10 个实例
-kubectl scale deployment scrapewright --replicas=10
+./bin/scrapewright throttle on    # 把抗节流参数写入 Chrome 启动器
+# 完全退出 Chrome 后重启，再正常采集
+./bin/scrapewright throttle status  # 确认已生效；throttle off 可撤销
 ```
 
-K8s 中每个 Pod 运行 1 个 Chrome + 1 个 host.js，通过 `/health` 端点做存活和就绪探针。调度平台通过 `scrapewright.default.svc.cluster.local:8765` 访问。
+同时在 Options → Settings 打开 **Enhanced Scraping Mode**（滚动卡住时发送真实滚轮事件）。五层抗节流机制的原理见[白皮书 §9](docs/technical-whitepaper.md)。
 
-### 需登录态的网站
+### 代码改了没生效
 
-- **本地部署**：有头模式启动 Chrome → 人工登录目标网站 → Cookie 持久化到 Profile 目录
-- **K8s 部署**：将已登录的 Profile 打包为 PersistentVolume，挂载到 Pod
+- 扩展代码 → `chrome://extensions/` 点击扩展卡片刷新图标
+- 主机代码 → `./bin/scrapewright restart`
 
-### 吞吐量参考
+## 核心特性
 
-| 实例数 | 吞吐量 | 内存需求 |
-|--------|--------|---------|
-| 1 | ~2 任务/分 | 2GB |
-| 5 | ~10 任务/分 | 8GB |
-| 10 | ~20 任务/分 | 16GB |
-| K8s 20 Pod | ~40 任务/分 | 按节点分配 |
+### 系统价值
 
-## 技术架构要点
+- **配置一次，长期复用** — 采集逻辑沉淀为服务，不是每次现写脚本；输入输出有 Schema 约束，调用方无需关心目标网站长什么样
+- **登录态零成本** — 复用你已登录的浏览器会话，这是服务器端方案最难复制的能力
+- **自愈** — auto-fix 在配置期和运行时都会分析失败原因并重写脚本；网站改版后修复成本远低于重写
+- **数据不出本机** — 自部署，LLM 只在配置期接触页面结构（执行期不需要 LLM）
+- **非技术用户友好** — 向导式操作 + 可视化元素标注；标注你的意图，AI 按意图生成
+- **一专多能** — 同一步骤图引擎也可用作轻量 Web 测试自动化（点击、输入、等待、断言、分支）
+- **可扩展** — 需要更高吞吐时支持多实例并行部署（Docker/K8s，见[白皮书 §12](docs/technical-whitepaper.md)）
 
-Scrapewright 建立四大支柱之上：**三层桥接架构**（外部程序 → Node.js HTTP Host → Chrome 扩展 → 目标页面），绕过 MV3 对 Service Worker 运行 HTTP 服务器的禁令；**步骤图编排引擎**（`StepOrchestrator`）执行一个有向步骤图，支持条件跳转、轮询/重试预算与跨步骤数据传递；通过单一的 offscreen 托管 iframe 实现**沙盒脚本执行**（在 MV3 CSP 下允许 `eval`/`new Function`）；Host 与扩展之间采用**单一 HTTP 传输**（双向长轮询），主机以操作系统后台服务形式运行。AI 驱动的脚本生成、步骤级自动修复与可视化元素标注构建于这些支柱之上。
+底层能力一览：跨 iframe 采集、详情页逐条下钻（`$openTab`）、悬浮卡片字段增强（`$extractWithHover`）、流式内容完成检测（`$waitForStable`）、抗混淆稳定选择器、提示词体积防护。脚本 DSL 共 19 个原语，全部由 AI 生成、可手动编辑，详见[白皮书 §7](docs/technical-whitepaper.md)。
 
-完整的架构、数据流、模块参考、文件目录布局、Chrome MV3 约束表与开发/贡献指南详见 [技术白皮书](docs/technical-whitepaper.md)。
+### 与其他方案对比
 
+AI 辅助采集主要有四条技术路线。核心区别是**用谁的浏览器**：
+
+| 路线 | 代表 | 浏览器 | 登录态 |
+|------|------|--------|--------|
+| 服务器端 headless 采集 | Firecrawl、Crawl4AI | 服务器 Chromium | 需注入 Cookie |
+| 服务器端 AI agent | Skyvern、Browser-use | 服务器浏览器 | 模拟登录 |
+| 开发者编程式 | Claude Code + Playwright | 本机/CI headless | 手动处理 |
+| **客户端扩展（本项目）** | **Scrapewright** | **你的日常 Chrome** | **天然复用** |
+
+与同类产品的差异：
+
+| 产品 | 核心差异 |
+|------|---------|
+| [Firecrawl](https://www.firecrawl.dev/) | 我们复用用户登录态 + 生成可执行脚本（非仅 HTML→Markdown）；本地部署 |
+| [Crawl4AI](https://github.com/unclecode/crawl4ai) | 我们是可视化向导（无需写 Python） |
+| [Skyvern](https://www.skyvern.com/) / [Browser-use](https://browser-use.com/) | 我们配置一次成服务可重复调用（vs 每次交互式驱动） |
+| [AgentQL](https://agentql.com/) | 我们提供完整多步骤编排 + auto-fix（vs 单点选择器智能） |
+
+**适合你，如果：** 需要登录态的采集（内网/付费内容/SaaS 后台）、非技术人员要自定义采集、低频高价值查询（AI 问答、人物/机构信息、知识图谱）、复杂页面（iframe、动态加载、流式输出）。
+
+**不适合，如果：** 万级 URL 大规模高并发（单浏览器瓶颈，用服务器端方案）、7×24 无人值守（依赖你的 Chrome 运行）、需要拦截/Mock 网络请求（用 Playwright/CDP）。
+
+**一句话定位：个人/团队浏览器里的 AI 采集助手——把"打开浏览器 → 登录 → 操作 → 提取"配置成可被程序调用的 HTTP 服务。**
+
+### 典型场景
+
+- **内部数据自动化** — 登录后的管理后台、报表系统，定时拉取关键指标
+- **AI 问答采集** — 向各家 AI 提同样的问题，收集回答做评测或知识库
+- **列表 + 详情页** — 搜索结果、商品列表逐条打开详情，提取完整字段
+- **门户/政府网站** — 深层 iframe 嵌套的公告、公示信息
+- **情报与知识图谱** — 人物、机构、话题的低频高价值查询
+- **Web 测试自动化** — 用步骤图表达"点击→输入→断言"的回归测试
 
 ## 版权与许可证
 
-本项目采用 [**GNU General Public License v3.0**](./LICENSE)（GPLv3）开源协议发布。
+本项目采用 [**GPLv3**](./LICENSE) 开源。
 
-### 使用须知
+- 自由使用、修改、分发，包括商业用途
+- 分发或以 SaaS 形式部署时，**必须**同时开源你的衍生代码（同等 GPLv3 协议）
+- 保留原始版权与许可证声明
 
-- ✅ **允许**：自由使用、复制、修改、分发本程序，包括商业用途
-- ✅ **允许**：将本项目整合到更大的系统中
-- ⚠️ **义务**：任何分发或公开部署**必须**同时提供完整的源代码
-- ⚠️ **义务**：修改后的版本**必须**以相同协议（GPLv3）开源，并标注修改说明
-- ⚠️ **义务**：保留原始版权声明与许可证声明
-
-> 简而言之：**你可以免费用、可以拿去卖钱、可以二开，但只要分发（含 SaaS 形式的网络服务部署），就必须同样开源你的衍生代码。**
-
-完整法律文本见根目录 [`LICENSE`](./LICENSE) 文件。GPLv3 官方说明：<https://www.gnu.org/licenses/gpl-3.0.html>
-
-### 开发者
-
-**湖南星汉数智科技有限公司**
-官网：<https://www.singhand.com>
-
-### 贡献
-
-欢迎通过 Issue 报告 Bug 或提出功能建议。提交 Pull Request 即表示您同意将贡献内容按 GPLv3 协议开源。
+完整法律文本见 [`LICENSE`](./LICENSE)。欢迎通过 Issue 报告问题、Pull Request 贡献代码（提交即表示同意以 GPLv3 开源）。
 
 ```text
 Scrapewright
-Copyright (C) 2026 湖南星汉数智科技有限公司
+Copyright (C) 2026 Scrapewright Contributors
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -718,4 +396,3 @@ but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 ```
-
