@@ -28,7 +28,7 @@
         </div>
       </div>
       <div class="native-actions">
-        <button id="nativeReconnect">Reconnect</button>
+        <button id="nativeReconnect" class="btn-primary">Reconnect</button>
         <button id="nativeCopyDiag" class="btn-secondary">Copy Diagnostics</button>
       </div>
       <p class="hint">The host runs as an OS background service (systemd / launchd / scheduled task). If the badge is red, the host isn't reachable — copy diagnostics or run <code>scrapewright doctor</code>.</p>
@@ -56,7 +56,7 @@
       <div class="section-head">
         <h2>Services</h2>
       </div>
-      <button id="newService">+ New Service</button>
+      <button id="newService" class="btn-primary">+ New Service</button>
       <button id="exportAll">Export All</button>
       <button id="importBtn">Import</button>
       <input type="file" id="importFile" accept=".json" class="hidden" />
@@ -89,11 +89,11 @@
       <p class="hint">Per-request timeout for LLM calls. Blank = 120s. Increase if your model is slow; lower for faster failure.</p>
       <input type="number" id="llmMaxTokens" placeholder="Max output tokens (default 8192)" min="1024" max="131072" step="1024" />
       <p class="hint">Completion token budget for every LLM call (max_tokens). Blank = 8192. Raise it if your model spends tokens on reasoning or truncates long JSON outputs (finish_reason=length).</p>
-      <button id="saveLlm">Save LLM Config</button>
+      <button id="saveLlm" class="btn-primary">Save LLM Config</button>
 
       <h3>Server Configuration</h3>
       <input type="number" id="serverPort" placeholder="8765" min="1" max="65535" />
-      <button id="savePort">Save Port</button>
+      <button id="savePort" class="btn-primary">Save Port</button>
       <button id="testConnection" class="btn-secondary">Test Connection</button>
       <span id="connectionResult" class="connection-result"></span>
       <p class="hint">Host runs as an OS service. Port must match what <code>scrapewright install --port=N</code> was given.</p>
@@ -142,7 +142,7 @@
     <div class="modal-content">
       <span class="modal-close">&times;</span>
       <h2 id="apiDocTitle">API Documentation</h2>
-      <button id="apiDocDownloadMd" class="btn-secondary">⬇ Download Markdown</button>
+      <button id="apiDocDownloadMd" class="btn-secondary">Download Markdown</button>
       <div id="apiDocBody"></div>
     </div>
   </div>
