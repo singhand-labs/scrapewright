@@ -1,28 +1,208 @@
-body { font-family: system-ui, sans-serif; margin: 0; background: #f5f5f5; }
-.container { max-width: 800px; margin: 0 auto; padding: 20px; }
-h1 { font-size: 24px; margin-bottom: 20px; }
-.hidden { display: none !important; }
+/* ============================================================================
+   Scrapewright options — professional light theme
+   ----------------------------------------------------------------------------
+   Design system (ui-ux-pro-max, Swiss Modernism discipline on a Micro-SaaS
+   palette): 4px base spacing unit, single indigo accent, slate neutrals,
+   consistent 10px/8px radii, layered micro-shadows, WCAG AA+ text contrast.
+   Selector contract: every id/class below is referenced by options.js —
+   state classes (.hidden, .toast.info/.error/.success/.dismissible,
+   .badge.enabled/.disabled, .native-badge.connected/.disconnected/.unknown,
+   .connection-result.ok/.fail) must keep their names.
+   ============================================================================ */
+
+:root {
+  --bg: #f1f5f9;
+  --surface: #ffffff;
+  --surface-2: #f8fafc;
+  --text: #0f172a;
+  --text-muted: #475569;
+  --text-faint: #64748b;
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-soft: #eef2ff;
+  --accent-border: #c7d2fe;
+  --success: #047857;
+  --success-soft: #ecfdf5;
+  --success-border: #a7f3d0;
+  --danger: #b91c1c;
+  --danger-soft: #fef2f2;
+  --danger-border: #fecaca;
+  --code-bg: #f1f5f9;
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05), 0 1px 3px rgba(15, 23, 42, 0.07);
+  --shadow-md: 0 4px 6px -2px rgba(15, 23, 42, 0.05), 0 10px 20px -4px rgba(15, 23, 42, 0.1);
+  --radius-card: 10px;
+  --radius-ctl: 8px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter",
+    "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono",
+    Menlo, Consolas, "Courier New", monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: var(--font);
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+.container { max-width: 860px; margin: 0 auto; padding: 28px 20px 48px; }
+
+/* --- Page title ---------------------------------------------------------- */
+h1 {
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  margin: 0 0 20px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+h1::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* --- Sections ------------------------------------------------------------ */
+section {
+  background: var(--surface);
+  padding: 20px;
+  border-radius: var(--radius-card);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 16px;
+}
+
+h2 {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+  margin: 0 0 14px;
+}
+
 .section-head { display: flex; justify-content: space-between; align-items: center; }
 .section-head h2 { margin: 0; }
 
-/* === Settings entry card (top of page) =====================================
-   Promoted out of the Services section-head so users can actually find it.
-   Clicking opens #settingsModal. */
+.hidden { display: none !important; }
+
+/* --- Buttons ---------------------------------------------------------------
+   Three tiers: .btn-primary (solid accent, one per view), default/secondary
+   (surface + border), .btn-danger (soft red). All share 150ms color
+   transitions — no transform hovers (layout shift), focus-visible rings. */
+button {
+  font: inherit;
+  font-weight: 500;
+  padding: 7px 14px;
+  cursor: pointer;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-ctl);
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s,
+    box-shadow 0.15s;
+}
+button:hover { background: var(--surface-2); border-color: var(--text-faint); }
+button:active { background: var(--code-bg); }
+button:disabled { opacity: 0.55; cursor: not-allowed; }
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+.settings-card:focus-visible,
+.modal-close:focus-visible,
+.toast-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+}
+.btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+
+.btn-secondary {
+  background: var(--surface);
+  color: var(--text-muted);
+  border: 1px solid var(--border-strong);
+}
+.btn-secondary:hover { background: var(--surface-2); border-color: var(--text-faint); color: var(--text); }
+
+.btn-danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border: 1px solid var(--danger-border);
+}
+.btn-danger:hover {
+  background: #fee2e2;
+  border-color: #fca5a5;
+}
+
+/* --- Forms ---------------------------------------------------------------- */
+input, select {
+  display: block;
+  width: 100%;
+  margin: 8px 0;
+  padding: 8px 10px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-ctl);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+input::placeholder { color: var(--text-faint); }
+input:hover, select:hover { border-color: var(--text-faint); }
+input:focus, select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.hint {
+  font-size: 12.5px;
+  color: var(--text-faint);
+  line-height: 1.6;
+  margin: 6px 0 12px;
+}
+.hint code, .native-value, p code, li code {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  word-break: break-all;
+}
+
+/* --- Settings entry card -------------------------------------------------- */
 .settings-card {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 16px;
-  background: #f0f9ff;
-  border: 1px solid #bae6fd;
-  border-radius: 6px;
+  padding: 14px 16px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-ctl);
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
+  transition: background-color 0.15s, border-color 0.15s, box-shadow 0.15s;
 }
-.settings-card:hover { background: #e0f2fe; border-color: #7dd3fc; }
-.settings-card:focus-visible {
-  outline: 2px solid #6366f1;
-  outline-offset: 2px;
+.settings-card:hover {
+  background: #e0e7ff;
+  border-color: #a5b4fc;
+  box-shadow: var(--shadow-sm);
 }
 .settings-card .settings-icon {
   flex-shrink: 0;
@@ -31,70 +211,133 @@ h1 { font-size: 24px; margin-bottom: 20px; }
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #6366f1;
+  background: var(--accent);
   color: white;
-  border-radius: 6px;
+  border-radius: var(--radius-ctl);
 }
 .settings-card .settings-icon svg { width: 18px; height: 18px; }
 .settings-card .settings-title {
   font-weight: 600;
-  font-size: 15px;
-  color: #1e40af;
+  font-size: 14px;
+  color: var(--accent-hover);
 }
 .settings-card .settings-desc {
   font-size: 12px;
-  color: #475569;
+  color: var(--text-muted);
   margin-top: 2px;
-  line-height: 1.4;
+  line-height: 1.5;
 }
 
-/* === Service row action buttons ============================================ */
-/* All buttons in a service card share consistent styling; API Doc used to
-   have its own .btn-api-doc class with different size + indigo background,
-   which made it visually inconsistent and awkwardly wedged between Export
-   and Delete. It now uses btn-secondary like other supplementary actions. */
-.service-actions {
+/* --- Services ------------------------------------------------------------- */
+.service-card {
+  border: 1px solid var(--border);
+  padding: 14px 16px;
+  margin: 10px 0;
+  border-radius: var(--radius-ctl);
+  background: var(--surface);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.service-card:hover { border-color: var(--border-strong); box-shadow: var(--shadow-sm); }
+
+.badge {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  margin-left: 8px;
+  vertical-align: 1px;
+}
+.badge.enabled { background: var(--success-soft); color: var(--success); border: 1px solid var(--success-border); }
+.badge.disabled { background: var(--danger-soft); color: var(--danger); border: 1px solid var(--danger-border); }
+
+.svc-url {
+  color: var(--text-faint);
+  font-size: 12.5px;
+  font-family: var(--mono);
+  margin: 4px 0;
+  word-break: break-all;
+}
+.svc-io {
+  font-size: 12px;
+  color: var(--accent-hover);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  padding: 3px 8px;
+  border-radius: 4px;
+  margin: 6px 0 4px;
+  display: inline-block;
+}
+.svc-steps { font-size: 12px; color: var(--text-faint); margin: 4px 0; }
+
+.service-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.service-actions button { margin: 0; padding: 5px 12px; font-size: 13px; }
+
+/* --- Execution history ---------------------------------------------------- */
+.exec-entry {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 10px;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
 }
-.service-actions button {
-  margin: 0;
+.exec-entry:last-child { border-bottom: none; }
+.exec-time {
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 12px;
+  min-width: 160px;
+  font-variant-numeric: tabular-nums;
 }
-section { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
-input, select { display: block; width: 100%; margin: 8px 0; padding: 8px; box-sizing: border-box; }
-button { padding: 8px 16px; cursor: pointer; }
-.service-card { border: 1px solid #ddd; padding: 12px; margin: 8px 0; border-radius: 4px; }
-.badge { font-size: 12px; padding: 2px 6px; border-radius: 4px; margin-left: 8px; }
-.badge.enabled { background: #10b981; color: white; }
-.badge.disabled { background: #ef4444; color: white; }
-.svc-url { color: #666; font-size: 13px; margin: 4px 0; }
-.svc-io { font-size: 12px; color: #0369a1; background: #f0f9ff; padding: 4px 8px; border-radius: 4px; margin: 4px 0; }
+.exec-svc { flex: 1; color: var(--text-muted); }
+
+/* --- Toast ------------------------------------------------------------------
+   Neutral dark surface + colored left border per type (info/error/success).
+   Dismissible variant adds a close button; both set by options.js. */
 .toast {
-  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
-  padding: 12px 24px; border-radius: 6px; color: white; font-size: 14px;
-  z-index: 9999; transition: opacity 0.3s; min-width: 200px; text-align: center;
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 12px 20px;
+  border-radius: var(--radius-ctl);
+  background: #1e293b;
+  color: #f1f5f9;
+  font-size: 13.5px;
+  line-height: 1.5;
+  border-left: 3px solid var(--text-faint);
+  box-shadow: var(--shadow-md);
+  z-index: 9999;
+  transition: opacity 0.3s;
+  min-width: 200px;
+  max-width: 90vw;
+  text-align: center;
 }
-.toast.info { background: #3b82f6; }
-.toast.error { background: #ef4444; }
-.toast.success { background: #10b981; }
+.toast.info { border-left-color: #38bdf8; }
+.toast.error { border-left-color: #f87171; }
+.toast.success { border-left-color: #34d399; }
 .toast.dismissible { display: flex; align-items: center; gap: 16px; text-align: left; }
 .toast-message { flex: 1; }
 .toast-close {
-  background: transparent; border: none; color: white; font-size: 20px;
-  cursor: pointer; padding: 0 4px; line-height: 1; flex-shrink: 0;
+  background: transparent;
+  border: none;
+  color: #cbd5e1;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  flex-shrink: 0;
 }
-.toast-close:hover { opacity: 0.7; }
-.exec-entry { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid #eee; font-size: 13px; }
-.exec-time { color: #666; min-width: 160px; }
-.exec-svc { flex: 1; }
-.svc-steps { font-size: 12px; color: #666; margin: 4px 0; }
+.toast-close:hover { opacity: 0.75; background: transparent; border: none; }
 
+/* --- Modals ---------------------------------------------------------------- */
 .modal {
   position: fixed;
-  top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(0,0,0,0.5);
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -102,9 +345,11 @@ button { padding: 8px 16px; cursor: pointer; }
 }
 
 .modal-content {
-  background: white;
+  background: var(--surface);
   padding: 24px;
-  border-radius: 8px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-md);
   max-width: 700px;
   max-height: 85vh;
   overflow: auto;
@@ -112,58 +357,91 @@ button { padding: 8px 16px; cursor: pointer; }
   position: relative;
 }
 
+.modal-content h2 {
+  font-size: 16px;
+  font-weight: 650;
+  text-transform: none;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  margin: 0 0 16px;
+  padding-right: 32px;
+}
+
 .modal-close {
   position: absolute;
-  top: 12px;
+  top: 14px;
   right: 16px;
-  font-size: 24px;
+  font-size: 22px;
+  line-height: 1;
   cursor: pointer;
-  color: #6b7280;
+  color: var(--text-faint);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, background-color 0.15s;
 }
+.modal-close:hover { color: var(--text); background: var(--code-bg); }
 
 .modal-content h3 {
-  font-size: 15px;
-  margin: 20px 0 8px;
-  color: #374151;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+  margin: 24px 0 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
 }
-.modal-content h3:first-of-type { margin-top: 0; }
+.modal-content h3:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
 
-.api-doc-section {
-  margin: 16px 0;
-}
+/* --- API doc modal ---------------------------------------------------------- */
+.api-doc-section { margin: 16px 0; }
 
 .api-doc-section h3 {
-  font-size: 14px;
+  font-size: 12.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  color: var(--text-faint);
   margin: 0 0 8px 0;
-  color: #374151;
+  border-top: none;
+  padding-top: 0;
 }
 
 .api-doc-section pre {
-  background: #1e1e1e;
-  color: #d4d4d4;
-  padding: 12px;
-  border-radius: 4px;
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 12px 14px;
+  border-radius: var(--radius-ctl);
+  border: 1px solid #1e293b;
   overflow-x: auto;
-  font-size: 13px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.6;
   margin: 0;
 }
 
-.api-doc-section code {
-  font-family: 'Courier New', monospace;
-}
+.api-doc-section code { font-family: var(--mono); font-size: 12.5px; }
 
 .api-doc-section .endpoint {
-  background: #f0f9ff;
-  color: #0369a1;
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+  border: 1px solid var(--accent-border);
   padding: 8px 12px;
-  border-radius: 4px;
-  font-family: 'Courier New', monospace;
-  font-size: 13px;
+  border-radius: var(--radius-ctl);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  word-break: break-all;
 }
 
 .api-doc-section .hint {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--text-faint);
   margin-top: 4px;
 }
 
@@ -176,7 +454,7 @@ button { padding: 8px 16px; cursor: pointer; }
   flex-wrap: wrap;
   margin: 12px 0 4px 0;
   font-size: 13px;
-  color: #374151;
+  color: var(--text-muted);
 }
 
 .api-doc-controls label {
@@ -184,71 +462,74 @@ button { padding: 8px 16px; cursor: pointer; }
   align-items: center;
   gap: 6px;
   font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
 }
 
 .api-doc-controls select {
   display: inline-block;
   width: auto;
   margin: 0;
-  padding: 4px 8px;
+  padding: 5px 8px;
+  font-family: var(--mono);
+  font-size: 12.5px;
 }
 
 .api-doc-controls .hint {
   flex-basis: 100%;
   font-size: 12px;
-  color: #6b7280;
+  color: var(--text-faint);
 }
 
-/* === Native Host Status card ============================================== */
-
+/* --- Host status card -------------------------------------------------------- */
 .native-host-status .native-status-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 .native-badge {
   display: inline-block;
-  padding: 4px 10px;
-  border-radius: 4px;
-  color: white;
-  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.05em;
+  border: 1px solid transparent;
 }
+.native-badge.connected { background: var(--success-soft); color: var(--success); border-color: var(--success-border); }
+.native-badge.disconnected { background: var(--danger-soft); color: var(--danger); border-color: var(--danger-border); }
+.native-badge.unknown { background: var(--code-bg); color: var(--text-muted); border-color: var(--border-strong); }
 
-.native-badge.connected    { background: #10b981; }  /* green — host reachable at configured port */
-.native-badge.disconnected { background: #ef4444; } /* red — no host reachable */
-.native-badge.unknown   { background: #6b7280; }  /* gray — haven't checked yet */
-
-.native-mode-desc {
-  font-size: 13px;
-  color: #374151;
-}
+.native-mode-desc { font-size: 13px; color: var(--text-muted); }
 
 .native-details {
-  background: #f9fafb;
-  border-radius: 4px;
-  padding: 10px 12px;
-  margin-bottom: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-ctl);
+  padding: 10px 14px;
+  margin-bottom: 14px;
   font-size: 13px;
 }
 
 .native-detail-row {
   display: flex;
-  padding: 2px 0;
-  gap: 6px;
+  padding: 3px 0;
+  gap: 8px;
 }
 
 .native-detail-row .native-label {
-  color: #6b7280;
+  color: var(--text-faint);
   min-width: 130px;
+  flex-shrink: 0;
 }
 
 .native-detail-row .native-value {
-  color: #111827;
+  color: var(--text);
   word-break: break-all;
 }
 
@@ -256,50 +537,57 @@ button { padding: 8px 16px; cursor: pointer; }
   display: flex;
   margin-top: 6px;
   padding-top: 6px;
-  border-top: 1px solid #e5e7eb;
+  border-top: 1px solid var(--border);
 }
 
 .native-error-text {
-  color: #b91c1c;
-  font-family: 'Courier New', monospace;
+  color: var(--danger);
+  font-family: var(--mono);
   font-size: 12px;
   white-space: pre-wrap;
 }
 
-.native-actions {
-  display: flex;
-  gap: 8px;
-}
+.native-actions { display: flex; gap: 8px; }
 
-.btn-secondary {
-  background: #f3f4f6;
-  color: #374151;
-  border: 1px solid #d1d5db;
-}
+.connection-result { margin-left: 8px; font-weight: 600; font-size: 13px; }
+.connection-result.ok { color: var(--success); }
+.connection-result.fail { color: var(--danger); }
 
-.btn-danger {
-  background: #fef2f2;
-  color: #b91c1c;
-  border: 1px solid #fecaca;
-}
-.btn-danger:hover {
-  background: #fee2e2;
-  border-color: #fca5a5;
-}
-
-.connection-result { margin-left: 8px; font-weight: 600; }
-.connection-result.ok { color: #166534; }
-.connection-result.fail { color: #991b1b; }
-
-/* Enhanced scraping mode toggle — now lives inside #settingsModal */
+/* --- Enhanced mode switch (settings modal) ----------------------------------- */
 .enhanced-mode-row { display: flex; align-items: flex-start; gap: 12px; margin: 8px 0; }
-.enhanced-mode-desc { color: #555; font-size: 13px; line-height: 1.5; margin-top: 2px; }
+.enhanced-mode-desc { color: var(--text-muted); font-size: 13px; line-height: 1.55; margin-top: 2px; }
 #enhancedModeStatus { font-weight: 600; }
 
 .switch { position: relative; display: inline-block; width: 40px; height: 22px; flex-shrink: 0; }
 .switch input { opacity: 0; width: 0; height: 0; }
-.switch .slider { position: absolute; cursor: pointer; inset: 0; background: #ccc; transition: 0.2s; border-radius: 22px; }
-.switch .slider::before { content: ''; position: absolute; height: 16px; width: 16px; left: 3px; top: 3px; background: #fff; transition: 0.2s; border-radius: 50%; }
-.switch input:checked + .slider { background: #2563eb; }
+.switch .slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background: var(--border-strong);
+  transition: background-color 0.2s;
+  border-radius: 22px;
+}
+.switch .slider::before {
+  content: '';
+  position: absolute;
+  height: 16px;
+  width: 16px;
+  left: 3px;
+  top: 3px;
+  background: #ffffff;
+  transition: transform 0.2s;
+  border-radius: 50%;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.2);
+}
+.switch input:checked + .slider { background: var(--accent); }
 .switch input:checked + .slider::before { transform: translateX(18px); }
-.switch input:disabled + .slider { background: #ddd; cursor: not-allowed; }
+.switch input:disabled + .slider { background: var(--border); cursor: not-allowed; }
+.switch input:focus-visible + .slider { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
