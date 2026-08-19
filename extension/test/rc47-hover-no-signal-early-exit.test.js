@@ -56,16 +56,21 @@ describe('RC47: domHover defines a no-signal early-exit threshold', () => {
       '(e.g. NO_SIGNAL_EARLY_EXIT_MS = 1500).');
   });
 
-  it('early-exit threshold is >= 1200ms and <= 2000ms', () => {
+  it('early-exit threshold is >= 1200ms and strictly below the default polling timeout', () => {
     // Real hovercards mount in 600-1600ms. Threshold must be:
     //   - high enough to admit slow-but-real mounts (>= 1200ms)
-    //   - low enough to actually save time vs the 3000ms default (< 2000ms)
+    //   - strictly below the default polling timeout, else the branch is
+    //     dead code (RC60 raised it 1500 → 3000ms per user decision for
+    //     robustness; the default timeout rose to 4500ms in lockstep).
     const body = sliceDomHover(readSrc('content-script.js'));
     const m = body.match(/NO_SIGNAL_EARLY_EXIT_MS\s*=\s*(\d+)/);
     assert.ok(m, 'NO_SIGNAL_EARLY_EXIT_MS = <number> must be declared');
     const val = parseInt(m[1], 10);
-    assert.ok(val >= 1200 && val <= 2000,
-      'NO_SIGNAL_EARLY_EXIT_MS must be in [1200, 2000] (real hovercards mount in 600-1600ms). Got: ' + val);
+    const defaultMs = parseInt(
+      body.match(/opts\.timeoutMs\s*===\s*'number'[^\n]*\?\s*opts\.timeoutMs\s*:\s*(\d+)/)[1], 10);
+    assert.ok(val >= 1200 && val < defaultMs,
+      'NO_SIGNAL_EARLY_EXIT_MS must be in [1200, default timeout). Got: ' + val +
+      ' (default ' + defaultMs + 'ms)');
   });
 });
 

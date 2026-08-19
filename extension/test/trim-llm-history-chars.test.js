@@ -6,10 +6,12 @@ const path = require('node:path');
 const WIZARD_PATH = path.join(__dirname, '..', 'wizard.js');
 
 // Local reimplementation of the post-RC24 trimLlmHistory logic, for unit testing.
+// RC60: floor is 2 (keep the last user/assistant pair) — the old `> 4` floor
+// let a 4-message / 176K-char history sit over the 150K cap untrimmed.
 function trimLlmHistoryImpl(history, fingerprintsInHistory, maxChars = 150000) {
   let total = history.reduce((n, m) => n + (m.content?.length || 0), 0);
   let trimmed = false;
-  while (total > maxChars && history.length > 4) {
+  while (total > maxChars && history.length > 2) {
     const removed = history.shift();
     total -= (removed.content?.length || 0);
     trimmed = true;
@@ -49,9 +51,26 @@ describe('trimLlmHistory by total chars (C4)', () => {
     const result = trimLlmHistoryImpl(history, fps, 150000);
     assert.ok(result.trimmed, 'should have trimmed');
     assert.ok(result.total <= 150000, 'total should be under limit');
-    assert.ok(result.history.length >= 4 || result.history.length === history.length,
-      'should keep at least 4 messages or all if already under limit');
+    assert.ok(result.history.length >= 2 || result.history.length === history.length,
+      'should keep at least the last pair (2) or all if already under limit');
     assert.equal(fps.size, 0, 'fingerprintsInHistory should be cleared');
+  });
+
+  it('unit: RC60 — trims a 4-message history that exceeds the cap (old > 4 floor bug)', () => {
+    // Live evidence 2026-08-18: round-3 llmHistory was exactly 4 messages /
+    // 176,469 chars. The old `length > 4` floor blocked every trim.
+    const history = [
+      { role: 'user', content: 'A'.repeat(80000) },
+      { role: 'assistant', content: 'B'.repeat(50000) },
+      { role: 'user', content: 'C'.repeat(30000) },
+      { role: 'assistant', content: 'D'.repeat(20000) }
+    ];
+    const result = trimLlmHistoryImpl(history, null, 150000);
+    assert.ok(result.trimmed, '4-message over-cap history must be trimmable');
+    assert.ok(result.total <= 150000, 'cap enforced, got ' + result.total);
+    assert.equal(result.history.length, 3,
+      'trimming stops as soon as total fits — oldest message dropped, 3 kept (floor 2 never reached here)');
+    assert.equal(result.history[0].role, 'assistant', 'the 80K first message was the one shifted out');
   });
 
   it('unit: does not trim if already under limit', () => {
