@@ -1350,6 +1350,29 @@ async function handleOpenTabExecute(url, scriptStr, parentTabId, reqId) {
   // RC12→RC17: popup window so the detail page actually renders its lazy-loaded
   // content (FB post comments, product reviews, etc.).
   const tab = await createScrapeTab(url);
+  // RC64: activate the sub-tab BEFORE it loads. Chrome only produces
+  // compositor frames for the active tab, so a never-activated sub-tab mounts
+  // the app shell (waits resolve) but never renders content — every extract
+  // comes back deterministically empty. Sticky semantics (RC56): the tab
+  // stays active; on close, the onRemoved landing returns focus to the
+  // user's last-clicked tab.
+  if (typeof TabActivation !== 'undefined' && typeof TabActivation.requestActivation === 'function') {
+    try {
+      const act = await TabActivation.requestActivation(tab.id);
+      debugLogger.log('info', 'background', 'handleOpenTabExecute sub-tab activation', {
+        tabId: tab.id,
+        ok: !!(act && act.ok),
+        activated: !!(act && act.ok && act.activated),
+        crossWindow: !!(act && act.crossWindow),
+        reason: (act && act.reason) || null
+      });
+    } catch (e) {
+      debugLogger.log('warn', 'background', 'handleOpenTabExecute sub-tab activation failed', {
+        tabId: tab.id,
+        error: e && e.message || String(e)
+      });
+    }
+  }
   await waitForTabLoad(tab.id);
   const csReady = await waitForContentScript(tab.id);
   if (!csReady) {

@@ -551,9 +551,14 @@ describe('RC16 background.js — sub-tab capture on $openTab success (structural
     // Slice up to the next top-level function def or end of file. The
     // function is the last one in background.js, so end-of-file is fine.
     const fnBody = SRC.slice(fnStart);
-    // Within the success try-block (the FIRST try in handleOpenTabExecute),
-    // captureSubTabSnapshot(..., 'on success') must appear before closeScrapeTab(tab).
-    const tryBlock = fnBody.match(/try\s*\{[\s\S]*?await\s+closeScrapeTab\(tab\);[\s\S]*?catch\s*\(error\)/);
+    // Within the success try-block (the try that follows executor creation —
+    // RC64 added an earlier activation try/catch guard, so "first try in the
+    // function" is no longer the main one), captureSubTabSnapshot(..., 'on
+    // success') must appear before closeScrapeTab(tab).
+    const anchorIdx = fnBody.indexOf('const executor = new OffscreenExecutor(tab.id)');
+    assert.ok(anchorIdx !== -1, 'could not locate the OffscreenExecutor creation');
+    const tryBlock = fnBody.slice(anchorIdx)
+      .match(/try\s*\{[\s\S]*?await\s+closeScrapeTab\(tab\);[\s\S]*?catch\s*\(error\)/);
     assert.ok(tryBlock, 'could not locate the success try-block (looking for closeScrapeTab(tab) between try and catch)');
     const captureIdx = tryBlock[0].indexOf("captureSubTabSnapshot(tab.id, 'on success')");
     const destroyIdx = tryBlock[0].indexOf('closeScrapeTab(tab)');

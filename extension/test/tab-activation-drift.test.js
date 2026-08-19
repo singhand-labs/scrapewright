@@ -170,4 +170,47 @@ describe('RC20 tab-activation integration drift guard', () => {
               /return withTabActivation/.test(body),
       'domScrollToBottom must return the withTabActivation result');
   });
+
+  it('RC64: handleOpenTabExecute activates the sub-tab before load/execution', () => {
+    const src = fs.readFileSync(BG_PATH, 'utf8');
+    // Slice handleOpenTabExecute's body. Same brace walker as above.
+    const start = src.indexOf('async function handleOpenTabExecute');
+    assert.ok(start !== -1, 'handleOpenTabExecute not found');
+    let depth = 0;
+    let inString = null;
+    let bodyStart = -1;
+    let bodyEnd = -1;
+    for (let i = start; i < src.length; i++) {
+      const ch = src[i];
+      if (inString) {
+        if (ch === '\\') { i++; continue; }
+        if (ch === inString) inString = null;
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === '`') { inString = ch; continue; }
+      if (ch === '{') {
+        if (bodyStart === -1) bodyStart = i;
+        depth++;
+      } else if (ch === '}') {
+        depth--;
+        if (depth === 0) { bodyEnd = i; break; }
+      }
+    }
+    assert.ok(bodyStart !== -1 && bodyEnd !== -1, 'could not slice handleOpenTabExecute body');
+    const body = src.slice(start, bodyEnd + 1);
+    // The guarded activation call must exist inside the function.
+    const actIdx = body.search(/TabActivation\.requestActivation\(\s*tab\.id\s*\)/);
+    assert.ok(actIdx !== -1,
+      'handleOpenTabExecute must call TabActivation.requestActivation(tab.id) — sub-tabs rendering JS-heavy detail pages never produce compositor frames as background tabs (RC20/RC56 mechanism), leaving content extracts deterministically empty');
+    // It must run BEFORE the tab starts loading and before the script executes,
+    // so the page renders with compositor frames from initial load onward.
+    const loadIdx = body.indexOf('waitForTabLoad');
+    assert.ok(loadIdx !== -1, 'handleOpenTabExecute must call waitForTabLoad');
+    assert.ok(actIdx < loadIdx,
+      'activation must precede waitForTabLoad so the sub-tab is active during initial render');
+    const execIdx = body.search(/executor\.execute/);
+    assert.ok(execIdx !== -1, 'handleOpenTabExecute must call executor.execute');
+    assert.ok(actIdx < execIdx,
+      'activation must precede executor.execute');
+  });
 });
