@@ -179,10 +179,14 @@ function trimLlmHistory(maxChars) {
   // C4: trim by total chars, not message count. Preserves multi-round memory
   // for typical autoFix flows (which stay well under the limit) but caps
   // pathological growth (many rounds with page changes).
+  // RC60 (console.log 2026-08-18): floor relaxed 4 → 2. Live evidence: round-3
+  // history was 4 messages / 176,469 chars — over the 150K cap, yet the old
+  // `length > 4` floor blocked every trim. The floor's only job is to keep
+  // the most recent user/assistant pair; anything above it is trimmable.
   const limit = (typeof maxChars === 'number' && maxChars > 0) ? maxChars : 150000;
   let total = wizardState.llmHistory.reduce((n, m) => n + (m.content?.length || 0), 0);
   let trimmed = false;
-  while (total > limit && wizardState.llmHistory.length > 4) {
+  while (total > limit && wizardState.llmHistory.length > 2) {
     const removed = wizardState.llmHistory.shift();
     total -= (removed.content?.length || 0);
     trimmed = true;
@@ -2950,9 +2954,12 @@ If your script does NOT use $openTab, $wait / $ / $extract will run against the 
   // elideDuplicateFinalResults (console.log 2026-08-18): the terminal step's
   // result and finalResult are the same object — the autoFix prompt embedded
   // every output record twice (~250K chars × 2 on top of the history copy).
-  // Applied LAST so it dedupes exactly the bytes about to be serialized.
+  // sampleRecordsForLLMContext (RC60, same log): long record arrays keep
+  // their first 3 entries + an omission marker — ~10 records × several
+  // 5K-capped html fields dominated a ~504K-char single-round prompt.
+  // Applied LAST (sampling after elision) so both compare/serialize full data.
   const testResultSection = wizardState.testResult
-    ? '\n\nPREVIOUS TEST RESULT:\n' + JSON.stringify(elideDuplicateFinalResults(stripPagesFromLLMContext(stripSnapshotsFromTestResult(dedupeStepIterations(wizardState.testResult)))), null, 2)
+    ? '\n\nPREVIOUS TEST RESULT:\n' + JSON.stringify(sampleRecordsForLLMContext(elideDuplicateFinalResults(stripPagesFromLLMContext(stripSnapshotsFromTestResult(dedupeStepIterations(wizardState.testResult))))), null, 2)
     : '';
 
   const RETURN_FORMAT = `RETURN FORMAT — choose ONE:
@@ -3141,10 +3148,12 @@ ${RETURN_FORMAT}`;
     // accumulators (updatedPosts etc.) bypassed the per-field cap and ballooned
     // the prompt to 1.83MB on a 9-iteration step-5. See testResultSection above
     // for ordering rationale.
-    // RC59: elideDuplicateFinalResults applied last — see testResultSection
-    // above; currentOutput embedded the same output twice otherwise.
+    // RC59: elideDuplicateFinalResults — see testResultSection above;
+    // currentOutput embedded the same output twice otherwise.
+    // RC60: sampleRecordsForLLMContext wraps the same chain — see
+    // testResultSection above (record-array diet for ~504K-char prompts).
     const currentOutput = wizardState.testResult
-      ? JSON.stringify(elideDuplicateFinalResults(stripPagesFromLLMContext(stripSnapshotsFromTestResult(dedupeStepIterations(wizardState.testResult)))), null, 2)
+      ? JSON.stringify(sampleRecordsForLLMContext(elideDuplicateFinalResults(stripPagesFromLLMContext(stripSnapshotsFromTestResult(dedupeStepIterations(wizardState.testResult))))), null, 2)
       : '(no output)';
 
     // RC11 regression guard. The user-feedback path runs MAX_ATTEMPTS=1 per

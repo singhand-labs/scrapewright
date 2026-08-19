@@ -1681,7 +1681,7 @@
   async function domHover(selOrEl, popoverSel, opts) {
     if (!selOrEl) throw new Error('$hover requires an anchor selector or element');
     opts = opts || {};
-    var timeoutMs = (typeof opts.timeoutMs === 'number' && opts.timeoutMs > 0) ? opts.timeoutMs : 3000;
+    var timeoutMs = (typeof opts.timeoutMs === 'number' && opts.timeoutMs > 0) ? opts.timeoutMs : 4500;
     var dismiss = (typeof opts.dismiss === 'boolean') ? opts.dismiss : true;
     var index = (typeof opts.index === 'number' && Number.isFinite(opts.index)) ? Math.floor(opts.index) : null;
     // RC43 constants for the three-gate acceptance check.
@@ -1698,20 +1698,22 @@
     var STABILITY_SAMPLE_INTERVAL_MS = 100;
     // RC47 (console.log 2026-08-13): no-signal early-exit threshold. Real
     //   hovercards mount in 600-1600ms (per empirical captures across
-    //   portal-based hovercard frameworks). If by 1500ms no signal has
-    //   appeared — no MutationObserver additions AND no popoverSel match
-    //   (verified via querySelectorDeep(popoverSel) + isElementVisible) —
-    //   the anchor almost certainly has no hovercard. Continuing to poll
-    //   until the 3000ms default timeout wastes ~1.5s per no-hovercard
-    //   anchor. With $extractWithHover iterating many anchors per container
-    //   (and the LLM sometimes writing overly-broad anchorSels that match
-    //   post permalinks, timestamps, etc.), this waste compounds to 5-10
-    //   minutes per step. The NO_SIGNAL_EARLY_EXIT_MS constant caps it at
-    //   1.5s. The path (a) match check (earlyPathAMatch via popoverSel +
-    //   isElementVisible) preserves RC39 pre-allocated portals (which never
-    //   fire MutationObserver but DO match popoverSel once CSS reveals
-    //   them via isElementVisible).
-    var NO_SIGNAL_EARLY_EXIT_MS = 1500;
+    //   portal-based hovercard frameworks). If no signal has appeared — no
+    //   MutationObserver additions AND no popoverSel match (verified via
+    //   querySelectorDeep(popoverSel) + isElementVisible) — the anchor almost
+    //   certainly has no hovercard. With $extractWithHover iterating many
+    //   anchors per container (and the LLM sometimes writing overly-broad
+    //   anchorSels that match post permalinks, timestamps, etc.), unbounded
+    //   polling wastes minutes per step. The NO_SIGNAL_EARLY_EXIT_MS constant
+    //   caps it. RC60 (user decision 2026-08-19): relaxed 1500 → 3000ms for
+    //   robustness on slow-mounting hovercards; the polling default timeout
+    //   rose 3000 → 4500ms in lockstep so this branch stays reachable (at
+    //   threshold == timeout it would be dead code) and no-signal anchors
+    //   stay capped at 3s. The path (a) match check (earlyPathAMatch via
+    //   popoverSel + isElementVisible) preserves RC39 pre-allocated portals
+    //   (which never fire MutationObserver but DO match popoverSel once CSS
+    //   reveals them via isElementVisible).
+    var NO_SIGNAL_EARLY_EXIT_MS = 3000;
 
     // RC45: accept a resolved DOM element as the first argument. Callers like
     // $extractWithHover iterate anchors inside a specific container and pass

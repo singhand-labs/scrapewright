@@ -2235,7 +2235,7 @@ function dedupeStepIterations(testResult) {
   return { ...testResult, steps: [...seen.values()] };
 }
 
-// elideDuplicateFinalResults(testResult) — applied LAST in the serialization
+// elideDuplicateFinalResults(testResult) — applied in the serialization
 // chain (after dedupe → strip snapshots → strip pages). The terminal step's
 // steps[].result and testResult.finalResult are frequently the SAME object:
 // the orchestrator derives finalResult from the last successful step, so the
@@ -2243,8 +2243,36 @@ function dedupeStepIterations(testResult) {
 // 2026-08-18 console.log incident — on top of the history copy). Steps whose
 // result deep-equals finalResult get their result replaced with a marker;
 // finalResult itself is kept full so the output appears exactly once.
+// RC60: results that are earlier-stage SUBSETS of finalResult (same records
+// before a later step enriched them) get the same treatment — deep equality
+// alone left the pre-enrichment copy serialized in full.
 // Non-mutating: returns a shallow-cloned steps array with cloned step entries
 // only where elision occurred — wizardState.testResult is never touched.
+// RC60: is a an earlier-stage version of b? a ⊆ b with tolerance: every key
+// of a must exist in b with a predecessor value; arrays require equal length
+// with >= 80% itemwise predecessor matches (downstream enrichment may rewrite
+// individual records — e.g. content expansion — without breaking the
+// "same record set, before enrichment" relationship).
+function isPredecessorValue(a, b) {
+  if (a === b) return true;
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    if (a.length === 0) return true;
+    let subsetCount = 0;
+    for (let i = 0; i < a.length; i++) {
+      if (isPredecessorValue(a[i], b[i])) subsetCount++;
+    }
+    return subsetCount / a.length >= 0.8;
+  }
+  if (a && typeof a === 'object') {
+    if (!b || typeof b !== 'object' || Array.isArray(b)) return false;
+    const keys = Object.keys(a);
+    if (keys.length === 0) return true;
+    return keys.every(k => k in b && isPredecessorValue(a[k], b[k]));
+  }
+  return false; // primitives: predecessor only when strictly equal (a === b)
+}
+
 function elideDuplicateFinalResults(testResult) {
   if (!testResult || typeof testResult !== 'object') return testResult;
   const finalResult = testResult.finalResult;
@@ -2256,10 +2284,64 @@ function elideDuplicateFinalResults(testResult) {
     steps: testResult.steps.map((step) => {
       if (!step || typeof step !== 'object' || !('result' in step)) return step;
       if (finalJson === null) finalJson = JSON.stringify(finalResult);
-      if (JSON.stringify(step.result) !== finalJson) return step;
-      return { ...step, result: '[elided — identical to finalResult]' };
+      if (JSON.stringify(step.result) === finalJson) {
+        return { ...step, result: '[elided — identical to finalResult]' };
+      }
+      // RC60 (console.log 2026-08-18): the extraction step's pre-enrichment
+      // record set (a subset of finalResult) was serialized in full next to
+      // the final one — ~half of a ~300K-char Current output section. Deep
+      // equality alone missed it; the subset check collapses it too.
+      if (isPredecessorValue(step.result, finalResult)) {
+        return { ...step, result: '[elided — earlier-stage subset of finalResult]' };
+      }
+      return step;
     })
   };
+}
+
+// RC60: sampleRecordsForLLMContext — record-array diet for the serialized
+// testResult embedded in autoFix prompts (console.log 2026-08-18: single-round
+// prompts measured ~504K chars / 235K prompt tokens, dominated by ~10 records
+// × several 5K-capped html fields; rounds 1-2 had cached_tokens:0). The LLM
+// needs structure + empty-patterns + a few full examples; cross-record shape
+// variance is already summarized by the shape-distribution signal, which reads
+// the RAW testResult — not this serialization. Long arrays of record objects
+// keep their first RECORD_KEEP entries plus a marker element disclosing how
+// many were omitted; long primitive arrays (accumulator signature lists) keep
+// PRIMITIVE_KEEP. The top-level `steps` array is never sampled itself — one
+// entry per step is execution-trace data, not records — but sampling recurses
+// INTO each step entry (step results are record arrays too). Non-mutating.
+const OUTPUT_RECORD_KEEP = 3;
+const OUTPUT_PRIMITIVE_ARRAY_KEEP = 20;
+function sampleRecordsForLLMContext(value, opts) {
+  const recordKeep = (opts && Number.isFinite(opts.recordKeep) && opts.recordKeep > 0)
+    ? Math.floor(opts.recordKeep) : OUTPUT_RECORD_KEEP;
+  const primitiveKeep = (opts && Number.isFinite(opts.primitiveKeep) && opts.primitiveKeep > 0)
+    ? Math.floor(opts.primitiveKeep) : OUTPUT_PRIMITIVE_ARRAY_KEEP;
+  const walk = (node) => {
+    if (Array.isArray(node)) {
+      const mapped = node.map(walk);
+      const isRecordArray = mapped.length > 0 &&
+        mapped[0] && typeof mapped[0] === 'object' && !Array.isArray(mapped[0]);
+      const keep = isRecordArray ? recordKeep : primitiveKeep;
+      if (mapped.length > keep) {
+        const omitted = mapped.length - keep;
+        const noun = isRecordArray ? 'records' : 'items';
+        return mapped.slice(0, keep)
+          .concat('[+' + omitted + ' more ' + noun + ' omitted — context budget]');
+      }
+      return mapped;
+    }
+    if (node && typeof node === 'object') {
+      const out = {};
+      for (const [k, v] of Object.entries(node)) {
+        out[k] = (k === 'steps' && Array.isArray(v)) ? v.map(walk) : walk(v);
+      }
+      return out;
+    }
+    return node;
+  };
+  return walk(value);
 }
 
 function formatDomActivitySummary(activities) {
@@ -3598,7 +3680,7 @@ function formatElementsForPrompt(elements, opts) {
 
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
@@ -3686,6 +3768,8 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.stripPagesFromLLMContext = stripPagesFromLLMContext;
   self.dedupeStepIterations = dedupeStepIterations;
   self.elideDuplicateFinalResults = elideDuplicateFinalResults;
+  self.isPredecessorValue = isPredecessorValue;
+  self.sampleRecordsForLLMContext = sampleRecordsForLLMContext;
   self.formatDomActivitySummary = formatDomActivitySummary;
   self.summarizeExecutionDiagnostics = summarizeExecutionDiagnostics;
   self.summarizeAllStepDiagnostics = summarizeAllStepDiagnostics;
