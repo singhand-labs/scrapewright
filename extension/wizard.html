@@ -29,7 +29,7 @@
       <label for="reqOutputStruct">Output structure (optional)</label>
       <textarea id="reqOutputStruct" rows="3" placeholder="e.g. { title, price, publishedAt, detailUrl } (leave empty for AI to infer)"></textarea>
 
-      <button id="btnPhase1Research">Research</button>
+      <button id="btnPhase1Research" class="btn-primary">Research</button>
 
       <div id="explorationPanel" class="exploration-panel hidden">
         <h3>Interactive Exploration</h3>
@@ -68,7 +68,7 @@
 
       <div class="step-nav">
         <button id="btnPhase2Back">Back</button>
-        <button id="btnPhase2Next">Next</button>
+        <button id="btnPhase2Next" class="btn-primary">Next</button>
       </div>
     </div>
 
@@ -80,7 +80,7 @@
       <textarea id="outputSchemaEditor" rows="6"></textarea>
       <label>Test Input (JSON):</label>
       <textarea id="testInputEditor" rows="4"></textarea>
-      <button id="btnPhase3Test">Run Test</button>
+      <button id="btnPhase3Test" class="btn-primary">Run Test</button>
       <button id="btnPhase3Back">Back</button>
     </div>
 
@@ -122,7 +122,7 @@
         <button id="btnRetryTest" class="hidden">Retry Test</button>
         <button id="btnAutoFix" class="hidden">Auto-Fix</button>
         <button id="btnDeployAnyway" class="hidden">Deploy Anyway</button>
-        <button id="btnPhase5Deploy" class="hidden">Looks Good - Deploy</button>
+        <button id="btnPhase5Deploy" class="hidden btn-primary">Looks Good - Deploy</button>
         <button id="btnPhase5EditSteps">Edit Steps</button>
         <button id="btnPhase5Back">Back</button>
       </div>
