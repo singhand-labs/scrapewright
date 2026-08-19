@@ -1,6 +1,6 @@
 # <img src="logo.png" width="44" style="vertical-align:middle" alt="Scrapewright"> Scrapewright
 
-**用自然语言描述你要的数据，Scrapewright 把它变成可重复调用的 HTTP 采集服务。**
+**用自然语言描述网页爬取和信息抽取需求，Scrapewright 把它自动编码为可重复调用的 HTTP 采集服务。**
 
 [English](./README.md) | **简体中文**
 
@@ -9,14 +9,14 @@
 ![Chrome](https://img.shields.io/badge/Chrome-MV3-brightgreen)
 ![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
-开源 · 自部署 · 数据不出本机
+Scrapewright 是一个 **基于大语言模型（LLM）的智能网页数据采集平台**：用自然语言描述“想采集什么”，LLM 会自动分析目标网页，自动生成采集脚本并部署为一个长期运行的服务。使用 Scrapewright 开发和部署网页采集与抽取服务，无需学习框架、无需编写 CSS 选择器、无需应对反爬，且网站改版后的维护将变得极其容易。
 
-从网页中提取数据，传统做法是编写爬虫：学习框架、编写选择器、应对反爬，且网站每次改版都要重新维护。**Scrapewright 将这一过程交给 AI**：在向导中用自然语言描述需求，AI 打开目标网页、分析结构、生成采集脚本并当场试跑；验证效果后，它即成为一个标准 HTTP 接口，供程序、脚本或 AI 智能体调用。
+**Scrapewright 用 AI 开发网页爬虫采集服务**：在向导中用自然语言描述需求，AI 打开目标网页、分析结构、生成采集脚本并当场试跑；验证效果后，它即成为一个标准 HTTP 接口，供程序、脚本或 AI 智能体调用。运行时**不再调用 LLM**、不消耗 token，经济性和速度优于 Agent 驱动浏览器的方式。
 
-它以 Chrome 扩展的形式运行在**日常使用的浏览器**中，因而具备三个天然优势：
+Scrapewright 以 Chrome 扩展的形式运行在**日常使用的浏览器**中，因而具备三个天然优势：
 
 - **登录态直接复用** — 已登录的网站直接采集，无需配置 Cookie、无需模拟登录
-- **页面完整可见** — 浏览器中显示的内容均可采集：JS 动态渲染、iframe 嵌套、翻页、悬浮卡片，以及逐条打开的详情页
+- **页面完整可见** — 浏览器中显示的内容均可采集：JS 动态渲染、iframe 嵌套、翻页、悬浮卡片、延迟加载（lazy render）、节流限制，以及逐条打开的详情页等
 - **无自动化痕迹** — 没有 headless 浏览器的指纹特征，请求来自真实浏览器
 
 脚本执行失败时，AI 会分析 DOM 快照并自动修复重试；网站改版后，同样可以再次修复。每个服务还可导出 Markdown 接口文档，供其他 AI 智能体使用。
@@ -29,13 +29,24 @@
 >
 > 现在任何程序都能调用它：
 >
+> 提交任务（立即返回 jobId）：
 > ```bash
 > curl -X POST http://localhost:8765/api/v1/services/my-service/execute \
 >   -H "X-API-Key: dev-key" -H "Content-Type: application/json" \
 >   -d '{"input": {"query": "你好"}}'
 > ```
+>
+> 获取采集结果（阻塞直到完成）：
+> ```bash
+> curl "http://localhost:8765/api/v1/jobs/<jobId>/wait?timeout=120" \
+>   -H "X-API-Key: dev-key"
+> ```
 
-技术细节请看[技术白皮书](docs/technical-whitepaper.md)（架构、模块、二次开发指南）。
+项目 `examples/` 目录下提供了若干采集服务脚本样例，可在 Options 页通过 **Import** 导入后直接部署。
+
+同一套步骤图（step-graph）引擎还可作为轻量级的 **Web 测试自动化** / 浏览器自动化工具：点击、输入、等待、断言、分支——声明式、可重放、可自愈。
+
+**技术细节**请看[技术白皮书](docs/technical-whitepaper.md)（架构、模块、二次开发指南）。
 
 ## 目录
 
@@ -148,7 +159,7 @@ Research 期间 AI 会经历多个轮次：探索页面结构、发现候选选�
 
 ### 调用服务
 
-部署完成后，服务就是一个本地 HTTP 接口，三步调用：
+部署完成后，服务就是一个本地 HTTP 接口，两步调用：
 
 ```bash
 # 1. 提交任务（立即返回 jobId）

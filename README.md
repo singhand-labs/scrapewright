@@ -1,6 +1,6 @@
 # <img src="logo.png" width="44" style="vertical-align:middle" alt="Scrapewright"> Scrapewright
 
-**Describe the data you want in natural language; Scrapewright turns it into a reusable HTTP service.**
+**Describe your web scraping and data extraction needs in natural language; Scrapewright automatically turns them into reusable HTTP services.**
 
 **English** | [简体中文](./README.zh-CN.md)
 
@@ -9,14 +9,14 @@
 ![Chrome](https://img.shields.io/badge/Chrome-MV3-brightgreen)
 ![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
-Open source · Self-hosted · Your data never leaves your machine
+Scrapewright is an **LLM-powered intelligent web data scraping platform**: describe "what you want to scrape" in natural language, and the LLM analyzes the target page, generates the scraping script, and deploys it as a long-running service. With Scrapewright you build and deploy scraping/extraction services without learning a framework, without writing CSS selectors, and without fighting anti-bot measures — and maintenance after a site redesign becomes almost effortless.
 
-Extracting data from web pages traditionally means writing a scraper: learning a framework, hand-writing selectors, dealing with anti-bot measures, and redoing the work at every site redesign. **Scrapewright automates this process with AI**: in the wizard you describe the requirement in natural language; the AI opens the target page, analyzes its structure, generates the scraping script, and test-runs it on the spot. Once verified, it becomes a standard HTTP endpoint for programs, scripts, or AI agents to call.
+**Scrapewright uses AI to build web scraping services**: in the wizard you describe the requirement in natural language; the AI opens the target page, analyzes its structure, generates the scraping script, and test-runs it on the spot. Once verified, it becomes a standard HTTP endpoint for programs, scripts, or AI agents to call. At run time the deployed service **no longer calls the LLM** and consumes no tokens — cheaper and faster than agent-driven browser control.
 
 It runs as a Chrome extension inside the **browser you already use**, which gives it three inherent advantages:
 
 - **Login state reused as-is** — scrape sites you are already logged into, without cookie configuration or scripted logins
-- **Full page fidelity** — anything visible in the browser is extractable: JS-rendered content, nested iframes, pagination, hover popups, and per-item detail pages
+- **Full page fidelity** — anything visible in the browser is extractable: JS-rendered content, nested iframes, pagination, hover popups, lazy-rendered content, throttling restrictions, and per-item detail pages
 - **No automation fingerprint** — no headless-browser markers; requests come from a genuine browser
 
 When a script fails, the AI analyzes the DOM snapshot and repairs it automatically; the same mechanism applies after a site redesign. Every service can also export a Markdown API doc for other AI agents to consume.
@@ -29,11 +29,22 @@ When a script fails, the AI analyzes the DOM snapshot and repairs it automatical
 >
 > Now any program can call it:
 >
+> Submit a job (returns a jobId immediately):
 > ```bash
 > curl -X POST http://localhost:8765/api/v1/services/my-service/execute \
 >   -H "X-API-Key: dev-key" -H "Content-Type: application/json" \
 >   -d '{"input": {"query": "hello"}}'
 > ```
+>
+> Fetch the result (blocks until done):
+> ```bash
+> curl "http://localhost:8765/api/v1/jobs/<jobId>/wait?timeout=120" \
+>   -H "X-API-Key: dev-key"
+> ```
+
+The `examples/` directory ships ready-to-use sample services you can import on the Options page and deploy directly.
+
+The same step-graph engine also works as a lightweight **web test automation** / browser automation tool: click, type, wait, assert, branch — declarative, replayable, self-healing.
 
 For internals, see the [Technical Whitepaper](docs/technical-whitepaper.en.md) (architecture, modules, customization guide).
 
@@ -148,7 +159,7 @@ The bottom of the page is **Execution History** (last 20 runs: time, service, su
 
 ### Call a Service
 
-Once deployed, a service is a local HTTP endpoint. Three steps:
+Once deployed, a service is a local HTTP endpoint. Two steps:
 
 ```bash
 # 1. Submit a job (returns a jobId immediately)
