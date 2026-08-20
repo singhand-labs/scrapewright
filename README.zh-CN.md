@@ -11,7 +11,7 @@
 
 Scrapewright 是一个 **基于大语言模型（LLM）的智能网页数据采集平台**：用自然语言描述“想采集什么”，LLM 会自动分析目标网页，自动生成采集脚本并部署为一个长期运行的服务。使用 Scrapewright 开发和部署网页采集与抽取服务，无需学习框架、无需编写 CSS 选择器、无需应对反爬，且网站改版后的维护将变得极其容易。
 
-**Scrapewright 用 AI 开发网页爬虫采集服务**：在向导中用自然语言描述需求，AI 打开目标网页、分析结构、生成采集脚本并当场试跑；验证效果后，它即成为一个标准 HTTP 接口，供程序、脚本或 AI 智能体调用。运行时**不再调用 LLM**、不消耗 token，经济性和速度优于 Agent 驱动浏览器的方式。
+**Scrapewright 用 AI 开发网页爬虫采集服务**：在向导中用自然语言描述需求，AI 打开目标网页、分析结构、生成采集脚本并当场试跑；验证效果后，它即成为一个标准 HTTP 接口，供程序、脚本或 AI 智能体调用。**运行时不再调用 LLM**、不消耗 token，经济性和速度远胜于 Agent 驱动浏览器的方式。脚本执行失败时，AI 会分析 DOM 快照并自动修复重试；网站改版后，同样可以再次修复。每个服务还可导出 Markdown 接口文档，供其他 AI 智能体使用。
 
 Scrapewright 以 Chrome 扩展的形式运行在**日常使用的浏览器**中，因而具备三个天然优势：
 
@@ -19,7 +19,6 @@ Scrapewright 以 Chrome 扩展的形式运行在**日常使用的浏览器**中�
 - **页面完整可见** — 浏览器中显示的内容均可采集：JS 动态渲染、iframe 嵌套、翻页、悬浮卡片、延迟加载（lazy render）、节流限制，以及逐条打开的详情页等
 - **无自动化痕迹** — 没有 headless 浏览器的指纹特征，请求来自真实浏览器
 
-脚本执行失败时，AI 会分析 DOM 快照并自动修复重试；网站改版后，同样可以再次修复。每个服务还可导出 Markdown 接口文档，供其他 AI 智能体使用。
 
 > **60 秒上手**
 >
@@ -29,22 +28,22 @@ Scrapewright 以 Chrome 扩展的形式运行在**日常使用的浏览器**中�
 >
 > 现在任何程序都能调用它：
 >
-> 提交任务（立即返回 jobId）：
+>   提交任务（立即返回 jobId）
 > ```bash
 > curl -X POST http://localhost:8765/api/v1/services/my-service/execute \
 >   -H "X-API-Key: dev-key" -H "Content-Type: application/json" \
 >   -d '{"input": {"query": "你好"}}'
 > ```
 >
-> 获取采集结果（阻塞直到完成）：
+>   获取采集结果（阻塞直到完成）
 > ```bash
 > curl "http://localhost:8765/api/v1/jobs/<jobId>/wait?timeout=120" \
 >   -H "X-API-Key: dev-key"
 > ```
 
-项目 `examples/` 目录下提供了若干采集服务脚本样例，可在 Options 页通过 **Import** 导入后直接部署。
+项目 `examples/` 目录下提供了若干采集脚本样例，可在 Options 页通过 **Import** 导入后直接部署。
 
-同一套步骤图（step-graph）引擎还可作为轻量级的 **Web 测试自动化** / 浏览器自动化工具：点击、输入、等待、断言、分支——声明式、可重放、可自愈。
+此外，本项目还可作为轻量级的 **Web 测试自动化** / 浏览器自动化工具：点击、输入、等待、断言、分支——声明式、可重放、可自愈。
 
 **技术细节**请看[技术白皮书](docs/technical-whitepaper.md)（架构、模块、二次开发指南）。
 
@@ -70,7 +69,7 @@ Scrapewright 以 Chrome 扩展的形式运行在**日常使用的浏览器**中�
 | **难以复用** | 给网站 A 写的爬虫帮不到结构类似的网站 B |
 | **没有统一接口** | 每个采集任务的输入输出格式都不同，编排和调度无从下手 |
 
-Scrapewright 的回答是：**让 AI 在真实浏览器里替你配置采集，并把结果标准化成 HTTP 服务。**
+Scrapewright 的方案是：**让 AI 在真实浏览器里替你配置采集，并把结果标准化成 HTTP 服务。**
 
 - **AI 驱动** — 自然语言描述需求，LLM 分析页面、生成脚本、失败自动修复
 - **真实浏览器** — Chrome 扩展运行在你日常的浏览器里，登录态、Cookie、指纹原样复用
@@ -81,16 +80,18 @@ Scrapewright 的回答是：**让 AI 在真实浏览器里替你配置采集，�
 
 - Chrome 浏览器（最新稳定版）
 - Node.js >= 18
-- 任一 LLM 服务的 API Key：OpenAI / Moonshot Kimi / Anthropic / GLM 智谱（或任何 OpenAI 兼容接口）
+- 任一 LLM 服务的 API Key：OpenAI / Moonshot Kimi / Anthropic / GLM 智谱（或任何 OpenAI 兼容接口），推荐使用上下文窗口长的模型（如GLM 5.2）
 
 ## 快速开始
 
 ### 安装
 
+下载本项目源码后，按照如下步骤安装。
+
 #### 1. 加载 Chrome 扩展
 
-1. 打开 Chrome，进入 `chrome://extensions/`
-2. 开启右上角**"开发者模式"**
+1. 打开 Chrome，在地址栏输入 `chrome://extensions/`
+2. 开启Chrome扩展管理页面右上角**"开发者模式"**
 3. 点击**"加载已解压的扩展程序"**，选择本项目的 `extension/` 目录
 
 #### 2. 安装主机
@@ -103,7 +104,7 @@ Scrapewright 的回答是：**让 AI 在真实浏览器里替你配置采集，�
 ./bin/scrapewright install --port=9123        # 自定义端口（所有平台）
 ```
 
-安装后打开扩展 → **Options** → **Server Configuration** 确认端口一致（默认 `8765`），点击 **Test Connection**，状态徽标显示 **Connected** 即成功。
+安装后打开Chrome扩展Scrapewright → **Options** → **Server Configuration** 确认端口一致（默认 `8765`），点击 **Test Connection**，状态徽标显示 **Connected** 即成功。
 
 #### 3. 配置 LLM
 
@@ -121,11 +122,11 @@ Scrapewright 的回答是：**让 AI 在真实浏览器里替你配置采集，�
 
 | 阶段 | 你做什么 |
 |------|---------|
-| **1. 目标与需求** | 填目标网址 + 一句话需求（要哪些字段、翻不翻页）。点 **Research**，AI 打开页面分析并生成草稿 |
+| **1. 目标与需求** | 填目标网址 + 需求（输入参数、页面操作步骤、要返回哪些字段）。点 **Research**，AI 打开页面分析并生成草稿 |
 | **2. 名称与步骤** | 给服务命名，查看/编辑 AI 生成的步骤（每步一段脚本，可手动微调） |
 | **3. 接口定义** | 确认输入/输出的 JSON Schema 和测试数据 |
 | **4. 执行测试** | 实时观看逐步执行过程：打开页面 → 每一步 → 成功/失败 |
-| **5. 结果** | 检查提取的数据。不满意就点 **Auto-Fix** 让 AI 修，或直接部署 |
+| **5. 结果** | 检查提取的数据。不满意就点 **Auto-Fix** 让 AI 修，直到满意后点击部署，便可对外提供服务 |
 
 <p align="center">
   <img src="docs/phase1.png" width="72%" alt="向导阶段 1：描述目标与需求">
@@ -172,7 +173,7 @@ curl -s "http://localhost:8765/api/v1/jobs/$JOB_ID/wait?timeout=120" \
   -H "X-API-Key: dev-key" | jq '.job.result'
 ```
 
-**交给 AI 智能体调用。** 每个服务都可以在 Options 页通过 **API Doc** 按钮下载 Markdown 接口文档；将文档提供给 Hermes Agent、WorkBuddy、龙虾 等智能体后，它们即可直接调用该服务。
+**交给 AI 智能体调用。** 每个服务都可以在 Options 页通过 **API Doc** 按钮下载 Markdown 接口文档；将文档提供给 Hermes Agent、WorkBuddy、龙虾 等智能体后，让它们自己开发相应工具或skill来调用该服务。
 
 完整接口说明（参数、状态、错误码、页面记录字段）见 [采集服务接口（HTTP API）](#采集服务接口http-api)。
 
@@ -326,6 +327,7 @@ tail -f ~/.cache/scrapewright/host.log            # Linux
 - **登录态零成本** — 复用你已登录的浏览器会话，这是服务器端方案最难复制的能力
 - **自愈** — auto-fix 在配置期和运行时都会分析失败原因并重写脚本；网站改版后修复成本远低于重写
 - **数据不出本机** — 自部署，LLM 只在配置期接触页面结构（执行期不需要 LLM）
+- **运行时不烧Token** — LLM只在配置服务时用于研究页面和生成脚本，脚本部署后不再调用LLM，不烧Token，速度快、成本低
 - **非技术用户友好** — 向导式操作 + 可视化元素标注；标注你的意图，AI 按意图生成
 - **一专多能** — 同一步骤图引擎也可用作轻量 Web 测试自动化（点击、输入、等待、断言、分支）
 - **可扩展** — 需要更高吞吐时支持多实例并行部署（Docker/K8s，见[白皮书 §12](docs/technical-whitepaper.md)）
