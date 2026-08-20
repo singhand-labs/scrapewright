@@ -419,19 +419,31 @@ async function loadServices() {
 }
 
 // Reads the host machine's non-internal IPv4s from /health (reported by
-// native-host/lib/network-info.js). Returns [] when the host is unreachable
-// — the modal then offers localhost only.
+// native-host/lib/network-info.js — the extension itself has no API to
+// enumerate network interfaces). Returns { reachable, reported, ips } so the
+// UI can distinguish a down host from a reachable host running a pre-ips
+// build (both previously collapsed to [] and showed "Host unreachable").
 async function fetchLocalIps(port) {
   try {
     const r = await fetch(`http://localhost:${port}/health`, { signal: AbortSignal.timeout(3000) });
-    if (!r.ok) return [];
+    if (!r.ok) return { reachable: false, reported: false, ips: [] };
     const body = await r.json();
-    return Array.isArray(body.ips)
-      ? body.ips.filter(ip => /^\d+\.\d+\.\d+\.\d+$/.test(ip))
-      : [];
+    const reported = Array.isArray(body.ips);
+    return {
+      reachable: true,
+      reported,
+      ips: reported ? body.ips.filter(ip => /^\d+\.\d+\.\d+\.\d+$/.test(ip)) : []
+    };
   } catch {
-    return [];
+    return { reachable: false, reported: false, ips: [] };
   }
+}
+
+function apiDocAddressHint(ipInfo) {
+  if (ipInfo.ips.length > 0) return 'Addresses detected from the host — pick the one your caller can reach.';
+  if (!ipInfo.reachable) return 'Host unreachable — only localhost offered. Start the host to detect LAN addresses.';
+  if (!ipInfo.reported) return 'Host is running an older build without address reporting — run scrapewright restart, then reopen this dialog to detect LAN addresses.';
+  return 'Host reports no LAN IPv4 addresses — only localhost offered.';
 }
 
 // Modal state for the currently-shown API doc. Address + platform selectors
@@ -492,7 +504,8 @@ async function showApiDoc(svc) {
   const portResponse = await chrome.runtime.sendMessage({ type: 'GET_SERVER_PORT' });
   const port = portResponse.port || 8765;
   const apiKey = 'dev-key';
-  const ips = await fetchLocalIps(port);
+  const ipInfo = await fetchLocalIps(port);
+  const ips = ipInfo.ips;
 
   apiDocState = { svc, port, ips, host: 'localhost', platform: 'unix', apiKey };
 
@@ -517,9 +530,7 @@ async function showApiDoc(svc) {
           <option value="windows">Windows (cmd / PowerShell)</option>
         </select>
       </label>
-      <span class="hint">${ips.length > 0
-        ? 'Addresses detected from the host — pick the one your caller can reach.'
-        : 'Host unreachable — only localhost offered. Start the host to detect LAN addresses.'}</span>
+      <span class="hint">${escapeHtml(apiDocAddressHint(ipInfo))}</span>
     </div>
 
     <div id="apiDocExamples"></div>
@@ -611,7 +622,7 @@ async function downloadServiceMarkdown(svc) {
   } catch { /* default port */ }
   // Re-query the host so the doc lists current LAN addresses even if the
   // modal was opened while the host was down.
-  const ips = await fetchLocalIps(port);
+  const { ips } = await fetchLocalIps(port);
   const md = generateServiceMarkdown(svc, port, { ips });
   const blob = new Blob([md], { type: 'text/markdown' });
   const url = URL.createObjectURL(blob);

@@ -48,4 +48,47 @@ describe('options.js API doc address selector', () => {
     assert.match(src, /generateServiceMarkdown\([^)]*ips/,
       'download doc must list the machine LAN addresses');
   });
+
+  it('RC65: fetchLocalIps distinguishes down host from old host build', () => {
+    const src = readSrc('options.js');
+    // A reachable host running a pre-ips /health build must NOT be labeled
+    // "Host unreachable" — the old shape collapsed fetch-throw, non-200,
+    // and missing body.ips into one empty-array outcome and the hint blamed
+    // the host being down. The result object must carry reachable/reported
+    // so the hint can say WHY no LAN addresses are offered.
+    assert.match(src, /reachable:\s*false/,
+      'fetchLocalIps must report unreachable explicitly');
+    assert.match(src, /reported/,
+      'fetchLocalIps must report whether /health carried an ips array');
+    assert.match(src, /function apiDocAddressHint/,
+      'hint text must come from a dedicated helper so outcomes stay distinct');
+  });
+
+  it('RC65: address hint covers all four outcomes honestly', () => {
+    const src = readSrc('options.js');
+    const start = src.indexOf('function apiDocAddressHint');
+    assert.ok(start !== -1, 'apiDocAddressHint not found');
+    const end = src.indexOf('\n}', start);
+    const body = src.slice(start, end);
+    assert.match(body, /pick the one your caller can reach/,
+      'ips detected → selection guidance');
+    assert.match(body, /Host unreachable/,
+      'unreachable → start-the-host guidance');
+    assert.match(body, /older build/,
+      'reachable but no ips field → old-build guidance');
+    assert.match(body, /scrapewright restart/,
+      'old-build guidance must name the fix command');
+    assert.match(body, /no LAN IPv4 addresses/,
+      'reachable, ips reported, but empty → honest empty-state guidance');
+  });
+
+  it('RC65: both fetchLocalIps call sites destructure the result object', () => {
+    const src = readSrc('options.js');
+    const uses = src.match(/await fetchLocalIps\(port\)/g) || [];
+    assert.ok(uses.length >= 2, 'expected modal + markdown call sites');
+    assert.match(src, /const\s+ips\s*=\s*ipInfo\.ips/,
+      'modal site reads ipInfo.ips');
+    assert.match(src, /const\s*\{\s*ips\s*\}\s*=\s*await fetchLocalIps\(port\)/,
+      'markdown site destructures ips from the result object');
+  });
 });
