@@ -817,7 +817,7 @@ MV3 的 Service Worker 会在 30s 无活动后休眠。通过 `chrome.alarms.cre
 
 ### 12.4 分布式部署（多实例）
 
-单实例同时只执行一个任务（§14）。更高吞吐的扩展方式是**多实例并行**：每个实例独立的 Chrome Profile（Cookie/登录态）、独立的 host.js 进程、独立的执行队列，**零扩展改造**——利用 Chrome 原生多进程能力。Chrome MV3 限制每个扩展只能有 1 个 offscreen document（脚本执行面），扩展内部并发需重写整个脚本执行路径，成本极高；多 Profile 方案完全绕开。
+单个扩展实例同时只执行一个任务（§14）。因此，并行执行需要相互独立的实例组合：每个实例各有一个 Chrome Profile（以及扩展 Service Worker）、一个 `host.js` 进程和一个 HTTP 端口。不同 Profile 之间不共享 Cookie、服务定义、任务队列、日志或 `chrome.storage.local` 数据。
 
 ```
 调度平台
@@ -826,11 +826,14 @@ MV3 的 Service Worker 会在 30s 无活动后休眠。通过 `chrome.alarms.cre
   └── POST localhost:8762/api/v1/services/{name}/execute  → 实例 2
 ```
 
-**本地多实例**（`deploy/scrapewright-manager.sh`）：
+#### 本地多实例辅助脚本
+
+`deploy/scrapewright-manager.sh` 是面向 Linux/macOS 的开发辅助脚本。它直接启动进程，不会安装操作系统服务、配置负载均衡，也不会在 Profile 之间复制扩展状态。
 
 ```bash
-vim deploy/config.yaml        # basePort=8760, baseDebugPort=9220, instances=5, headless=false
-cd deploy && ./scrapewright-manager.sh start    # 启动 N 个实例
+vim deploy/config.yaml
+cd deploy
+./scrapewright-manager.sh start
 ./scrapewright-manager.sh status
 ./scrapewright-manager.sh stop
 ```
@@ -842,7 +845,21 @@ cd deploy && ./scrapewright-manager.sh start    # 启动 N 个实例
 | `instances` | `5` | 实例数量 |
 | `headless` | `false` | 无头模式（不需要登录态时设 true） |
 
-**Docker / K8s**（`deploy/Dockerfile`、`deploy/k8s.yaml`）：
+首次启动后，需要在每个 Profile 的扩展 **Server Configuration** 中配置对应的 `basePort + 实例 ID`，并在每个 Profile 中分别导入或创建所需服务。按仓库默认值，实例 0 使用 8760，实例 1 使用 8761，依此类推。扩展自身默认连接 8765，辅助脚本不会自动完成端口配对。初始配置和人工登录应使用有头模式。`restart ID` 只重启一个实例组合；`start COUNT` 与 `stop COUNT` 操作 ID `0..COUNT-1`。
+
+辅助脚本依赖 Bash、Node.js 18+、Chrome 和 `curl`。仅在标准 Linux/macOS 位置找不到 Chrome 时才会使用 `CHROME_PATH`。各 Profile 保存在 `profileBaseDir` 下，其中包含浏览器会话数据，应妥善保护。调度器必须把任务发往明确的实例端口，并保证同一任务的所有后续请求仍访问该实例。
+
+#### Docker 与 Kubernetes 模板
+
+`deploy/Dockerfile`、`deploy/entrypoint.sh` 和 `deploy/k8s.yaml` 是开发模板，并非开箱即用的生产级分布式控制面：
+
+- 镜像启动一个 `host.js` 和一个以未打包方式加载扩展的 Chrome，两者使用扩展默认端口 8765。Chrome Profile 位于临时目录 `/tmp/chrome-profile`；若不改造镜像和清单，容器替换后 Profile 与扩展配置不会保留。
+- 默认启用无头模式。模板没有提供交互式登录/初始化流程，也不会把服务定义导入 `chrome.storage.local`。
+- `SCRAPEWRIGHT_API_KEY` 保护外部 API 路由（默认值为 `dev-key`）；`/health` 和两个扩展传输端点无需认证。不要把 8765 端口直接暴露给不可信网络；应设置非默认密钥，并使用可信的反向代理或网络边界。
+- Kubernetes Service 可能把连续请求转发到不同 Pod。任务和扩展状态均为 Pod 本地状态，因此 execute/status/wait/cancel 的完整生命周期必须使用实例级路由或会话亲和性。仓库内清单尚未配置这些能力。
+- 清单没有挂载持久化存储、创建所引用的 Secret，也没有提供 TLS/Ingress；将其作为可部署环境使用前，需要补齐这些部分。
+
+补齐状态和路由后，可以用以下命令对模板进行冒烟验证：
 
 ```bash
 docker build -f deploy/Dockerfile -t scrapewright .
@@ -850,9 +867,7 @@ kubectl apply -f deploy/k8s.yaml
 kubectl scale deployment scrapewright --replicas=10
 ```
 
-每个 Pod 运行 1 个 Chrome + 1 个 host.js，`/health` 作存活/就绪探针。需登录态的站点：本地部署用有头模式人工登录一次（Cookie 持久化到 Profile）；K8s 把已登录 Profile 打包为 PersistentVolume 挂载。
-
-**吞吐量参考：** 1 实例约 2 任务/分（2GB 内存）；5 实例约 10 任务/分（8GB）；10 实例约 20 任务/分（16GB）；K8s 20 Pod 约 40 任务/分。
+只要 host 正在监听，`/health` 就始终返回 HTTP 200。需要检查响应 JSON 中的 `extensionConnected` 字段（仓库内 Kubernetes 探针不会检查该字段），但它仍不能证明某个服务已存在或能在该 Profile 中成功执行。实例加入调度前，应在每个实例上验证一次真实的、带认证的 execute-and-wait 请求。容量取决于目标站点和工作流，应使用代表性服务进行基准测试，不应仅根据副本数量推算吞吐量。
 
 ## 13. 扩展与二次开发指南
 

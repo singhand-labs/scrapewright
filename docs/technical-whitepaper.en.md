@@ -818,7 +818,7 @@ An MV3 Service Worker sleeps after 30s of inactivity. A `chrome.alarms.create('k
 
 ### 12.4 Distributed Deployment (Multi-Instance)
 
-A single instance executes one job at a time (§14). The path to higher throughput is **parallel multi-instance deployment**: each instance gets its own Chrome Profile (cookies / login state), its own `host.js` process, and its own execution queue — **zero extension changes**, riding Chrome's native multi-process capability. Chrome MV3 caps each extension at 1 offscreen document (the script execution surface), so making the extension internally concurrent would mean rewriting the entire script execution path at very high cost; the multi-Profile approach sidesteps it entirely.
+A single extension instance executes one job at a time (§14). Parallelism therefore requires independent instance pairs: one Chrome profile (and extension service worker), one `host.js` process, and one HTTP port per instance. Profiles do not share cookies, services, queues, logs, or `chrome.storage.local` data.
 
 ```
 Scheduler
@@ -827,11 +827,14 @@ Scheduler
   └── POST localhost:8762/api/v1/services/{name}/execute  → instance 2
 ```
 
-**Local multi-instance** (`deploy/scrapewright-manager.sh`):
+#### Local multi-instance helper
+
+`deploy/scrapewright-manager.sh` is a Linux/macOS development helper. It starts the processes directly; it does not install OS services, configure a load balancer, or copy extension state between profiles.
 
 ```bash
-vim deploy/config.yaml        # basePort=8760, baseDebugPort=9220, instances=5, headless=false
-cd deploy && ./scrapewright-manager.sh start    # launch N instances
+vim deploy/config.yaml
+cd deploy
+./scrapewright-manager.sh start
 ./scrapewright-manager.sh status
 ./scrapewright-manager.sh stop
 ```
@@ -843,7 +846,21 @@ cd deploy && ./scrapewright-manager.sh start    # launch N instances
 | `instances` | `5` | Number of instances |
 | `headless` | `false` | Headless mode (set true when no login state is needed) |
 
-**Docker / K8s** (`deploy/Dockerfile`, `deploy/k8s.yaml`):
+After first launch, configure each profile's extension **Server Configuration** to the matching `basePort + instance ID`, and import/create the required services in every profile. With the checked-in defaults, instance 0 uses port 8760, instance 1 uses 8761, and so on. The extension itself defaults to 8765, so the helper cannot perform this pairing automatically. Use headed mode for this setup and for interactive login. `restart ID` restarts one pair; `start COUNT` and `stop COUNT` operate on IDs `0..COUNT-1`.
+
+The helper requires Bash, Node.js 18+, Chrome, and `curl`. `CHROME_PATH` is used only when Chrome is not found in the standard Linux/macOS locations. Each profile is stored below `profileBaseDir`; protect that directory because it contains browser session data. Route work to a specific instance port and keep all requests for a job on that same instance.
+
+#### Docker and Kubernetes templates
+
+`deploy/Dockerfile`, `deploy/entrypoint.sh`, and `deploy/k8s.yaml` are development templates, not a production-ready distributed control plane:
+
+- The image starts one `host.js` and one unpacked Chrome extension, both on the extension's default port 8765. It uses a temporary Chrome profile at `/tmp/chrome-profile`; no profile or extension configuration survives container replacement unless the image and manifests are adapted.
+- Headless mode is the default. The templates do not provide an interactive login/bootstrap flow or import services into `chrome.storage.local`.
+- `SCRAPEWRIGHT_API_KEY` protects external API routes (the default is `dev-key`); `/health` and the two extension transport endpoints are unauthenticated. Do not expose port 8765 directly to an untrusted network. Use a non-default secret and a trusted reverse proxy/network boundary.
+- The Kubernetes Service may send consecutive requests to different Pods. Because jobs and extension state are Pod-local, clients must use per-instance routing or session affinity for the complete execute/status/wait/cancel lifecycle. The checked-in manifest does not configure this.
+- The manifest does not mount persistent storage, define the referenced Secret, or include TLS/Ingress. Add those pieces before treating it as a deployable environment.
+
+The templates can be smoke-tested as follows after supplying the missing state and routing:
 
 ```bash
 docker build -f deploy/Dockerfile -t scrapewright .
@@ -851,9 +868,7 @@ kubectl apply -f deploy/k8s.yaml
 kubectl scale deployment scrapewright --replicas=10
 ```
 
-Each Pod runs 1 Chrome + 1 `host.js`, with `/health` as liveness/readiness probe. For login-required sites: in local deployment, start Chrome headed and log in once manually (cookies persist into the Profile); in K8s, pack the logged-in Profile as a PersistentVolume and mount it.
-
-**Throughput reference:** 1 instance ≈ 2 jobs/min (2GB RAM); 5 ≈ 10 jobs/min (8GB); 10 ≈ 20 jobs/min (16GB); K8s 20 Pods ≈ 40 jobs/min.
+`/health` always returns HTTP 200 while the host is listening. Inspect its JSON `extensionConnected` field (the checked-in Kubernetes probes do not), but note that it still does not prove a particular service exists or executes successfully in that profile. Verify a real authenticated execute-and-wait request on every instance before placing it in rotation. Capacity depends on the target site and workflow, so benchmark representative services instead of deriving throughput from replica count alone.
 
 ## 13. Extension & Customization Guide
 

@@ -96,7 +96,12 @@
       <button id="savePort" class="btn-primary">Save Port</button>
       <button id="testConnection" class="btn-secondary">Test Connection</button>
       <span id="connectionResult" class="connection-result"></span>
-      <p class="hint">Host runs as an OS service. Port must match what <code>scrapewright install --port=N</code> was given.</p>
+      <p class="hint">
+        The port must match <code>scrapewright install --port=N</code>. For a
+        local multi-instance setup, every Chrome Profile must use its own host
+        port (<code>basePort + instance ID</code>) and contain its own imported
+        or created services; profiles do not share extension data.
+      </p>
 
       <h3>Enhanced Scraping Mode</h3>
       <div class="enhanced-mode-row">
@@ -107,33 +112,34 @@
         <div>
           <div id="enhancedModeStatus">Not enabled</div>
           <div id="enhancedModeDesc" class="enhanced-mode-desc">
-            Complementary layer: transiently attaches <code>chrome.debugger</code>
-            to scrape tabs and issues <code>Page.setWebLifecycleState(active)</code>
-            to lift Chrome's page-lifecycle throttle.
+            Enables trusted wheel and hover input when normal DOM events are
+            insufficient. The extension attaches <code>chrome.debugger</code>
+            only while dispatching the required <code>Input.*</code> event.
           </div>
         </div>
       </div>
       <p class="hint">
-        <strong>Limitation:</strong> this toggle addresses the page-lifecycle
-        layer but <em>not</em> the compositor frame-production layer. For sites
-        with lazy-load (Facebook feeds, infinite scroll, virtualized lists),
-        IntersectionObserver callbacks still won't fire on background tabs
-        because no frame is produced. <strong>For reliable background-tab
-        scraping on such sites, run:</strong>
-        <code>scrapewright throttle on</code>
-        and restart Chrome — this sets Chrome launch flags
-        (<code>--disable-renderer-backgrounding</code> and friends) that
-        disable frame-production throttling at the process level.
+        Scrape tabs are activated when rendering or trusted input requires it
+        and remain active until the scrape tab closes or you select another
+        tab. Your last manually selected tab is restored when the scrape tab
+        closes. Enhanced mode is useful for lazy loaders and hovercards that
+        ignore synthetic JavaScript events; ordinary scraping does not need it.
       </p>
       <p class="hint">
         The <code>debugger</code> permission is granted at install time (Chrome
         does not allow it as an optional permission); this toggle controls
         whether the extension actually <em>uses</em> the debugger at runtime.
-        While enabled, Chrome will briefly show a yellow "extension is
-        debugging this browser" banner each time a scrape tab opens
-        (transient, &lt;100ms). Detection-risk minimized: only
-        <code>Page.setWebLifecycleState</code> is issued, never
-        <code>Runtime.evaluate</code>.
+        Chrome may briefly show an "extension is debugging this browser"
+        banner when a trusted wheel or hover event is sent. Only
+        <code>Input.dispatchMouseEvent</code> is used; the extension does not
+        issue <code>Runtime</code>, <code>Network</code>, <code>DOM</code>, or
+        <code>Emulation</code> commands through this feature.
+      </p>
+      <p class="hint">
+        If a site still throttles timers or rendering, run
+        <code>scrapewright throttle on</code> and restart Chrome. This optional
+        host setting adds process-level anti-throttling flags and is separate
+        from trusted input.
       </p>
     </div>
   </div>
