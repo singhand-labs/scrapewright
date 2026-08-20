@@ -7,7 +7,7 @@
    Selector contract: every id/class below is referenced by options.js —
    state classes (.hidden, .toast.info/.error/.success/.dismissible,
    .badge.enabled/.disabled, .native-badge.connected/.disconnected/.unknown,
-   .connection-result.ok/.fail) must keep their names.
+   .connection-result.ok/.warn/.fail) must keep their names.
    ============================================================================ */
 
 :root {
@@ -26,6 +26,7 @@
   --success: #047857;
   --success-soft: #ecfdf5;
   --success-border: #a7f3d0;
+  --warning: #a16207;
   --danger: #b91c1c;
   --danger-soft: #fef2f2;
   --danger-border: #fecaca;
@@ -551,6 +552,7 @@ input:focus, select:focus {
 
 .connection-result { margin-left: 8px; font-weight: 600; font-size: 13px; }
 .connection-result.ok { color: var(--success); }
+.connection-result.warn { color: var(--warning); }
 .connection-result.fail { color: var(--danger); }
 
 /* --- Enhanced mode switch (settings modal) ----------------------------------- */

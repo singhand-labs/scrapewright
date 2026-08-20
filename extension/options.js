@@ -199,11 +199,11 @@ function showToast(message, type = 'info', duration = 3000) {
   }
 }
 
-// --- Enhanced scraping mode (chrome.debugger transient activation) ----------
+// --- Enhanced scraping mode (trusted input opt-in) --------------------------
 
-// Reflects the current permission state into the toggle UI. The actual grant
-// is held by Chrome itself (optional_permissions:'debugger'), not in our
-// storage — so we just query chrome.permissions.contains on load.
+// The debugger permission is required by the manifest. The toggle reflects
+// the chrome.storage.local opt-in that gates whether trusted wheel/hover input
+// may transiently attach chrome.debugger at runtime.
 async function loadEnhancedModeState() {
   const toggle = document.getElementById('enhancedModeToggle');
   const statusEl = document.getElementById('enhancedModeStatus');
@@ -223,9 +223,8 @@ async function loadEnhancedModeState() {
   }
 }
 
-// Toggle handler — MUST run in a user-gesture context (the change event from
-// the toggle click). Chrome will show its own permission dialog; if the user
-// denies it, requestDebuggerPermission resolves false and we revert the toggle.
+// Toggle handler. The renderer-activation API keeps its historical permission
+// method names, but these methods now set or clear the runtime opt-in flag.
 async function toggleEnhancedMode(e) {
   const toggle = e.target;
   const statusEl = document.getElementById('enhancedModeStatus');
@@ -251,7 +250,7 @@ async function toggleEnhancedMode(e) {
     if (!removed) {
       toggle.checked = true;
       if (statusEl) statusEl.textContent = 'Enabled (remove failed)';
-      showToast('Could not revoke debugger permission', 'error');
+      showToast('Could not disable enhanced scraping mode', 'error');
       return;
     }
     if (statusEl) statusEl.textContent = 'Not enabled';
@@ -282,8 +281,20 @@ async function testServerConnection() {
   try {
     const r = await fetch(`http://localhost:${port}/health`, { signal: AbortSignal.timeout(3000) });
     if (r.ok) {
-      result.textContent = '✓ Connected';
-      result.className = 'connection-result ok';
+      let health = null;
+      try {
+        health = await r.json();
+      } catch {}
+      if (health && health.extensionConnected === true) {
+        result.textContent = '✓ Host and extension connected';
+        result.className = 'connection-result ok';
+      } else if (health && health.extensionConnected === false) {
+        result.textContent = '⚠ Host reachable; extension disconnected';
+        result.className = 'connection-result warn';
+      } else {
+        result.textContent = '⚠ Host reachable; extension status unavailable';
+        result.className = 'connection-result warn';
+      }
     } else {
       result.textContent = '✗ HTTP ' + r.status;
       result.className = 'connection-result fail';
