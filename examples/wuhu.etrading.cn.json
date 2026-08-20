@@ -1,0 +1,129 @@
+[
+  {
+    "annotations": [],
+    "config": {
+      "autoCloseTab": true,
+      "enabled": true,
+      "maxRetries": 1,
+      "maxStepIterations": 50,
+      "timeoutMs": 60000
+    },
+    "createdAt": 1784275239890,
+    "displayName": "wuhu.etrading.cn",
+    "id": "1aa3a20a-eab0-4c2b-bbcf-64b3995aba57",
+    "inputSchema": {
+      "properties": {
+        "page": {
+          "description": "列表页页码",
+          "type": "number"
+        }
+      },
+      "required": [
+        "page"
+      ],
+      "type": "object"
+    },
+    "name": "wuhuetradingcn",
+    "outputSchema": {
+      "properties": {
+        "results": {
+          "items": {
+            "properties": {
+              "title": {
+                "description": "详情页标题",
+                "type": "string"
+              },
+              "url": {
+                "description": "详情页URL",
+                "type": "string"
+              },
+              "中标候选人公示": {
+                "description": "中标候选人公示内容",
+                "type": "string"
+              },
+              "中标公示": {
+                "description": "中标公示内容",
+                "type": "string"
+              },
+              "招标公告": {
+                "description": "招标公告内容",
+                "type": "string"
+              },
+              "澄清/变更公告": {
+                "description": "澄清/变更公告内容",
+                "type": "string"
+              }
+            },
+            "required": [
+              "title",
+              "url",
+              "招标公告",
+              "澄清/变更公告",
+              "中标候选人公示",
+              "中标公示"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "results"
+      ],
+      "type": "object"
+    },
+    "requirements": {
+      "inputParams": "列表页页码参数（一个数字）",
+      "outputStruct": "以json格式返回每个标讯（详情页）的标题、url、招标公告、澄清/变更公告、中标候选人公示、中标公示五项。",
+      "pageOps": "目标网站是一个招投标信息平台。在目标网站上的页码框输入页码参数，点击跳转按钮，跳转到指定页码的列表页。然后，采集该页面所有列表条目的详情页内容：即逐一点击列表页中的每个详情条目，跳转进入详情页，获取详情页的内容，抽取详情页中的标题、招标公告、澄清/变更公告、中标候选人公示、中标公示五项内容。注意，点击条目进入详情页时，会自动打开新的tab页面，应该跟踪到详情页的tab页。"
+    },
+    "sampleInput": {
+      "page": 2
+    },
+    "steps": [
+      {
+        "condition": null,
+        "entryUrl": "https://wuhu.etrading.cn/jyxx/002001/002001001/notice_jyxxzbgg.html",
+        "id": "1",
+        "maxIterations": 1,
+        "name": "输入页码并跳转",
+        "onFailure": "TERMINATE",
+        "onSuccess": "2",
+        "script": "await $type('#page .m-pagination-group input[type=\"text\"]', String(__input__.page));\nawait $click('#page .m-pagination-group button[type=\"button\"]');\nawait new Promise(r => setTimeout(r, 3000));\nreturn { done: true };"
+      },
+      {
+        "condition": null,
+        "entryUrl": "https://wuhu.etrading.cn/jyxx/002001/002001001/notice_jyxxzbgg.html",
+        "id": "2",
+        "maxIterations": 3,
+        "name": "采集列表条目链接",
+        "onFailure": "TERMINATE",
+        "onSuccess": "3",
+        "script": "const items = await $list('ul.wb-data-item li.wb-data-list a.ewb-data-txt');\nif (!items || items.length === 0) {\n  return { done: false };\n}\nconst links = items.map(el => ({\n  href: el.href,\n  text: (el.textContent || '').trim()\n}));\nreturn { items: links, index: 0, results: [] };"
+      },
+      {
+        "condition": null,
+        "entryUrl": "https://wuhu.etrading.cn/jyxx/002001/002001001/notice_jyxxzbgg.html",
+        "id": "3",
+        "maxIterations": 30,
+        "name": "逐条采集详情页",
+        "onFailure": "TERMINATE",
+        "onSuccess": "4",
+        "script": "const state = __lastResult__;\nif (!state || !state.items || state.index >= state.items.length) {\n  return { done: true, results: state ? state.results : [] };\n}\nconst item = state.items[state.index];\nconst detail = await $openTab(item.href, `\n  await $wait('h3.ewb-notice-tt', 10000);\n  await new Promise(r => setTimeout(r, 2000));\n  let title = '';\n  try { title = await $extract('h3.ewb-notice-tt', null, 5000); } catch(e) {}\n  let zhaobiao = '';\n  try { zhaobiao = await $extract('iframe#zbggframe1::div.ewb-info-main', null, 8000); } catch(e) {}\n  let chengqing = '';\n  try { chengqing = await $extract('iframe#bgggframe1::div.ewb-info-main', null, 5000); } catch(e) {}\n  let houxaun = '';\n  try { houxaun = await $extract('iframe#hxgsframe1::div.ewb-info-main', null, 5000); } catch(e) {}\n  let zhongbiao = '';\n  try { zhongbiao = await $extract('iframe#zbgsframe1::div.ewb-info-main', null, 5000); } catch(e) {}\n  return { title: title || '', zhaobiao: zhaobiao || '', chengqing: chengqing || '', houxaun: houxaun || '', zhongbiao: zhongbiao || '' };\n`);\nconst result = {\n  title: detail.title || item.text || '',\n  url: item.href,\n  招标公告: detail.zhaobiao || '',\n  '澄清/变更公告': detail.chengqing || '',\n  '中标候选人公示': detail.houxaun || '',\n  '中标公示': detail.zhongbiao || ''\n};\nstate.results.push(result);\nstate.index++;\nreturn { done: false, items: state.items, index: state.index, results: state.results };"
+      },
+      {
+        "condition": null,
+        "entryUrl": "https://wuhu.etrading.cn/jyxx/002001/002001001/notice_jyxxzbgg.html",
+        "id": "4",
+        "maxIterations": 1,
+        "name": "返回最终结果",
+        "onFailure": "TERMINATE",
+        "onSuccess": "TERMINATE",
+        "script": "const state = __lastResult__;\nreturn { results: state.results || [] };"
+      }
+    ],
+    "targetUrl": "https://wuhu.etrading.cn/jyxx/002001/002001001/notice_jyxxzbgg.html",
+    "updatedAt": 1784275239891,
+    "userDescription": "## User Requirements\n- Input parameters: 列表页页码参数（一个数字）\n- Page operations & data to collect: 目标网站是一个招投标信息平台。在目标网站上的页码框输入页码参数，点击跳转按钮，跳转到指定页码的列表页。然后，采集该页面所有列表条目的详情页内容：即逐一点击列表页中的每个详情条目，跳转进入详情页，获取详情页的内容，抽取详情页中的标题、招标公告、澄清/变更公告、中标候选人公示、中标公示五项内容。注意，点击条目进入详情页时，会自动打开新的tab页面，应该跟踪到详情页的tab页。\n- Output structure: 以json格式返回每个标讯（详情页）的标题、url、招标公告、澄清/变更公告、中标候选人公示、中标公示五项。"
+  }
+]

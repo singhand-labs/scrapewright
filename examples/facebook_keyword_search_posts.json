@@ -1,0 +1,324 @@
+[
+  {
+    "annotations": [],
+    "config": {
+      "autoCloseTab": true,
+      "enabled": true,
+      "maxRetries": 1,
+      "maxStepIterations": 50,
+      "tabLoadTimeoutMs": 60000,
+      "timeoutMs": 60000
+    },
+    "createdAt": 1787053571847,
+    "displayName": "facebook_keyword_search_posts",
+    "id": "f291b813-18c1-40e0-b844-4ff2327602b6",
+    "inputSchema": {
+      "properties": {
+        "keyword": {
+          "description": "搜索关键词",
+          "type": "string"
+        },
+        "postCount": {
+          "description": "需要提取的帖子条数",
+          "type": "number"
+        }
+      },
+      "required": [
+        "keyword",
+        "postCount"
+      ],
+      "type": "object"
+    },
+    "name": "facebook-keyword-search-posts",
+    "outputSchema": {
+      "properties": {
+        "keyword": {
+          "type": "string"
+        },
+        "posts": {
+          "items": {
+            "properties": {
+              "comments": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              },
+              "hoverInfos": {
+                "items": {
+                  "properties": {
+                    "accountLink": {
+                      "type": "string"
+                    },
+                    "accountName": {
+                      "type": "string"
+                    },
+                    "attributes": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "avatar": {
+                      "type": "string"
+                    },
+                    "followerCount": {
+                      "type": "string"
+                    },
+                    "groupIcon": {
+                      "type": "string"
+                    },
+                    "groupId": {
+                      "type": "string"
+                    },
+                    "groupLink": {
+                      "type": "string"
+                    },
+                    "groupName": {
+                      "type": "string"
+                    },
+                    "htmlSnippet": {
+                      "type": "string"
+                    },
+                    "link": {
+                      "type": "string"
+                    },
+                    "memberCount": {
+                      "type": "string"
+                    },
+                    "privacy": {
+                      "type": "string"
+                    },
+                    "role": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "html": {
+                "type": "string"
+              },
+              "index": {
+                "type": "number"
+              },
+              "likes": {
+                "type": "string"
+              },
+              "location": {
+                "type": "string"
+              },
+              "mediaUrls": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "postId": {
+                "type": "string"
+              },
+              "shares": {
+                "type": "string"
+              },
+              "time": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "index",
+              "postId",
+              "hoverInfos",
+              "time",
+              "location",
+              "content",
+              "mediaUrls",
+              "likes",
+              "comments",
+              "shares",
+              "html"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "keyword",
+        "posts"
+      ],
+      "type": "object"
+    },
+    "requirements": {
+      "inputParams": "搜索关键词、帖子条数",
+      "outputStruct": "返回多个帖子，每个帖子包括序号、帖子id、悬浮窗扩展信息（多个）、发帖时间、地点（可能有）、内容、插图或视频url、点赞数、评论数、转发数、帖子条目的html dom片段等字段。悬浮窗扩展信息包括：链接、html dom片段、类型（小组还是账号）、角色（主发帖人、联合发帖人、发帖人所在地等）、其他key-value。",
+      "pageOps": "1. 将目标网站的url的keyword替换成输入的搜索关键词，打开网站以获得关键词的搜索结果。\n2. 从主工作区的信息流中提取帖子，注意要提出主页推荐、账号推荐、小组推荐等非帖子信息。如果提取的帖子不足输入参数要求的条数，就滚动主工作区的信息流，直到没有更多数据。\n3. 对每个帖子，执行如下操作：\n  - 虚拟鼠标hover事件到帖子正文上方两行的每个元素（注意，鼠标事件是悬停，不是点击），如果有悬浮窗弹出，提取悬浮窗的html dom片段，作为帖子的扩展信息。注意，要在悬浮窗关闭前提取，因为悬浮窗的内容可能是鼠标悬停后才动态加载，悬停事件一取消或移到其他元素后，相应悬浮窗会消失。\n  - 帖子正文中若有“展开”操作，点击展开链接，加载出完整的内容。\n  - 识别帖子条目的各项元素，包括时间、地点、正文内容、嵌入媒体的链接、点赞数、评论数、转发数。\n  - 将帖子关联悬浮窗动态加载的扩展信息，分为账号信息和小组信息两类，非这两类的不要。\n  - 区分关联悬浮窗扩展信息的角色是主发帖人、联合发帖人、发帖人所在地等的哪一种。\n  - 关联悬浮窗中的内容根据上下文尽可能提取相关的key-value。例如：\n    - 对于小组信息，提取小组id、小组详情链接、小组名、小组属性（如“公开小组”）、小组人数、小组图标。\n    - 对于账号信息，提取账号ID、账号名、账号详情链接、标签、各类属性（多个）、头像、粉丝数。\n  - **注意**：提取帖子各项元素时与触发及获取悬浮窗信息要同时进行，避免关联错位。"
+    },
+    "sampleInput": {
+      "keyword": "SEO 招聘",
+      "postCount": 10
+    },
+    "steps": [
+      {
+        "condition": null,
+        "entryUrl": "https://www.facebook.com/search/top?q={{keyword}}",
+        "id": "1",
+        "maxIterations": 10,
+        "name": "wait_for_feed",
+        "onFailure": "TERMINATE",
+        "onSuccess": "2",
+        "script": "const ok = await $exists(\"div[role='feed'] div[role='article']\", 10000);\nif (!ok) return { done: false };\nawait new Promise(r => setTimeout(r, 2000));\nreturn { done: true };"
+      },
+      {
+        "condition": null,
+        "entryUrl": "https://www.facebook.com/search/top?q={{keyword}}",
+        "id": "2",
+        "maxIterations": 25,
+        "name": "scroll_and_load",
+        "onFailure": "TERMINATE",
+        "onSuccess": "3",
+        "script": "const target = (__input__ && __input__.postCount) || 10;\nconst seen = new Set((__lastResult__ && __lastResult__.seenSignatures) || []);\n\n// Deep scroll: several increments per iteration to push the lazy loader.\nlet scrolledAny = false;\nfor (let i = 0; i < 3; i++) {\n  const r = await $scrollBy(window.innerHeight * 1.5, \"div[role='feed']\");\n  if (r.scrolled) scrolledAny = true;\n  await new Promise(resolve => setTimeout(resolve, 1200));\n}\nif (!scrolledAny) {\n  const r2 = await $scrollToBottom();\n  scrolledAny = r2.scrolled;\n  await new Promise(resolve => setTimeout(resolve, 1500));\n}\n\nconst articles = await $list(\"div[role='feed'] div[role='article']\");\nlet postLike = 0;\nfor (const a of articles) {\n  const t = (a.textContent || '').slice(0, 160);\n  if (!t.trim()) continue;\n  seen.add(t);\n  // count only post-like signatures: has a timestamp marker (年/月/天/小时/分钟/昨天)\n  if (/\\d{4}年|\\d{1,2}月\\d{1,2}日|昨天|\\d+小时|\\d+天前|\\d+分钟/.test(t)) postLike++;\n}\nconst uniqueCount = seen.size;\nconst stalled = ((__lastResult__ && __lastResult__.stalled) || 0) + (scrolledAny ? 0 : 1);\nif (postLike >= target) return { done: true, uniqueCount, seenSignatures: [...seen].slice(0, 100) };\nif (stalled >= 8 && postLike > 0) return { done: true, uniqueCount, seenSignatures: [...seen].slice(0, 100), exhausted: true };\nreturn { done: false, uniqueCount, postLike, stalled, seenSignatures: [...seen].slice(0, 100) };"
+      },
+      {
+        "annotations": [],
+        "condition": null,
+        "entryUrl": "https://www.facebook.com/search/top?q={{keyword}}",
+        "id": "3",
+        "maxIterations": 2,
+        "name": "expand_see_more",
+        "needsAnnotation": false,
+        "onFailure": "4",
+        "onSuccess": "4",
+        "script": "const res = await $clickInList(\"div[role='feed'] div[role][aria-posinset]\", \"div[data-ad-preview='message'] div[role='button']\", { delayMs: 500 });\nreturn { done: true, expanded: res.clicked, errors: res.errors.length };"
+      },
+      {
+        "annotations": [
+          {
+            "description": "477",
+            "domPath": "div > div > div > div > div > div > div > div > div > div[role=\"main\"][aria-label=\"搜索结果\"] > div > div > div > div > div[role=\"feed\"] > div > div > div > div > div > div > div > div[role=\"article\"][aria-posinset=\"\\33 \"] > div > div > div > div > div > div > div > div > div > div > div > div > div > div > div > div > div[role=\"button\"][aria-label=\"移除赞\"]",
+            "elementType": "div",
+            "html": "<div aria-label=\"移除赞\" class=\"x1i10hfl x1qjc9v5 xjbqb8w xjqpnuy xc5r6h4 xqeqjp1 x1phubyo x13fuv20 x18b5jzi x1q0q8m5 x1t7ytsu x972fbf x10w94by x1qhh985 x14e42zd x9f619 x1ypdohk xdl72j9 x2lah0s x3ct3a4 xdj266r x14z9mp xat24cr x1lziwak x2lwn1j xeuugli xexx8yu xyri2b x18d9i69 x1c1uobl x1n2onr6 x16tdsg8 x1hl2dhg x1ja2u2z x1t137rt x1fmog5m xu25z0z x140muxe xo1y3bh x3nfvp2 x1q0g3np x87ps6o x1lku1pv x1a2a7pz x5ve5x3\" role=\"button\" tabindex=\"0\" style=\"transform: none;\"><div class=\"x9f619 x1ja2u2z x2lah0s ",
+            "outputField": "posts.likes",
+            "sampleText": "477",
+            "selector": "div[role=\"article\"][aria-posinset=\"\\33 \"] div[role=\"button\"][aria-label=\"移除赞\"]",
+            "text": "477",
+            "type": "extract"
+          },
+          {
+            "description": "316",
+            "domPath": "div > div > div > div > div > div > div > div > div > div[role=\"main\"][aria-label=\"搜索结果\"] > div > div > div > div > div[role=\"feed\"] > div > div > div > div > div > div > div > div[role=\"article\"][aria-posinset=\"\\33 \"] > div > div > div > div > div > div > div > div > div > div > div > div > div > div > div > div > div[role=\"button\"][aria-label=\"发表评论\"]",
+            "elementType": "div",
+            "html": "<div aria-label=\"发表评论\" class=\"x1i10hfl x1qjc9v5 xjbqb8w xjqpnuy xc5r6h4 xqeqjp1 x1phubyo x13fuv20 x18b5jzi x1q0q8m5 x1t7ytsu x972fbf x10w94by x1qhh985 x14e42zd x9f619 x1ypdohk xdl72j9 x2lah0s x3ct3a4 xdj266r x14z9mp xat24cr x1lziwak x2lwn1j xeuugli xexx8yu xyri2b x18d9i69 x1c1uobl x1n2onr6 x16tdsg8 x1hl2dhg xggy1nq x1ja2u2z x1t137rt x1fmog5m xu25z0z x140muxe xo1y3bh x3nfvp2 x1q0g3np x87ps6o x1lku1pv x1a2a7pz\" role=\"button\" tabindex=\"0\" style=\"\"><div class=\"x9f619 x1ja2u2z x2lah0s x1n2onr6 xl56j7",
+            "outputField": "posts.comments",
+            "sampleText": "316",
+            "selector": "div[role=\"article\"][aria-posinset=\"\\33 \"] div[role=\"button\"][aria-label=\"发表评论\"]",
+            "text": "316",
+            "type": "extract"
+          },
+          {
+            "description": "7",
+            "domPath": "div > div > div > div > div > div > div > div > div > div[role=\"main\"][aria-label=\"搜索结果\"] > div > div > div > div > div[role=\"feed\"] > div > div > div > div > div > div > div > div[role=\"article\"][aria-posinset=\"\\33 \"] > div > div > div > div > div > div > div > div > div > div > div > div > div > div > div > div > div[role=\"button\"][aria-label=\"发送给好友或发布到你的个人主页。\"]",
+            "elementType": "div",
+            "html": "<div aria-label=\"发送给好友或发布到你的个人主页。\" class=\"x1i10hfl x1qjc9v5 xjbqb8w xjqpnuy xc5r6h4 xqeqjp1 x1phubyo x13fuv20 x18b5jzi x1q0q8m5 x1t7ytsu x972fbf x10w94by x1qhh985 x14e42zd x9f619 x1ypdohk xdl72j9 x2lah0s x3ct3a4 xdj266r x14z9mp xat24cr x1lziwak x2lwn1j xeuugli xexx8yu xyri2b x18d9i69 x1c1uobl x1n2onr6 x16tdsg8 x1hl2dhg xggy1nq x1ja2u2z x1t137rt x1fmog5m xu25z0z x140muxe xo1y3bh x3nfvp2 x1q0g3np x87ps6o x1lku1pv x1a2a7pz\" role=\"button\" tabindex=\"0\" style=\"\"><div class=\"x9f619 x1ja2u2z x2lah0s x1n",
+            "outputField": "posts.shares",
+            "sampleText": "7",
+            "selector": "div[role=\"article\"][aria-posinset=\"\\33 \"] div[role=\"button\"][aria-label=\"发送给好友或发布到你的个人主页。\"]",
+            "text": "7",
+            "type": "extract"
+          },
+          {
+            "description": "2",
+            "domPath": "div > div > div > div > div > div > div > div > div > div[role=\"main\"][aria-label=\"搜索结果\"] > div > div > div > div > div[role=\"feed\"] > div > div > div > div > div > div > div > div[role=\"article\"][aria-posinset=\"\\34 \"] > div > div > div > div > div > div > div > div > div > div > div > div > div > div > div > div > div[role=\"button\"][aria-label=\"赞\"]",
+            "elementType": "div",
+            "html": "<div aria-label=\"赞\" class=\"x1i10hfl x1qjc9v5 xjbqb8w xjqpnuy xc5r6h4 xqeqjp1 x1phubyo x13fuv20 x18b5jzi x1q0q8m5 x1t7ytsu x972fbf x10w94by x1qhh985 x14e42zd x9f619 x1ypdohk xdl72j9 x2lah0s x3ct3a4 xdj266r x14z9mp xat24cr x1lziwak x2lwn1j xeuugli xexx8yu xyri2b x18d9i69 x1c1uobl x1n2onr6 x16tdsg8 x1hl2dhg x1ja2u2z x1t137rt x1fmog5m xu25z0z x140muxe xo1y3bh x3nfvp2 x1q0g3np x87ps6o x1lku1pv x1a2a7pz x5ve5x3\" role=\"button\" tabindex=\"0\" style=\"transform: none;\"><div class=\"x9f619 x1ja2u2z x2lah0s x1",
+            "outputField": "posts.likes",
+            "sampleText": "2",
+            "selector": "div[role=\"article\"][aria-posinset=\"\\34 \"] div[role=\"button\"][aria-label=\"赞\"]",
+            "text": "2",
+            "type": "extract"
+          },
+          {
+            "description": "",
+            "domPath": "div > div > div > div > div > div > div > div > div > div[role=\"main\"][aria-label=\"搜索结果\"] > div > div > div > div > div[role=\"feed\"] > div > div > div > div > div > div > div > div[role=\"article\"][aria-posinset=\"\\34 \"] > div > div > div > div > div > div > div > div > div > div > div > div > div > div > div > div > div[role=\"button\"][aria-label=\"发表评论\"]",
+            "elementType": "div",
+            "html": "<div aria-label=\"发表评论\" class=\"x1i10hfl x1qjc9v5 xjbqb8w xjqpnuy xc5r6h4 xqeqjp1 x1phubyo x13fuv20 x18b5jzi x1q0q8m5 x1t7ytsu x972fbf x10w94by x1qhh985 x14e42zd x9f619 x1ypdohk xdl72j9 x2lah0s x3ct3a4 xdj266r x14z9mp xat24cr x1lziwak x2lwn1j xeuugli xexx8yu xyri2b x18d9i69 x1c1uobl x1n2onr6 x16tdsg8 x1hl2dhg xggy1nq x1ja2u2z x1t137rt x1fmog5m xu25z0z x140muxe xo1y3bh x3nfvp2 x1q0g3np x87ps6o x1lku1pv x1a2a7pz\" role=\"button\" tabindex=\"0\" style=\"\"><div class=\"x9f619 x1ja2u2z x2lah0s x1n2onr6 xl56j7",
+            "outputField": "posts.comments",
+            "sampleText": "",
+            "selector": "div[role=\"article\"][aria-posinset=\"\\34 \"] div[role=\"button\"][aria-label=\"发表评论\"]",
+            "text": "",
+            "type": "extract"
+          },
+          {
+            "description": "",
+            "domPath": "div > div > div > div > div > div > div > div > div > div[role=\"main\"][aria-label=\"搜索结果\"] > div > div > div > div > div[role=\"feed\"] > div > div > div > div > div > div > div > div[role=\"article\"][aria-posinset=\"\\34 \"] > div > div > div > div > div > div > div > div > div > div > div > div > div > div > div > div > div[role=\"button\"][aria-label=\"发送给好友或发布到你的个人主页。\"]",
+            "elementType": "div",
+            "html": "<div aria-label=\"发送给好友或发布到你的个人主页。\" class=\"x1i10hfl x1qjc9v5 xjbqb8w xjqpnuy xc5r6h4 xqeqjp1 x1phubyo x13fuv20 x18b5jzi x1q0q8m5 x1t7ytsu x972fbf x10w94by x1qhh985 x14e42zd x9f619 x1ypdohk xdl72j9 x2lah0s x3ct3a4 xdj266r x14z9mp xat24cr x1lziwak x2lwn1j xeuugli xexx8yu xyri2b x18d9i69 x1c1uobl x1n2onr6 x16tdsg8 x1hl2dhg xggy1nq x1ja2u2z x1t137rt x1fmog5m xu25z0z x140muxe xo1y3bh x3nfvp2 x1q0g3np x87ps6o x1lku1pv x1a2a7pz\" role=\"button\" tabindex=\"0\" style=\"\"><div class=\"x9f619 x1ja2u2z x2lah0s x1n",
+            "outputField": "posts.shares",
+            "sampleText": "",
+            "selector": "div[role=\"article\"][aria-posinset=\"\\34 \"] div[role=\"button\"][aria-label=\"发送给好友或发布到你的个人主页。\"]",
+            "text": "",
+            "type": "extract"
+          },
+          {
+            "description": "414",
+            "domPath": "div > div > div > div > div > div > div > div > div > div[role=\"main\"][aria-label=\"搜索结果\"] > div > div > div > div > div[role=\"feed\"] > div > div > div > div > div > div > div > div[role=\"article\"][aria-posinset=\"\\36 \"] > div > div > div > div > div > div > div > div > div > div > div > div > div > div > div > div > div[role=\"button\"][aria-label=\"赞\"]",
+            "elementType": "div",
+            "html": "<div aria-label=\"赞\" class=\"x1i10hfl x1qjc9v5 xjbqb8w xjqpnuy xc5r6h4 xqeqjp1 x1phubyo x13fuv20 x18b5jzi x1q0q8m5 x1t7ytsu x972fbf x10w94by x1qhh985 x14e42zd x9f619 x1ypdohk xdl72j9 x2lah0s x3ct3a4 xdj266r x14z9mp xat24cr x1lziwak x2lwn1j xeuugli xexx8yu xyri2b x18d9i69 x1c1uobl x1n2onr6 x16tdsg8 x1hl2dhg x1ja2u2z x1t137rt x1fmog5m xu25z0z x140muxe xo1y3bh x3nfvp2 x1q0g3np x87ps6o x1lku1pv x1a2a7pz x5ve5x3\" role=\"button\" tabindex=\"0\" style=\"transform: none;\"><div class=\"x9f619 x1ja2u2z x2lah0s x1",
+            "outputField": "posts.likes",
+            "sampleText": "414",
+            "selector": "div[role=\"article\"][aria-posinset=\"\\36 \"] div[role=\"button\"][aria-label=\"赞\"]",
+            "text": "414",
+            "type": "extract"
+          },
+          {
+            "description": "16",
+            "domPath": "div > div > div > div > div > div > div > div > div > div[role=\"main\"][aria-label=\"搜索结果\"] > div > div > div > div > div[role=\"feed\"] > div > div > div > div > div > div > div > div[role=\"article\"][aria-posinset=\"\\36 \"] > div > div > div > div > div > div > div > div > div > div > div > div > div > div > div > div > div[role=\"button\"][aria-label=\"发表评论\"]",
+            "elementType": "div",
+            "html": "<div aria-label=\"发表评论\" class=\"x1i10hfl x1qjc9v5 xjbqb8w xjqpnuy xc5r6h4 xqeqjp1 x1phubyo x13fuv20 x18b5jzi x1q0q8m5 x1t7ytsu x972fbf x10w94by x1qhh985 x14e42zd x9f619 x1ypdohk xdl72j9 x2lah0s x3ct3a4 xdj266r x14z9mp xat24cr x1lziwak x2lwn1j xeuugli xexx8yu xyri2b x18d9i69 x1c1uobl x1n2onr6 x16tdsg8 x1hl2dhg xggy1nq x1ja2u2z x1t137rt x1fmog5m xu25z0z x140muxe xo1y3bh x3nfvp2 x1q0g3np x87ps6o x1lku1pv x1a2a7pz\" role=\"button\" tabindex=\"0\" style=\"\"><div class=\"x9f619 x1ja2u2z x2lah0s x1n2onr6 xl56j7",
+            "outputField": "posts.comments",
+            "sampleText": "16",
+            "selector": "div[role=\"article\"][aria-posinset=\"\\36 \"] div[role=\"button\"][aria-label=\"发表评论\"]",
+            "text": "16",
+            "type": "extract"
+          },
+          {
+            "description": "14",
+            "domPath": "div > div > div > div > div > div > div > div > div > div[role=\"main\"][aria-label=\"搜索结果\"] > div > div > div > div > div[role=\"feed\"] > div > div > div > div > div > div > div > div[role=\"article\"][aria-posinset=\"\\36 \"] > div > div > div > div > div > div > div > div > div > div > div > div > div > div > div > div > div[role=\"button\"][aria-label=\"发送给好友或发布到你的个人主页。\"]",
+            "elementType": "div",
+            "html": "<div aria-label=\"发送给好友或发布到你的个人主页。\" class=\"x1i10hfl x1qjc9v5 xjbqb8w xjqpnuy xc5r6h4 xqeqjp1 x1phubyo x13fuv20 x18b5jzi x1q0q8m5 x1t7ytsu x972fbf x10w94by x1qhh985 x14e42zd x9f619 x1ypdohk xdl72j9 x2lah0s x3ct3a4 xdj266r x14z9mp xat24cr x1lziwak x2lwn1j xeuugli xexx8yu xyri2b x18d9i69 x1c1uobl x1n2onr6 x16tdsg8 x1hl2dhg xggy1nq x1ja2u2z x1t137rt x1fmog5m xu25z0z x140muxe xo1y3bh x3nfvp2 x1q0g3np x87ps6o x1lku1pv x1a2a7pz\" role=\"button\" tabindex=\"0\" style=\"\"><div class=\"x9f619 x1ja2u2z x2lah0s x1n",
+            "outputField": "posts.shares",
+            "sampleText": "14",
+            "selector": "div[role=\"article\"][aria-posinset=\"\\36 \"] div[role=\"button\"][aria-label=\"发送给好友或发布到你的个人主页。\"]",
+            "text": "14",
+            "type": "extract"
+          }
+        ],
+        "condition": null,
+        "entryUrl": "https://www.facebook.com/search/top?q=美女",
+        "id": "4",
+        "maxIterations": 12,
+        "name": "extract_with_hover",
+        "needsAnnotation": false,
+        "onFailure": "5",
+        "onSuccess": "5",
+        "script": "const target = (__input__ && __input__.postCount) || 10;\nconst start = (__lastResult__ && __lastResult__.nextStart) || 0;\n\nconst total = await $count(\"div[role='feed'] div[role='article'][aria-posinset]\");\nif (total === 0 && start === 0) {\n  return { done: true, accumulated: [], nextStart: 0 };\n}\n\nconst records = await $extractWithHover(\"div[role='feed'] div[role='article'][aria-posinset]\", {\n  postUrl: { selector: \"a[href*='multi_permalinks'], a[href*='story_fbid'], a[href*='/posts/'], a[href*='/permalink/']\", attr: 'href' },\n  timeLabel: { selector: \"a[role='link'][href*='story_fbid'][aria-label], a[role='link'][href*='/posts/'][aria-label], a[role='link'][href*='multi_permalinks'][aria-label]\", attr: 'aria-label' },\n  authorName: \"div[data-ad-rendering-role='profile_name'] h3 a span, div[data-ad-rendering-role='profile_name'] a span\",\n  authorHref: { selector: \"div[data-ad-rendering-role='profile_name'] h3 a, div[data-ad-rendering-role='profile_name'] a\", attr: 'href' },\n  content: \"div[data-ad-rendering-role='story_message'] div[data-ad-preview='message']\",\n  contentHtml: { selector: \"div[data-ad-rendering-role='story_message'] div[data-ad-preview='message']\", attr: 'innerHTML' },\n  html: { selector: '', attr: 'outerHTML' }\n}, {\n  hover: {\n    anchorSel: \"div[data-ad-rendering-role='profile_name'] a, a[href*='/groups/']:not([href*='/user/'])\",\n    popoverSel: \"div[data-hovercard], div[role='dialog']\",\n    timeoutMs: 3000\n  },\n  allowEmpty: true,\n  containerRange: [start, start + 5]\n});\n\nconst labelRecords = await $extractListMulti(\"div[role='feed'] div[role='article'][aria-posinset]\", {\n  ariaLabels: { selector: \"div[role='aria-label'], div[role][aria-label]\", attr: 'aria-label' },\n  // Full outerHTML of EVERY action-bar button so we can pair each count span\n  // with ITS OWN button's aria-label (semantic mapping, not positional).\n  actionBtnHtml: { selector: \"div[role='button'][aria-label]\", attr: 'outerHTML' }\n}, { allowEmpty: true });\n\nconst mediaRecords = await $extractListMulti(\"div[role='feed'] div[role='article'][aria-posinset]\", {\n  mediaUrls: { selector: \"img[src*='scontent']\", attr: 'src' }\n}, { allowEmpty: true });\n\n// Classify a button's aria-label into likes / comments / shares by SEMANTICS.\n// A post may lack the comment button entirely — then its count span simply\n// does not exist and comments stays '' (never borrow the share count).\nfunction btnKind(label) {\n  const s = (label || '').trim();\n  if (!s) return '';\n  if (/评论|留言|回覆|回复|comment/i.test(s)) return 'comments';\n  if (/分享|转发|共享|发送给好友|分享给|share/i.test(s)) return 'shares';\n  if (/^赞$|^点赞|like/i.test(s)) return 'likes';\n  return ''; // 留下心情 / 写评论… / other non-count controls\n}\n\nfunction parseCounts(labels, btnHtmls) {\n  const out = { likes: '', comments: '', shares: '' };\n  const seen = {};\n  for (const bh of (btnHtmls || [])) {\n    if (!bh) continue;\n    const lm = bh.match(/aria-label=\"([^\"]*)\"/);\n    const kind = btnKind(lm ? lm[1] : '');\n    if (!kind || seen[kind]) continue;\n    // count span inside THIS button only\n    const cm = bh.match(/<span[^>]*xhkezso[^>]*>([^<]+)<\\/span>/);\n    if (cm && /^\\d+([.,]\\d+)*万?$/.test(cm[1].trim())) {\n      out[kind] = cm[1].trim();\n      seen[kind] = true;\n    }\n  }\n  // Reaction aria-labels are a fallback for likes only (never comments/shares).\n  if (!out.likes) {\n    const reactionTotal = [];\n    for (const l of (labels || [])) {\n      const s = (l || '').trim();\n      if (!s) continue;\n      const rl = s.match(/^(?:赞|大爱|哇|抱抱|伤心|生气|哈哈|关爱)[：:]\\s*([\\d,.]+\\s*万?)(?:\\s*(?:位用户|人))?$/);\n      if (rl) {\n        reactionTotal.push(parseFloat(rl[1].replace(/[万,]/g, '')) * (rl[1].indexOf('万') >= 0 ? 10000 : 1));\n      }\n    }\n    if (reactionTotal.length) out.likes = String(reactionTotal.reduce((s, v) => s + v, 0));\n  }\n  return out;\n}\n\nconst prev = (__lastResult__ && __lastResult__.accumulated) || [];\nconst batch = (records || []).map((r, i) => {\n  const idx = start + i;\n  r.mediaUrls = (mediaRecords[idx] && mediaRecords[idx].mediaUrls) || [];\n  r.ariaLabels = (labelRecords[idx] && labelRecords[idx].ariaLabels) || [];\n  const c = parseCounts(r.ariaLabels, (labelRecords[idx] && labelRecords[idx].actionBtnHtml) || []);\n  r.likes = c.likes;\n  r.comments = c.comments;\n  r.shares = c.shares;\n  return r;\n});\nconst accumulated = prev.concat(batch);\nconst nextStart = start + 5;\n\nif (accumulated.length >= target + 3 || nextStart >= total) {\n  return { done: true, accumulated, nextStart, total };\n}\nreturn { done: false, accumulated, nextStart, total };"
+      },
+      {
+        "condition": null,
+        "entryUrl": "https://www.facebook.com/search/top?q={{keyword}}",
+        "id": "5",
+        "maxIterations": 1,
+        "name": "classify_and_output",
+        "onFailure": "TERMINATE",
+        "onSuccess": "TERMINATE",
+        "script": "const target = (__input__ && __input__.postCount) || 10;\nconst keyword = (__input__ && __input__.keyword) || '';\nconst raw = (__lastResult__ && __lastResult__.accumulated) || [];\nconst posts = [];\nlet idx = 0;\n\nconst pickCount = (m) => (m ? m[1].trim() : '');\n\nfunction decodeEntities(s) {\n  return s\n    .replace(/&nbsp;/g, ' ')\n    .replace(/&amp;/g, '&')\n    .replace(/&lt;/g, '<')\n    .replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"')\n    .replace(/&#39;/g, \"'\")\n    .replace(/&#x2F;/gi, '/')\n    .replace(/&(?:#x200D|zwj);/gi, '\\u200D')\n    .replace(/&(?:#xFE0F|#x20E3);/gi, '\\uFE0F');\n}\n\nfunction htmlToText(html) {\n  if (!html) return '';\n  let s = html\n    .replace(/<br\\s*\\/?>/gi, '\\n')\n    .replace(/<\\/(?:div|p|li|ul|ol|h[1-6]|tr|blockquote)>/gi, '\\n')\n    .replace(/<(?:img|video)[^>]*>/gi, '')\n    .replace(/<[^>]+>/g, '');\n  s = decodeEntities(s);\n  s = s.replace(/\\n[ \\t]+/g, '\\n').replace(/\\n{3,}/g, '\\n\\n');\n  return s.trim();\n}\n\nfunction classifyHref(href) {\n  if (/\\/groups\\/[^/?]+\\/user\\//.test(href)) return '账号';\n  if (/\\/groups\\/[^/?]+/.test(href)) return '小组';\n  if (/profile\\.php/.test(href) || /facebook\\.com\\/[^/?]+/.test(href)) return '账号';\n  return '';\n}\n\nfor (const rec of raw) {\n  const hasPermalink = rec.postUrl && /story_fbid|\\/posts\\/|\\/permalink\\/|multi_permalinks/.test(rec.postUrl);\n  if (!hasPermalink) continue;\n  idx += 1;\n\n  const html = rec.html || '';\n  const doc = new DOMParser().parseFromString(html, 'text/html');\n  const fullText = doc.body.textContent || '';\n\n  // ---- hovercards ----\n  const hoverInfos = [];\n  const seenEntities = new Set();\n  for (const card of (rec.hovercards || [])) {\n    if (!card || !card.htmlSnippet) continue;\n    const cdoc = new DOMParser().parseFromString(card.htmlSnippet, 'text/html');\n    if (!cdoc.querySelector('[aria-label=\"链接预览\"], [aria-label=\"关闭链接预览\"]')) continue;\n    if (!cdoc.querySelector('h3')) continue;\n    const h3a = cdoc.querySelector('h3 a[href]');\n    const href = h3a ? h3a.getAttribute('href') : '';\n    const type = classifyHref(href);\n    if (!type) continue;\n    const ctext = cdoc.body.textContent || '';\n    const kv = {};\n    let entityKey = '';\n    if (type === '小组') {\n      const m = href.match(/\\/groups\\/([^/?]+)/);\n      if (m) kv.groupId = m[1];\n      kv.groupLink = 'https://www.facebook.com/groups/' + (m ? m[1] : '');\n      kv.groupName = h3a ? h3a.textContent.trim() : (card.anchorText || '').trim();\n      const mm = ctext.match(/([\\d,.]+\\s*万?)\\s*位成员/);\n      kv.memberCount = mm ? mm[0] : '';\n      kv.privacy = /公开/.test(ctext) ? '公开' : (/私密/.test(ctext) ? '私密' : '');\n      const img = cdoc.querySelector('image, img');\n      if (img) kv.groupIcon = img.getAttribute('xlink:href') || img.getAttribute('src') || '';\n      entityKey = 'group:' + (m ? m[1] : kv.groupName);\n      if (seenEntities.has(entityKey)) continue;\n      seenEntities.add(entityKey);\n      hoverInfos.push({ link: href, htmlSnippet: card.htmlSnippet, type: '小组', role: '发帖小组', ...kv });\n    } else {\n      let userId = '', userLink = '';\n      const gu = href.match(/\\/groups\\/[^/?]+\\/user\\/([\\w.]+)/);\n      const idm = href.match(/[?&]id=(\\d+)/);\n      const vm = href.match(/facebook\\.com\\/([^/?]+)/);\n      if (gu) { userId = gu[1]; userLink = 'https://www.facebook.com/profile.php?id=' + gu[1]; }\n      else if (idm) { userId = idm[1]; userLink = 'https://www.facebook.com/profile.php?id=' + idm[1]; }\n      else if (vm) { userId = vm[1]; userLink = 'https://www.facebook.com/' + vm[1]; }\n      kv.accountId = userId;\n      kv.accountLink = userLink;\n      kv.accountName = h3a ? h3a.textContent.trim() : (card.anchorText || '').trim();\n      const fm = ctext.match(/([\\d,.]+\\s*万?)\\s*位粉丝/);\n      kv.followerCount = fm ? fm[0] : '';\n      const img = cdoc.querySelector('image, img');\n      if (img) kv.avatar = img.getAttribute('xlink:href') || img.getAttribute('src') || '';\n      const attrs = [];\n      const attrPatterns = [\n        ['所在地', /所在地：([^来自已关\\n]{2,20})/],\n        ['来自', /来自：([^已目添\\n]{2,20})/],\n        ['目前就职', /目前就职：([^曾经已\\n]{2,40})/],\n        ['曾经就读', /曾经就读：([^已添\\n]{2,40})/],\n        ['标签', /(公共主页\\s*·\\s*[^,，。;；\\n]{2,20})/]\n      ];\n      for (const pair of attrPatterns) {\n        const m = ctext.match(pair[1]);\n        if (m) attrs.push(pair[0] + '：' + m[1].trim());\n      }\n      kv.attributes = attrs;\n      entityKey = 'user:' + userId;\n      if (seenEntities.has(entityKey)) continue;\n      seenEntities.add(entityKey);\n      hoverInfos.push({ link: href, htmlSnippet: card.htmlSnippet, type: '账号', role: '主发帖人', ...kv });\n    }\n  }\n\n  // ---- media ----\n  const mediaUrls = [...doc.querySelectorAll(\"img[src*='scontent'], video[poster]\")]\n    .map(e => e.getAttribute('src') || e.getAttribute('poster') || '').filter(Boolean);\n\n  // ---- likes / comments / shares ----\n  // Step 4 computed these from the action-bar count spans in fixed order\n  // [likes, comments, shares] — these are authoritative. Only fill EMPTY\n  // fields from explicit aria-label / text phrasings. NEVER re-derive a\n  // non-empty field, and NEVER split concatenated \"展开<digits>\" strings.\n  let likes = (rec.likes || '').trim();\n  let comments = (rec.comments || '').trim();\n  let shares = (rec.shares || '').trim();\n\n  const labels = rec.ariaLabels || [];\n  const RE_COMMENT = /([\\d,.]+\\s*万?)\\s*(?:条|则|个|篇)(?:评论|留言|回覆|回复)/;\n  const RE_SHARE = /([\\d,.]+\\s*万?)\\s*(?:次|则|个)?(?:分享|转发|共享)/;\n  if (!likes || !comments || !shares) {\n    for (const a of labels) {\n      if (typeof a !== 'string') continue;\n      if (!likes) {\n        const rl = a.match(/^(?:赞|大爱|哇|抱抱|伤心|生气|哈哈|关爱)：?([\\d,.]+\\s*万?)(?:\\s*(?:位用户|人))?$/);\n        if (rl) likes = rl[1].trim();\n      }\n      if (!comments) { const m = a.match(RE_COMMENT); if (m) comments = pickCount(m); }\n      if (!shares) { const m = a.match(RE_SHARE); if (m) shares = pickCount(m); }\n    }\n  }\n  if (!likes || !comments || !shares) {\n    for (const el of doc.querySelectorAll('[aria-label]')) {\n      const a = el.getAttribute('aria-label') || '';\n      if (!likes) { const rl = a.match(/^(?:赞|大爱|哇|抱抱|伤心|生气|哈哈|关爱)：?([\\d,.]+\\s*万?)(?:\\s*(?:位用户|人))?$/); if (rl) likes = rl[1].trim(); }\n      if (!comments) { const m = a.match(RE_COMMENT); if (m) comments = pickCount(m); }\n      if (!shares) { const m = a.match(RE_SHARE); if (m) shares = pickCount(m); }\n    }\n  }\n  // plain-text explicit phrasings (label word required — no digit-splitting)\n  if (!comments) { const m = fullText.match(RE_COMMENT); if (m) comments = pickCount(m); }\n  if (!comments) { const m = fullText.match(/([\\d,.]+\\s*万?)\\s*则留言/); if (m) comments = pickCount(m); }\n  if (!shares) { const m = fullText.match(RE_SHARE); if (m) shares = pickCount(m); }\n  if (!shares) { const m = fullText.match(/([\\d,.]+\\s*万?)\\s*人分享(?:了)?/); if (m) shares = pickCount(m); }\n  if (!likes) { const m = fullText.match(/([\\d,.]+\\s*万?)\\s*(?:人赞|个赞|条赞)/); if (m) likes = pickCount(m); }\n\n  // ---- time ----\n  let time = (rec.timeLabel || '').trim();\n  if (!time || !(/年|月|日|小时|天|分钟|昨天/.test(time))) {\n    const m = fullText.match(/\\d{4}年\\d{1,2}月\\d{1,2}日|\\d{1,2}月\\d{1,2}日|昨天|\\d+小时前|\\d+分钟前|\\d+天前|\\d+分钟/);\n    time = m ? m[0] : (time || '');\n  }\n\n  // ---- location ----\n  let location = '';\n  const lm = fullText.match(/(?:发自于?|来自于?)\\s*([^·\\n，,;；]{2,20})/);\n  if (lm) location = lm[1].trim();\n\n  // ---- content ----\n  let content = htmlToText(rec.contentHtml || '');\n  if (!content) content = (rec.content || '').replace(/\\s*收起\\s*$/, '').trim();\n  else content = content.replace(/\\s*收起\\s*$/, '').trim();\n\n  const idm = (rec.postUrl || '').match(/story_fbid=(\\w+)|\\/posts\\/([\\w-]+)|multi_permalinks=(\\w+)/);\n  posts.push({\n    index: idx,\n    postId: idm ? (idm[1] || idm[2] || idm[3]) : '',\n    hoverInfos,\n    time,\n    location,\n    content,\n    mediaUrls,\n    likes,\n    comments,\n    shares,\n    html\n  });\n  if (posts.length >= target) break;\n}\nreturn { keyword, posts };"
+      }
+    ],
+    "targetUrl": "https://www.facebook.com/search/top?q={{keyword}}",
+    "updatedAt": 1787057240678,
+    "userDescription": "## User Requirements\n- Input parameters: 搜索关键词、帖子条数\n- Page operations & data to collect: 1. 将目标网站的url的keyword替换成输入的搜索关键词，打开网站以获得关键词的搜索结果。\n2. 从主工作区的信息流中提取帖子，注意要提出主页推荐、账号推荐、小组推荐等非帖子信息。如果提取的帖子不足输入参数要求的条数，就滚动主工作区的信息流，直到没有更多数据。\n3. 对每个帖子，执行如下操作：\n  - 虚拟鼠标hover事件到帖子正文上方两行的每个元素（注意，鼠标事件是悬停，不是点击），如果有悬浮窗弹出，提取悬浮窗的html dom片段，作为帖子的扩展信息。注意，要在悬浮窗关闭前提取，因为悬浮窗的内容可能是鼠标悬停后才动态加载，悬停事件一取消或移到其他元素后，相应悬浮窗会消失。\n  - 帖子正文中若有“展开”操作，点击展开链接，加载出完整的内容。\n  - 识别帖子条目的各项元素，包括时间、地点、正文内容、嵌入媒体的链接、点赞数、评论数、转发数。\n  - 将帖子关联悬浮窗动态加载的扩展信息，分为账号信息和小组信息两类，非这两类的不要。\n  - 区分关联悬浮窗扩展信息的角色是主发帖人、联合发帖人、发帖人所在地等的哪一种。\n  - 关联悬浮窗中的内容根据上下文尽可能提取相关的key-value。例如：\n    - 对于小组信息，提取小组id、小组详情链接、小组名、小组属性（如“公开小组”）、小组人数、小组图标。\n    - 对于账号信息，提取账号ID、账号名、账号详情链接、标签、各类属性（多个）、头像、粉丝数。\n  - **注意**：提取帖子各项元素时与触发及获取悬浮窗信息要同时进行，避免关联错位。\n- Output structure: 返回多个帖子，每个帖子包括序号、帖子id、悬浮窗扩展信息（多个）、发帖时间、地点（可能有）、内容、插图或视频url、点赞数、评论数、转发数、帖子条目的html dom片段等字段。悬浮窗扩展信息包括：链接、html dom片段、类型（小组还是账号）、角色（主发帖人、联合发帖人、发帖人所在地等）、其他key-value。"
+  }
+]
