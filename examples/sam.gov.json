@@ -1,0 +1,180 @@
+[
+  {
+    "annotations": [],
+    "config": {
+      "autoCloseTab": true,
+      "enabled": true,
+      "maxRetries": 1,
+      "maxStepIterations": 50,
+      "tabLoadTimeoutMs": 60000,
+      "timeoutMs": 60000
+    },
+    "createdAt": 1787192571731,
+    "displayName": "sam.gov",
+    "id": "a8d727e8-a93d-4913-a158-eddc1c2fa6a9",
+    "inputSchema": {
+      "properties": {
+        "keyword": {
+          "description": "Search keyword for contracts",
+          "type": "string"
+        },
+        "page": {
+          "description": "Page number to jump to",
+          "type": "number"
+        }
+      },
+      "required": [
+        "keyword",
+        "page"
+      ],
+      "type": "object"
+    },
+    "name": "samgov",
+    "outputSchema": {
+      "properties": {
+        "contracts": {
+          "items": {
+            "properties": {
+              "contractType": {
+                "type": "string"
+              },
+              "department": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "detailHtml": {
+                "type": "string"
+              },
+              "inactiveDates": {
+                "type": "string"
+              },
+              "inactivePolicy": {
+                "type": "string"
+              },
+              "naics": {
+                "type": "string"
+              },
+              "noticeId": {
+                "type": "string"
+              },
+              "office": {
+                "type": "string"
+              },
+              "placeOfPerformance": {
+                "type": "string"
+              },
+              "pocEmail": {
+                "type": "string"
+              },
+              "pocName": {
+                "type": "string"
+              },
+              "pocPhone": {
+                "type": "string"
+              },
+              "psc": {
+                "type": "string"
+              },
+              "publishedDate": {
+                "type": "string"
+              },
+              "relatedNotice": {
+                "type": "string"
+              },
+              "responseDate": {
+                "type": "string"
+              },
+              "setAside": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "subTier": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "contracts"
+      ],
+      "type": "object"
+    },
+    "requirements": {
+      "inputParams": "keyword, page number",
+      "outputStruct": "Array of contract. Each contract contains detail page html and varias key-value from the table in the detail page about contract.",
+      "pageOps": "1. Use the search input box and the Submit button to search for contracts by the specified keyword.\n2. Use the page navigation input box to jump to the specified page number.\n3. After the page has finished rendering, open each item title link in the main result list in a new Chrome tab.\n4. Crawl the detail page HTML and extract all key-value pairs related to the contract."
+    },
+    "sampleInput": {
+      "keyword": "IT services",
+      "page": 1
+    },
+    "steps": [
+      {
+        "condition": null,
+        "entryUrl": "https://sam.gov/search/?page=1&pageSize=25&sort=-modifiedDate&sfm%5BsimpleSearch%5D%5BkeywordRadio%5D=ALL&sfm%5Bstatus%5D%5Bis_active%5D=true",
+        "id": "1",
+        "maxIterations": 1,
+        "name": "search_keyword",
+        "onFailure": "TERMINATE",
+        "onSuccess": "2",
+        "script": "await $wait('#newSimpleSearch');\nawait $type('#newSimpleSearch', __input__.keyword);\nawait new Promise(r => setTimeout(r, 500));\nawait $click(\"sds-search form.usa-search button[type='submit']\");\nreturn { done: true };"
+      },
+      {
+        "condition": null,
+        "entryUrl": "https://sam.gov/search/?page=1&pageSize=25&sort=-modifiedDate&sfm%5BsimpleSearch%5D%5BkeywordRadio%5D=ALL&sfm%5Bstatus%5D%5Bis_active%5D=true",
+        "id": "2",
+        "maxIterations": 15,
+        "name": "wait_results",
+        "onFailure": "TERMINATE",
+        "onSuccess": "3",
+        "script": "await new Promise(r => setTimeout(r, 3000));\nconst hasResults = await $exists('sds-search-result-list app-opportunity-result, sds-search-result-list app-exclusion-result', 3000);\nconst noResults = await $exists('.card-title', 1000);\nif (hasResults) return { done: true };\nif (noResults) return { done: true, empty: true };\nreturn { done: false };"
+      },
+      {
+        "condition": null,
+        "entryUrl": "https://sam.gov/search/?page=1&pageSize=25&sort=-modifiedDate&sfm%5BsimpleSearch%5D%5BkeywordRadio%5D=ALL&sfm%5Bstatus%5D%5Bis_active%5D=true",
+        "id": "3",
+        "maxIterations": 30,
+        "name": "jump_to_page",
+        "onFailure": "TERMINATE",
+        "onSuccess": "4",
+        "script": "const target = Number(__input__.page || 1);\nif (target <= 1) return { done: true, page: 1 };\n\nconst state = (__lastResult__ && typeof __lastResult__.page === 'number') ? __lastResult__ : { page: 1, triedJump: false };\n\n// Attempt 1: direct jump via the pagination input (type + blur to trigger change)\nif (!state.triedJump) {\n  try {\n    await $type('#bottomPagination-currentPage', String(target));\n    await new Promise(r => setTimeout(r, 400));\n    // blur the input so the change event fires (click a neutral heading)\n    await $click('#header-508');\n    await new Promise(r => setTimeout(r, 3000));\n    const v = String(await $extract('#bottomPagination-currentPage', 'value', 3000)).trim();\n    if (v === String(target)) return { done: true, page: target };\n  } catch (e) { /* fall through to stepping */ }\n  state.triedJump = true;\n  return { done: false, page: state.page, triedJump: true };\n}\n\n// Fallback: step forward one page at a time, tracking the page number ourselves\nconst hasNext = await $exists('#bottomPagination-nextPage', 2000);\nif (!hasNext) return { done: true, page: state.page, exhausted: true };\nawait $click('#bottomPagination-nextPage');\nawait new Promise(r => setTimeout(r, 3000));\nstate.page = state.page + 1;\nif (state.page >= target) return { done: true, page: target };\nreturn { done: false, page: state.page, triedJump: true };"
+      },
+      {
+        "condition": null,
+        "entryUrl": "https://sam.gov/search/?page=1&pageSize=25&sort=-modifiedDate&sfm%5BsimpleSearch%5D%5BkeywordRadio%5D=ALL&sfm%5Bstatus%5D%5Bis_active%5D=true",
+        "id": "4",
+        "maxIterations": 10,
+        "name": "verify_page_and_collect_links",
+        "onFailure": "TERMINATE",
+        "onSuccess": "5",
+        "script": "await new Promise(r => setTimeout(r, 3000));\n\n// Don't gate on the pagination input's value (it reads 0/unreliably in this DOM).\n// Instead verify the results list is rendered and stable, then collect links.\nconst hasResults = await $exists('sds-search-result-list app-opportunity-result, sds-search-result-list app-exclusion-result', 5000);\nif (!hasResults) {\n  // If a \"no results\" card is shown, that's a deterministic empty — report done.\n  const noResults = await $exists('.card-title', 2000);\n  if (noResults) return { done: true, items: [], index: 0, results: [], empty: true };\n  return { done: false };\n}\n\n// Wait for content stability so we don't grab links mid-render\nawait $waitForStable('sds-search-result-list', { maxMs: 15000 });\n\nlet links = await $list(\"sds-search-result-list a.usa-link[href*='/view']\");\nlet items = links.map(l => ({ href: l.href, text: (l.textContent || '').trim() })).filter(i => i.href);\n\n// Fallback selector: title links inside each result item\nif (items.length === 0) {\n  links = await $list('app-opportunity-result h3 a');\n  items = links.map(l => ({ href: l.href, text: (l.textContent || '').trim() })).filter(i => i.href);\n}\n\nreturn { done: true, items, index: 0, results: [], page: __input__.page || 1 };"
+      },
+      {
+        "condition": null,
+        "entryUrl": "https://sam.gov/search/?page=1&pageSize=25&sort=-modifiedDate&sfm%5BsimpleSearch%5D%5BkeywordRadio%5D=ALL&sfm%5Bstatus%5D%5Bis_active%5D=true",
+        "id": "5",
+        "maxIterations": 30,
+        "name": "scrape_detail_pages",
+        "onFailure": "TERMINATE",
+        "onSuccess": "TERMINATE",
+        "script": "const state = __lastResult__;\nif (!state || !state.items || state.items.length === 0) return { done: true, contracts: [] };\nif (state.index >= state.items.length) {\n  return { done: true, contracts: state.results };\n}\nconst item = state.items[state.index];\nlet detail = { title: item.text, url: item.href, detailHtml: '' };\ntry {\n  detail = await $openTab(item.href, `\n    await $wait('app-opps-display h1.card-title', 20000);\n    await new Promise(r => setTimeout(r, 1500));\n    const g = async (sel) => { try { return (await $extract(sel, null, 800) || '').trim(); } catch(e) { return ''; } };\n    const title = await g('h1.card-title');\n    const status = await g('.sds-tag--status');\n    const noticeId = await g('h5[aria-describedby=\"notice-id\"]');\n    const relatedNotice = await g('h5[aria-describedby=\"related-notice\"]');\n    const contractType = await g('h5[aria-describedby=\"contract-type\"]');\n    const contractLineNumber = await g('h5[aria-describedby=\"contract-line-number\"]');\n    const inactiveDates = await g('h5[aria-describedby=\"inactive-dates\"]');\n    const inactivePolicy = await g('h5[aria-describedby=\"inactive-policy\"]');\n    const responseDate = await g('h5[aria-describedby=\"date-offers-date\"]');\n    const publishedDate = await g('h5[aria-describedby=\"published-date\"]');\n    const department = await g('h5[aria-describedby=\"dept-agency\"]');\n    const subTier = await g('h5[aria-describedby=\"sub-tier\"]');\n    const office = await g('h5[aria-describedby=\"office\"]');\n    const awardDate = await g('app-award-details h5[aria-describedby=\"title-one-row\"]');\n    const awardNumber = await g('app-award-details .grid-col-3:nth-of-type(2) h5[aria-describedby=\"title-one-row\"]');\n    const awardedAddress = await g('h5[aria-describedby=\"address\"]');\n    const awardedUEI = await g('h5[aria-describedby=\"title-two-row\"]');\n    const awardedName = await g('app-award-details .grid-col-fill h5[aria-describedby=\"title-one-row\"]');\n    const setAside = await g('h5[aria-describedby=\"set-aside\"]');\n    const psc = await g('h5[aria-describedby=\"psc\"]');\n    const naics = await g('h5[aria-describedby=\"naics\"]');\n    const placeOfPerformance = await g('#poc ~ .grid-row .sds-field__value');\n    const description = await g('app-solicitation-details #desc .value-new-line');\n    const pocName = await g('h5.contact-title-2');\n    const pocEmail = await g('h6[aria-describedby=\"email\"]');\n    const pocPhone = await g('h6[aria-describedby=\"phone\"]');\n    let detailHtml = '';\n    try { detailHtml = await $extract('app-opps-display', 'outerHTML', 3000); } catch(e) {}\n    return { title, status, noticeId, relatedNotice, contractType, contractLineNumber, inactiveDates, inactivePolicy, responseDate, publishedDate, department, subTier, office, awardDate, awardNumber, awardedAddress, awardedUEI, awardedName, setAside, psc, naics, placeOfPerformance, description, pocName, pocEmail, pocPhone, detailHtml };\n  `);\n} catch (e) {\n  detail.error = String(e);\n}\ndetail.url = item.href;\nif (!detail.title) detail.title = item.text;\nstate.results.push(detail);\nstate.index = state.index + 1;\nreturn { done: false, items: state.items, index: state.index, results: state.results };"
+      }
+    ],
+    "targetUrl": "https://sam.gov/search/?page=1&pageSize=25&sort=-modifiedDate&sfm%5BsimpleSearch%5D%5BkeywordRadio%5D=ALL&sfm%5Bstatus%5D%5Bis_active%5D=true",
+    "updatedAt": 1787192571733,
+    "userDescription": "## User Requirements\n- Input parameters: keyword, page number\n- Page operations & data to collect: 1. Use the search input box and the Submit button to search for contracts by the specified keyword.\n2. Use the page navigation input box to jump to the specified page number.\n3. After the page has finished rendering, open each item title link in the main result list in a new Chrome tab.\n4. Crawl the detail page HTML and extract all key-value pairs related to the contract.\n- Output structure: Array of contract. Each contract contains detail page html and varias key-value from the table in the detail page about contract."
+  }
+]
