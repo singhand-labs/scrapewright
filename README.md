@@ -11,7 +11,7 @@
 
 Scrapewright is an **LLM-powered intelligent web data scraping platform**: describe "what you want to scrape" in natural language, and the LLM analyzes the target page, generates the scraping script, and deploys it as a long-running service. With Scrapewright you build and deploy scraping/extraction services without learning a framework, without writing CSS selectors, and without fighting anti-bot measures — and maintenance after a site redesign becomes almost effortless.
 
-**Scrapewright uses AI to build web scraping services**: in the wizard you describe the requirement in natural language; the AI opens the target page, analyzes its structure, generates the scraping script, and test-runs it on the spot. Once verified, it becomes a standard HTTP endpoint for programs, scripts, or AI agents to call. At run time the deployed service **no longer calls the LLM** and consumes no tokens — cheaper and faster than agent-driven browser control.
+**Scrapewright uses AI to build web scraping services**: in the wizard you describe the requirement in natural language; the AI opens the target page, analyzes its structure, generates the scraping script, and test-runs it on the spot. Once verified, it becomes a standard HTTP endpoint for programs, scripts, or AI agents to call. At run time the deployed service **no longer calls the LLM** and consumes no tokens — far cheaper and faster than agent-driven browser control. When a script fails, the AI analyzes the DOM snapshot and repairs it automatically; the same mechanism applies after a site redesign. Every service can also export a Markdown API doc for other AI agents to consume.
 
 It runs as a Chrome extension inside the **browser you already use**, which gives it three inherent advantages:
 
@@ -19,7 +19,6 @@ It runs as a Chrome extension inside the **browser you already use**, which give
 - **Full page fidelity** — anything visible in the browser is extractable: JS-rendered content, nested iframes, pagination, hover popups, lazy-rendered content, throttling restrictions, and per-item detail pages
 - **No automation fingerprint** — no headless-browser markers; requests come from a genuine browser
 
-When a script fails, the AI analyzes the DOM snapshot and repairs it automatically; the same mechanism applies after a site redesign. Every service can also export a Markdown API doc for other AI agents to consume.
 
 > **60-second start**
 >
@@ -29,22 +28,22 @@ When a script fails, the AI analyzes the DOM snapshot and repairs it automatical
 >
 > Now any program can call it:
 >
-> Submit a job (returns a jobId immediately):
+>   Submit a job (returns a jobId immediately)
 > ```bash
 > curl -X POST http://localhost:8765/api/v1/services/my-service/execute \
 >   -H "X-API-Key: dev-key" -H "Content-Type: application/json" \
 >   -d '{"input": {"query": "hello"}}'
 > ```
 >
-> Fetch the result (blocks until done):
+>   Fetch the result (blocks until done)
 > ```bash
 > curl "http://localhost:8765/api/v1/jobs/<jobId>/wait?timeout=120" \
 >   -H "X-API-Key: dev-key"
 > ```
 
-The `examples/` directory ships ready-to-use sample services you can import on the Options page and deploy directly.
+The `examples/` directory ships ready-to-use scraping script samples you can import on the Options page and deploy directly.
 
-The same step-graph engine also works as a lightweight **web test automation** / browser automation tool: click, type, wait, assert, branch — declarative, replayable, self-healing.
+Beyond scraping, the project itself doubles as a lightweight **web test automation** / browser automation tool: click, type, wait, assert, branch — declarative, replayable, self-healing.
 
 For internals, see the [Technical Whitepaper](docs/technical-whitepaper.en.md) (architecture, modules, customization guide).
 
@@ -70,7 +69,7 @@ Traditional tools for extracting web data (Scrapy, Selenium, Puppeteer/Playwrigh
 | **Not reusable** | The spider you wrote for site A won't help with structurally similar site B |
 | **No uniform interface** | Every job has its own I/O shape; orchestration goes nowhere |
 
-Scrapewright's answer: **let AI configure the scrape inside a real browser, and standardize the result as an HTTP service.**
+Scrapewright's approach: **let AI configure the scrape inside a real browser, and standardize the result as an HTTP service.**
 
 - **AI-driven** — describe the need in natural language; the LLM analyzes the page, writes the script, and self-repairs on failure
 - **Real browser** — a Chrome extension running in your daily browser, reusing logins, cookies, and fingerprint as-is
@@ -81,16 +80,18 @@ Scrapewright's answer: **let AI configure the scrape inside a real browser, and 
 
 - Chrome browser (latest stable)
 - Node.js >= 18
-- An API key for any LLM: OpenAI / Moonshot Kimi / Anthropic / GLM (or any OpenAI-compatible endpoint)
+- An API key for any LLM: OpenAI / Moonshot Kimi / Anthropic / GLM (or any OpenAI-compatible endpoint); a long-context model is recommended (e.g. GLM 5.2)
 
 ## Quick Start
 
 ### Installation
 
+Download the project source first, then follow the steps below.
+
 #### 1. Load the Chrome Extension
 
-1. Open Chrome and go to `chrome://extensions/`
-2. Toggle on **Developer mode** (top-right)
+1. Open Chrome and type `chrome://extensions/` in the address bar
+2. Toggle on **Developer mode** (top-right of the extensions management page)
 3. Click **Load unpacked** and select the project's `extension/` directory
 
 #### 2. Install the Host
@@ -103,7 +104,7 @@ The host is a lightweight Node.js service that exposes the HTTP API. One command
 ./bin/scrapewright install --port=9123        # custom port (all platforms)
 ```
 
-Then open the extension → **Options** → **Server Configuration**, confirm the port matches (default `8765`), and click **Test Connection**. A **Connected** badge means you're done.
+Then open the Scrapewright Chrome extension → **Options** → **Server Configuration**, confirm the port matches (default `8765`), and click **Test Connection**. A **Connected** badge means you're done.
 
 #### 3. Configure the LLM
 
@@ -121,11 +122,11 @@ On the Options page click **+ New Service** to enter the 5-phase AI wizard:
 
 | Phase | What you do |
 |-------|-------------|
-| **1. Target & requirements** | Enter the target URL + a one-line requirement (which fields, pagination or not). Click **Research**; the AI opens the page, analyzes it, and drafts the service |
+| **1. Target & requirements** | Enter the target URL + the requirements (input parameters, page operations, which fields to return). Click **Research**; the AI opens the page, analyzes it, and drafts the service |
 | **2. Name & steps** | Name the service; review/edit the AI-generated steps (each step is a script you can tweak) |
 | **3. Interface definition** | Confirm input/output JSON Schemas and the test input |
 | **4. Test run** | Watch the live step-by-step execution: open page → each step → success/failure |
-| **5. Results** | Inspect the extracted data. Not happy? Hit **Auto-Fix** and let the AI repair it — or deploy |
+| **5. Results** | Inspect the extracted data. Not happy? Hit **Auto-Fix** and let the AI repair it; once satisfied, click deploy and the service starts serving |
 
 <p align="center">
   <img src="docs/phase1.png" width="72%" alt="Wizard phase 1: describe target and requirements">
@@ -172,7 +173,7 @@ curl -s "http://localhost:8765/api/v1/jobs/$JOB_ID/wait?timeout=120" \
   -H "X-API-Key: dev-key" | jq '.job.result'
 ```
 
-**Calling from AI agents.** Every service can export its Markdown API doc via the **API Doc** button on the Options page. Provide the document to agents such as Hermes Agent, WorkBuddy, or Lobster, and they can call the service directly.
+**Calling from AI agents.** Every service can export its Markdown API doc via the **API Doc** button on the Options page. Provide the document to agents such as Hermes Agent, WorkBuddy, or Lobster, and have them build their own tools or skills to call the service.
 
 Full interface details (parameters, states, error codes, page records): see [Scraping Service Interface (HTTP API)](#scraping-service-interface-http-api).
 
@@ -326,6 +327,7 @@ Also enable **Enhanced Scraping Mode** under Options → Settings (dispatches re
 - **Zero-cost login state** — reuses your logged-in browser session; the hardest thing for server-side tools to replicate
 - **Self-healing** — auto-fix analyzes failures and rewrites scripts at config time and at runtime; after a redesign, repair beats rewrite
 - **Data stays local** — self-hosted; the LLM only sees page structure at configuration time (never needed at run time)
+- **No token burn at run time** — the LLM is only used at configuration time to research the page and generate the script; once deployed, the script never calls the LLM again — no token cost, fast and cheap
 - **Non-technical friendly** — wizard-driven with visual element annotation; annotate your intent and the AI generates from it
 - **More than scraping** — the same step-graph engine works as lightweight web test automation (click, type, wait, assert, branch)
 - **Scalable** — multi-instance parallel deployment (Docker/K8s) when you need more throughput (see [Whitepaper §12](docs/technical-whitepaper.en.md))
