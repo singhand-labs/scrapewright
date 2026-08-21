@@ -1,6 +1,6 @@
 {
   "name": "scrapewright-native-host",
-  "version": "0.1.0",
+  "version": "0.1",
   "description": "HTTP host service for Scrapewright extension",
   "license": "GPL-3.0-only",
   "author": "湖南星汉数智科技有限公司 (https://www.singhand.com)",
