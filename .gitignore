@@ -9,6 +9,9 @@ node_modules/
 # service dumps, console/debug logs, raw extractions — not source artifacts).
 .DS_Store
 
+# CWS packaging output (bin/package-extension.sh)
+/build/
+
 # Local-only docs: superpowers workspace (plans/specs) and roadmap scratch.
 docs/superpowers/
 docs/roadmap.md

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Scrapewright",
-  "version": "0.1.0",
+  "version": "0.1",
   "description": "LLM-powered web scraping platform",
   "permissions": [
     "storage",
