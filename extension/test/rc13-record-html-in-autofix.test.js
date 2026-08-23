@@ -101,15 +101,16 @@ describe('RC13 — firstContainerHtml capture (Issue #2 fix)', () => {
     assert.equal(diag.firstContainerHtml, null);
   });
 
-  it('firstContainerHtml is capped near 2000 chars, head+tail with truncation marker (RC59)', () => {
+  it('firstContainerHtml is capped near 8000 chars, head+tail with truncation marker (RC59, cap raised 2026-08-24)', () => {
     // Build a record whose outerHTML exceeds the cap. RC59: the cap is a
     // head+tail split (metric attributes cluster at the END of record
-    // markup; the old head-only cap amputated that evidence).
-    const longBody = 'x'.repeat(3000);
+    // markup; the old head-only cap amputated that evidence). 2026-08-24:
+    // 2000 → 8000 per user directive — page evidence gets a real budget.
+    const longBody = 'x'.repeat(12000);
     const dom = new JSDOM('<!DOCTYPE html><body><div class="post"><p>' + longBody + '</p></div></body>');
     const record = dom.window.document.querySelector('.post');
     const diag = computeExtractListDiagnostics([record], { body: 'p' }, '.post');
-    assert.ok(diag.firstContainerHtml.length <= 2060,
+    assert.ok(diag.firstContainerHtml.length <= 8060,
       'firstContainerHtml must be capped (got ' + diag.firstContainerHtml.length + ')');
     assert.match(diag.firstContainerHtml, /…\[truncated \d+ chars, middle cut\]…/,
       'marker must disclose the original length');

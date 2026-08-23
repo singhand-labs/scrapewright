@@ -150,6 +150,55 @@ function clickInListItems(containers, subSel, clickFn, delayMs) {
   return { clicked, errors, delayMs: delay };
 }
 
+// computeClickInListDiagnostics(containers, subSel, containerSelector, result) → object
+//
+// console.log 2026-08-23 (FB search): step 3's $clickInList errored on all
+// 10 containers ('subSel not found'), returned done:true, and the failure
+// was silent — the wizard had no framework-level evidence that the click
+// sub-selector matched nothing. Mirrors computeExtractListDiagnostics so
+// autoFix sees container counts plus one real container's HTML (the place
+// where the actually-clickable element lives).
+function computeClickInListDiagnostics(containers, subSel, containerSelector, result) {
+  const containerArr = Array.isArray(containers) ? containers : [];
+  const errors = (result && Array.isArray(result.errors)) ? result.errors : [];
+  const notFoundCount = errors.filter(e => e && typeof e.reason === 'string' && e.reason.indexOf('subSel not found') >= 0).length;
+  const sampleTexts = [];
+  for (const c of containerArr) {
+    if (sampleTexts.length >= 3) break;
+    if (c && typeof c.textContent === 'string') {
+      const t = c.textContent.trim().slice(0, 80);
+      if (t) sampleTexts.push(t);
+    }
+  }
+  let firstContainerHtml = null;
+  if (containerArr.length > 0) {
+    const c0 = containerArr[0];
+    if (c0 && typeof c0.outerHTML === 'string') {
+      const collapsed = c0.outerHTML.replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, ' ');
+      if (collapsed.length <= 8000) {
+        firstContainerHtml = collapsed;
+      } else {
+        const tail = 4000;
+        const head = 8000 - tail - 60;
+        firstContainerHtml = collapsed.slice(0, head) +
+          ' …[truncated ' + collapsed.length + ' chars, middle cut]… ' +
+          collapsed.slice(collapsed.length - tail);
+      }
+    }
+  }
+  return {
+    api: 'clickInList',
+    containerSelector: containerSelector || null,
+    containerMatches: containerArr.length,
+    subSelector: subSel || null,
+    clicked: (result && typeof result.clicked === 'number') ? result.clicked : 0,
+    errorCount: errors.length,
+    notFoundCount,
+    sampleTexts,
+    firstContainerHtml
+  };
+}
+
 // extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverFn, opts) → Promise<records>
 //
 // Container-scoped extract-then-hover. For each container:
@@ -310,8 +359,8 @@ function computeExtractListDiagnostics(containers, fieldMap, containerSelector) 
     }
     return { field, subSelector, attr, matchCount, sampleTexts, sampleHrefs };
   });
-  // Capture ~2000 chars of the first container's outerHTML, head+tail split.
-  // The cap is per-call: if there are multiple $extractList calls in one
+  // Capture up to ~8000 chars of the first container's outerHTML, head+tail
+  // split. The cap is per-call: if there are multiple $extractList calls in one
   // step, each one contributes its own snippet. summarizeAllStepDiagnostics
   // further caps the aggregate to avoid unbounded prompt growth.
   // RC59 (console.log 2026-08-18): the cap used to be HEAD-ONLY, but metric
@@ -319,6 +368,9 @@ function computeExtractListDiagnostics(containers, fieldMap, containerSelector) 
   // of record markup — the head-only cap amputated exactly the evidence the
   // LLM needed to fix chronic-empty count fields, across 10 blind autoFix
   // rounds. Tail share ~60%.
+  // 2026-08-24: 2000 → 8000 (user directive: page evidence the LLM must
+  // reason about gets a real budget — a generic tight cap blind-amputates
+  // nesting/anchor structure the same way RC59's head-only cut did).
   let firstContainerHtml = null;
   if (containerArr.length > 0) {
     const c0 = containerArr[0];
@@ -326,11 +378,11 @@ function computeExtractListDiagnostics(containers, fieldMap, containerSelector) 
       // Collapse runs of whitespace to keep the snippet compact and to avoid
       // dumping huge indented DOM. Keep newlines so the LLM can read structure.
       const collapsed = c0.outerHTML.replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, ' ');
-      if (collapsed.length <= 2000) {
+      if (collapsed.length <= 8000) {
         firstContainerHtml = collapsed;
       } else {
-        const tail = 1200;
-        const head = 2000 - tail - 60; // marker budget
+        const tail = 4000;
+        const head = 8000 - tail - 60; // marker budget
         firstContainerHtml = collapsed.slice(0, head) +
           ' …[truncated ' + collapsed.length + ' chars, middle cut]… ' +
           collapsed.slice(collapsed.length - tail);
@@ -386,6 +438,7 @@ const api = {
   extractWithHoverRecords,
   clickInListItems,
   computeExtractListDiagnostics,
+  computeClickInListDiagnostics,
   computeSimpleSelectorDiagnostics
 };
 

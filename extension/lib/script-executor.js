@@ -17,7 +17,7 @@ class ScriptExecutor {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         debugLogger.log('error', 'script-executor', 'SCRIPT_TIMEOUT fired', { tabId: this.tabId, timeoutMs: this.timeoutMs });
-        reject(new Error('SCRIPT_TIMEOUT'));
+        reject(new Error(`SCRIPT_TIMEOUT: script exceeded the ${this.timeoutMs}ms per-step execution budget and was killed. If this step batches $extractWithHover/$hover over multiple containers (each hovered anchor burns ~5-10s even when no popover appears), narrow the batch (containerRange/maxContainers) or slice it across maxIterations>1 + { done: false } iterations. For long waits, poll via retry iterations instead of in-script sleeps.`));
       }, this.timeoutMs);
 
       const listener = (message, sender) => {

@@ -55,4 +55,15 @@ describe('SCRIPT_DSL_GUIDE — scrolling section', () => {
     assert.match(SCRIPT_DSL_GUIDE, /\$scrollIntoView/);
     assert.match(SCRIPT_DSL_GUIDE, /See more/i);
   });
+
+  // console.log 2026-08-23 (FB search): step 2's r.scrolled-based stall
+  // counter NEVER fired — the feed's scroll position/height kept creeping
+  // without new content, so scrolled stayed true and the step burned 19
+  // iterations (~5 min) stuck at 8 articles. Growth of unique signatures
+  // (noGrowth), not scroll position, is the reliable exhaustion signal on
+  // virtualized feeds.
+  it('VIRTUALIZED FEEDS teaches noGrowth (unique-signature growth) as the exhaustion signal', () => {
+    assert.match(SCRIPT_DSL_GUIDE, /noGrowth/);
+    assert.match(SCRIPT_DSL_GUIDE, /r\.scrolled can stay true|scrolled.*stay true/i);
+  });
 });

@@ -270,11 +270,11 @@
         const c0 = containerArr[0];
         if (c0 && typeof c0.outerHTML === 'string') {
           const collapsed = c0.outerHTML.replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, ' ');
-          if (collapsed.length <= 2000) {
+          if (collapsed.length <= 8000) {
             firstContainerHtml = collapsed;
           } else {
-            const tail = 1200;
-            const head = 2000 - tail - 60; // marker budget
+            const tail = 4000;
+            const head = 8000 - tail - 60; // marker budget
             firstContainerHtml = collapsed.slice(0, head) +
               ' …[truncated ' + collapsed.length + ' chars, middle cut]… ' +
               collapsed.slice(collapsed.length - tail);
@@ -318,12 +318,56 @@
       };
     }
 
+    // Inline mirror of lib/list-extract-ops.js computeClickInListDiagnostics —
+    // keep in sync (pinned by test/inline-list-extract-ops-drift.test.js).
+    function computeClickInListDiagnostics(containers, subSel, containerSelector, result) {
+      const containerArr = Array.isArray(containers) ? containers : [];
+      const errors = (result && Array.isArray(result.errors)) ? result.errors : [];
+      const notFoundCount = errors.filter(e => e && typeof e.reason === 'string' && e.reason.indexOf('subSel not found') >= 0).length;
+      const sampleTexts = [];
+      for (const c of containerArr) {
+        if (sampleTexts.length >= 3) break;
+        if (c && typeof c.textContent === 'string') {
+          const t = c.textContent.trim().slice(0, 80);
+          if (t) sampleTexts.push(t);
+        }
+      }
+      let firstContainerHtml = null;
+      if (containerArr.length > 0) {
+        const c0 = containerArr[0];
+        if (c0 && typeof c0.outerHTML === 'string') {
+          const collapsed = c0.outerHTML.replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, ' ');
+          if (collapsed.length <= 8000) {
+            firstContainerHtml = collapsed;
+          } else {
+            const tail = 4000;
+            const head = 8000 - tail - 60;
+            firstContainerHtml = collapsed.slice(0, head) +
+              ' …[truncated ' + collapsed.length + ' chars, middle cut]… ' +
+              collapsed.slice(collapsed.length - tail);
+          }
+        }
+      }
+      return {
+        api: 'clickInList',
+        containerSelector: containerSelector || null,
+        containerMatches: containerArr.length,
+        subSelector: subSel || null,
+        clicked: (result && typeof result.clicked === 'number') ? result.clicked : 0,
+        errorCount: errors.length,
+        notFoundCount,
+        sampleTexts,
+        firstContainerHtml
+      };
+    }
+
     return {
       extractListRecords,
       extractListMultiRecords,
       extractWithHoverRecords,
       clickInListItems,
       computeExtractListDiagnostics,
+      computeClickInListDiagnostics,
       computeSimpleSelectorDiagnostics
     };
   }
@@ -942,8 +986,10 @@
         }
         case 'clickInList': {
           const __t0 = Date.now();
-          result = await domClickInList(data.selector, data.args && data.args[0], data.args && data.args[1]);
-          recordDomActivity('$clickInList', data.selector, result && typeof result.clicked === 'number' ? result.clicked : 0, Date.now() - __t0);
+          const __r = await domClickInList(data.selector, data.args && data.args[0], data.args && data.args[1]);
+          result = __r.result;
+          _diagnostics = __r._diagnostics;
+          recordDomActivity('$clickInList', data.selector, __r.result && typeof __r.result.clicked === 'number' ? __r.result.clicked : 0, Date.now() - __t0);
           break;
         }
         case 'extractWithHover': {
@@ -1379,7 +1425,7 @@
     if (!ops) {
       throw new Error('$clickInList runtime missing: lib/list-extract-ops.js did not attach window.ListExtractOps. Reload the extension and refresh the target tab.');
     }
-    const result = ops.clickInListItems(
+    const clickResult = ops.clickInListItems(
       containers,
       subSel,
       (el) => { el.click(); },
@@ -1388,15 +1434,21 @@
     // The pure helper is synchronous; per-click spacing is approximated by a single
     // post-batch sleep. For long lists requiring strict per-click timing, split across
     // orchestrator iterations (see DSL guide's EXPAND-THEN-EXTRACT block).
-    if (delayMs > 0 && result.clicked > 1) {
+    if (delayMs > 0 && clickResult.clicked > 1) {
       await new Promise(r => setTimeout(r, Math.min(delayMs, 500)));
     }
     sendDebugLog('info', 'content-script', 'domClickInList done', {
       selector: containerSel,
-      clicked: result.clicked,
-      errors: result.errors.length
+      clicked: clickResult.clicked,
+      errors: clickResult.errors.length
     });
-    return { clicked: result.clicked, errors: result.errors };
+    // console.log 2026-08-23: total clickInList failure (0 clicked, all
+    // containers 'subSel not found') was invisible to autoFix — instrumented
+    // like the extractList family so the evidence rides the DOM_RESPONSE.
+    const _diagnostics = (typeof ops.computeClickInListDiagnostics === 'function')
+      ? ops.computeClickInListDiagnostics(containers, subSel, containerSel, clickResult)
+      : null;
+    return { result: { clicked: clickResult.clicked, errors: clickResult.errors }, _diagnostics };
   }
 
   // ===== Scroll APIs =====
@@ -2396,6 +2448,15 @@
       anchorSel: hoverConfig.anchorSel,
       fieldKeys: Object.keys(fieldMap)
     });
+    // Mirror into the background SW console so a single log capture shows the
+    // hover pipeline actually ran (third-session console.log 2026-08-23: the
+    // wrapper's sendDebugLog only reached the page console, so the SW capture
+    // had zero extractWithHover traces and diagnosis stalled).
+    notifyBackgroundDiagnostic('extractWithHover_entry', {
+      containerSelector: containerSel,
+      containerMatches: containers.length,
+      anchorSel: hoverConfig.anchorSel
+    });
     // Apply range opts.
     var processed;
     if (containerIndex !== null && containerIndex !== undefined) {
@@ -2472,6 +2533,35 @@
       hovercardsCaptured: hovercardsCaptured,
       hoverFailures: hoverFailures
     };
+    _diagnostics.anchorSel = hoverConfig.anchorSel;
+    // Anchor fixes need the REAL container markup, not a generic snippet.
+    // computeExtractListDiagnostics caps firstContainerHtml at 2000 chars,
+    // but choosing an anchorSel requires seeing the full nesting around the
+    // interactive link (wrapper elements, aria-hidden shells, object
+    // elements). Capture generously from the first processed container —
+    // when page evidence is what the LLM must reason about, give it a real
+    // budget instead of amputating at a blind threshold.
+    try {
+      if (processed.length > 0 && processed[0] && typeof processed[0].outerHTML === 'string') {
+        var collapsedEwh = processed[0].outerHTML.replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, ' ');
+        if (collapsedEwh.length <= 8000) {
+          _diagnostics.firstContainerHtml = collapsedEwh;
+        } else {
+          var tailEwh = 4000;
+          var headEwh = 8000 - tailEwh - 60; // marker budget
+          _diagnostics.firstContainerHtml = collapsedEwh.slice(0, headEwh) +
+            ' …[truncated ' + collapsedEwh.length + ' chars, middle cut]… ' +
+            collapsedEwh.slice(collapsedEwh.length - tailEwh);
+        }
+      }
+    } catch (_) { /* diagnostics must never break the scrape path */ }
+    notifyBackgroundDiagnostic('extractWithHover_done', {
+      containerSelector: containerSel,
+      processed: processed.length,
+      anchorsFound: anchorsFound,
+      hovercardsCaptured: hovercardsCaptured,
+      hoverFailures: hoverFailures
+    });
     return { result: records, _diagnostics: _diagnostics };
   }
 

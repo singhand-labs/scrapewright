@@ -49,6 +49,12 @@ AVAILABLE API FUNCTIONS:
 
 CSS TRAP — Do NOT use :nth-of-type(N) on a compound selector. 'li.result-item:nth-of-type(5)' matches the 5th sibling *of that element type* (any 5th <li>), not the 5th matching li.result-item. To get the Nth match, use $list and index into the returned array: const items = await $list('li.result-item'); const fifth = items[4]; If you need all items in a list, iterate the array — never emit per-index selectors. (Exception: if an ANNOTATION gives you a selector that already contains :nth-of-type, copy it verbatim per the SELECTOR FIDELITY RULE below — this trap applies only to selectors you compose yourself.)
 
+STANDARD CSS ONLY — every \$ API selector is passed to document.querySelector/querySelectorAll. Only standard CSS selectors are valid. Playwright/Puppeteer-only pseudo-classes DO NOT EXIST here: :has-text("..."), :text="...", :text-is(), :contains(...), :visible, :nth-match(). Using any of them throws "not a valid selector" IMMEDIATELY and kills the entire step before anything runs. To select by VISIBLE TEXT, select by structure first, then filter in JS:
+  // Find an end-of-feed marker by its text:
+  const headings = await \$list('h2, div[role="heading"]');
+  const related = headings.find(h => /related searches/i.test(h.textContent || ''));
+  if (related) { /* end of feed */ }
+
 ANTI-PATTERN — Do NOT build selectors with template-literal indices in a loop. The following pattern is ALWAYS WRONG and fails on real DOMs (modern component libraries, React/Vue apps, virtualized lists) because :nth-of-type is resolved among SIBLINGS OF THE SAME TAG, not among prior compound-selector matches:
   // WRONG — every one of these fails or matches the wrong element:
   for (let i = 0; i < n; i++) {
@@ -132,6 +138,10 @@ CORRECT patterns — return EVERY record with empty fields for missing data:
 The framework's EMPTY_FIELDS detector will surface which fields are uniformly empty across records, and autoFix can iterate field-by-field instead of guessing.
 
 If you MUST skip a record, do so conservatively — only skip when you have POSITIVE evidence from a SPECIFIC element (e.g. an explicit "Sponsored" label span that exists NOWHERE else on the page), never regex-test outerHTML.
+
+CARD-TYPE HETEROGENEITY (feeds mixing promoted and organic cards): when a required field comes back empty on every record, check WHAT KIND of cards your selectors kept before rewriting the field selector. Heterogeneous feeds mix promoted/sponsored cards with organic ones, and promoted cards often lack permalink/timestamp fields entirely — the field is not "hard to select", it does not exist on that card type. Two corollaries:
+(a) a container filter or field selector built on promoted-card markup attributes implicitly keeps ONLY promoted cards, making user-facing fields (permalink, timestamp) structurally unreachable — select organic cards and exclude promoted ones by a specific, language-INDEPENDENT markup signal (a dedicated data-* rendering attribute), never by localized label text (a "Sponsored" text match silently misses localized pages);
+(b) do not write contradictory filters across steps — step N keeping only card type A while step M excludes card type A yields empty or mislabeled output. Decide ONE card policy per service and enforce it at exactly ONE place in the chain.
 
 IMPORTANT: For waiting or polling scenarios (e.g., checking if AI has finished generating), do NOT use $() in a loop — it will throw after 30s if the element is not found. Instead:
 - Use 'await new Promise(r => setTimeout(r, ms))' for fixed delays
@@ -268,7 +278,7 @@ A scroll-to-load step is a poll step: maxIterations>1, onSuccess = the extractio
   if (!r.scrolled && postCount >= 10) return { done: true, postCount };   // feed exhausted AND we have enough
   return { done: false, postCount };                                      // retry — more posts may load
 
-CRITICAL: "position did not change" (r.scrolled === false) is the only reliable exhausted-feed signal. Do NOT guess that the feed is exhausted from a post count alone — infinite feeds often stop scrolling mid-page when the user is idle, then resume on the next scroll. Only declare done when BOTH (a) r.scrolled === false for the latest scroll AND (b) you have at least the user-requested number of posts (or a small number of consecutive unchanged scrolls — track via __lastResult__).
+CRITICAL: "position did not change" (r.scrolled === false) is the most reliable exhausted-feed signal for ordinary feeds. Do NOT guess that the feed is exhausted from a post count alone — infinite feeds often stop scrolling mid-page when the user is idle, then resume on the next scroll. Only declare done when BOTH (a) r.scrolled === false for the latest scroll AND (b) you have at least the user-requested number of posts (or a small number of consecutive unchanged scrolls — track via __lastResult__). EXCEPTION — VIRTUALIZED FEEDS (see below): r.scrolled can stay true forever while no new content mounts; there the noGrowth signature counter is the only trustworthy signal.
   // Stricter variant — require N consecutive no-progress scrolls before done:
   const r = await $scrollToBottom();
   await new Promise(resolve => setTimeout(resolve, 1500));
@@ -278,6 +288,8 @@ CRITICAL: "position did not change" (r.scrolled === false) is the only reliable 
   return { done: false, postCount, stalled };
 
 SCROLL CONTAINER (not the window): some sites scroll an inner element (overflow:auto/scroll), not the document. If $count returns 0 after $scrollToBottom() with no selector, find the scrollable container in the snapshot and pass its selector: await $scrollToBottom('div[data-scrollable-container]'). A quick heuristic: the element with the largest scrollHeight that is NOT document.body is usually the feed's scroll root.
+
+FIRST CONTENT MAY NEED A SCROLL (container present, 0 items at load): many feed/search pages render the container immediately but show 0 items until the first scroll — items are viewport-gated (IntersectionObserver lazy render), not network-late. If $count(itemSel) stays 0 across retries while the container exists, do NOT keep polling passively and do NOT nudge with window-level $scrollBy(delta) — when the page scrolls an inner container (see SCROLL CONTAINER above), window scroll is a no-op and nothing ever renders. Put the nudge inside the poll step itself: await $scrollToBottom('div[role="feed"]') (or $scrollBy(delta, containerSel)), wait ~2s for render, THEN count again.
 
 VIRTUALIZED FEEDS (search results, social feeds, infinite-scroll comment threads): these feeds UNMOUNT posts as you scroll past them — $count('li.result-item') STAYS AT 7 across iterations even though new posts are loading in. The stalled-counter pattern above will declare "exhausted" prematurely because postCount never grows past the visible-window size. Track UNIQUE post signatures across iterations via __lastResult__ instead:
   // Step 2 (scroll_and_load, maxIterations: 20, onSuccess: '3', onFailure: 'TERMINATE'):
@@ -291,11 +303,15 @@ VIRTUALIZED FEEDS (search results, social feeds, infinite-scroll comment threads
     if (sig.trim()) seen.add(sig);
   }
   const uniqueCount = seen.size;
-  const stalled = (__lastResult__ && __lastResult__.stalled || 0) + (r.scrolled ? 0 : 1);
+  // noGrowth: consecutive iterations that added ZERO new signatures. This —
+  // not r.scrolled — is the reliable exhaustion signal (see WARNING below).
+  const prevUnique = (__lastResult__ && __lastResult__.uniqueCount) || 0;
+  const noGrowth = (uniqueCount > prevUnique) ? 0 : (((__lastResult__ && __lastResult__.noGrowth) || 0) + 1);
   if (uniqueCount >= 10) return { done: true, uniqueCount, seenSignatures: [...seen].slice(0, 50) };
-  if (stalled >= 5 && uniqueCount > 0) return { done: true, uniqueCount, seenSignatures: [...seen].slice(0, 50), exhausted: true };
-  return { done: false, uniqueCount, stalled, seenSignatures: [...seen].slice(0, 50) };
+  if (noGrowth >= 3 && uniqueCount > 0) return { done: true, uniqueCount, seenSignatures: [...seen].slice(0, 50), exhausted: true };
+  return { done: false, uniqueCount, noGrowth, seenSignatures: [...seen].slice(0, 50) };
 Key insight: $count(DOM) ≠ unique posts seen. The DOM is a sliding window; signatures accumulated across iterations are the truth. Cap seenSignatures at ~50 entries to avoid unbounded growth across long feeds.
+WARNING: do NOT use r.scrolled === false as the exhaustion signal on virtualized feeds. r.scrolled can stay true indefinitely — the feed's scroll position and container height keep creeping without any new content mounting, so every iteration "successfully scrolls" while the unique-signature count is frozen. Judge exhaustion ONLY by signature growth (the noGrowth counter), never by scroll position.
 
 RAW HTML EXTRACTION (domHtml, full record HTML fields):
 $extract(sel) and $extractList(sel, { field: { selector, attr } }) support attribute reads. outerHTML and innerHTML are DOM PROPERTIES (not HTML attributes) — historically getAttribute returned null for them. They are now supported: pass attr='outerHTML' or attr='innerHTML' and the runner reads the DOM property directly.
@@ -390,6 +406,21 @@ RULES:
   most robust signal for which kind of entity a hovercard describes (its
   URL path shape — segment prefixes, id patterns). Only fall back to
   parsing card.htmlSnippet when anchors are href-less.
+- ANCHOR SCOPE — anchorSel is evaluated per container as
+  container.querySelectorAll(anchorSel): it must match INSIDE each
+  container's subtree. When it matches 0 anchors in every container, hover
+  NEVER runs and every record comes back with hovercards:[] holding ZERO
+  entries — that empty array is the signature of "anchor not found", NOT of
+  "hovered but no card appeared" (a hovered-but-empty attempt produces one
+  entry per anchor with htmlSnippet:null and a reason). Two traps seen in
+  real failures: (a) wrapper nesting — the visible interactive link sits
+  inside a wrapper element (an <object> wrapper, an aria-hidden shell
+  around the real link), so a chain naming the visible block misses it;
+  (b) sibling-branch chaining — naming an intermediate block (a heading or
+  metadata wrapper) that is NOT an ancestor of the link. Prefer a short,
+  container-scoped tag+[attr] form (e.g. 'a[role="link"][aria-label]')
+  over long descendant chains, and verify it against one container's
+  actual HTML before committing.
 - Field extraction and hover enrichment happen atomically per container
   in one call. There is no inter-step DOM drift.
 - Fields are SCALAR (one value per field per container, same as
@@ -402,8 +433,17 @@ RULES:
 - The framework dismisses each popover before hovering the next anchor
   (dismiss defaults to true). Do not set dismiss:false unless you have
   a specific reason — lingering popovers contaminate the next hover.
-- Total time scales as containers × anchors × per-hover timeout. For
-  large batches, slice via containerRange across iterations.
+- HOVER PIPELINE TIME BUDGET: each hovered anchor can burn 5-10s of wall
+  time even when no popover appears — hover wait, no-signal early-exit,
+  dismiss, and extraction are all time-bounded waits, so this is timeout
+  burn, not network latency. Estimate containers × anchors × ~10s and keep
+  it comfortably under the ceiling stated in CRITICAL TIME CONSTRAINT: with
+  a 60s ceiling that means ~3-4 containers (1 anchor each) per iteration.
+  Slice larger batches via containerRange across orchestrator iterations
+  (maxIterations>1 + { done: false }) — a step killed mid-batch by
+  SCRIPT_TIMEOUT loses ALL of its work. Services using
+  \$extractWithHover get the per-step ceiling auto-raised to 120s, but
+  slicing is still safer than maxing out the batch width.
 - \$extractWithHover requires Enhanced Mode (it uses \$hover under the
   hood, which needs CDP Input.dispatchMouseEvent). Surface this via
   test-result feedback, not by retrying.
@@ -745,6 +785,185 @@ Each step script has a HARD execution timeout of ${seconds}s (${t}ms). The scrip
 
 function buildIORenderString(inputSchema, outputSchema) {
   return 'Input: ' + parseSchemaFields(inputSchema || {}) + ' | Output: ' + parseSchemaFields(outputSchema || {});
+}
+
+// $extractWithHover burns ~5-10s per hovered anchor in time-bounded waits
+// (not network), so the default 60s ceiling deterministically kills a
+// 5-container batch mid-pipeline. Raise the per-step ceiling for services
+// that use it. max() semantics: never lower an explicit higher config.
+function hoverAwareTimeoutMs(steps, baseMs) {
+  const base = Number.isFinite(baseMs) && baseMs > 0 ? baseMs : 30000;
+  const usesHoverPipeline = (steps || []).some(s => /\$extractWithHover\s*\(/.test(s.script || ''));
+  return usesHoverPipeline ? Math.max(base, 120000) : base;
+}
+
+// console.log 2026-08-23 (search-feed site): step 3's $clickInList clicked 0,
+// errored on all 10 containers, and returned done:true — the requirement's
+// expand action silently no-opped. Detects the total failure from
+// STEP_ITERATION events (framework-level diagnostics), independent of which
+// fields the LLM chose to surface in its step result. Fires only on TOTAL
+// failure: containers matched, every call clicked nothing, and no later
+// iteration of the same step recovered.
+function detectClickInListTotalFailure(events) {
+  if (!Array.isArray(events)) return null;
+  const perStep = new Map();
+  for (const evt of events) {
+    if (!evt || evt.type !== 'STEP_ITERATION') continue;
+    const diags = Array.isArray(evt.selectorDiagnostics) ? evt.selectorDiagnostics : [];
+    for (const d of diags) {
+      if (!d || d.api !== 'clickInList' || !(d.containerMatches > 0)) continue;
+      if (!perStep.has(evt.stepId)) {
+        perStep.set(evt.stepId, { stepId: evt.stepId, calls: 0, clicked: 0, errorCount: 0, notFoundCount: 0, containerMatches: 0, subSelector: null });
+      }
+      const agg = perStep.get(evt.stepId);
+      agg.calls += 1;
+      agg.clicked += (d.clicked || 0);
+      agg.errorCount += (d.errorCount || 0);
+      agg.notFoundCount += (d.notFoundCount || 0);
+      if (!agg.containerMatches) agg.containerMatches = d.containerMatches;
+      if (!agg.subSelector && d.subSelector) agg.subSelector = d.subSelector;
+    }
+  }
+  for (const agg of perStep.values()) {
+    if (agg.calls > 0 && agg.clicked === 0) return agg;
+  }
+  return null;
+}
+
+// console.log 2026-08-23 14:51:59 (second session): step 3's $clickInList
+// used the never-fixed rigid container selector — 0 containers matched, so
+// clickInListItems iterated an empty array: clicked 0 AND errors 0. The
+// subSel detector above requires containerMatches>0 and stayed silent (its
+// message would have been misleading). This detector covers the other half:
+// every clickInList call saw ZERO containers. The remedy differs too — the
+// CONTAINER selector (often shared with sibling steps) is what needs fixing.
+function detectClickInListEmptyContainers(events) {
+  if (!Array.isArray(events)) return null;
+  const perStep = new Map();
+  for (const evt of events) {
+    if (!evt || evt.type !== 'STEP_ITERATION') continue;
+    const diags = Array.isArray(evt.selectorDiagnostics) ? evt.selectorDiagnostics : [];
+    for (const d of diags) {
+      if (!d || d.api !== 'clickInList') continue;
+      if (!perStep.has(evt.stepId)) {
+        perStep.set(evt.stepId, { stepId: evt.stepId, calls: 0, nonEmptyCalls: 0, containerSelector: null, subSelector: null });
+      }
+      const agg = perStep.get(evt.stepId);
+      agg.calls += 1;
+      if ((d.containerMatches || 0) > 0) agg.nonEmptyCalls += 1;
+      if (!agg.containerSelector && d.containerSelector) agg.containerSelector = d.containerSelector;
+      if (!agg.subSelector && d.subSelector) agg.subSelector = d.subSelector;
+    }
+  }
+  for (const agg of perStep.values()) {
+    if (agg.calls > 0 && agg.nonEmptyCalls === 0) return agg;
+  }
+  return null;
+}
+
+// console.log 2026-08-23 14:44-14:48 (second session): step 2 polled 20
+// iterations at {done:false, uniqueCount:0} while its $list counting selector
+// matched 0 elements on EVERY iteration — the page visibly filled with posts
+// the script could not see, and the only signal reaching autoFix was the
+// generic POLL_EXHAUSTED. The LLM then guessed at causes. This detector runs
+// post-hoc over the full STEP_ITERATION history: a step is COUNT-blind when
+// (a) >= 3 not-ready iterations carried selector diagnostics, (b) EVERY one
+// of those diagnostics matched 0, and (c) no later iteration ever matched
+// anything (a recovered step was slow-render, not blind — run 3 of the same
+// log recovered on iteration 5 and MUST NOT fire). "Every selector matched 0"
+// means the script saw NOTHING on the page it queried for; a step where the
+// container matched but the item selector didn't is NOT blind — that partial
+// evidence is already surfaced per-selector by summarizeAllStepDiagnostics.
+function detectCountSelectorBlind(events) {
+  if (!Array.isArray(events)) return null;
+  const perStep = new Map();
+  for (const evt of events) {
+    if (!evt || evt.type !== 'STEP_ITERATION') continue;
+    const stepId = evt.stepId;
+    if (stepId == null) continue;
+    if (!perStep.has(stepId)) {
+      perStep.set(stepId, { stepId, iterations: 0, blindIterations: 0, selectors: new Map(), recovered: false });
+    }
+    const agg = perStep.get(stepId);
+    agg.iterations += 1;
+    const diags = Array.isArray(evt.selectorDiagnostics) ? evt.selectorDiagnostics : [];
+    if (diags.length === 0) continue; // no evidence this iteration — can't judge
+    let anyMatch = false;
+    for (const d of diags) {
+      if (!d) continue;
+      const sel = d.selector || d.containerSelector || null;
+      const count = (typeof d.matchCount === 'number') ? d.matchCount
+        : (typeof d.containerMatches === 'number') ? d.containerMatches : null;
+      if (sel && !agg.selectors.has(sel)) agg.selectors.set(sel, 0);
+      if (sel && typeof count === 'number') agg.selectors.set(sel, agg.selectors.get(sel) + count);
+      if (typeof count === 'number' && count > 0) anyMatch = true;
+    }
+    if (anyMatch) {
+      agg.recovered = true; // saw real content at some point — never blind
+      continue;
+    }
+    // All selectors matched 0 this iteration. Only not-ready (polling)
+    // iterations count: a done:true with 0 matches is EMPTY_EXTRACTION's
+    // domain, not scroll-blindness.
+    if (/"done"\s*:\s*false/.test(String(evt.resultPreview || ''))) {
+      agg.blindIterations += 1;
+    }
+  }
+  for (const agg of perStep.values()) {
+    if (agg.blindIterations >= 3 && !agg.recovered) {
+      return { stepId: agg.stepId, iterations: agg.iterations, blindIterations: agg.blindIterations, selectors: [...agg.selectors.keys()] };
+    }
+  }
+  return null;
+}
+
+// console.log 2026-08-23 16:13-16:15 (third session): the session ran green
+// end-to-end, but every record had hovercards:[] — and a user-feedback
+// autoFix round could not repair it because the true cause was invisible.
+// $extractWithHover enumerates anchors with container.querySelectorAll(
+// anchorSel); when anchorSel matches 0 elements inside every container the
+// hover function is NEVER invoked, so each record gets hovercards:[] with
+// ZERO entries — indistinguishable in the output from "hovered but no card
+// appeared". hoverSummary.anchorsFound:0 was present in the diagnostics
+// channel all along; nothing consumed it. Fires when EVERY extractWithHover
+// call that processed containers found 0 anchors and no call ever matched an
+// anchor (matched-anywhere ⇒ not blind). Calls with processedContainers===0
+// are excluded from the blind judgment (container-empty is the
+// CLICK_CONTAINERS_EMPTY failure class with a different remedy).
+function detectHoverAnchorsBlind(events) {
+  if (!Array.isArray(events)) return null;
+  const perStep = new Map();
+  for (const evt of events) {
+    if (!evt || evt.type !== 'STEP_ITERATION') continue;
+    const stepId = evt.stepId;
+    if (stepId == null) continue;
+    const diags = Array.isArray(evt.selectorDiagnostics) ? evt.selectorDiagnostics : [];
+    for (const d of diags) {
+      if (!d || d.api !== 'extractWithHover') continue;
+      if (!perStep.has(stepId)) {
+        perStep.set(stepId, {
+          stepId: stepId, calls: 0, processedCalls: 0, anchorsFound: 0,
+          hovercardsCaptured: 0, containersProcessed: 0,
+          anchorSel: null, containerSelector: null
+        });
+      }
+      const agg = perStep.get(stepId);
+      agg.calls += 1;
+      const hs = d.hoverSummary || {};
+      agg.anchorsFound += (hs.anchorsFound || 0);
+      agg.hovercardsCaptured += (hs.hovercardsCaptured || 0);
+      if (!agg.anchorSel && d.anchorSel) agg.anchorSel = d.anchorSel;
+      if (!agg.containerSelector && d.containerSelector) agg.containerSelector = d.containerSelector;
+      if ((d.processedContainers || 0) > 0) {
+        agg.processedCalls += 1;
+        agg.containersProcessed += d.processedContainers;
+      }
+    }
+  }
+  for (const agg of perStep.values()) {
+    if (agg.processedCalls > 0 && agg.anchorsFound === 0) return agg;
+  }
+  return null;
 }
 
 function validateTestInput(inputStr, schemaStr, testInputStr) {
@@ -2528,11 +2747,13 @@ function summarizeAllStepDiagnostics(events, steps) {
           // real record's DOM lets the LLM pick the right sub-element.
           if (d.firstContainerHtml && typeof d.firstContainerHtml === 'string' && d.firstContainerHtml.length > 0) {
             lines.push('      RECORD HTML (first container\'s actual outerHTML — read this to find where missing fields live):');
-            // Cap at 1800 chars per call so N extractList calls in one step
-            // can't blow up the prompt. The source-side cap is 2000; this
-            // trims a bit more to leave room for the surrounding markers.
-            const html = d.firstContainerHtml.length > 1800
-              ? d.firstContainerHtml.slice(0, 1800) + '…[truncated]'
+            // Display cap tracks the source-side capture (8000, head+tail —
+            // 2026-08-24 user directive: page evidence the LLM must reason
+            // about gets a real budget, not a blind generic threshold; RC59
+            // showed tight caps amputate exactly the needed evidence). The
+            // aggregate stays bounded by the ≤10-calls-per-step slice above.
+            const html = d.firstContainerHtml.length > 8000
+              ? d.firstContainerHtml.slice(0, 7977) + '…[truncated]'
               : d.firstContainerHtml;
             lines.push('        ' + html);
           }
@@ -2604,6 +2825,31 @@ function summarizeAllStepDiagnostics(events, steps) {
             if (line.length > 240) line = line.slice(0, 237) + '...';
             lines.push(line);
           }
+        } else if (d.api === 'clickInList') {
+          // console.log 2026-08-23: a $clickInList whose sub-selector matched
+          // nothing in ANY container silently returned done:true. Rendering
+          // the dead sub-selector + a real container's HTML gives autoFix the
+          // evidence to rewrite the click target (e.g. text-based buttons
+          // often carry no aria-label).
+          let header = '    $clickInList(\'' + d.containerSelector + '\') — container matched ' + d.containerMatches + ' element(s), clicked ' + d.clicked + ', ' + (d.errorCount || 0) + ' errored';
+          if (d.containerMatches === 0) {
+            header += ' (the CONTAINER selector itself matched nothing — this call could never click anything; fix the container selector and propagate the fix to every step using the same list)';
+          } else if (d.errorCount > 0 && d.notFoundCount === d.errorCount) {
+            header += ' (subSel ' + JSON.stringify(d.subSelector) + ' matched NOTHING in any container — the click action did nothing)';
+          }
+          lines.push(header);
+          if (d.sampleTexts && d.sampleTexts.length > 0) {
+            lines.push('      container text samples: ' + JSON.stringify(d.sampleTexts));
+          }
+          if (d.firstContainerHtml && typeof d.firstContainerHtml === 'string' && d.firstContainerHtml.length > 0) {
+            // Display cap tracks the source-side 8000 head+tail capture
+            // (2026-08-24 user directive on real budgets for page evidence).
+            const html = d.firstContainerHtml.length > 8000
+              ? d.firstContainerHtml.slice(0, 7977) + '…[truncated]'
+              : d.firstContainerHtml;
+            lines.push('      CONTAINER HTML (find the actually-clickable element here):');
+            lines.push('        ' + html);
+          }
         } else if (d.api === 'list' || d.api === 'extract') {
           const fn = d.api === 'list' ? '$list' : '$extract';
           const samples = d.sampleTexts && d.sampleTexts.length > 0
@@ -2620,6 +2866,44 @@ function summarizeAllStepDiagnostics(events, steps) {
           let line = '    $count(\'' + d.selector + '\') — matched ' + d.matchCount + ' element(s).';
           if (line.length > 240) line = line.slice(0, 237) + '...';
           lines.push(line);
+        } else if (d.api === 'extractWithHover') {
+          // console.log 2026-08-23 16:13-16:15 (third session): the anchor
+          // counts lived in hoverSummary on the diagnostics channel but no
+          // summary branch rendered them, so the autoFix LLM had to guess why
+          // hovercards were [] — and guessed the wrong ancestor block twice.
+          const hs = d.hoverSummary || {};
+          let header = '    $extractWithHover(\'' + (d.containerSelector || '?') + '\') — processed ' +
+            (d.processedContainers || 0) + ' container(s)' +
+            (d.anchorSel ? ', anchorSel ' + JSON.stringify(d.anchorSel) : '') +
+            ' — anchors found ' + (hs.anchorsFound || 0) +
+            ', hovercards captured ' + (hs.hovercardsCaptured || 0) +
+            ', failures ' + (hs.hoverFailures || 0);
+          if ((d.processedContainers || 0) > 0 && (hs.anchorsFound || 0) === 0) {
+            header += ' ← ANCHOR BLIND (anchorSel matched 0 anchors inside every processed container — hover NEVER ran; every record got hovercards:[] with ZERO entries, which is NOT the same as "hovered but no card appeared". anchorSel is evaluated as container.querySelectorAll(anchorSel): it must match INSIDE each container subtree, and the real interactive link is often nested inside wrapper elements — <object> wrappers, aria-hidden shells — or sits in a different branch than the block named in the selector chain)';
+          }
+          if (header.length > 700) header = header.slice(0, 697) + '...';
+          lines.push(header);
+          // perField carries the same shape as extractList diagnostics
+          // (computed by computeExtractListDiagnostics) — render the compact
+          // match line so field-level 0-matches stay visible too.
+          for (const f of (d.perField || [])) {
+            if (!f || !f.field) continue;
+            let line = '      field ' + f.field + ' (sel \'' + (f.subSelector || '') + '\'' + (f.attr ? ', attr=\'' + f.attr + '\'' : '') + '): ' + (f.matchCount || 0) + ' matches.';
+            if (line.length > 240) line = line.slice(0, 237) + '...';
+            lines.push(line);
+          }
+          if (d.firstContainerHtml && typeof d.firstContainerHtml === 'string' && d.firstContainerHtml.length > 0) {
+            // Display cap matches the extractWithHover source-side capture
+            // (8000, set in domExtractWithHover) — re-amputating here with the
+            // generic 1800 display cap would cut exactly the nesting evidence
+            // the anchor fix needs (user directive: page evidence the LLM must
+            // reason about gets a real budget, not a blind generic threshold).
+            const html = d.firstContainerHtml.length > 8000
+              ? d.firstContainerHtml.slice(0, 7977) + '…[truncated]'
+              : d.firstContainerHtml;
+            lines.push('      CONTAINER HTML (find the real hover anchor here — check where the interactive link actually nests):');
+            lines.push('        ' + html);
+          }
         }
       }
     }
@@ -3680,9 +3964,14 @@ function formatElementsForPrompt(elements, opts) {
 
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
+  window.hoverAwareTimeoutMs = hoverAwareTimeoutMs;
+  window.detectClickInListTotalFailure = detectClickInListTotalFailure;
+  window.detectClickInListEmptyContainers = detectClickInListEmptyContainers;
+  window.detectCountSelectorBlind = detectCountSelectorBlind;
+  window.detectHoverAnchorsBlind = detectHoverAnchorsBlind;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
   window.validateInputAgainstSchema = validateInputAgainstSchema;
   window.validateOutputAgainstSchema = validateOutputAgainstSchema;

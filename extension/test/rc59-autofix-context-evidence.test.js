@@ -181,18 +181,20 @@ describe('RC59: firstContainerHtml head+tail capture', () => {
   const listExtractOps = require('../lib/list-extract-ops');
 
   it('lib capture keeps head AND tail of oversized container HTML', () => {
-    const html = '<div class="record">' + 'm'.repeat(4000) +
+    // 2026-08-24: cap raised 2000 → 8000 per user directive (real budget for
+    // page evidence). Fixture enlarged past 8000 so the truncation path runs.
+    const html = '<div class="record">' + 'm'.repeat(12000) +
       '<a aria-label="93 则评论" role="button"></a></div>';
     const dom = new JSDOM('<!DOCTYPE html>' + html);
     const c = dom.window.document.querySelector('.record');
     const out = listExtractOps.computeExtractListDiagnostics([c], {}, '.record')
       .firstContainerHtml;
-    assert.ok(out.length < 2300, 'still capped near 2000, got ' + out.length);
+    assert.ok(out.length < 8300, 'still capped near 8000, got ' + out.length);
     assert.ok(out.startsWith('<div class="record">'), 'head prefix survives');
     assert.ok(out.includes('aria-label="93 则评论"'),
       'TAIL evidence (metric count attribute) must survive the cap');
     const lenMatch = out.match(/truncated (\d+) chars/);
-    assert.ok(lenMatch && Number(lenMatch[1]) >= 4000,
+    assert.ok(lenMatch && Number(lenMatch[1]) >= 12000,
       'marker must disclose the original length, got: ' + (lenMatch && lenMatch[1]));
   });
 

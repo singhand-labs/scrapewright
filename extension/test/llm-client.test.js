@@ -425,6 +425,71 @@ describe('LLMClient.chat retry behavior', () => {
   });
 });
 
+// 2026-08-24 (max_tokens default discussion): finish_reason=length WITH
+// partial content was returned silently — a clipped JSON payload that then
+// failed parsing downstream with no hint that the CAUSE was the completion
+// cap, not the model. RC55 only covers the empty+length burn. This warning
+// makes real output truncation visible in the log capture.
+describe('LLMClient.chat partial-content length truncation warning', () => {
+  let consoleStub;
+  const originalConsoleLog = console.log;
+  const originalConsoleError = console.error;
+  const originalConsoleWarn = console.warn;
+
+  beforeEach(() => {
+    consoleStub = [];
+    console.log = (...args) => consoleStub.push(['log', ...args]);
+    console.error = (...args) => consoleStub.push(['error', ...args]);
+    console.warn = (...args) => consoleStub.push(['warn', ...args]);
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    console.log = originalConsoleLog;
+    console.error = originalConsoleError;
+    console.warn = originalConsoleWarn;
+  });
+
+  function makeClient() {
+    return new LLMClient({
+      provider: 'openai',
+      model: 'test-model',
+      apiKey: 'test-key',
+      apiBaseUrl: 'http://test.local/v1'
+    });
+  }
+
+  it('returns the partial content but warns with the effective budget', async () => {
+    global.fetch = async () => mockResponse({
+      body: {
+        choices: [{ message: { role: 'assistant', content: '{"steps": [{"id": "1", "scr' }, finish_reason: 'length' }],
+        usage: { prompt_tokens: 100, completion_tokens: 8192, total_tokens: 8292 }
+      }
+    });
+
+    const client = makeClient();
+    const content = await client.chat([{ role: 'user', content: 'hi' }], { maxTokens: 8192 });
+
+    assert.equal(content, '{"steps": [{"id": "1", "scr', 'partial content must be returned as-is');
+    const warns = consoleStub.filter(e => e[0] === 'warn');
+    assert.equal(warns.length, 1, 'exactly one truncation warning');
+    const flat = JSON.stringify(warns[0]);
+    assert.match(flat, /TRUNCATED/i, 'warning must say the output was truncated');
+    assert.match(flat, /8192/, 'warning must disclose the effective completion budget');
+    assert.match(flat, /maxOutputTokens/, 'warning must point at the Settings knob');
+    assert.match(flat, /finish_reason=length/, 'warning must name the finish reason');
+  });
+
+  it('does NOT warn on normal stop responses', async () => {
+    global.fetch = async () => mockResponse({ body: successBody('{"ok":true}') });
+    const client = makeClient();
+    const content = await client.chat([{ role: 'user', content: 'hi' }]);
+    assert.equal(content, '{"ok":true}');
+    const warns = consoleStub.filter(e => e[0] === 'warn' && /TRUNCATED/i.test(String(e[1])));
+    assert.equal(warns.length, 0, 'no truncation warning on finish_reason=stop');
+  });
+});
+
 describe('LLMClient timeout configuration', () => {
   it('defaults to 120s when no timeoutMs configured', () => {
     const client = new LLMClient({

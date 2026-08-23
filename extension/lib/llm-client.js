@@ -222,6 +222,20 @@ class LLMClient {
       throw new LLMError(`LLM API returned empty content${hint}. Detail: ${detail}`, { retryable: true });
     }
 
+    // 2026-08-24: finish_reason=length WITH partial content — the response
+    // was clipped by the completion cap. RC55 above only handles the
+    // empty+length burn; a clipped payload used to be returned silently and
+    // fail JSON parsing downstream with no hint that the CAUSE was the cap.
+    // Return it (callers may still salvage it) but make the truncation
+    // visible, with the effective budget and the Settings knob to raise.
+    if (finishReason === 'length' && content) {
+      console.warn(
+        `[LLMClient] Output TRUNCATED (finish_reason=length): the response was cut at the ${body.max_tokens}-token completion budget before finishing ` +
+        `(${String(content).length} chars received, completion_tokens=${usage.completion_tokens ?? 'unknown'}). ` +
+        `A truncated payload will likely fail JSON parsing or end mid-script. ` +
+        `If this recurs, raise the Settings maxOutputTokens above ${body.max_tokens} for this provider.`
+      );
+    }
     return content;
   }
 }

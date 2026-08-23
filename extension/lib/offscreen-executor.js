@@ -43,7 +43,7 @@ class OffscreenExecutor {
           tabId: this.tabId,
           _toOffscreen: true
         }).catch(() => {});
-        reject(new Error('SCRIPT_TIMEOUT'));
+        reject(new Error(`SCRIPT_TIMEOUT: script exceeded the ${this.timeoutMs}ms per-step execution budget and was killed. If this step batches $extractWithHover/$hover over multiple containers (each hovered anchor burns ~5-10s even when no popover appears), narrow the batch (containerRange/maxContainers) or slice it across maxIterations>1 + { done: false } iterations. For long waits, poll via retry iterations instead of in-script sleeps.`));
       }, this.timeoutMs);
 
       const listener = (message) => {

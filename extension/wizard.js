@@ -1935,7 +1935,7 @@ async function testScript() {
     const service = {
       targetUrl: wizardState.targetUrl,
       steps: wizardState.steps,
-      config: { timeoutMs: DEPLOY_TIMEOUT_MS, maxRetries: 0, autoCloseTab: true, maxStepIterations: 50, tabLoadTimeoutMs: 60000 }
+      config: { timeoutMs: hoverAwareTimeoutMs(wizardState.steps, DEPLOY_TIMEOUT_MS), maxRetries: 0, autoCloseTab: true, maxStepIterations: 50, tabLoadTimeoutMs: 60000 }
     };
 
     appendLog('Starting step execution...');
@@ -2040,6 +2040,69 @@ async function testScript() {
       wizardState.lastErrorSnapshot = { ...lastStep.snapshot, capturedAt: Date.now() };
     }
 
+    // console.log 2026-08-23 (FB search): step 3's $clickInList errored on
+    // all 10 containers ('subSel not found') yet returned done:true — the
+    // requirement's expand action silently no-opped and no autoFix fired.
+    // Framework-level detection from STEP_ITERATION diagnostics, independent
+    // of which fields the step script chose to return.
+    const clickFail = detectClickInListTotalFailure(wizardState.lastExecutionEvents || []);
+    if (clickFail) {
+      const stepDef = (wizardState.steps || []).find(s => String(s.id) === String(clickFail.stepId));
+      const allMissed = clickFail.notFoundCount === clickFail.errorCount && clickFail.errorCount > 0;
+      const err = new Error(
+        'CLICK_TARGET_NOT_FOUND: step "' + (stepDef ? stepDef.name : clickFail.stepId) + '" called $clickInList' +
+        (clickFail.subSelector ? ' with sub-selector ' + JSON.stringify(clickFail.subSelector) : '') +
+        ' — matched ' + clickFail.containerMatches + ' container(s), clicked 0, errored ' + clickFail.errorCount +
+        (allMissed ? ' (subSel not found in EVERY container)' : '') +
+        '. The click/expand action silently did nothing. Read the container HTML in SELECTOR DIAGNOSTICS to find the real clickable element — text-labeled buttons often have no aria-label; match by role or visible text instead.'
+      );
+      err.stepId = clickFail.stepId;
+      throw err;
+    }
+
+    // Same log, 14:51:59: step 3's $clickInList container selector matched 0
+    // elements — clicked 0 AND errored 0 (empty iteration), so the subSel
+    // detector above stayed silent and done:true let the no-op pass. The
+    // container selector is dead (often the same broken string sibling steps
+    // still carry — see SELECTOR COHERENCE in the autoFix prompt).
+    const containersEmpty = detectClickInListEmptyContainers(wizardState.lastExecutionEvents || []);
+    if (containersEmpty) {
+      const stepDefCE = (wizardState.steps || []).find(s => String(s.id) === String(containersEmpty.stepId));
+      const errCE = new Error(
+        'CLICK_CONTAINERS_EMPTY: step "' + (stepDefCE ? stepDefCE.name : containersEmpty.stepId) + '" called $clickInList' +
+        (containersEmpty.containerSelector ? ' with container selector ' + JSON.stringify(containersEmpty.containerSelector) : '') +
+        ' — that container selector matched 0 element(s) on every call (' + containersEmpty.calls + ' call(s)), so the click action never had anything to operate on. ' +
+        'Fix the container selector (check SELECTOR DIAGNOSTICS and the page HTML for the real list structure — prefer descendant selectors over rigid child-combinator chains), and propagate the same fix to every step that references this list.'
+      );
+      errCE.stepId = containersEmpty.stepId;
+      throw errCE;
+    }
+
+    // console.log 2026-08-23 16:13-16:15 (third session): the run went green
+    // but every record had hovercards:[]. $extractWithHover's anchorSel
+    // matched 0 anchors inside every container, so hover NEVER executed and
+    // records got hovercards:[] with ZERO entries — output-indistinguishable
+    // from "hovered but no card appeared". A user-feedback autoFix round
+    // then guessed at the cause (wrongly) because nothing surfaced the
+    // anchorsFound:0 evidence. Mirrors CLICK_CONTAINERS_EMPTY above.
+    const hoverBlind = (typeof detectHoverAnchorsBlind === 'function')
+      ? detectHoverAnchorsBlind(wizardState.lastExecutionEvents || [])
+      : null;
+    if (hoverBlind) {
+      const stepDefHB = (wizardState.steps || []).find(s => String(s.id) === String(hoverBlind.stepId));
+      const errHB = new Error(
+        'HOVER_ANCHORS_BLIND: step "' + (stepDefHB ? stepDefHB.name : hoverBlind.stepId) + '" called $extractWithHover' +
+        (hoverBlind.anchorSel ? ' with opts.hover.anchorSel ' + JSON.stringify(hoverBlind.anchorSel) : '') +
+        ' — that anchorSel matched 0 anchor elements inside EVERY processed container (' +
+        hoverBlind.processedCalls + ' call(s), ' + hoverBlind.containersProcessed + ' container(s) total), so hover never ran and every record got hovercards:[] with ZERO entries. ' +
+        'This is NOT "hovered but no card appeared" — the anchor was never found. anchorSel is evaluated as container.querySelectorAll(anchorSel): it must match INSIDE each container subtree. ' +
+        'The real interactive link is often nested inside wrapper elements (e.g. an <object> wrapper or an aria-hidden shell around the visible link), or sits in a different branch than the intermediate block named in the selector chain — ' +
+        'prefer a short, container-scoped tag+[attr] form and verify it against one container\'s HTML in SELECTOR DIAGNOSTICS. Fix anchorSel and propagate the fix to every step that uses the same anchor, or drop the hover option and use $extractList if hovercard data is not required.'
+      );
+      errHB.stepId = hoverBlind.stepId;
+      throw errHB;
+    }
+
     // WS4.2: required-output check against outputSchema (catches "success:true with empty answer").
     const finalData = result.finalResult?.data || result.finalResult;
     // Empty-extraction check runs FIRST and throws on failure, so the LLM
@@ -2106,6 +2169,31 @@ async function testScript() {
     }
     debugLogger.log('info', 'wizard', 'testScript success', { finalResult: result.finalResult });
   } catch (e) {
+    // Augment raw failure causes with compile-time analysis before they reach
+    // autoFix — both regressions from console.log 2026-08-23 (second session).
+    try {
+      if (e && /POLL_EXHAUSTED/.test(e.message || '')) {
+        // A poll step that exhausted while EVERY selector it queried matched
+        // 0 elements on every iteration is COUNT-blind: the page may be full
+        // of content the script cannot see. The generic POLL_EXHAUSTED text
+        // made the LLM guess; naming the blind selectors converges in one
+        // round. (Post-hoc over the full event history, so a step that
+        // recovered mid-run — slow render — is never mislabeled.)
+        const blind = detectCountSelectorBlind(wizardState.lastExecutionEvents || []);
+        if (blind) {
+          const stepDefB = (wizardState.steps || []).find(s => String(s.id) === String(blind.stepId));
+          e.message = 'POLL_EXHAUSTED — root cause: COUNT_SELECTOR_BLIND. Step "' + (stepDefB ? stepDefB.name : blind.stepId) + '" polled ' +
+            blind.blindIterations + ' not-ready iteration(s), and EVERY selector it queried matched 0 elements on every iteration: [' +
+            blind.selectors.map(s => JSON.stringify(s)).join(', ') + ']. ' +
+            'The step cannot see the content it is polling for. Either (a) the selector is wrong for this page\'s DOM structure — rigid child-combinator chains like A > div > B commonly fail on real nesting; prefer the descendant form A B — or (b) the content never rendered (viewport-gated: scroll inside the poll step per FIRST CONTENT MAY NEED A SCROLL in the DSL guide). ' +
+            'Check SELECTOR DIAGNOSTICS for empirical match counts, and propagate any selector fix to every step referencing the same list (SELECTOR COHERENCE). Original error: ' + e.message;
+          if (!e.stepId) e.stepId = blind.stepId;
+        }
+      }
+      if (e && /is not a valid selector/i.test(e.message || '')) {
+        e.message += ' — NOTE: only standard CSS selectors are valid in querySelector/querySelectorAll. Playwright-only pseudo-classes such as :has-text(...), :text=..., :contains(...) do NOT exist here and throw instantly. Select by structure (tag/role/aria/class), then filter by visible text in JS: const els = await $list(\'h2, div[role="heading"]\'); const hit = els.find(el => /your phrase/i.test(el.textContent || \'\')); (see STANDARD CSS ONLY in the DSL guide).';
+      }
+    } catch (_) { /* augmentation must never mask the original error */ }
     wizardState.lastError = e.message;
     wizardState.lastErrorStepId = e.stepId || null;
     wizardState.lastErrorSnapshot = e.snapshot ? { ...e.snapshot, capturedAt: Date.now() } : null;
@@ -2967,6 +3055,9 @@ If your script does NOT use $openTab, $wait / $ / $extract will run against the 
 (B) If you ALSO need to change THIS step's flow (onSuccess/onFailure/maxIterations), OR redirect the fix to a DIFFERENT step, return a JSON object and nothing else:
     {"script": "<fixed JS as one string>", "onSuccess": "<step id or TERMINATE>", "onFailure": "<step id or TERMINATE>", "maxIterations": <number>, "stepId": "<id of step to apply this patch to>"}
     Include only the flow fields you are changing; "script" is always required. The new flow must keep the chain valid (every target id exists, no orphan steps, never use "SELF"). Do NOT add or remove steps.
+(C) SELECTOR COHERENCE — if your fix changes a list container/item selector that OTHER steps also use, return multi-step patches and nothing else:
+    {"patches": [{"stepId": "<id>", "script": "<that step's full fixed JS>"}, ...]}
+    Every patch must carry an explicit stepId, and every patched script must contain the SAME fixed selector string. Use (C) only for propagating identical selector fixes — unrelated rewrites stay in (A)/(B).
 
 REDIRECTING THE FIX (important when user reports extraction-quality issues):
 - The step marked "<<< FAILING" below is the step that raised the runtime error. The actual root cause frequently lives in an EARLIER step whose output flowed into the failing step.
@@ -3092,6 +3183,7 @@ Rules (READ ALL):
     prompt = `${buildUrlTemplateNotice(wizardState.targetUrl)}${buildFeedbackSection(userFeedback, attemptNum, totalAttempts, wizardState.llmHistory)}${SCRIPT_DSL_GUIDE}
 
 The following step failed. Fix it — primarily its script, but you MAY also adjust THIS step's onSuccess / onFailure / maxIterations if the runtime shows the step flow itself is wrong (the steps were generated before seeing this page state, so the topology can be a best guess). Do NOT add or remove steps; only edit this step's own fields.
+SELECTOR COHERENCE (exception to the above): when your fix changes a selector for a LIST CONTAINER or repeated item — e.g. broadening a rigid child-combinator chain like 'div[x] > div > div[item]' into the descendant form 'div[x] div[item]' — scan the FULL STEP WORKFLOW below for every OTHER step whose script contains the SAME broken selector string and fix it there too, returning the multi-step {"patches":[...]} form from RETURN FORMAT (C). A selector fixed in one step but left broken in later steps makes those steps silently match 0 containers (click steps no-op, extract steps return empty) and burns a future auto-fix round on the very same mistake.
 ${compactedNote}
 
 Step ID: ${targetStepId}
@@ -3107,7 +3199,7 @@ Original requirement: ${wizardState.description}
 Current step script:
 ${targetStep.script}
 
-${buildTimeoutGuidance(DEPLOY_TIMEOUT_MS).text}
+${buildTimeoutGuidance(hoverAwareTimeoutMs(wizardState.steps, DEPLOY_TIMEOUT_MS)).text}
 
 ${detailPageHint}${htmlSection}
 
@@ -3296,7 +3388,7 @@ ${compactedNote}
 Target URL: ${wizardState.targetUrl}
 Original requirement: ${wizardState.description}
 
-${buildTimeoutGuidance(DEPLOY_TIMEOUT_MS).text}
+${buildTimeoutGuidance(hoverAwareTimeoutMs(wizardState.steps, DEPLOY_TIMEOUT_MS)).text}
 
 FULL STEP WORKFLOW (analyze EVERY step — root cause may be in ANY of them):
 ${allStepsContext}
@@ -3575,7 +3667,9 @@ async function confirmDeploy() {
     outputSchema: wizardState.outputSchema,
     sampleInput: wizardState.sampleInput,
     annotations: wizardState.annotations,
-    config: existingService ? existingService.config : { enabled: true, timeoutMs: DEPLOY_TIMEOUT_MS, maxRetries: 1, autoCloseTab: true, maxStepIterations: 50, tabLoadTimeoutMs: 60000 },
+    config: existingService
+      ? { ...existingService.config, timeoutMs: hoverAwareTimeoutMs(wizardState.steps, existingService.config?.timeoutMs ?? DEPLOY_TIMEOUT_MS) }
+      : { enabled: true, timeoutMs: hoverAwareTimeoutMs(wizardState.steps, DEPLOY_TIMEOUT_MS), maxRetries: 1, autoCloseTab: true, maxStepIterations: 50, tabLoadTimeoutMs: 60000 },
     createdAt: existingService ? existingService.createdAt : Date.now()
   };
 
