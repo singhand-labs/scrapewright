@@ -371,8 +371,8 @@ An OpenAI-compatible client supporting multiple providers:
 | Setting | Description |
 |---------|-------------|
 | `provider` / `baseUrl` / `model` / `apiKey` | Provider choice; a custom baseUrl supports any OpenAI-compatible gateway |
-| `maxOutputTokens` | Per-request `max_tokens` cap (1024-131072, blank = 8192). Resolution chain: `options.maxTokens ?? maxOutputTokens ?? 8192` (an explicit per-call-site value wins; the config is the authoritative default) |
-| `timeoutMs` | Per-request timeout; default `DEFAULT_TIMEOUT_MS=120000` |
+| `maxOutputTokens` | Per-request `max_tokens` cap (1024-131072, blank = 16384). Resolution chain: `options.maxTokens ?? maxOutputTokens ?? 16384` (an explicit per-call-site value wins; the config is the authoritative default) |
+| `timeoutMs` | Per-request timeout; default `DEFAULT_TIMEOUT_MS=300000` |
 
 **Retry policy** (`chatWithRetry`): the retryable status set is `RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}`; network failures and timeouts (AbortError) are also retryable; default `DEFAULT_MAX_RETRIES=3` retries with exponential backoff 1s→2s→4s (capped at 8s) + 0-500ms random jitter.
 
@@ -771,7 +771,7 @@ Both wizard and autoFix prompts embed page HTML; three layers of defense control
 2. **Snapshot budgets** (`wizard-utils.js:truncateSnapshotForLLM`, default 30000 chars; `stripSnapshotsFromTestResult`): a testResult entering autoFix context is first stripped of per-step snapshots, then deduplicated per iteration (the RC9 incident: 750K-char snapshots bypassed the 30K budget and reached the prompt).
 3. **Prompt element budgets** (`wizard-utils.js:formatElementsForPrompt`, RC54): when candidate-container element HTML is embedded one by one, a single element exceeding `RC54_MAX_ELEMENT_HTML_CHARS=30000` chars is truncated and tagged `[TRUNCATED]` (the opening tags + leading children already carry all the structural signal); once the total reaches `RC54_TOTAL_ELEMENTS_BUDGET_CHARS=200000`, remaining elements are tagged `[SKIPPED: element HTML budget exhausted]` — **the selectors are still listed** (sticky), so the LLM at least knows they exist (the RC54 incident: container candidates carried the raw outerHTML of the entire feed, inflating a single prompt to 756,464 tokens).
 
-**The completion-budget chain:** `max_tokens = options.maxTokens ?? maxOutputTokens config ?? 8192` (`llm-client.js`). The Options page's `maxOutputTokens` (1024-131072, blank = 8192) is the global authoritative value.
+**The completion-budget chain:** `max_tokens = options.maxTokens ?? maxOutputTokens config ?? 16384` (`llm-client.js`). The Options page's `maxOutputTokens` (1024-131072, blank = 16384) is the global authoritative value.
 
 **Non-retryable error classification** (details in §4.5): empty content + finish_reason=length is a deterministic failure, classified non-retryable directly instead of burning retry budget.
 

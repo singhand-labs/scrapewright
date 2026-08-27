@@ -313,10 +313,10 @@ async function loadLlmConfig() {
   document.getElementById('model').value = config.model || '';
   document.getElementById('apiKey').value = config.apiKey || '';
   document.getElementById('apiBaseUrl').value = config.apiBaseUrl || '';
-  // timeoutMs is stored in ms; the UI is in seconds. Blank → default (120).
+  // timeoutMs is stored in ms; the UI is in seconds. Blank → default (300).
   const timeoutSeconds = config.timeoutMs ? Math.round(config.timeoutMs / 1000) : '';
   document.getElementById('llmTimeout').value = timeoutSeconds;
-  // maxOutputTokens is stored as a plain token count. Blank → default (8192).
+  // maxOutputTokens is stored as a plain token count. Blank → default (16384).
   document.getElementById('llmMaxTokens').value = config.maxOutputTokens || '';
 }
 
@@ -324,9 +324,9 @@ async function saveLlmConfig() {
   const rawTimeout = parseInt(document.getElementById('llmTimeout').value, 10);
   const timeoutSeconds = Number.isFinite(rawTimeout) && rawTimeout >= 10 && rawTimeout <= 600
     ? rawTimeout
-    : 120;
+    : 300;
   // Completion budget (RC53). Blank or out-of-range → undefined, so
-  // llm-client falls back to its 8192 default at the use site. Range floor
+  // llm-client falls back to its 16384 default at the use site. Range floor
   // 1024: a smaller budget reintroduces the finish_reason:length truncation
   // class (RC52).
   const rawMaxTokens = parseInt(document.getElementById('llmMaxTokens').value, 10);

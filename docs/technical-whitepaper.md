@@ -370,8 +370,8 @@ OpenAI 兼容接口客户端，支持多个提供商：
 | 配置 | 说明 |
 |------|------|
 | `provider` / `baseUrl` / `model` / `apiKey` | 提供商选择；自定义 baseUrl 支持任意 OpenAI 兼容网关 |
-| `maxOutputTokens` | 每次请求的 `max_tokens` 上限（1024-131072，留空 8192）。生效链：`options.maxTokens ?? maxOutputTokens ?? 8192`（调用点显式传值优先，配置是权威默认） |
-| `timeoutMs` | 单次请求超时；默认 `DEFAULT_TIMEOUT_MS=120000` |
+| `maxOutputTokens` | 每次请求的 `max_tokens` 上限（1024-131072，留空 16384）。生效链：`options.maxTokens ?? maxOutputTokens ?? 16384`（调用点显式传值优先，配置是权威默认） |
+| `timeoutMs` | 单次请求超时；默认 `DEFAULT_TIMEOUT_MS=300000` |
 
 **重试策略**（`chatWithRetry`）：可重试的状态码集合 `RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}`；网络失败与超时（AbortError）亦可重试；默认重试 `DEFAULT_MAX_RETRIES=3` 次，指数退避 1s→2s→4s（封顶 8s）+ 0-500ms 随机抖动。
 
@@ -770,7 +770,7 @@ RC20 的"激活→操作→恢复"在背靠背操作间产生激活/恢复抖动
 2. **快照预算**（`wizard-utils.js:truncateSnapshotForLLM`，默认 30000 字符；`stripSnapshotsFromTestResult`）：进入 autoFix 上下文的 testResult 先剥掉每步快照再逐次去重（RC9 事故：750K 字符快照绕过 30K 预算直达提示词）。
 3. **提示词元素预算**（`wizard-utils.js:formatElementsForPrompt`，RC54）：候选容器元素 HTML 逐个嵌入时，单元素超 `RC54_MAX_ELEMENT_HTML_CHARS=30000` 字符截断并标 `[TRUNCATED]`（开头标签 + 前导子节点已含全部结构信号）；总量达 `RC54_TOTAL_ELEMENTS_BUDGET_CHARS=200000` 后其余元素标 `[SKIPPED: element HTML budget exhausted]`——**选择器仍然列出**（sticky），LLM 至少知道它存在（RC54 事故：容器候选携带整条信息流的原始 outerHTML，单次提示词膨胀到 756,464 token）。
 
-**完成预算链**：`max_tokens = options.maxTokens ?? maxOutputTokens 配置 ?? 8192`（`llm-client.js`）。设置页的 `maxOutputTokens`（1024-131072，留空 8192）是全局权威值。
+**完成预算链**：`max_tokens = options.maxTokens ?? maxOutputTokens 配置 ?? 16384`（`llm-client.js`）。设置页的 `maxOutputTokens`（1024-131072，留空 16384）是全局权威值。
 
 **不可重试错误分类**（详见 §4.5）：空内容 + finish_reason=length 属确定性失败，直接归类为不可重试，不再烧重试预算。
 
