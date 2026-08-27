@@ -111,12 +111,11 @@ describe('RC53: llm-client maxOutputTokens priority chain', () => {
       'options.maxTokens must win over config.maxOutputTokens (per-call escape hatch)');
   });
 
-  it('defaults to 8192 (not the RC52-trap 4096) when both are absent', async () => {
+  it('defaults to 16384 when both config and per-call override are absent', async () => {
     const client = makeClient();
     await client.chat([{ role: 'user', content: 'hi' }], { maxRetries: 0 });
-    assert.equal(capturedBodies[0].max_tokens, 8192,
-      'the built-in fallback must be >= 8192 — the 4096 default caused the RC52 incident ' +
-      '(136K-token prompt, finish_reason:length, empty content, 4 wasted retries)');
+    assert.equal(capturedBodies[0].max_tokens, 16384,
+      'the built-in fallback must preserve the experimentally selected 16384-token budget');
   });
 
   it('ignores invalid config.maxOutputTokens (falls back at use site)', async () => {
@@ -129,7 +128,7 @@ describe('RC53: llm-client maxOutputTokens priority chain', () => {
         'invalid maxOutputTokens must normalize to undefined (timeoutMs pattern)');
     }
     await zero.chat([{ role: 'user', content: 'hi' }], { maxRetries: 0 });
-    assert.equal(capturedBodies[0].max_tokens, 8192);
+    assert.equal(capturedBodies[0].max_tokens, 16384);
   });
 
   it('accepts numeric-string config.maxOutputTokens (Number coercion, timeoutMs parity)', async () => {
