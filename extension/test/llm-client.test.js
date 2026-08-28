@@ -396,7 +396,9 @@ describe('LLMClient.chat retry behavior', () => {
       await assert.rejects(
         () => client.chat([{ role: 'user', content: 'hi' }], { maxRetries: 3 })
       );
-      // Filter out the AbortController timer (timeoutMs defaults to 120000).
+      assert.ok(delays.includes(300000),
+        'unconfigured requests must use the 300-second default timeout');
+      // Filter out the AbortController timer (timeoutMs defaults to 300000).
       const backoffDelays = delays.filter(d => d < 10000);
       assert.equal(backoffDelays.length, 3, 'should back off 3 times (before each retry); raw delays: ' + JSON.stringify(delays));
       // Default backoff: 1000, 2000, 4000 (each + 0-499 jitter)
@@ -491,13 +493,14 @@ describe('LLMClient.chat partial-content length truncation warning', () => {
 });
 
 describe('LLMClient timeout configuration', () => {
-  it('defaults to 120s when no timeoutMs configured', () => {
+  it('defaults to 300s when no timeoutMs configured', () => {
     const client = new LLMClient({
       provider: 'glm', model: 'glm-5.1', apiKey: 'k', apiBaseUrl: 'http://test.local/v1'
     });
     assert.equal(client.timeoutMs, undefined);
     // The use-site fallback lives in _chatOnce — verified by inspecting that
-    // options.timeoutMs ?? this.timeoutMs ?? DEFAULT_TIMEOUT_MS resolves to 120000.
+    // The request-timer behavior is asserted in the retry test above, where
+    // options.timeoutMs ?? this.timeoutMs ?? DEFAULT_TIMEOUT_MS resolves to 300000.
   });
 
   it('honors config.timeoutMs from constructor (ms)', () => {

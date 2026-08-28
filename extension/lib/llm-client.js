@@ -1,5 +1,6 @@
 const DEFAULT_MAX_RETRIES = 3;
-const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 300_000;
+const DEFAULT_MAX_OUTPUT_TOKENS = 16_384;
 const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 
 class LLMError extends Error {
@@ -45,7 +46,7 @@ class LLMClient {
     // to the provider+model pair (e.g. reasoning models can spend the whole
     // budget on non-visible tokens — RC52: output_tokens 4096, text_tokens 0),
     // so it is a Settings-page config knob, not a per-call-site guess. Use
-    // site chain: options.maxTokens ?? this.maxOutputTokens ?? 8192.
+    // site chain: options.maxTokens ?? this.maxOutputTokens ?? 16384.
     const maxOut = Number(config.maxOutputTokens);
     this.maxOutputTokens = Number.isFinite(maxOut) && maxOut > 0 ? maxOut : undefined;
   }
@@ -101,7 +102,7 @@ class LLMClient {
       model: this.model,
       messages,
       temperature: options.temperature ?? this.temperature,
-      max_tokens: options.maxTokens ?? this.maxOutputTokens ?? 8192,
+      max_tokens: options.maxTokens ?? this.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
       response_format: options.jsonMode ? { type: 'json_object' } : undefined
     };
 

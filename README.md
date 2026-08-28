@@ -112,8 +112,8 @@ Then open the Scrapewright Chrome extension → **Options** → **Server Configu
 2. Under **LLM Configuration**, fill in:
    - **Provider / Model / API Key** — any of OpenAI, Moonshot / Kimi, Anthropic, GLM
    - **Base URL** (optional) — custom or OpenAI-compatible gateway; must include the path prefix (e.g. `https://api.openai.com/v1`)
-   - **Max output tokens** (default 8192) — raise for reasoning models that burn "thinking" tokens and truncate output
-   - **Timeout** (default 120s) — raise for slow models or very long prompts
+   - **Max output tokens** (default 16384) — raise for reasoning models that burn "thinking" tokens and truncate output
+   - **Timeout** (default 300s) — raise for slow models or very long prompts
 3. Click **Save**
 
 ### Create a Scraping Service

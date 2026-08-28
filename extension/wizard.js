@@ -1172,8 +1172,8 @@ Return JSON with:
   // parseable content (finish_reason: length, empty content), and the
   // deterministic failure retried 4x before surfacing LLMRetryExhausted.
   // RC53: no call-site budget — the completion budget is the Settings-page
-  // maxOutputTokens config parameter, falling back to 8192 in llm-client
-  // (options.maxTokens ?? config ?? 8192).
+  // maxOutputTokens config parameter, falling back to 16384 in llm-client
+  // (options.maxTokens ?? config ?? 16384).
   const result = await client.chat([
     { role: 'system', content: buildSystemMessageWithGlobalContext('You are a web scraping expert. Return JSON only.') },
     { role: 'user', content: prompt }
@@ -1497,7 +1497,7 @@ Do NOT infer templates from implicit patterns like "search for keyword" or "show
   // RC52/RC53: this prompt embeds the full DSL guide — a 4096 completion cap
   // can deterministically fail with finish_reason:length (see the
   // confirmSelectorsWithFullHtml note). Budget now comes from the Settings
-  // maxOutputTokens config (llm-client fallback 8192).
+  // maxOutputTokens config (llm-client fallback 16384).
   const result = await client.chat([
     { role: 'system', content: buildSystemMessageWithGlobalContext('You are a web scraping expert. Return JSON only.') },
     { role: 'user', content: prompt }

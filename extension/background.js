@@ -3,6 +3,7 @@ importScripts(
   'lib/llm-client.js',
   'lib/offscreen-executor.js',
   'lib/url-template.js',
+  'lib/open-tab-url.js',
   'lib/page-tracker.js',
   'lib/step-orchestrator.js',
   'lib/wizard-utils.js',
@@ -998,11 +999,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
   if (message.type === 'OPEN_TAB_EXECUTE') {
-    handleOpenTabExecute(message.url, message.script, message.parentTabId, message.reqId)
+    // Prefer the browser-authenticated sender tab over the message field.
+    // The latter is retained only for compatibility with older relay paths.
+    const openTabParentId = sender.tab?.id || message.parentTabId;
+    handleOpenTabExecute(message.url, message.script, openTabParentId, message.reqId)
       .catch(err => {
         debugLogger.log('error', 'background', 'handleOpenTabExecute failed', { error: err.message });
-        if (message.parentTabId) {
-          chrome.tabs.sendMessage(message.parentTabId, {
+        if (openTabParentId) {
+          chrome.tabs.sendMessage(openTabParentId, {
             type: 'TAB_RESULT',
             reqId: message.reqId,
             error: err.message
@@ -1347,9 +1351,29 @@ async function captureSubTabSnapshot(tabId, label) {
 
 async function handleOpenTabExecute(url, scriptStr, parentTabId, reqId) {
   debugLogger.log('info', 'background', 'handleOpenTabExecute start', { url, parentTabId, reqId });
+  let parentUrl = null;
+  if (parentTabId != null) {
+    try {
+      const parentTab = await chrome.tabs.get(parentTabId);
+      parentUrl = parentTab?.url || null;
+    } catch (e) {
+      debugLogger.log('warn', 'background', 'handleOpenTabExecute could not read parent tab URL', {
+        parentTabId,
+        error: e && e.message || String(e)
+      });
+    }
+  }
+  const resolvedUrl = OpenTabUrl.resolveOpenTabUrl(url, parentUrl);
+  if (resolvedUrl !== url) {
+    debugLogger.log('info', 'background', 'Resolved relative $openTab URL', {
+      originalUrl: url,
+      parentUrl,
+      resolvedUrl
+    });
+  }
   // RC12→RC17: popup window so the detail page actually renders its lazy-loaded
   // content (FB post comments, product reviews, etc.).
-  const tab = await createScrapeTab(url);
+  const tab = await createScrapeTab(resolvedUrl);
   // RC64: activate the sub-tab BEFORE it loads. Chrome only produces
   // compositor frames for the active tab, so a never-activated sub-tab mounts
   // the app shell (waits resolve) but never renders content — every extract
