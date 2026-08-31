@@ -141,7 +141,8 @@ If you MUST skip a record, do so conservatively — only skip when you have POSI
 
 CARD-TYPE HETEROGENEITY (feeds mixing promoted and organic cards): when a required field comes back empty on every record, check WHAT KIND of cards your selectors kept before rewriting the field selector. Heterogeneous feeds mix promoted/sponsored cards with organic ones, and promoted cards often lack permalink/timestamp fields entirely — the field is not "hard to select", it does not exist on that card type. Two corollaries:
 (a) a container filter or field selector built on promoted-card markup attributes implicitly keeps ONLY promoted cards, making user-facing fields (permalink, timestamp) structurally unreachable — select organic cards and exclude promoted ones by a specific, language-INDEPENDENT markup signal (a dedicated data-* rendering attribute), never by localized label text (a "Sponsored" text match silently misses localized pages);
-(b) do not write contradictory filters across steps — step N keeping only card type A while step M excludes card type A yields empty or mislabeled output. Decide ONE card policy per service and enforce it at exactly ONE place in the chain.
+(b) do not write contradictory filters across steps — step N keeping only card type A while step M excludes card type A yields empty or mislabeled output. Decide ONE card policy per service and enforce it at exactly ONE place in the chain;
+(c) the scroll step's counter is a card filter too — an unfiltered counter counts recommendation/promoted cards toward the target, so the loop exits "successfully" carrying junk. Count with the SAME language-independent card signals the extraction step uses, and make the filtered counter safe against matching nothing (see ZERO-TRAP COUNTER).
 
 IMPORTANT: For waiting or polling scenarios (e.g., checking if AI has finished generating), do NOT use $() in a loop — it will throw after 30s if the element is not found. Instead:
 - Use 'await new Promise(r => setTimeout(r, ms))' for fixed delays
@@ -284,7 +285,12 @@ CRITICAL: "position did not change" (r.scrolled === false) is the most reliable 
   await new Promise(resolve => setTimeout(resolve, 1500));
   const stalled = (__lastResult__ && __lastResult__.stalled || 0) + (r.scrolled ? 0 : 1);
   const postCount = await $count('li.result-item');
-  if (stalled >= 3 && postCount > 0) return { done: true, postCount, exhausted: true };
+  // NEVER guard the exhausted exit with '&& postCount > 0': if the item
+  // selector (or a counting filter) matches nothing, the count stays 0
+  // forever, this exit is unreachable, and the step scrolls until
+  // maxIterations. Zero for N stalled iterations is itself a verdict —
+  // exit exhausted and let downstream diagnostics SEE the zero.
+  if (stalled >= 3) return { done: true, postCount, exhausted: true };
   return { done: false, postCount, stalled };
 
 SCROLL CONTAINER (not the window): some sites scroll an inner element (overflow:auto/scroll), not the document. If $count returns 0 after $scrollToBottom() with no selector, find the scrollable container in the snapshot and pass its selector: await $scrollToBottom('div[data-scrollable-container]'). A quick heuristic: the element with the largest scrollHeight that is NOT document.body is usually the feed's scroll root.
@@ -308,10 +314,22 @@ VIRTUALIZED FEEDS (search results, social feeds, infinite-scroll comment threads
   const prevUnique = (__lastResult__ && __lastResult__.uniqueCount) || 0;
   const noGrowth = (uniqueCount > prevUnique) ? 0 : (((__lastResult__ && __lastResult__.noGrowth) || 0) + 1);
   if (uniqueCount >= 10) return { done: true, uniqueCount, seenSignatures: [...seen].slice(0, 50) };
-  if (noGrowth >= 3 && uniqueCount > 0) return { done: true, uniqueCount, seenSignatures: [...seen].slice(0, 50), exhausted: true };
+  // DEADLOCK WARNING: do NOT write this as 'noGrowth >= 3 && uniqueCount > 0'.
+  // When the counting filter (or signature scheme) matches nothing, uniqueCount
+  // stays 0 on every iteration, the '> 0' guard makes this exit unreachable,
+  // and the step scrolls until maxIterations while the user watches the page
+  // fill with cards the script never counts. Zero-growth for N consecutive
+  // iterations is a valid exhaustion verdict even at count 0 — exit and let
+  // the zero be visible to downstream diagnostics and auto-fix.
+  if (noGrowth >= 3) return { done: true, uniqueCount, seenSignatures: [...seen].slice(0, 50), exhausted: true };
   return { done: false, uniqueCount, noGrowth, seenSignatures: [...seen].slice(0, 50) };
 Key insight: $count(DOM) ≠ unique posts seen. The DOM is a sliding window; signatures accumulated across iterations are the truth. Cap seenSignatures at ~50 entries to avoid unbounded growth across long feeds.
 WARNING: do NOT use r.scrolled === false as the exhaustion signal on virtualized feeds. r.scrolled can stay true indefinitely — the feed's scroll position and container height keep creeping without any new content mounting, so every iteration "successfully scrolls" while the unique-signature count is frozen. Judge exhaustion ONLY by signature growth (the noGrowth counter), never by scroll position.
+
+ZERO-TRAP COUNTER (filtered counting in scroll loops): discriminating card types inside the scroll counter — e.g. counting only cards that contain a permalink href matching a regex, the correct way to skip recommendation/promoted cards (see CARD-TYPE HETEROGENEITY) — introduces a failure mode the selector diagnostics CANNOT see: the counting filter itself can match NOTHING. Permalink shapes vary by site, locale, and era (/posts/<id>/, story.php, /share/p/<id>/, watch?v=, /reel/<id>/) — a regex written from assumption instead of observation matches 0 hrefs on every card, the count stays 0 forever, and (per the DEADLOCK WARNING above) the step scrolls to maxIterations while the user watches the page fill with cards the script never counts. Three defenses:
+(a) sample before you filter: extract the raw values first — $extractListMulti(containerSel, { h: { selector: 'a[href]', attr: 'href' } }, { allowEmpty: true }) — read what the hrefs actually look like (they surface in SELECTOR DIAGNOSTICS), THEN write the regex around the observed shapes;
+(b) never guard the exhausted exit with 'count > 0' — at a permanently-zero count that exit is unreachable and the loop's only stop becomes maxIterations (minutes of pointless loading);
+(c) keep a RAW fallback counter (records.length or $count(containerSel)) alongside the filtered one: filtered 0 while raw keeps growing proves the filter (not the page) is wrong — exit exhausted with a zeroFiltered marker so the failure is visible and repairable, instead of scrolling forever.
 
 RAW HTML EXTRACTION (domHtml, full record HTML fields):
 $extract(sel) and $extractList(sel, { field: { selector, attr } }) support attribute reads. outerHTML and innerHTML are DOM PROPERTIES (not HTML attributes) — historically getAttribute returned null for them. They are now supported: pass attr='outerHTML' or attr='innerHTML' and the runner reads the DOM property directly.
@@ -912,6 +930,97 @@ function detectCountSelectorBlind(events) {
   for (const agg of perStep.values()) {
     if (agg.blindIterations >= 3 && !agg.recovered) {
       return { stepId: agg.stepId, iterations: agg.iterations, blindIterations: agg.blindIterations, selectors: [...agg.selectors.keys()] };
+    }
+  }
+  return null;
+}
+
+// console.log 2026-08-31 16:06-16:15 (fourth session): after a user-feedback
+// autoFix rewrote the scroll counter to count only permalink-bearing cards,
+// the permalink regex matched 0 hrefs on EVERY card — uniqueCount stayed 0 for
+// 33 straight not-ready iterations (~9.5 min of scrolling the user watched
+// and finally aborted). The selector diagnostics saw nothing wrong (the
+// containers themselves match; the SCRIPT-LEVEL JS filter zeroed the count),
+// and the exhausted exit was guarded by `&& uniqueCount > 0`, making it
+// unreachable at count 0. This detector covers the half COUNT_SELECTOR_BLIND
+// cannot see: the script's own result announces a counter field stuck at 0.
+// Fires when a step's not-ready iterations carried counter fields that were
+// 0 on EVERY occurrence and never once positive (a count that went positive
+// then froze is a stall the script's own noGrowth handles — not a trap).
+const FROZEN_ZERO_STREAK_THRESHOLD = 8;
+
+// Parse one resultPreview for counter-shaped numeric fields. A counter name
+// ends with "count" (uniqueCount, postCount, newCount, ...) or is one of the
+// bare aggregate names. Control fields (noGrowth, stalled, iteration, ...)
+// are deliberately excluded — they legitimately count failures, not content.
+function parseCounterFields(resultPreview) {
+  const out = { zero: [], positive: [] };
+  const s = String(resultPreview || '');
+  if (!s) return out;
+  const re = /"([A-Za-z_$][A-Za-z0-9_$]*)"\s*:\s*(-?\d+(?:\.\d+)?)/g;
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    const name = m[1];
+    const isCounter = /count$/i.test(name) || /^(total|matched|found|loaded)$/i.test(name);
+    if (!isCounter) continue;
+    const val = Number(m[2]);
+    if (val > 0) out.positive.push(name);
+    else if (val === 0) out.zero.push(name);
+  }
+  return out;
+}
+
+// isFrozenZeroNotReady(resultPreview): the iteration is a poll retry whose
+// counters are all zero. Previews without counter fields are "no evidence" —
+// neither frozen nor recovering.
+function isFrozenZeroNotReady(resultPreview) {
+  const s = String(resultPreview || '');
+  if (!/"done"\s*:\s*false/.test(s)) return false;
+  const c = parseCounterFields(s);
+  return c.zero.length > 0 && c.positive.length === 0;
+}
+
+function detectFrozenZeroCounter(events) {
+  if (!Array.isArray(events)) return null;
+  const perStep = new Map();
+  for (const evt of events) {
+    if (!evt || evt.type !== 'STEP_ITERATION') continue;
+    const stepId = evt.stepId;
+    if (stepId == null) continue;
+    if (!perStep.has(stepId)) {
+      perStep.set(stepId, {
+        stepId: stepId, iterations: 0, frozenIterations: 0,
+        counterFields: new Set(), everPositive: false, selectorMatchedSomething: false
+      });
+    }
+    const agg = perStep.get(stepId);
+    agg.iterations += 1;
+    const counters = parseCounterFields(evt.resultPreview);
+    if (counters.positive.length > 0) {
+      agg.everPositive = true; // saw real content — never a zero-trap
+    }
+    for (const z of counters.zero) agg.counterFields.add(z);
+    if (isFrozenZeroNotReady(evt.resultPreview)) agg.frozenIterations += 1;
+    // Selector evidence distinguishes the two zero classes: selectors
+    // matching while counters stay 0 PROVES a script-level filter trap
+    // (COUNT_SELECTOR_BLIND is the other class — selectors themselves 0).
+    const diags = Array.isArray(evt.selectorDiagnostics) ? evt.selectorDiagnostics : [];
+    for (const d of diags) {
+      if (!d) continue;
+      const count = (typeof d.matchCount === 'number') ? d.matchCount
+        : (typeof d.containerMatches === 'number') ? d.containerMatches : null;
+      if (typeof count === 'number' && count > 0) agg.selectorMatchedSomething = true;
+    }
+  }
+  for (const agg of perStep.values()) {
+    if (agg.frozenIterations >= FROZEN_ZERO_STREAK_THRESHOLD && !agg.everPositive) {
+      return {
+        stepId: agg.stepId,
+        iterations: agg.iterations,
+        frozenIterations: agg.frozenIterations,
+        counterFields: [...agg.counterFields],
+        selectorMatchedSomething: agg.selectorMatchedSomething
+      };
     }
   }
   return null;
@@ -2732,8 +2841,8 @@ function summarizeAllStepDiagnostics(events, steps) {
     if (allDiags.length > 0) {
       lines.push('  SELECTOR DIAGNOSTICS (empirical — what your selectors actually matched):');
       for (const d of allDiags.slice(0, 10)) {  // cap at 10 calls per step
-        if (d.api === 'extractList') {
-          let header = '    $extractList(\'' + d.containerSelector + '\') — container matched ' + d.containerMatches + ' element(s)';
+        if (d.api === 'extractList' || d.api === 'extractListMulti') {
+          let header = '    $' + d.api + '(\'' + d.containerSelector + '\') — container matched ' + d.containerMatches + ' element(s)';
           if (d.containerMatches === 0) header += ' (returned [] — allowEmpty was set or container selector is wrong)';
           lines.push(header);
           // RC13 (console.log 2026-07-27 02:30): surface the first matched
@@ -2824,6 +2933,16 @@ function summarizeAllStepDiagnostics(events, steps) {
             let line = '      field ' + f.field + ' (sel \'' + f.subSelector + '\'' + (f.attr ? ', attr=\'' + f.attr + '\'' : '') + '): ' + f.matchCount + ' matches.' + overConstrained + mismatch + emptyExtract + collision + samples + hrefs;
             if (line.length > 240) line = line.slice(0, 237) + '...';
             lines.push(line);
+            // Fourth-session log 2026-08-31 (ZERO-TRAP): the actual extracted
+            // VALUES — attr fields had no samples before, so a script-level
+            // regex filtering hrefs to zero was invisible. These are what a
+            // counting/filtering regex must be written against. Own line:
+            // 5 values × 160 chars would amputate under the 240-col field cap.
+            if (Array.isArray(f.sampleValues) && f.sampleValues.length > 0) {
+              let vline = '      observed values for \'' + f.field + '\'' + (f.attr ? ' (attr ' + f.attr + ')' : '') + ': ' + JSON.stringify(f.sampleValues);
+              if (vline.length > 1000) vline = vline.slice(0, 997) + '...';
+              lines.push(vline);
+            }
           }
         } else if (d.api === 'clickInList') {
           // console.log 2026-08-23: a $clickInList whose sub-selector matched
@@ -3964,7 +4083,7 @@ function formatElementsForPrompt(elements, opts) {
 
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.hoverAwareTimeoutMs = hoverAwareTimeoutMs;
@@ -3972,6 +4091,10 @@ if (typeof module !== 'undefined' && module.exports) {
   window.detectClickInListEmptyContainers = detectClickInListEmptyContainers;
   window.detectCountSelectorBlind = detectCountSelectorBlind;
   window.detectHoverAnchorsBlind = detectHoverAnchorsBlind;
+  window.detectFrozenZeroCounter = detectFrozenZeroCounter;
+  window.parseCounterFields = parseCounterFields;
+  window.isFrozenZeroNotReady = isFrozenZeroNotReady;
+  window.FROZEN_ZERO_STREAK_THRESHOLD = FROZEN_ZERO_STREAK_THRESHOLD;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
   window.validateInputAgainstSchema = validateInputAgainstSchema;
   window.validateOutputAgainstSchema = validateOutputAgainstSchema;
@@ -4036,6 +4159,9 @@ if (typeof module !== 'undefined' && module.exports) {
 if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.validateChain = validateChain;
   self.validateForExecution = validateForExecution;
+  self.detectFrozenZeroCounter = detectFrozenZeroCounter;
+  self.parseCounterFields = parseCounterFields;
+  self.isFrozenZeroNotReady = isFrozenZeroNotReady;
   self.validateInputAgainstSchema = validateInputAgainstSchema;
   self.validateOutputAgainstSchema = validateOutputAgainstSchema;
   self.findEmptyExtractionFields = findEmptyExtractionFields;

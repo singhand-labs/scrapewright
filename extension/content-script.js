@@ -228,7 +228,11 @@
       return { clicked, errors, delayMs: delay };
     }
 
-    function computeExtractListDiagnostics(containers, fieldMap, containerSelector) {
+    // ⚠️ DRIFT GUARD: mirrors computeExtractListDiagnostics in
+    // lib/list-extract-ops.js (including the multiMode/sampleValues semantics
+    // added for the 2026-08-31 ZERO-TRAP fix). If you change one, change the
+    // other in the same commit.
+    function computeExtractListDiagnostics(containers, fieldMap, containerSelector, multiMode) {
       const containerArr = Array.isArray(containers) ? containers : [];
       const fields = fieldMap && typeof fieldMap === 'object' ? Object.entries(fieldMap) : [];
       const perField = fields.map(([field, spec]) => {
@@ -236,24 +240,48 @@
         const attr = typeof spec === 'string' ? null : (spec && spec.attr) || null;
         const sampleTexts = [];
         const sampleHrefs = [];
+        const sampleValues = [];
         let matchCount = 0;
         if (!subSelector) {
-          return { field, subSelector: null, attr, matchCount: 0, sampleTexts: [], sampleHrefs: [] };
+          return { field, subSelector: null, attr, matchCount: 0, sampleTexts: [], sampleHrefs: [], sampleValues: [] };
         }
-        for (const c of containerArr) {
-          let el;
-          try { el = c.querySelector(subSelector); } catch (_) { el = null; }
-          if (!el) continue;
-          matchCount += 1;
-          if (!attr && sampleTexts.length < 3 && typeof el.textContent === 'string') {
-            sampleTexts.push(el.textContent.trim().slice(0, 80));
+        const pushValue = (el) => {
+          if (sampleValues.length >= 5) return;
+          let v = null;
+          if (attr) {
+            v = (attr === 'outerHTML' || attr === 'innerHTML') ? el[attr] : (el.getAttribute ? el.getAttribute(attr) : null);
+          } else {
+            v = (el.textContent || '').trim();
           }
-          if (!attr && sampleHrefs.length < 3 && el.getAttribute) {
-            const href = el.getAttribute('href');
-            if (href) sampleHrefs.push(String(href).slice(0, 120));
+          if (v != null && String(v).length > 0) sampleValues.push(String(v).slice(0, 160));
+        };
+        if (multiMode && containerArr.length > 0) {
+          for (const c of containerArr) {
+            let el;
+            try { el = c.querySelector(subSelector); } catch (_) { el = null; }
+            if (el) matchCount += 1;
+          }
+          const c0 = containerArr[0];
+          let els0 = [];
+          try { els0 = c0 ? Array.from(c0.querySelectorAll(subSelector)) : []; } catch (_) { els0 = []; }
+          for (const el of els0) pushValue(el);
+        } else {
+          for (const c of containerArr) {
+            let el;
+            try { el = c.querySelector(subSelector); } catch (_) { el = null; }
+            if (!el) continue;
+            matchCount += 1;
+            pushValue(el);
+            if (!attr && sampleTexts.length < 3 && typeof el.textContent === 'string') {
+              sampleTexts.push(el.textContent.trim().slice(0, 80));
+            }
+            if (!attr && sampleHrefs.length < 3 && el.getAttribute) {
+              const href = el.getAttribute('href');
+              if (href) sampleHrefs.push(String(href).slice(0, 120));
+            }
           }
         }
-        return { field, subSelector, attr, matchCount, sampleTexts, sampleHrefs };
+        return { field, subSelector, attr, matchCount, sampleTexts, sampleHrefs, sampleValues };
       });
       // Mirror lib/list-extract-ops.js RC13 + RC59: capture ~2000 chars of
       // the first container outerHTML with a head+tail split. WITHOUT this,
@@ -1357,6 +1385,11 @@
     const _diagnostics = ops && ops.computeExtractListDiagnostics
       ? ops.computeExtractListDiagnostics(containers, fieldMap, containerSel)
       : { api: 'extractList', containerSelector: containerSel, containerMatches: containers.length, perField: [] };
+    notifyBackgroundDiagnostic('extractList_entry', {
+      containerSelector: containerSel,
+      containerMatches: containers.length,
+      fields: Object.keys(fieldMap || {})
+    });
     return { result: records, _diagnostics };
   }
 
@@ -1393,12 +1426,19 @@
       throw new Error('$extractListMulti runtime stale: ops.extractListMultiRecords missing — lib/list-extract-ops.js and content-script.js inline fallback are out of sync. Reload the extension; if it persists, run test/inline-list-extract-ops-drift.test.js.');
     }
     const records = ops.extractListMultiRecords(containers, fieldMap, opts || {});
-    // Reuse the same diagnostics shape — diagnostics count matches per field,
-    // which is what autoFix needs to see ("your publishTime selector matched 0
-    // out of N containers" remains meaningful for the multi-match variant).
+    // Fourth-session log 2026-08-31: step 2 counted posts by filtering hrefs
+    // extracted with attr:'href' — the diagnostic sampled nothing for attr
+    // fields, so the zero-match regex was invisible. multiMode samples every
+    // match in the first container; sampleValues carries the real shapes.
     const _diagnostics = ops && ops.computeExtractListDiagnostics
-      ? ops.computeExtractListDiagnostics(containers, fieldMap, containerSel)
+      ? ops.computeExtractListDiagnostics(containers, fieldMap, containerSel, true)
       : { api: 'extractList', containerSelector: containerSel, containerMatches: containers.length, perField: [] };
+    if (_diagnostics && _diagnostics.api === 'extractList') _diagnostics.api = 'extractListMulti';
+    notifyBackgroundDiagnostic('extractListMulti_entry', {
+      containerSelector: containerSel,
+      containerMatches: containers.length,
+      fields: Object.keys(fieldMap || {})
+    });
     return { result: records, _diagnostics };
   }
 

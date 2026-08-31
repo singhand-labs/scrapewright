@@ -332,7 +332,15 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
 // reaction/comment/share counts). Showing one real record's outerHTML lets
 // the LLM discover "the count is in a <span> inside the button, not the
 // button itself" — a fully generic fix that works for any site, any field.
-function computeExtractListDiagnostics(containers, fieldMap, containerSelector) {
+// multiMode (fourth-session log 2026-08-31): when $extractListMulti reuses
+// this diagnostic, first-match-per-container samples can mislead — the value
+// the script filters on (a permalink href) may be the 2nd..Nth match while
+// the 1st is a profile link. In multi mode, sample ALL matches of the FIRST
+// container (up to 5) so the observed value SHAPES are visible. sampleValues
+// (both modes) carries actual extracted values — attr-based fields previously
+// produced NO samples at all, so a script-level regex filtering attr values to
+// zero was invisible to autoFix (the ZERO-TRAP failure mode).
+function computeExtractListDiagnostics(containers, fieldMap, containerSelector, multiMode) {
   const containerArr = Array.isArray(containers) ? containers : [];
   const fields = fieldMap && typeof fieldMap === 'object' ? Object.entries(fieldMap) : [];
   const perField = fields.map(([field, spec]) => {
@@ -340,24 +348,50 @@ function computeExtractListDiagnostics(containers, fieldMap, containerSelector) 
     const attr = typeof spec === 'string' ? null : (spec && spec.attr) || null;
     const sampleTexts = [];
     const sampleHrefs = [];
+    const sampleValues = [];
     let matchCount = 0;
     if (!subSelector) {
-      return { field, subSelector: null, attr, matchCount: 0, sampleTexts: [], sampleHrefs: [] };
+      return { field, subSelector: null, attr, matchCount: 0, sampleTexts: [], sampleHrefs: [], sampleValues: [] };
     }
-    for (const c of containerArr) {
-      let el;
-      try { el = c.querySelector(subSelector); } catch (_) { el = null; }
-      if (!el) continue;
-      matchCount += 1;
-      if (!attr && sampleTexts.length < 3 && typeof el.textContent === 'string') {
-        sampleTexts.push(el.textContent.trim().slice(0, 80));
+    const pushValue = (el) => {
+      if (sampleValues.length >= 5) return;
+      let v = null;
+      if (attr) {
+        v = DOM_PROPERTY_READS.has(attr) ? el[attr] : (el.getAttribute ? el.getAttribute(attr) : null);
+      } else {
+        v = (el.textContent || '').trim();
       }
-      if (!attr && sampleHrefs.length < 3 && el.getAttribute) {
-        const href = el.getAttribute('href');
-        if (href) sampleHrefs.push(String(href).slice(0, 120));
+      if (v != null && String(v).length > 0) sampleValues.push(String(v).slice(0, 160));
+    };
+    if (multiMode && containerArr.length > 0) {
+      // Multi: count containers with ≥1 match, but sample every match inside
+      // the first container — the full value shape distribution.
+      for (const c of containerArr) {
+        let el;
+        try { el = c.querySelector(subSelector); } catch (_) { el = null; }
+        if (el) matchCount += 1;
+      }
+      const c0 = containerArr[0];
+      let els0 = [];
+      try { els0 = c0 ? Array.from(c0.querySelectorAll(subSelector)) : []; } catch (_) { els0 = []; }
+      for (const el of els0) pushValue(el);
+    } else {
+      for (const c of containerArr) {
+        let el;
+        try { el = c.querySelector(subSelector); } catch (_) { el = null; }
+        if (!el) continue;
+        matchCount += 1;
+        pushValue(el);
+        if (!attr && sampleTexts.length < 3 && typeof el.textContent === 'string') {
+          sampleTexts.push(el.textContent.trim().slice(0, 80));
+        }
+        if (!attr && sampleHrefs.length < 3 && el.getAttribute) {
+          const href = el.getAttribute('href');
+          if (href) sampleHrefs.push(String(href).slice(0, 120));
+        }
       }
     }
-    return { field, subSelector, attr, matchCount, sampleTexts, sampleHrefs };
+    return { field, subSelector, attr, matchCount, sampleTexts, sampleHrefs, sampleValues };
   });
   // Capture up to ~8000 chars of the first container's outerHTML, head+tail
   // split. The cap is per-call: if there are multiple $extractList calls in one

@@ -1896,6 +1896,9 @@ async function testScript() {
   wizardState.lastErrorSnapshot = null;
   wizardState.lastExecutionEvents = [];
   wizardState.testAbortController = new AbortController();
+  // Zero-trap circuit-breaker state (consumed in onEvent + failure path).
+  wizardState.zeroCounterStreaks = new Map();
+  wizardState.zeroCounterBreaker = null;
   // RC25 (console.log 2026-08-04): reset trusted-wheel skip counter at the
   // start of each testScript run. Counter is incremented by the
   // TRUSTED_WHEEL_SKIPPED broadcast listener; surfaced as a tip after run.
@@ -2012,6 +2015,34 @@ async function testScript() {
       onEvent: (evt) => {
         wizardState.lastExecutionEvents.push(evt);
         try { renderExecutionProgress(evt); } catch (_) {}
+        // ZERO-TRAP circuit breaker (console.log 2026-08-31): a scroll/poll
+        // step whose counter fields stay 0 across consecutive not-ready
+        // iterations has a counting filter that matches nothing — its
+        // exhausted exit is typically guarded by `count > 0` and can never
+        // fire, so the loop scrolls to maxIterations (~tens of minutes)
+        // while the user watches. Stop the run at the threshold and let the
+        // failure path re-label the abort with the precise root cause. A
+        // count that goes positive even once marks the step healthy forever
+        // (slow loads recover legitimately — COUNT_SELECTOR_BLIND run 3
+        // recovered at iteration 5; threshold 8 leaves that margin).
+        try {
+          if (evt && evt.type === 'STEP_ITERATION' && evt.stepId != null) {
+            const counters = parseCounterFields(evt.resultPreview);
+            if (counters.positive.length > 0) {
+              wizardState.zeroCounterStreaks.delete(String(evt.stepId));
+            } else if (isFrozenZeroNotReady(evt.resultPreview)) {
+              const streak = (wizardState.zeroCounterStreaks.get(String(evt.stepId)) || 0) + 1;
+              wizardState.zeroCounterStreaks.set(String(evt.stepId), streak);
+              if (streak >= FROZEN_ZERO_STREAK_THRESHOLD && !wizardState.zeroCounterBreaker) {
+                wizardState.zeroCounterBreaker = {
+                  stepId: evt.stepId, streak, counterFields: counters.zero
+                };
+                appendLog('Zero-counter circuit breaker tripped for step ' + evt.stepId + ' (' + streak + ' not-ready iterations, counters ' + counters.zero.join(', ') + ' all 0). Aborting run.', 'error');
+                wizardState.testAbortController?.abort();
+              }
+            }
+          }
+        } catch (_) { /* breaker must never kill the run loop */ }
       }
     });
 
@@ -2170,8 +2201,24 @@ async function testScript() {
     debugLogger.log('info', 'wizard', 'testScript success', { finalResult: result.finalResult });
   } catch (e) {
     // Augment raw failure causes with compile-time analysis before they reach
-    // autoFix — both regressions from console.log 2026-08-23 (second session).
+    // autoFix — regressions from console.log 2026-08-23 (second session) and
+    // 2026-08-31 (fourth session).
     try {
+      // ZERO-TRAP breaker: the onEvent circuit breaker aborted this run
+      // because a step's counter fields stayed 0 across consecutive
+      // not-ready iterations. Re-label the bare TEST_ABORTED with the
+      // precise root cause so autoFix gets a fixable signal instead of a
+      // user-style abort it would ignore.
+      const breaker = wizardState.zeroCounterBreaker;
+      if (breaker && /TEST_ABORTED/.test(e.message || '')) {
+        const stepDefZ = (wizardState.steps || []).find(s => String(s.id) === String(breaker.stepId));
+        e.message = 'ZERO_COUNTER_FROZEN: step "' + (stepDefZ ? stepDefZ.name : breaker.stepId) + '" returned not-ready for ' + breaker.streak +
+          ' consecutive iterations while its counter field(s) [' + breaker.counterFields.join(', ') + '] stayed 0 and never once rose. ' +
+          'The counting FILTER inside the step (JS logic — e.g. a permalink-href regex) matched nothing on the page, and an exhausted exit guarded by `count > 0` can never fire at count 0, so the run scrolled toward maxIterations and was stopped by the circuit breaker. ' +
+          'Fix per ZERO-TRAP COUNTER in the DSL guide: (1) SAMPLE the raw values before filtering — extract them (e.g. $extractListMulti(containerSel, { h: { selector: \'a[href]\', attr: \'href\' } }, { allowEmpty: true })) and inspect what the hrefs actually look like (permalinks vary: /posts/<id>/, story.php, /share/p/<id>/, watch?v=, /reel/<id>/), then write the regex around the observed shapes; ' +
+          '(2) remove any `count > 0` guard from the exhausted exit; (3) keep a RAW fallback counter (records.length / $count(containerSel)) so the loop can still exit when the filter matches nothing. Original error: ' + e.message;
+        e.stepId = breaker.stepId;
+      }
       if (e && /POLL_EXHAUSTED/.test(e.message || '')) {
         // A poll step that exhausted while EVERY selector it queried matched
         // 0 elements on every iteration is COUNT-blind: the page may be full
@@ -2188,6 +2235,23 @@ async function testScript() {
             'The step cannot see the content it is polling for. Either (a) the selector is wrong for this page\'s DOM structure — rigid child-combinator chains like A > div > B commonly fail on real nesting; prefer the descendant form A B — or (b) the content never rendered (viewport-gated: scroll inside the poll step per FIRST CONTENT MAY NEED A SCROLL in the DSL guide). ' +
             'Check SELECTOR DIAGNOSTICS for empirical match counts, and propagate any selector fix to every step referencing the same list (SELECTOR COHERENCE). Original error: ' + e.message;
           if (!e.stepId) e.stepId = blind.stepId;
+        }
+        // Post-hoc ZERO-TRAP detection for runs that exhausted their retry
+        // budget without tripping the onEvent breaker: counter fields 0 on
+        // every not-ready iteration and never positive. Distinct from
+        // COUNT_SELECTOR_BLIND above — the selectors may have matched fine;
+        // the SCRIPT-LEVEL filter zeroed the count (fourth-session log:
+        // permalink regex matched 0 hrefs for 33 straight iterations).
+        if (!wizardState.zeroCounterBreaker) {
+          const frozen = detectFrozenZeroCounter(wizardState.lastExecutionEvents || []);
+          if (frozen) {
+            const stepDefF = (wizardState.steps || []).find(s => String(s.id) === String(frozen.stepId));
+            e.message = 'POLL_EXHAUSTED — root cause: ZERO_COUNTER_FROZEN. Step "' + (stepDefF ? stepDefF.name : frozen.stepId) + '" returned not-ready for ' +
+              frozen.frozenIterations + ' iterations while its counter field(s) [' + frozen.counterFields.join(', ') + '] were 0 on EVERY iteration and never once rose' +
+              (frozen.selectorMatchedSomething ? ' — even though its selectors DID match elements (check SELECTOR DIAGNOSTICS), so a counting FILTER inside the step (JS logic such as a permalink-href regex), not the selector, excluded everything' : '') +
+              '. Fix per ZERO-TRAP COUNTER in the DSL guide: sample the raw values before filtering ($extractListMulti with a href field and read the diagnostics), write the filter regex around the OBSERVED shapes, remove any `count > 0` guard from the exhausted exit, and keep a RAW fallback counter. Original error: ' + e.message;
+            if (!e.stepId) e.stepId = frozen.stepId;
+          }
         }
       }
       if (e && /is not a valid selector/i.test(e.message || '')) {
