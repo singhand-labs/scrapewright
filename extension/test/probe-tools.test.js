@@ -114,6 +114,17 @@ describe('probe.sample', () => {
     const r = await tools.sample('div.card', { index: 5 });
     assert.equal(r.notFound, true);
   });
+
+  it('surfaces a failed optional HTML leg as htmlError, keeping element data', async () => {
+    const { tools } = makeTools(async (snippet) => {
+      if (/\$extract\(/.test(snippet)) throw new Error('EXTRACT_FAILED');
+      return [{ tagName: 'DIV', id: 'c0', className: '', textContent: '' }];
+    });
+    const r = await tools.sample('div.card', { wantHtml: true });
+    assert.equal(r.htmlError, 'EXTRACT_FAILED');
+    assert.equal(r.html, undefined);
+    assert.equal(r.element.id, 'c0', 'element data survives the failed HTML leg');
+  });
 });
 
 describe('probe.attrStats', () => {
