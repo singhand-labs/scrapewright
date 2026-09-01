@@ -12,6 +12,7 @@
 // the annotation bridge (user interaction windows), not with each probe.
 //
 // All environment access is injected. IIFE-wrapped per RC30.
+// Optional deps (getTab, pingReady) are read at call time — callers may swap them after construction.
 
 (function (global) {
 
@@ -23,7 +24,6 @@
       if (typeof d[k] !== 'function') throw new Error('createLiveRail requires a ' + k + '() function');
     }
     const defaultUrl = typeof d.defaultUrl === 'string' ? d.defaultUrl : '';
-    // Read getTab/pingReady at call time (tests may swap them after construction)
     const log = typeof d.log === 'function' ? d.log : function () {};
 
     let currentTab = null;
@@ -42,8 +42,12 @@
 
     async function releaseLock() {
       if (!lockHeld) return;
-      lockHeld = false;
-      try { await d.releaseLock(); } catch (e) { /* background may be unavailable */ }
+      try {
+        await d.releaseLock();
+        lockHeld = false;
+      } catch (e) {
+        log('warn', 'Could not release exec lock (background may be unavailable); will retry on next release/dispose');
+      }
     }
 
     async function closeTab() {
@@ -58,7 +62,7 @@
       const url = (typeof a.url === 'string' && a.url.trim()) ? a.url.trim() : defaultUrl;
       if (!url) return { error: 'url required (no default target URL configured)' };
       if (!/^https?:\/\//i.test(url)) return { error: 'url must be http(s)' };
-      if (opening) return opening;
+      if (opening) return { error: 'page open already in progress — wait for it to finish, then retry' };
       opening = (async () => {
         await closeTab();
         await ensureLock();
@@ -76,7 +80,10 @@
           warning = 'load timeout: ' + String((e && e.message) || e);
         }
         let ready = true;
-        if (typeof d.pingReady === 'function') ready = await d.pingReady(tab.id);
+        if (typeof d.pingReady === 'function') {
+          try { ready = await d.pingReady(tab.id); }
+          catch (e) { ready = false; }
+        }
         const out = { tabId: tab.id, url: url, ready: !!ready };
         if (warning) out.warning = warning;
         else if (!ready) out.warning = 'content script not responding yet';
@@ -111,6 +118,7 @@
       if (typeof snippet !== 'string' || !snippet.trim()) return { error: 'snippet required' };
       if (!currentTab) return { error: 'no page open — call page.open first' };
       await ensureLock();
+      // best-effort: if the lock could not be taken, background is usually unreachable and execute() will fail with its own error
       try {
         return await d.execute(currentTab.id, snippet);
       } catch (e) {
@@ -119,6 +127,7 @@
     }
 
     async function dispose() {
+      if (opening) { try { await opening; } catch (e) { /* opening resolves to result objects; guard anyway */ } }
       await closeTab();
       await releaseLock();
     }

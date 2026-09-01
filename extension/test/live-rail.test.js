@@ -30,7 +30,7 @@ describe('createLiveRail', () => {
     const d = makeDeps();
     const rail = createLiveRail(d);
     const r = await rail.pageOpen({});
-    assert.deepEqual(Object.keys(r).sort(), ['ready', 'tabId', 'url'].sort());
+    assert.deepEqual(Object.keys(r).sort(), ['ready', 'tabId', 'url']);
     assert.equal(r.tabId, 7);
     assert.equal(r.url, 'https://example.com/list');
     assert.equal(r.ready, true);
@@ -48,7 +48,7 @@ describe('createLiveRail', () => {
 
   it('pageOpen closes the previous tab first (single-tab model)', async () => {
     const closed = [];
-    const d = makeDeps({ removeTab: async (id) => closed.push(id), createTab: async (url) => ({ id: url.length, url }) });
+    const d = makeDeps({ removeTab: async (id) => closed.push(id), createTab: async (url) => ({ id: url.length, url }) }); // tab ids = url lengths (19, 20) — distinct, so the close/reopen order is observable
     const rail = createLiveRail(d);
     await rail.pageOpen({ url: 'https://example.com' });
     await rail.pageOpen({ url: 'https://example.co/a' });
@@ -119,5 +119,54 @@ describe('createLiveRail', () => {
     await rail.dispose();
     assert.deepEqual(closed, [7]);
     assert.equal(d.lockReleases, 1);
+  });
+
+  it('concurrent pageOpen returns an error instead of aliasing the in-flight result', async () => {
+    let release;
+    const gate = new Promise(r => { release = r; });
+    const d = makeDeps({ waitForTabLoad: async () => { await gate; } });
+    const rail = createLiveRail(d);
+    const first = rail.pageOpen({});
+    const second = await rail.pageOpen({ url: 'https://example.com/other' });
+    assert.match(second.error, /already in progress/);
+    release();
+    const r = await first;
+    assert.equal(r.tabId, 7);
+  });
+
+  it('pageOpen degrades a pingReady throw to ready:false + warning, never throws', async () => {
+    const d = makeDeps({ pingReady: async () => { throw new Error('PING_FAILED'); } });
+    const rail = createLiveRail(d);
+    const r = await rail.pageOpen({});
+    assert.equal(r.tabId, 7);
+    assert.equal(r.ready, false);
+    assert.match(r.warning, /content script not responding/);
+  });
+
+  it('dispose during an in-flight open waits, then closes the created tab', async () => {
+    let release;
+    const gate = new Promise(r => { release = r; });
+    const closed = [];
+    const d = makeDeps({ waitForTabLoad: async () => { await gate; }, removeTab: async (id) => closed.push(id) });
+    const rail = createLiveRail(d);
+    const first = rail.pageOpen({});
+    const done = rail.dispose();
+    release();
+    await first;
+    await done;
+    assert.deepEqual(closed, [7]);
+  });
+
+  it('releaseLock retries after a failed release (no leaked background blocker)', async () => {
+    const d = makeDeps();
+    let fail = true;
+    d.releaseLock = async () => { if (fail) throw new Error('bg down'); d.lockReleases += 1; };
+    const rail = createLiveRail(d);
+    await rail.pageOpen({});
+    await rail.releaseLock();
+    assert.equal(d.lockReleases, 0, 'failed release keeps the lock held');
+    fail = false;
+    await rail.dispose();
+    assert.equal(d.lockReleases, 1, 'dispose retries the release');
   });
 });
