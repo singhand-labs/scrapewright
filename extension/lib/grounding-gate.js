@@ -118,7 +118,101 @@
     return Array.from(attrs);
   }
 
-  const api = { extractSelectorClaims, extractFilterAttributes };
+  // Receipt verification (spec §8). Receipt sources, in order:
+  //   1. override      — explicit human approval (logged by the caller)
+  //   2. observation   — this session's ObservationLog covers the selector
+  //   3. ledger        — prior-session findings (provenance probe or user)
+  //   4. autoVerify    — engine-supplied probe.count for uncovered STATIC
+  //                      selectors (derived compounds); count>0 issues the
+  //                      receipt, count 0 rejects
+  // Dynamic-mount selectors (popoverSel) never auto-verify: their static
+  // count is ALWAYS 0 — they need an observation, a ledger entry, or an
+  // override; the rejection points at diag.read / annotate.request.
+  // Filter attributes (inside :has()/:not()) additionally require an
+  // attribute-distribution receipt (attrStats) regardless of selector
+  // coverage — the seventh-log lesson made structural.
+  async function validateGrounding(opts) {
+    const steps = Array.isArray(opts && opts.steps) ? opts.steps : [];
+    const observationLog = opts && opts.observationLog;
+    const ledger = opts && opts.ledger;
+    const autoVerify = opts && typeof opts.autoVerify === 'function' ? opts.autoVerify : null;
+    const overrides = new Set(
+      Array.isArray(opts && opts.overrides) ? opts.overrides.filter(s => typeof s === 'string') : []
+    );
+
+    const ledgerSelectors = new Set();
+    if (ledger) {
+      const entries = (ledger.serialize && ledger.serialize().entries) || [];
+      for (const e of entries) {
+        for (const s of e.selectors || []) ledgerSelectors.add(s);
+      }
+    }
+
+    const rejections = [];
+    const overrideReceipts = [];
+    const autoVerified = [];
+
+    const claims = extractSelectorClaims(steps);
+    for (const claim of claims) {
+      let admitted = false;
+      if (overrides.has(claim.selector)) {
+        overrideReceipts.push(claim.selector);
+        admitted = true;
+      } else if (observationLog && observationLog.covers(claim.selector)) {
+        admitted = true;
+      } else if (ledgerSelectors.has(claim.selector)) {
+        admitted = true;
+      } else if (claim.kind === 'static' && autoVerify) {
+        const n = await autoVerify(claim.selector);
+        if (typeof n === 'number' && n > 0) {
+          autoVerified.push(claim.selector);
+          if (observationLog) {
+            observationLog.record({ tool: 'gate.autoVerify', selectors: [claim.selector], summary: 'count=' + n });
+          }
+          admitted = true;
+        }
+      }
+      if (!admitted) {
+        rejections.push(claim.kind === 'dynamic'
+          ? {
+              selector: claim.selector,
+              stepIds: claim.stepIds,
+              missing: 'dynamic-evidence',
+              suggestion: 'This selector matches an interaction-mounted element — a static count is always 0. Ground it with diag.read (observedPopover / hover diagnostics) or annotate.request, or obtain a user override.'
+            }
+          : {
+              selector: claim.selector,
+              stepIds: claim.stepIds,
+              missing: 'observation',
+              suggestion: 'No observation receipt. Run probe.count(' + JSON.stringify(claim.selector) + ') (or scope a probe that matches it exactly), or annotate.request.'
+            });
+        continue;
+      }
+      // Selector admitted — check filter-attribute distribution receipts.
+      const filterAttrs = extractFilterAttributes(claim.selector);
+      for (const attr of filterAttrs) {
+        const haveAttr = (observationLog && observationLog.coversAttr(attr));
+        if (!haveAttr) {
+          rejections.push({
+            selector: claim.selector,
+            attr: attr,
+            stepIds: claim.stepIds,
+            missing: 'attr-distribution',
+            suggestion: 'Attribute "' + attr + '" is used as a card filter but its distribution was never observed. Run probe.attrStats on the container population first — count>0 alone cannot tell a promotion marker from a structural scaffold.'
+          });
+        }
+      }
+    }
+
+    return {
+      ok: rejections.length === 0,
+      rejections: rejections,
+      overrideReceipts: overrideReceipts,
+      autoVerified: autoVerified
+    };
+  }
+
+  const api = { extractSelectorClaims, extractFilterAttributes, validateGrounding };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.GroundingGate = api;
 })(typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : self));

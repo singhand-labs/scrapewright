@@ -1,7 +1,9 @@
 // extension/test/grounding-gate.test.js
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { extractSelectorClaims, extractFilterAttributes } = require('../lib/grounding-gate');
+const { extractSelectorClaims, extractFilterAttributes, validateGrounding } = require('../lib/grounding-gate');
+const { createObservationLog } = require('../lib/observation-log');
+const { createFindingsLedger } = require('../lib/findings-ledger');
 
 describe('extractSelectorClaims', () => {
   it('extracts first-arg selectors from $ API calls in step scripts', () => {
@@ -87,5 +89,111 @@ describe('claim extraction hardening', () => {
   it('does not match $-suffixed identifiers as API calls', () => {
     const claims = extractSelectorClaims([{ id: '1', script: "my$count('.weird');" }]);
     assert.deepEqual(claims, []);
+  });
+});
+
+function session(receipts) {
+  const observationLog = createObservationLog();
+  const ledger = createFindingsLedger();
+  for (const r of receipts || []) {
+    if (r.type === 'attr') {
+      observationLog.record({ tool: 'probe.attrStats', selectors: [r.scope], attrs: [{ selector: r.scope, attr: r.attr }], summary: 'x' });
+    } else if (r.type === 'ledger') {
+      ledger.add({ finding: r.finding, evidence: 'e', confidence: 'high', provenance: r.provenance || 'probe', selectors: r.selectors || [] });
+    } else if (r.type === 'user') {
+      ledger.add({ finding: r.finding, evidence: 'user pick', confidence: 'high', provenance: 'user', selectors: r.selectors || [] });
+    } else {
+      observationLog.record({ tool: 'probe.count', selectors: [r.sel], summary: 'count>0' });
+    }
+  }
+  return { observationLog, ledger };
+}
+
+describe('validateGrounding — receipt sources', () => {
+  const steps = [{ id: '4', script: 'return $extractWithHover(\'div.card\', f, { anchorSel: \'a.p\', popoverSel: \'div[role="tooltip"]\' });' }];
+
+  it('accepts selectors covered by session observations', async () => {
+    const s = session([{ sel: 'div.card' }, { sel: 'a.p' }, { sel: 'div[role="tooltip"]' }]);
+    const r = await validateGrounding({ steps, observationLog: s.observationLog, ledger: s.ledger });
+    assert.equal(r.ok, true);
+  });
+
+  it('accepts prior-session ledger entries and user annotations as receipts', async () => {
+    const s = session([
+      { type: 'ledger', finding: 'card selector settled', selectors: ['div.card'] },
+      { type: 'ledger', finding: 'anchor settled', selectors: ['a.p'] },
+      { type: 'user', finding: 'user picked the popover', selectors: ['div[role="tooltip"]'] }
+    ]);
+    const r = await validateGrounding({ steps, observationLog: s.observationLog, ledger: s.ledger });
+    assert.equal(r.ok, true);
+  });
+
+  it('auto-verifies uncovered static selectors via probe.count when provided', async () => {
+    const s = session([]);
+    const autoVerified = [];
+    const r = await validateGrounding({
+      steps, observationLog: s.observationLog, ledger: s.ledger,
+      autoVerify: async (sel) => { autoVerified.push(sel); return sel === 'div.card' ? 5 : 0; }
+    });
+    assert.deepEqual(autoVerified, ['div.card', 'a.p'], 'derived/uncovers statics get one cheap probe each');
+    assert.equal(r.ok, false, 'a.p matched 0 — rejected');
+    assert.ok(r.rejections.some(x => x.selector === 'a.p' && x.missing === 'observation'));
+  });
+
+  it('dynamic selectors never auto-verify: rejection points at diag/annotation', async () => {
+    const s = session([{ sel: 'div.card' }, { sel: 'a.p' }]);
+    const r = await validateGrounding({
+      steps, observationLog: s.observationLog, ledger: s.ledger,
+      autoVerify: async () => 99
+    });
+    assert.equal(r.ok, false);
+    const rej = r.rejections.find(x => x.selector === 'div[role="tooltip"]');
+    assert.ok(rej);
+    assert.equal(rej.missing, 'dynamic-evidence');
+    assert.ok(/diag|annotat/i.test(rej.suggestion), 'rejection teaches the right next probe');
+  });
+
+  it('human overrides admit any selector and are reported', async () => {
+    const s = session([{ sel: 'div.card' }, { sel: 'a.p' }]);
+    const r = await validateGrounding({
+      steps, observationLog: s.observationLog, ledger: s.ledger,
+      overrides: ['div[role="tooltip"]']
+    });
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.overrideReceipts, ['div[role="tooltip"]']);
+  });
+});
+
+describe('validateGrounding — filter attributes need distribution receipts', () => {
+  it('THE seventh-log regression: ad attribute as :has() include without attrStats is rejected', async () => {
+    const steps = [{ id: '4', script: 'return $extractList("div[role=\'feed\'] article:has(div[data-ad-rendering-role=\'story_message\'])", { c: \'.t\' });' }];
+    const s = session([{ sel: "div[role='feed'] article:has(div[data-ad-rendering-role='story_message'])" }]);
+    const r = await validateGrounding({
+      steps, observationLog: s.observationLog, ledger: s.ledger,
+      autoVerify: async () => 8
+    });
+    assert.equal(r.ok, false, 'count>0 is NOT enough for filter attributes');
+    const rej = r.rejections.find(x => x.missing === 'attr-distribution');
+    assert.ok(rej, 'must demand the attrStats distribution receipt');
+    assert.equal(rej.attr, 'data-ad-rendering-role');
+    assert.ok(/attrStats/i.test(rej.suggestion));
+  });
+
+  it('attrStats receipt admits the filter; user annotation does not substitute for it', async () => {
+    const selWithFilter = "div[role='feed'] article:not(:has([data-ad-rendering-role]))";
+    const steps = [{ id: '4', script: 'return $extractList(' + JSON.stringify(selWithFilter) + ", { c: '.t' });" }];
+    const withAttrStats = session([
+      { sel: selWithFilter },
+      { type: 'attr', scope: 'article', attr: 'data-ad-rendering-role' }
+    ]);
+    const okR = await validateGrounding({ steps, observationLog: withAttrStats.observationLog, ledger: withAttrStats.ledger });
+    assert.equal(okR.ok, true);
+
+    const withUser = session([
+      { sel: selWithFilter },
+      { type: 'user', finding: 'user confirmed organic cards', selectors: [selWithFilter] }
+    ]);
+    const userR = await validateGrounding({ steps, observationLog: withUser.observationLog, ledger: withUser.ledger });
+    assert.equal(userR.ok, false, 'v1: user receipt is SELECTOR-scoped, attribute distribution still required — the user must annotate through the attrStats-approved flow or an override');
   });
 });
