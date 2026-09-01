@@ -176,3 +176,58 @@ describe('tool dispatch', () => {
     assert.ok(replay[0].content.includes('…[truncated]'));
   });
 });
+
+describe('budgets and breakers', () => {
+  const toolTurn = envelope('probe.count', { sel: 'div.card' });
+
+  it('stops gracefully at maxTurns and reports open state', async () => {
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([reply(toolTurn)], []),   // repeats forever
+      tools: { 'probe.count': async () => ({ count: 1 }) },
+      budgets: { maxTurns: 3 }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'maxTurns');
+    assert.equal(report.turns, 3);
+    assert.equal(report.status, 'stopped');
+  });
+
+  it('stops at the wall-clock cap using the injected clock', async () => {
+    let clock = 1000;
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([reply(toolTurn)], []),
+      tools: { 'probe.count': async () => { clock += 6000; return { count: 1 }; } },
+      now: () => clock,
+      budgets: { maxTurns: 50, wallClockMs: 5000 }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'wallClock');
+    assert.equal(report.turns, 1);
+  });
+
+  it('stops at the session token cap from llm usage', async () => {
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([reply(toolTurn, { usage: { prompt_tokens: 600, completion_tokens: 100 } })], []),
+      tools: { 'probe.count': async () => ({ count: 1 }) },
+      budgets: { maxTurns: 50, tokenCap: 1000 }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'tokenCap');
+    assert.equal(report.turns, 2);   // second turn trips the cap at loop top
+  });
+
+  it('estimates tokens (chars/4) when usage is absent', async () => {
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([reply(toolTurn, { usage: undefined })], []),
+      tools: { 'probe.count': async () => ({ count: 1 }) },
+      budgets: { maxTurns: 1 }
+    });
+    const report = await session.run();
+    assert.ok(report.spend.estimated);
+    assert.ok(report.spend.promptTokens > 0);
+  });
+});
