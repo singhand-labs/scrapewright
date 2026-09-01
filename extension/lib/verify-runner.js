@@ -67,11 +67,15 @@
     const getSignal = typeof d.getSignal === 'function' ? d.getSignal : () => null;
     const withTimeout = typeof d.withTimeout === 'function'
       ? d.withTimeout
-      // dev/test default — does not clear the loser's timer; production callers inject their own
-      : (promise, ms, message) => Promise.race([
-          promise,
-          new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms))
-        ]);
+      // dev/test default — clears the loser's timer on settle so pending
+      // timeouts cannot hold the event loop open; production callers inject their own
+      : (promise, ms, message) => new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error(message)), ms);
+          promise.then(
+            (v) => { clearTimeout(timer); resolve(v); },
+            (e) => { clearTimeout(timer); reject(e); }
+          );
+        });
 
     return async function runVerify(opts) {
       const o = opts || {};
