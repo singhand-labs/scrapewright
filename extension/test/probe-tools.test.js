@@ -79,12 +79,10 @@ describe('probe.attrStats', () => {
     const { tools, observationLog } = makeTools(async (snippet) => {
       assert.ok(/return \$extractList\(/.test(snippet), 'composes the EXISTING rail');
       assert.ok(snippet.includes('data-ad-rendering-role'), 'fieldMap targets the requested attr');
-      return {
-        records: [
-          { m: 'story_message' }, { m: '' }, { m: '' }, { m: '' },
-          { m: 'profile_name' }, { m: '' }, { m: '' }, { m: '' }, { m: '' }, { m: '' }
-        ]
-      };
+      return [
+        { m: 'story_message' }, { m: undefined }, { m: null }, { m: '' },
+        { m: 'profile_name' }, { m: '' }, { m: '' }, { m: '' }, { m: '' }, { m: '' }
+      ];
     });
     const r = await tools.attrStats('div.card', 'data-ad-rendering-role');
     assert.equal(r.totalCards, 10);
@@ -101,15 +99,24 @@ describe('probe.attrStats', () => {
   it('sorts value rows by frequency and caps the histogram', async () => {
     const records = [];
     for (let i = 0; i < 30; i++) records.push({ m: i < 12 ? 'a' : (i < 20 ? 'b' : 'c') });
-    const { tools } = makeTools(async () => ({ records }));
+    const { tools } = makeTools(async () => records);
     const r = await tools.attrStats('div.card', 'data-k');
     assert.deepEqual(r.values.map(v => v.value), ['a', 'c', 'b'], 'frequency-descending: a=12, c=10, b=8');
     assert.equal(r.values.length, 3);
 
     const many = [];
     for (let i = 0; i < 20; i++) many.push({ m: 'v' + i });
-    const capped = await makeTools(async () => ({ records: many })).tools.attrStats('div.card', 'data-k');
+    const capped = await makeTools(async () => many).tools.attrStats('div.card', 'data-k');
     assert.equal(capped.values.length, 12, 'histogram capped at 12 rows');
+  });
+
+  it('tolerates a records-wrapped executor result (wrapper variation)', async () => {
+    const { tools } = makeTools(async () => ({ records: [{ m: 'x' }, { m: 'x' }, {}] }));
+    const r = await tools.attrStats('div.card', 'data-k');
+    assert.equal(r.totalCards, 3);
+    assert.equal(r.values[0].value, 'x');
+    assert.equal(r.values[0].cards, 2);
+    assert.equal(r.absentPct, Math.round(1 / 3 * 1000) / 10);
   });
 
   it('tolerates executor error shape', async () => {
