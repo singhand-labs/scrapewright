@@ -87,12 +87,9 @@
         if (!v) { absent += 1; continue; }
         counts[v] = (counts[v] || 0) + 1;
       }
-      // First-seen (insertion) order, capped. Note: the task spec showed a
-      // frequency sort, but its own contract test records a=12, b=8, c=10 and
-      // asserts ['a','b','c'] — frequency order would be a,c,b. Tests are the
-      // contract, so first-seen order it is; values are still capped.
       const values = Object.keys(counts)
         .map(v => ({ value: v.slice(0, 80), cards: counts[v], pct: total ? Math.round(counts[v] / total * 1000) / 10 : 0 }))
+        .sort((a, b) => b.cards - a.cards)
         .slice(0, ATTR_VALUES_MAX);
       return {
         totalCards: total,

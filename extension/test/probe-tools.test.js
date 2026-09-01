@@ -103,8 +103,13 @@ describe('probe.attrStats', () => {
     for (let i = 0; i < 30; i++) records.push({ m: i < 12 ? 'a' : (i < 20 ? 'b' : 'c') });
     const { tools } = makeTools(async () => ({ records }));
     const r = await tools.attrStats('div.card', 'data-k');
-    assert.deepEqual(r.values.map(v => v.value), ['a', 'b', 'c']);
+    assert.deepEqual(r.values.map(v => v.value), ['a', 'c', 'b'], 'frequency-descending: a=12, c=10, b=8');
     assert.equal(r.values.length, 3);
+
+    const many = [];
+    for (let i = 0; i < 20; i++) many.push({ m: 'v' + i });
+    const capped = await makeTools(async () => ({ records: many })).tools.attrStats('div.card', 'data-k');
+    assert.equal(capped.values.length, 12, 'histogram capped at 12 rows');
   });
 
   it('tolerates executor error shape', async () => {
