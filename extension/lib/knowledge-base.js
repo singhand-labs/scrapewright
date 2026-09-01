@@ -42,13 +42,16 @@
     if (!u.body || typeof u.body !== 'string' || u.body.trim().length < MIN_BODY_CHARS) {
       errors.push('body must be at least ' + MIN_BODY_CHARS + ' chars of real lesson');
     }
-    if (!Array.isArray(u.matchEvents) || u.matchEvents.length === 0) {
+    if (!Array.isArray(u.matchEvents) || u.matchEvents.length === 0 ||
+        !u.matchEvents.every(x => typeof x === 'string')) {
       errors.push('matchEvents (signature tags) are required');
     }
     if (!u.origin || typeof u.origin !== 'string') errors.push('origin (incident reference) is required');
-    const blob = [u.id, u.title, u.body, (u.matchEvents || []).join(' ')].join(' ');
-    if (FORBIDDEN_TOKENS.test(blob)) {
-      errors.push('site token in unit — global knowledge must stay site-independent');
+    if (errors.length === 0) {
+      const blob = [u.id, u.title, u.body, u.matchEvents.join(' ')].join(' ');
+      if (FORBIDDEN_TOKENS.test(blob)) {
+        errors.push('site token in unit — global knowledge must stay site-independent');
+      }
     }
     return errors.length === 0
       ? { ok: true, unit: { id: u.id, title: u.title, body: u.body, matchEvents: u.matchEvents, origin: u.origin } }

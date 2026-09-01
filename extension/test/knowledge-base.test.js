@@ -87,6 +87,20 @@ describe('KnowledgeBase', () => {
     assert.ok(siteToken.errors.some(e => /site token/i.test(e)));
   });
 
+  it('proposeUnit never throws on malformed candidates (LLM-input boundary)', () => {
+    const cases = [
+      { id: 'x', title: 'T', body: 'A real generalized lesson body long enough to matter.', matchEvents: 'EMPTY_FIELDS', origin: 'x' },
+      { id: 'y', title: 'T', body: 'A real generalized lesson body long enough to matter.', matchEvents: [42], origin: 'x' },
+      null
+    ];
+    for (const c of cases) {
+      let r;
+      assert.doesNotThrow(() => { r = proposeUnit(KNOWLEDGE_UNITS, c); }, 'malformed candidate must not crash: ' + JSON.stringify(c));
+      assert.equal(r.ok, false);
+      assert.ok(Array.isArray(r.errors) && r.errors.length > 0);
+    }
+  });
+
   it('every seed unit matchEvents value is inside the documented vocabulary', () => {
     const VOCAB = new Set(['COUNT_SHORTFALL', 'EMPTY_EXTRACTION', 'EMPTY_FIELDS', 'POPOVER_TIMEOUT',
       'HOVER_NO_SIGNAL', 'COUNTER_FROZEN', 'DUPLICATE_RECORDS', 'SELECTOR_ZERO_MATCH',
