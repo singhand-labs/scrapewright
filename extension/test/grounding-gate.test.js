@@ -70,3 +70,22 @@ describe('extractFilterAttributes', () => {
     assert.deepEqual(attrs, []);
   });
 });
+
+describe('claim extraction hardening', () => {
+  it('unescapes string-literal escapes in captured selectors', () => {
+    const claims = extractSelectorClaims([{ id: '1', script: "$count('div[class=\\'x\\']');" }]);
+    assert.deepEqual(claims.map(c => c.selector), ["div[class='x']"]);
+  });
+
+  it('quote-aware span walk: parens inside quoted attr values do not truncate the span', () => {
+    const attrs = extractFilterAttributes(':not([title="f)"] [data-x])');
+    assert.deepEqual(attrs, ['data-x']);
+    const balanced = extractFilterAttributes('[aria-label="Close (X)"] :is([data-keep])');
+    assert.deepEqual(balanced, ['data-keep']);
+  });
+
+  it('does not match $-suffixed identifiers as API calls', () => {
+    const claims = extractSelectorClaims([{ id: '1', script: "my$count('.weird');" }]);
+    assert.deepEqual(claims, []);
+  });
+});

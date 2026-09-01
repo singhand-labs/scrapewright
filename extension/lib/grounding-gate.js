@@ -25,13 +25,21 @@
     'clickInList', 'scrollIntoView', 'scrollToBottom', 'hover',
     'list', 'count', 'wait', 'exists', 'check', 'click', 'type'
   ];
+  // Module-level /g regexes: callers must not break out of the exec loop; lastIndex is reset per step.
   const SELECTOR_API_RE = new RegExp(
-    '\\$(?:' + SELECTOR_APIS.join('|') + ')\\s*\\(\\s*([\'"`])((?:\\\\.|(?!\\1)[^\\\\])*)\\1',
+    '(?<![.\\w$])\\$(?:' + SELECTOR_APIS.join('|') + ')\\s*\\(\\s*([\'"`])((?:\\\\.|(?!\\1)[^\\\\])*)\\1',
     'g'
   );
   // Config keys whose string value is a selector (hoverCfg, opts objects).
+  // Module-level /g regexes: callers must not break out of the exec loop; lastIndex is reset per step.
   const CONFIG_KEY_RE = /\b(anchorSel|popoverSel|containerSelector|scopeSel)\s*:\s*(['"`])((?:\\.|(?!\2)[^\\])*)\2/g;
   const DYNAMIC_KEYS = new Set(['popoverSel']);
+  // Presentational/global HTML attributes that never serve as card-type
+  // filters — excluded from attribute-distribution receipt demands.
+  const GLOBAL_ATTRS = new Set([
+    'class', 'id', 'title', 'href', 'type', 'name', 'value', 'style',
+    'dir', 'lang', 'tabindex', 'has', 'not'
+  ]);
 
   function extractSelectorClaims(steps) {
     const bySelector = new Map();
@@ -54,8 +62,10 @@
   }
 
   function addClaim(map, selector, kind, stepId) {
-    const sel = String(selector || '');
+    let sel = String(selector || '');
     if (!sel) return;
+    // Unescape JS string-literal escapes so claims match the runtime selector string (realistic selector escapes are quotes/backslashes).
+    sel = sel.replace(/\\(.)/g, '$1');
     // Heuristic: selector-position strings do not look like URLs or bare
     // identifiers used as field names. Cheap, no false negatives observed in
     // the corpus; the engine's auto-verify would catch anything odd anyway.
@@ -83,16 +93,26 @@
     while ((m = re.exec(selector)) !== null) {
       let depth = 1;
       let i = re.lastIndex;
+      let quote = null;
       while (i < selector.length && depth > 0) {
-        if (selector[i] === '(') depth += 1;
-        else if (selector[i] === ')') depth -= 1;
+        const ch = selector[i];
+        if (quote) {
+          if (ch === '\\' && i + 1 < selector.length) { i += 2; continue; }
+          if (ch === quote) quote = null;
+        } else if (ch === "'" || ch === '"') {
+          quote = ch;
+        } else if (ch === '(') depth += 1;
+        else if (ch === ')') depth -= 1;
         i += 1;
       }
       const span = selector.slice(re.lastIndex, i - 1);
       const attrRe = /\[\s*([a-zA-Z][\w-]*)\s*(?:[*^$|~]?=\s*(?:"[^"]*"|'[^']*'|[^\]]*))?\s*\]/g;
       let a;
       while ((a = attrRe.exec(span)) !== null) {
-        if (a[1] !== 'has' && a[1] !== 'not') attrs.add(a[1]);
+        // Well-known presentational/global HTML attributes do not discriminate
+        // card types — only custom (data-*/aria-*/role-style) attributes do.
+        if (GLOBAL_ATTRS.has(a[1])) continue;
+        attrs.add(a[1]);
       }
     }
     return Array.from(attrs);
