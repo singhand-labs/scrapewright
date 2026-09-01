@@ -36,7 +36,7 @@
   ].join('\n');
 
   function renderToolCatalog(toolSpecs) {
-    const specs = Array.isArray(toolSpecs) ? toolSpecs : [];
+    const specs = Array.isArray(toolSpecs) ? toolSpecs.filter(s => s && typeof s === 'object' && s.name) : [];
     if (!specs.length) return '## Tools\n(none wired)';
     const lines = specs.map(s =>
       '- ' + s.name + '(' + String(s.args || '') + ') → ' + String(s.returns || '')
@@ -50,13 +50,17 @@
     if (c.base) parts.push(String(c.base));
     parts.push(PROTOCOL_BLOCK);
     parts.push(renderToolCatalog(c.toolSpecs));
-    if (Array.isArray(c.knowledgeIndex) && c.knowledgeIndex.length) {
+    // Element-level guards: these arrays flow from engine state / LLM-adjacent
+    // paths; a null member must skip, never throw (boundary discipline).
+    const idx = (Array.isArray(c.knowledgeIndex) ? c.knowledgeIndex : []).filter(u => u && typeof u === 'object' && u.id);
+    if (idx.length) {
       parts.push('## Knowledge index (pull bodies via knowledge.query {"ids":["<id>"]})\n' +
-        c.knowledgeIndex.map(u => '- ' + u.id + ': ' + u.title).join('\n'));
+        idx.map(u => '- ' + u.id + ': ' + String(u.title || '')).join('\n'));
     }
-    if (Array.isArray(c.attachedUnits) && c.attachedUnits.length) {
+    const units = (Array.isArray(c.attachedUnits) ? c.attachedUnits : []).filter(u => u && typeof u === 'object' && u.id);
+    if (units.length) {
       parts.push('## Knowledge (auto-attached, applies now)\n' +
-        c.attachedUnits.map(u => '### ' + u.id + ' — ' + u.title + '\n' + u.body).join('\n\n'));
+        units.map(u => '### ' + u.id + ' — ' + String(u.title || '') + '\n' + String(u.body || '')).join('\n\n'));
     }
     return parts.join('\n\n');
   }

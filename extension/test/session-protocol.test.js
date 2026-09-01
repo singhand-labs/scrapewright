@@ -54,4 +54,18 @@ describe('buildSystemPrompt', () => {
     assert.ok(!p.includes('## Knowledge (auto-attached'));
     assert.ok(typeof Protocol.buildSystemPrompt() === 'string');
   });
+
+  it('skips null/malformed members instead of throwing (boundary discipline)', () => {
+    const p = Protocol.buildSystemPrompt({
+      toolSpecs: [{ name: 'probe.count', args: '{sel}', returns: '{count}' }, null, { args: 'x' }],
+      knowledgeIndex: [{ id: 'u1', title: 'T' }, null],
+      attachedUnits: [null, { id: 'u1', title: 'T', body: 'B' }]
+    });
+    assert.ok(p.includes('probe.count'));
+    assert.ok(p.includes('- u1: T'));
+    assert.ok(p.includes('### u1 — T'));
+    assert.doesNotThrow(() => Protocol.buildSystemPrompt({
+      toolSpecs: [null], knowledgeIndex: [42], attachedUnits: ['x']
+    }));
+  });
 });
