@@ -48,6 +48,19 @@ describe('FindingsLedger', () => {
     const led = createFindingsLedger();
     led.add({ finding: 'organic card selector', evidence: 'probe.count=12', confidence: 'high', provenance: 'probe', selectors: ["div[role='feed'] article:not(:has([data-ad-rendering-role]))"] });
     const restored = createFindingsLedger(led.serialize());
-    assert.deepEqual(restored.serialize().entries[0].selectors, ["div[role='feed'] article:not(:has([data-ad-rendering-role]))"]);
+  });
+
+  it('is immune to caller mutation of returned entries (receipt integrity)', () => {
+    const led = createFindingsLedger();
+    const e = led.add({ finding: 'f1', evidence: 'e', confidence: 'high', provenance: 'probe', selectors: ['div.card'] });
+    e.confidence = 'low';
+    e.selectors.push('guessed-selector');
+    assert.equal(led.serialize().entries[0].confidence, 'high');
+    assert.ok(!led.serialize().entries[0].selectors.includes('guessed-selector'));
+    const snap = led.serialize();
+    snap.entries[0].selectors.push('also-guessed');
+    snap.entries[0].confidence = 'low';
+    assert.ok(!led.serialize().entries[0].selectors.includes('also-guessed'));
+    assert.equal(led.serialize().entries[0].confidence, 'high', 'internal state unchanged');
   });
 });

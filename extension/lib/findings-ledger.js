@@ -50,7 +50,7 @@
       }, entries.length + 1);
       if (existing !== -1) entries[existing] = entry;
       else entries.push(entry);
-      return entry;
+      return { ...entry, selectors: entry.selectors.slice() };
     }
 
     function compact(opts) {
@@ -79,7 +79,9 @@
 
     function size() { return entries.length; }
 
-    function serialize() { return { entries: entries.slice() }; }
+    function serialize() {
+      return { entries: entries.map(e => ({ ...e, selectors: e.selectors.slice() })) };
+    }
 
     return { add, compact, size, serialize };
   }
