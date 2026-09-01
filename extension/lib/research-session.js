@@ -158,6 +158,25 @@
       return INTERNAL_TOOL_SPECS.map(s => s.name).concat(Object.keys(tools));
     }
 
+    function applyTurnState(turn) {
+      const g = turn.goalUpdates;
+      if (g) {
+        if (g.push) state.goals.push({ id: 'g' + (state.goals.length + 1), text: g.push, status: 'open' });
+        else if (g.complete) {
+          const target = state.goals.find(x => x.id === g.complete || x.text === g.complete);
+          if (target) target.status = 'done';
+        }
+      }
+      const h = turn.hypothesisUpdates;
+      if (h) {
+        if (h.add) state.hypotheses.push({ n: state.hypotheses.length + 1, text: h.add, verdict: null });
+        else if (h.resolve) {
+          const t = state.hypotheses.find(x => x.n === h.resolve.n);
+          if (t) t.verdict = h.resolve.verdict;
+        }
+      }
+    }
+
     function buildSessionStateBlock() {
       const parts = [];
       if (state.goals.length) {
@@ -332,6 +351,7 @@
             content = repaired;
           }
           const turn = parsed.turn;
+          applyTurnState(turn);
           state.spend.turns += 1;
 
           state.transcript.push({ kind: 'assistant', text: content });

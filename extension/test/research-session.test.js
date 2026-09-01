@@ -355,3 +355,77 @@ describe('protocol violations', () => {
     assert.equal(report.spend.llmCalls, 3);
   });
 });
+
+describe('goals and hypotheses', () => {
+  it('applies envelope updates and injects SESSION STATE into the next call', async () => {
+    const calls = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('probe.count', { sel: 'div.card' }, {
+          goals: { push: 'find the organic card container' },
+          hypotheses: { add: 'div.card is the organic container' }
+        })),
+        reply(envelope('ledger.add', { finding: 'organic container = div.card', confidence: 'high' })),
+        reply(finishEnvelope())
+      ], calls),
+      tools: { 'probe.count': async () => ({ count: 8 }) }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    const second = calls[1].messages;
+    const stateMsg = second.find(m => m.role === 'system' && m.content.startsWith('SESSION STATE'));
+    assert.ok(stateMsg, 'SESSION STATE block must be injected');
+    assert.ok(stateMsg.content.includes('[open] g1: find the organic card container'));
+    assert.ok(stateMsg.content.includes('1. div.card is the organic container — OPEN'));
+    // ledger.add is engine-internal (Task 11); with tools registry lacking it, this turn
+    // errors — acceptable for this test; what matters here is the state block.
+  });
+
+  it('complete/resolve update state and drop out of openQuestions', async () => {
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('probe.count', {}, {
+          goals: { push: 'A' },
+          hypotheses: { add: 'H1' }
+        })),
+        reply(envelope('probe.count', {}, {
+          goals: { complete: 'g1' },
+          hypotheses: { resolve: { n: 1, verdict: 'confirmed' } }
+        })),
+        reply(envelope('probe.count', {}, {
+          goals: { push: 'B' },
+          hypotheses: { add: 'H2' }
+        })),
+        reply(envelope('probe.count', {})),
+        reply(envelope('probe.count', {}))
+      ], []),
+      tools: { 'probe.count': async () => ({ count: 1 }) },
+      budgets: { maxTurns: 4 }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'maxTurns');
+    assert.deepEqual(report.openQuestions, [
+      { kind: 'goal', id: 'g2', text: 'B' },
+      { kind: 'hypothesis', n: 2, text: 'H2' }
+    ]);
+  });
+
+  it('SESSION STATE shows resolved hypotheses and the ledger tail', async () => {
+    const calls = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('probe.count', {}, { hypotheses: { add: 'X marks cards' } })),
+        reply(envelope('probe.count', {}, { hypotheses: { resolve: { n: 1, verdict: 'refuted' } } })),
+        reply(finishEnvelope())
+      ], calls),
+      tools: { 'probe.count': async () => ({ count: 1 }) }
+    });
+    await session.run();
+    const third = calls[2].messages;
+    const stateMsg = third.find(m => m.role === 'system' && m.content.startsWith('SESSION STATE'));
+    assert.ok(stateMsg.content.includes('1. X marks cards — refuted'));
+  });
+});
