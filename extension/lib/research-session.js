@@ -406,13 +406,8 @@
     async function loop() {
       if (running) return buildReport();
       if (state.stopped && state.stopped.reason !== 'paused') return buildReport();
-      // A pause splits the run into segments: like segmentStart (wall clock),
-      // the per-segment turn budget restarts on resume. A seeded session
-      // (stopped === null) instead inherits the persisted turn count.
-      const wasPaused = state.status === 'paused';
       running = true;
       const resuming = state.spend.turns > 0;
-      if (wasPaused) state.spend.turns = 0;
       state.status = 'running';
       state.stopped = null;
       segmentStart = now();

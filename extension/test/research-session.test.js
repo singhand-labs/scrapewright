@@ -810,7 +810,7 @@ describe('persistence and lifecycle', () => {
     assert.equal(mid.status, 'paused');
     const end = await session.run();
     assert.equal(end.stopped.reason, 'completed');
-    assert.equal(end.turns, 2);
+    assert.equal(end.turns, 3, 'turn count is cumulative across pause/resume (work, not wall-clock)');
     assert.equal(calls.length, 3);
     const resumed = calls[2].messages;
     assert.ok(resumed.some(m => m.role === 'user' && m.content.includes('.first')),
