@@ -574,3 +574,143 @@ describe('knowledge integration', () => {
     assert.ok(entry.result.error.includes('ids'));
   });
 });
+
+const { createProbeTools } = require('../lib/probe-tools');
+
+describe('ledger.add (engine-internal)', () => {
+  it('writes findings with provenance session and surfaces them in SESSION STATE', async () => {
+    const calls = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('ledger.add', { finding: 'popover = div[role=tooltip]', confidence: 'high', selectors: ['div[role=tooltip]'] })),
+        reply(finishEnvelope())
+      ], calls),
+      tools: {}
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    assert.equal(report.ledgerEntries, 1);
+    const entries = session.ledger.serialize().entries;
+    assert.equal(entries[0].provenance, 'session');
+    assert.equal(entries[0].confidence, 'high');
+    const stateMsg = calls[1].messages.find(m => m.role === 'system' && m.content.startsWith('SESSION STATE'));
+    assert.ok(stateMsg.content.includes('popover = div[role=tooltip]'));
+  });
+
+  it('rejects findings without text', async () => {
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('ledger.add', {})),
+        reply(finishEnvelope())
+      ], []),
+      tools: {}
+    });
+    await session.run();
+    const entry = session.state().session.transcript.find(e => e.kind === 'tool');
+    assert.equal(entry.ok, false);
+    assert.ok(entry.result.error.includes('finding'));
+  });
+});
+
+describe('service.update grounding chokepoint (spec §8)', () => {
+  const AD_SELECTOR = "div.card:not([data-kind='ad'])";
+
+  function makeRail(countResult) {
+    // A fake executeDsl answering every $count snippet with countResult and
+    // the attrStats fieldMap snippet with a mixed population.
+    return async (snippet) => {
+      if (snippet.includes('$count')) return countResult;
+      if (snippet.includes('$extractList')) {
+        return [
+          { m: 'ad' }, { m: 'ad' }, { m: 'organic' }, { m: 'organic' },
+          { m: 'organic' }, { m: 'organic' }, { m: 'organic' }, { m: 'organic' }
+        ];
+      }
+      return null;
+    };
+  }
+
+  function updateStep(selector) {
+    return [{
+      id: '1',
+      script: 'return $extractList(' + JSON.stringify(selector) + ', { postId: { selector: "a", attr: "href" } });'
+    }];
+  }
+
+  // The engine keeps cfg.tools BY REFERENCE, so wiring real probe tools into
+  // a mutable bag AFTER createResearchSession works — the tests below use it.
+
+  it('REJECTS the seventh-log shape: filter attr with no attrStats receipt', async () => {
+    const bag = {};
+    const handlerCalls = [];
+    const session = createResearchSession({
+      requirement: 'collect cards',
+      llm: scriptedLlm([
+        reply(envelope('service.update', { steps: updateStep(AD_SELECTOR) })),
+        reply(finishEnvelope())
+      ], []),
+      tools: bag,
+      budgets: { maxTurns: 10 }
+    });
+    const probe = createProbeTools({ executeDsl: makeRail(8), observationLog: session.observationLog });
+    bag['probe.count'] = probe.count;
+    bag['service.update'] = async () => { handlerCalls.push(1); return { version: 1 }; };
+
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    assert.equal(report.artifactVersions, 0, 'no version may be created');
+    assert.equal(handlerCalls.length, 0, 'the write handler must NOT run');
+    const entry = session.state().session.transcript.find(e => e.kind === 'tool' && e.name === 'service.update');
+    assert.equal(entry.result.grounding, 'rejected');
+    assert.ok(entry.result.rejections.some(r => r.missing === 'attr-distribution' && r.attr === 'data-kind'),
+      'the polarity receipt demand is the rejection: ' + JSON.stringify(entry.result.rejections));
+  });
+
+  it('ADMITS after attrStats + selector grounding and versions the artifact', async () => {
+    const bag = {};
+    const handlerCalls = [];
+    const session = createResearchSession({
+      requirement: 'collect cards',
+      llm: scriptedLlm([
+        reply(envelope('probe.attrStats', { containerSel: 'div.card', attr: 'data-kind' })),
+        reply(envelope('service.update', { steps: updateStep(AD_SELECTOR) })),
+        reply(finishEnvelope())
+      ], []),
+      tools: bag,
+      budgets: { maxTurns: 10 }
+    });
+    const probe = createProbeTools({ executeDsl: makeRail(8), observationLog: session.observationLog });
+    bag['probe.attrStats'] = probe.attrStats;
+    bag['probe.count'] = probe.count;
+    bag['service.update'] = async () => { handlerCalls.push(1); return { version: 1 }; };
+
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    assert.equal(handlerCalls.length, 1);
+    assert.equal(report.artifactVersions, 1);
+    const entry = session.state().session.transcript.find(e => e.kind === 'tool' && e.name === 'service.update');
+    assert.ok(!entry.result.grounding, 'admitted: ' + JSON.stringify(entry.result));
+    assert.equal(entry.result.version, 1);
+    assert.equal(session.state().session.artifactVersions[0].steps[0].id, '1');
+  });
+
+  it('the attrStats result itself reaches the LLM (the semantic revealer)', async () => {
+    const bag = {};
+    const session = createResearchSession({
+      requirement: 'collect cards',
+      llm: scriptedLlm([
+        reply(envelope('probe.attrStats', { containerSel: 'div.card', attr: 'data-kind' })),
+        reply(finishEnvelope())
+      ], []),
+      tools: bag
+    });
+    const probe = createProbeTools({ executeDsl: makeRail(8), observationLog: session.observationLog });
+    bag['probe.attrStats'] = probe.attrStats;
+    await session.run();
+    const entry = session.state().session.transcript.find(e => e.kind === 'tool');
+    assert.equal(entry.result.totalCards, 8);
+    assert.ok(entry.result.values.some(v => v.value === 'ad' && v.cards === 2));
+  });
+});

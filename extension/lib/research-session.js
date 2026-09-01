@@ -213,6 +213,49 @@
       }
     }
 
+    function handleLedgerAdd(args) {
+      const a = args || {};
+      if (typeof a.finding !== 'string' || !a.finding.trim()) {
+        return { error: 'finding (non-empty string) required' };
+      }
+      const added = ledger.add({
+        finding: a.finding.trim(),
+        evidence: typeof a.evidence === 'string' ? a.evidence : '',
+        confidence: a.confidence,
+        provenance: 'session',
+        selectors: Array.isArray(a.selectors) ? a.selectors.filter(s => typeof s === 'string') : []
+      });
+      emit('ledger_add', { finding: a.finding.trim() });
+      return { added: true, id: added.id };
+    }
+
+    async function handleServiceUpdate(args) {
+      const a = args || {};
+      const steps = Array.isArray(a.steps) ? a.steps : [];
+      if (!steps.length) return { error: 'steps (non-empty array) required' };
+      const autoVerify = typeof tools['probe.count'] === 'function'
+        ? async (sel) => {
+            const r = await tools['probe.count'](sel);
+            return (r && typeof r.count === 'number') ? r.count : null;
+          }
+        : null;
+      const v = await Gate.validateGrounding({
+        steps: steps,
+        observationLog: observationLog,
+        ledger: ledger,
+        autoVerify: autoVerify,
+        overrides: Array.isArray(a.overrides) ? a.overrides : []
+      });
+      if (!v.ok) return { grounding: 'rejected', rejections: v.rejections };
+      const handler = tools['service.update'];
+      if (typeof handler !== 'function') return { error: 'no service.update handler wired' };
+      const out = await handler(a, { observationLog: observationLog, ledger: ledger, session: publicApi });
+      const version = state.artifactVersions.length + 1;
+      state.artifactVersions.push({ version: version, steps: steps, at: now() });
+      emit('artifact_version', { version: version });
+      return (out && typeof out === 'object') ? out : { version: version };
+    }
+
     function handleKnowledgeQuery(args) {
       const a = args || {};
       const ids = Array.isArray(a.ids) ? a.ids.filter(x => typeof x === 'string') : [];
@@ -344,6 +387,25 @@
 
     async function dispatchTool(name, args) {
       if (name === 'knowledge.query') return handleKnowledgeQuery(args);
+      if (name === 'ledger.add') return handleLedgerAdd(args);
+      if (name === 'service.update') return await handleServiceUpdate(args);
+      // Probe tools (probe-tools.js) take POSITIONAL args; the protocol carries
+      // one args object — adapt the object shape to the positional contract.
+      const PROBE_ARG_KEYS = {
+        'probe.count': ['sel'],
+        'probe.text': ['sel'],
+        'probe.attrStats': ['containerSel', 'attr'],
+        'probe.sample': ['sel', 'opts']
+      };
+      if (PROBE_ARG_KEYS[name] && typeof tools[name] === 'function') {
+        const a = (args && typeof args === 'object') ? args : {};
+        const pos = PROBE_ARG_KEYS[name].map(k => a[k]);
+        try {
+          return sanitizeToolResult(await tools[name].apply(null, pos));
+        } catch (err) {
+          return { error: String((err && err.message) || err) };
+        }
+      }
       const fn = tools[name];
       if (typeof fn !== 'function') {
         return { error: 'unknown tool: ' + name, available: availableToolNames() };
