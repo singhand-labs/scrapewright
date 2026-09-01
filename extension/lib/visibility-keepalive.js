@@ -150,6 +150,12 @@
       const results = await chrome.scripting.executeScript({
         target: { tabId, allFrames: false },
         world: 'MAIN',
+        // Without injectImmediately the probe queues behind document_idle —
+        // on a slow site in a throttled background tab that is page-load
+        // time (console.log 2026-09-01 04:40: ~9s). It also means probing a
+        // post-navigation document the early injection never survived to
+        // reach (RC16), so the readback was incoherent anyway.
+        injectImmediately: true,
         func: () => ({
           injected: !!window.__SCRAPEWRIGHT_VISIBILITY_KEEPALIVE__,
           injectedAt: window.__SCRAPEWRIGHT_VISIBILITY_KEEPALIVE_INJECTED_AT__ || null,

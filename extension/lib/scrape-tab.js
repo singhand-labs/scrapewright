@@ -67,6 +67,14 @@
   // load re-inject in step-orchestrator.js (after waitForTabLoad). The
   // early injection here is best-effort coverage for sites whose page
   // scripts run before the load event.
+  //
+  // The VERIFICATION runs detached: it is diagnostic-only (nothing consumes
+  // its return), and its executeScript used to queue behind document_idle —
+  // on a slow site in a throttled background tab that is page-load time,
+  // which blew the wizard's 10s tab-create budget twice (console.log
+  // 2026-08-31 17:25 + 2026-09-01 04:40: inject done at ~2s, verify
+  // resolved AFTER the timeout error). Awaiting a diagnostic must never
+  // gate tab creation.
   async function afterTabOpen(tab) {
     if (typeof injectVisibilityKeepalive !== 'function') {
       logWarn(tab, 'injectVisibilityKeepalive unavailable — visibility-keepalive skipped');
@@ -74,11 +82,12 @@
       try {
         const injectResult = await injectVisibilityKeepalive(tab.id);
         logInfo(tab, 'Visibility keepalive injection', injectResult);
-        const verifyResult = await verifyVisibilityKeepaliveWithFallback(tab.id);
-        logInfo(tab, 'Visibility keepalive verification', verifyResult);
       } catch (e) {
         logWarn(tab, 'Visibility keepalive injection threw', { error: e && e.message });
       }
+      verifyVisibilityKeepaliveWithFallback(tab.id)
+        .then((verifyResult) => logInfo(tab, 'Visibility keepalive verification', verifyResult))
+        .catch((e) => logWarn(tab, 'Visibility keepalive verification threw', { error: e && e.message }));
     }
     return tab;
   }

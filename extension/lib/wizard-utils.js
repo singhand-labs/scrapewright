@@ -139,10 +139,12 @@ The framework's EMPTY_FIELDS detector will surface which fields are uniformly em
 
 If you MUST skip a record, do so conservatively — only skip when you have POSITIVE evidence from a SPECIFIC element (e.g. an explicit "Sponsored" label span that exists NOWHERE else on the page), never regex-test outerHTML.
 
-CARD-TYPE HETEROGENEITY (feeds mixing promoted and organic cards): when a required field comes back empty on every record, check WHAT KIND of cards your selectors kept before rewriting the field selector. Heterogeneous feeds mix promoted/sponsored cards with organic ones, and promoted cards often lack permalink/timestamp fields entirely — the field is not "hard to select", it does not exist on that card type. Two corollaries:
+CARD-TYPE HETEROGENEITY (feeds mixing promoted and organic cards): when a required field comes back empty on every record, check WHAT KIND of cards your selectors kept before rewriting the field selector. Heterogeneous feeds mix promoted/sponsored cards with organic ones, and promoted cards often lack permalink/timestamp fields entirely — the field is not "hard to select", it does not exist on that card type. Corollaries:
 (a) a container filter or field selector built on promoted-card markup attributes implicitly keeps ONLY promoted cards, making user-facing fields (permalink, timestamp) structurally unreachable — select organic cards and exclude promoted ones by a specific, language-INDEPENDENT markup signal (a dedicated data-* rendering attribute), never by localized label text (a "Sponsored" text match silently misses localized pages);
 (b) do not write contradictory filters across steps — step N keeping only card type A while step M excludes card type A yields empty or mislabeled output. Decide ONE card policy per service and enforce it at exactly ONE place in the chain;
-(c) the scroll step's counter is a card filter too — an unfiltered counter counts recommendation/promoted cards toward the target, so the loop exits "successfully" carrying junk. Count with the SAME language-independent card signals the extraction step uses, and make the filtered counter safe against matching nothing (see ZERO-TRAP COUNTER).
+(c) the scroll step's counter is a card filter too — an unfiltered counter counts recommendation/promoted cards toward the target, so the loop exits "successfully" carrying junk. Count with the SAME language-independent card signals the extraction step uses, and make the filtered counter safe against matching nothing (see ZERO-TRAP COUNTER);
+(d) a cursor over containers is not a count of records — when the extraction step walks containers with an index/cursor, gate its done on the number of records that PASS the card policy (what your filtering/output step would keep), never on the raw container cursor: recommendation/promoted cards consume cursor slots, so a cursor-gated step declares victory at the target having collected FEWER real records than requested;
+(e) exclude cards by positive structural evidence, not by label text alone — label regexes ("Sponsored", "Recommended for you") are locale- and markup-fragile and silently miss current markup; a card that lacks EVERY organic anchor (permalink href, timestamp link, author/profile hover anchor) is promoted/recommendation BY STRUCTURE, and its fields are empty precisely because they do not exist on that card type.
 
 IMPORTANT: For waiting or polling scenarios (e.g., checking if AI has finished generating), do NOT use $() in a loop — it will throw after 30s if the element is not found. Instead:
 - Use 'await new Promise(r => setTimeout(r, ms))' for fixed delays
@@ -329,7 +331,7 @@ WARNING: do NOT use r.scrolled === false as the exhaustion signal on virtualized
 ZERO-TRAP COUNTER (filtered counting in scroll loops): discriminating card types inside the scroll counter — e.g. counting only cards that contain a permalink href matching a regex, the correct way to skip recommendation/promoted cards (see CARD-TYPE HETEROGENEITY) — introduces a failure mode the selector diagnostics CANNOT see: the counting filter itself can match NOTHING. Permalink shapes vary by site, locale, and era (/posts/<id>/, story.php, /share/p/<id>/, watch?v=, /reel/<id>/) — a regex written from assumption instead of observation matches 0 hrefs on every card, the count stays 0 forever, and (per the DEADLOCK WARNING above) the step scrolls to maxIterations while the user watches the page fill with cards the script never counts. Three defenses:
 (a) sample before you filter: extract the raw values first — $extractListMulti(containerSel, { h: { selector: 'a[href]', attr: 'href' } }, { allowEmpty: true }) — read what the hrefs actually look like (they surface in SELECTOR DIAGNOSTICS), THEN write the regex around the observed shapes;
 (b) never guard the exhausted exit with 'count > 0' — at a permanently-zero count that exit is unreachable and the loop's only stop becomes maxIterations (minutes of pointless loading);
-(c) keep a RAW fallback counter (records.length or $count(containerSel)) alongside the filtered one: filtered 0 while raw keeps growing proves the filter (not the page) is wrong — exit exhausted with a zeroFiltered marker so the failure is visible and repairable, instead of scrolling forever.
+(c) keep a RAW fallback counter (records.length or $count(containerSel)) alongside the filtered one: filtered 0 while raw keeps growing proves the filter (not the page) is wrong — exit exhausted with a zeroFiltered marker so the failure is visible and repairable, instead of scrolling forever. And once you keep that RAW counter, treat its growth as PROGRESS: reset your noGrowth/stalled counter whenever the raw count grows, even when the filtered count does not — a feed that is still loading containers has not exhausted anything, and exiting on a filtered-count stall while raw still climbs gives up below the target with data on the table.
 
 RAW HTML EXTRACTION (domHtml, full record HTML fields):
 $extract(sel) and $extractList(sel, { field: { selector, attr } }) support attribute reads. outerHTML and innerHTML are DOM PROPERTIES (not HTML attributes) — historically getAttribute returned null for them. They are now supported: pass attr='outerHTML' or attr='innerHTML' and the runner reads the DOM property directly.
@@ -948,6 +950,14 @@ function detectCountSelectorBlind(events) {
 // 0 on EVERY occurrence and never once positive (a count that went positive
 // then froze is a stall the script's own noGrowth handles — not a trap).
 const FROZEN_ZERO_STREAK_THRESHOLD = 8;
+
+// The live breaker additionally requires the streak to SPAN this long:
+// iteration cadence varies wildly (2s wait-steps vs 17s scroll-steps in one
+// log), so a count-only threshold fires at 16s on a fast-cadence step and
+// misdiagnoses a slowly-rendering page as a broken counting filter. Steps
+// with a small maxIterations fall through to natural POLL_EXHAUSTED, where
+// the post-hoc detectFrozenZeroCounter relabels with the same guidance.
+const FROZEN_ZERO_MIN_ELAPSED_MS = 60000;
 
 // Parse one resultPreview for counter-shaped numeric fields. A counter name
 // ends with "count" (uniqueCount, postCount, newCount, ...) or is one of the
@@ -4083,7 +4093,7 @@ function formatElementsForPrompt(elements, opts) {
 
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.hoverAwareTimeoutMs = hoverAwareTimeoutMs;
@@ -4095,6 +4105,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.parseCounterFields = parseCounterFields;
   window.isFrozenZeroNotReady = isFrozenZeroNotReady;
   window.FROZEN_ZERO_STREAK_THRESHOLD = FROZEN_ZERO_STREAK_THRESHOLD;
+  window.FROZEN_ZERO_MIN_ELAPSED_MS = FROZEN_ZERO_MIN_ELAPSED_MS;
   window.estimateScriptTimeBudget = estimateScriptTimeBudget;
   window.validateInputAgainstSchema = validateInputAgainstSchema;
   window.validateOutputAgainstSchema = validateOutputAgainstSchema;
@@ -4162,6 +4173,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.detectFrozenZeroCounter = detectFrozenZeroCounter;
   self.parseCounterFields = parseCounterFields;
   self.isFrozenZeroNotReady = isFrozenZeroNotReady;
+  self.FROZEN_ZERO_MIN_ELAPSED_MS = FROZEN_ZERO_MIN_ELAPSED_MS;
   self.validateInputAgainstSchema = validateInputAgainstSchema;
   self.validateOutputAgainstSchema = validateOutputAgainstSchema;
   self.findEmptyExtractionFields = findEmptyExtractionFields;

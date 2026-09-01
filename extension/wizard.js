@@ -1948,7 +1948,25 @@ async function testScript() {
         // Background tab via createScrapeTab (RC20 removed the popup path);
         // rendering is handled by the five-layer throttle stack — sticky
         // activation wraps input-required ops.
-        tab = await withTimeout(createScrapeTab(url), 10000, 'Failed to create tab (10s timeout)');
+        // The 10s budget covers only site-independent work (tabs.create +
+        // keepalive inject; verify runs detached in scrape-tab.js). When it
+        // fires anyway, close the tab that arrives late — both logged
+        // timeouts (2026-08-31 17:25, 2026-09-01 04:40) leaked an
+        // invisible background tab because the race left no handle to it.
+        let createTimedOut = false;
+        const createPromise = createScrapeTab(url).then((created) => {
+          if (createTimedOut) {
+            closeScrapeTab(created);
+            throw new Error('Tab arrived after the create timeout — closed to avoid a leaked background tab.');
+          }
+          return created;
+        });
+        try {
+          tab = await withTimeout(createPromise, 10000, 'Failed to create tab (10s timeout)');
+        } catch (e) {
+          createTimedOut = true;
+          throw e;
+        }
         appendLog('Opening ' + url + '...');
         return tab;
       },
@@ -2025,19 +2043,29 @@ async function testScript() {
         // count that goes positive even once marks the step healthy forever
         // (slow loads recover legitimately — COUNT_SELECTOR_BLIND run 3
         // recovered at iteration 5; threshold 8 leaves that margin).
+        // The streak must ALSO span FROZEN_ZERO_MIN_ELAPSED_MS (2026-09-01
+        // fifth log: the same wizard ran 2s-cadence wait steps AND 17s-
+        // cadence scroll steps — count-only fired at 16s and would misread
+        // a slowly-rendering page as a broken filter; short-maxIter steps
+        // still reach the post-hoc detector via POLL_EXHAUSTED).
         try {
           if (evt && evt.type === 'STEP_ITERATION' && evt.stepId != null) {
             const counters = parseCounterFields(evt.resultPreview);
             if (counters.positive.length > 0) {
               wizardState.zeroCounterStreaks.delete(String(evt.stepId));
             } else if (isFrozenZeroNotReady(evt.resultPreview)) {
-              const streak = (wizardState.zeroCounterStreaks.get(String(evt.stepId)) || 0) + 1;
-              wizardState.zeroCounterStreaks.set(String(evt.stepId), streak);
-              if (streak >= FROZEN_ZERO_STREAK_THRESHOLD && !wizardState.zeroCounterBreaker) {
+              const prev = wizardState.zeroCounterStreaks.get(String(evt.stepId)) || null;
+              const streak = (prev ? prev.n : 0) + 1;
+              const since = prev ? prev.since : Date.now();
+              wizardState.zeroCounterStreaks.set(String(evt.stepId), { n: streak, since });
+              if (streak >= FROZEN_ZERO_STREAK_THRESHOLD &&
+                  (Date.now() - since) >= FROZEN_ZERO_MIN_ELAPSED_MS &&
+                  !wizardState.zeroCounterBreaker) {
                 wizardState.zeroCounterBreaker = {
-                  stepId: evt.stepId, streak, counterFields: counters.zero
+                  stepId: evt.stepId, streak, counterFields: counters.zero,
+                  elapsedMs: Date.now() - since
                 };
-                appendLog('Zero-counter circuit breaker tripped for step ' + evt.stepId + ' (' + streak + ' not-ready iterations, counters ' + counters.zero.join(', ') + ' all 0). Aborting run.', 'error');
+                appendLog('Zero-counter circuit breaker tripped for step ' + evt.stepId + ' (' + streak + ' not-ready iterations over ' + Math.round((Date.now() - since) / 1000) + 's, counters ' + counters.zero.join(', ') + ' all 0). Aborting run.', 'error');
                 wizardState.testAbortController?.abort();
               }
             }
@@ -2213,7 +2241,7 @@ async function testScript() {
       if (breaker && /TEST_ABORTED/.test(e.message || '')) {
         const stepDefZ = (wizardState.steps || []).find(s => String(s.id) === String(breaker.stepId));
         e.message = 'ZERO_COUNTER_FROZEN: step "' + (stepDefZ ? stepDefZ.name : breaker.stepId) + '" returned not-ready for ' + breaker.streak +
-          ' consecutive iterations while its counter field(s) [' + breaker.counterFields.join(', ') + '] stayed 0 and never once rose. ' +
+          ' consecutive iterations (over ' + Math.round((breaker.elapsedMs || 0) / 1000) + 's) while its counter field(s) [' + breaker.counterFields.join(', ') + '] stayed 0 and never once rose. ' +
           'The counting FILTER inside the step (JS logic — e.g. a permalink-href regex) matched nothing on the page, and an exhausted exit guarded by `count > 0` can never fire at count 0, so the run scrolled toward maxIterations and was stopped by the circuit breaker. ' +
           'Fix per ZERO-TRAP COUNTER in the DSL guide: (1) SAMPLE the raw values before filtering — extract them (e.g. $extractListMulti(containerSel, { h: { selector: \'a[href]\', attr: \'href\' } }, { allowEmpty: true })) and inspect what the hrefs actually look like (permalinks vary: /posts/<id>/, story.php, /share/p/<id>/, watch?v=, /reel/<id>/), then write the regex around the observed shapes; ' +
           '(2) remove any `count > 0` guard from the exhausted exit; (3) keep a RAW fallback counter (records.length / $count(containerSel)) so the loop can still exit when the filter matches nothing. Original error: ' + e.message;
