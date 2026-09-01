@@ -390,22 +390,8 @@
       if (name === 'ledger.add') return sanitizeToolResult(handleLedgerAdd(args));
       if (name === 'service.update') return sanitizeToolResult(await handleServiceUpdate(args));
       // Probe tools (probe-tools.js) take POSITIONAL args; the protocol carries
-      // one args object — adapt the object shape to the positional contract.
-      const PROBE_ARG_KEYS = {
-        'probe.count': ['sel'],
-        'probe.text': ['sel'],
-        'probe.attrStats': ['containerSel', 'attr'],
-        'probe.sample': ['sel', 'opts']
-      };
-      if (PROBE_ARG_KEYS[name] && typeof tools[name] === 'function') {
-        const a = (args && typeof args === 'object') ? args : {};
-        const pos = PROBE_ARG_KEYS[name].map(k => a[k]);
-        try {
-          return sanitizeToolResult(await tools[name].apply(null, pos));
-        } catch (err) {
-          return { error: String((err && err.message) || err) };
-        }
-      }
+      // one args object — probe-tools accepts BOTH shapes (object-first or
+      // positional), so dispatch every user tool uniformly as fn(args, ctx).
       const fn = tools[name];
       if (typeof fn !== 'function') {
         return { error: 'unknown tool: ' + name, available: availableToolNames() };
@@ -420,11 +406,17 @@
     async function loop() {
       if (running) return buildReport();
       if (state.stopped && state.stopped.reason !== 'paused') return buildReport();
+      // A pause splits the run into segments: like segmentStart (wall clock),
+      // the per-segment turn budget restarts on resume. A seeded session
+      // (stopped === null) instead inherits the persisted turn count.
+      const wasPaused = state.status === 'paused';
       running = true;
+      const resuming = state.spend.turns > 0;
+      if (wasPaused) state.spend.turns = 0;
       state.status = 'running';
       state.stopped = null;
       segmentStart = now();
-      emit('session_start', { sessionId: state.id, resuming: state.spend.turns > 0 });
+      emit('session_start', { sessionId: state.id, resuming: resuming });
       let report = null;
       try {
         while (true) {
@@ -480,13 +472,17 @@
           state.spend.turns += 1;
 
           state.transcript.push({ kind: 'assistant', text: content });
+          await persist();
           if (turn.finish) {
             report = await stop('completed', turn.finish.summary || null);
             break;
           }
           emit('tool_call', { tool: turn.tool, args: turn.args });
           const result = await dispatchTool(turn.tool, turn.args);
-          const summary = Protocol.summarizeToolResult(turn.tool, result, toolResultCapChars);
+          // Replay/persistence must carry WHAT was probed (the args), not just
+          // the result — a resumed context still shows the selector used.
+          const callLabel = turn.tool + ' ' + JSON.stringify(turn.args || {});
+          const summary = Protocol.summarizeToolResult(callLabel, result, toolResultCapChars);
           state.transcript.push({ kind: 'tool', name: turn.tool, ok: !isErrorResult(result), result: result, summary: summary });
           emit('tool_result', { tool: turn.tool, ok: !isErrorResult(result), summary: summary.slice(0, 200) });
           attachKnowledge(result);

@@ -31,7 +31,17 @@
       }
     }
 
-    async function count(sel) {
+    // Dual dispatch: the engine calls every tool as fn(args, ctx) with a
+    // single args object; direct callers (tests, Plan 3 wiring) may keep the
+    // positional form. Normalize an object first-arg into the positional
+    // parameters each function below expects.
+    function unpackSel(a) {
+      if (a && typeof a === 'object' && !Array.isArray(a)) return [a.sel, a];
+      return [a, null];
+    }
+
+    async function count(sel0) {
+      const sel = unpackSel(sel0)[0];
       if (typeof sel !== 'string' || !sel) return { error: 'selector required' };
       const r = await runSnippet('return $count(' + JSON.stringify(sel) + ');');
       if (r && typeof r.error === 'string') return r;
@@ -42,7 +52,8 @@
       return { count: n };
     }
 
-    async function text(sel) {
+    async function text(sel0) {
+      const sel = unpackSel(sel0)[0];
       if (typeof sel !== 'string' || !sel) return { error: 'selector required' };
       const r = await runSnippet('return $list(' + JSON.stringify(sel) + ');');
       if (r && typeof r.error === 'string') return r;
@@ -58,7 +69,12 @@
 
     const ATTR_VALUES_MAX = 12;
 
-    async function attrStats(containerSel, attr) {
+    async function attrStats(containerSel0, attr0) {
+      let containerSel = containerSel0, attr = attr0;
+      if (containerSel && typeof containerSel === 'object' && !Array.isArray(containerSel)) {
+        attr = containerSel.attr;
+        containerSel = containerSel.containerSel;
+      }
       if (typeof containerSel !== 'string' || !containerSel) return { error: 'containerSelector required' };
       if (typeof attr !== 'string' || !/^[a-zA-Z][\w-]*$/.test(attr)) return { error: 'attribute name required' };
       // Composed on the EXISTING rail: $extractList with an attribute-read
@@ -98,7 +114,12 @@
       };
     }
 
-    async function sample(sel, opts) {
+    async function sample(sel0, opts0) {
+      let sel = sel0, opts = opts0;
+      if (sel && typeof sel === 'object' && !Array.isArray(sel)) {
+        opts = sel.opts;
+        sel = sel.sel;
+      }
       const o = opts || {};
       const index = typeof o.index === 'number' && o.index >= 0 ? Math.floor(o.index) : 0;
       if (typeof sel !== 'string' || !sel) return { error: 'selector required' };

@@ -738,3 +738,160 @@ describe('service.update grounding chokepoint (spec §8)', () => {
     assert.ok(entry.result.error.includes('unserializable'));
   });
 });
+
+describe('persistence and lifecycle', () => {
+  it('persists at every turn boundary and at stop', async () => {
+    const saves = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('probe.count', {})),
+        reply(finishEnvelope())
+      ], []),
+      tools: { 'probe.count': async () => ({ count: 1 }) },
+      persistence: { save: async (s) => saves.push(s) }
+    });
+    await session.run();
+    assert.ok(saves.length >= 3, 'turn 1 + turn 2 + final stop = 3 saves');
+    assert.equal(saves[saves.length - 1].session.stopped.reason, 'completed');
+    assert.ok(saves[0].observation && saves[0].ledger, 'persisted state carries the Plan-1 lib snapshots');
+  });
+
+  it('persistence failures never kill the loop', async () => {
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('probe.count', {})),
+        reply(finishEnvelope())
+      ], []),
+      tools: { 'probe.count': async () => ({ count: 1 }) },
+      persistence: { save: async () => { throw new Error('storage full'); } }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+  });
+
+  it('abort() stops at the next turn boundary with everything kept', async () => {
+    const events = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([reply(envelope('probe.count', {}))], []),
+      tools: {
+        'probe.count': async (args, ctx) => { ctx.session.abort('user said stop'); return { count: 1 }; }
+      },
+      onEvent: (e) => events.push(e)
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'aborted');
+    assert.equal(report.stopped.detail, 'user said stop');
+    assert.equal(report.turns, 1);
+    assert.ok(session.state().session.transcript.length === 2);
+  });
+
+  it('pause() yields control and run() resumes from the transcript', async () => {
+    const calls = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('probe.count', { sel: '.first' })),
+        reply(envelope('probe.count', { sel: '.second' })),
+        reply(finishEnvelope())
+      ], calls),
+      tools: {
+        'probe.count': async (args, ctx) => {
+          if (args.sel === '.first') ctx.session.pause();
+          return { count: 1 };
+        }
+      }
+    });
+    const mid = await session.run();
+    assert.equal(mid.stopped.reason, 'paused');
+    assert.equal(mid.turns, 1);
+    assert.equal(mid.status, 'paused');
+    const end = await session.run();
+    assert.equal(end.stopped.reason, 'completed');
+    assert.equal(end.turns, 2);
+    assert.equal(calls.length, 3);
+    const resumed = calls[2].messages;
+    assert.ok(resumed.some(m => m.role === 'user' && m.content.includes('.first')),
+      'resumed context still carries the pre-pause turn');
+  });
+
+  it('wall-clock budget EXCLUDES paused time', async () => {
+    let clock = 0;
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('probe.count', {})),
+        reply(envelope('probe.count', {})),
+        reply(finishEnvelope())
+      ], []),
+      tools: {
+        'probe.count': async (args, ctx) => {
+          if (clock === 0) { clock = 100; ctx.session.pause(); }
+          return { count: 1 };
+        }
+      },
+      now: () => clock,
+      budgets: { maxTurns: 10, wallClockMs: 500 }
+    });
+    const mid = await session.run();
+    assert.equal(mid.stopped.reason, 'paused');
+    clock = 100000;                       // the user thinks for a long time
+    const end = await session.run();      // resume — segmentStart resets
+    assert.equal(end.stopped.reason, 'completed', 'pause gap must not eat the budget: ' + JSON.stringify(end.stopped));
+  });
+
+  it('seed resume: a fresh session continues from a persisted state', async () => {
+    const calls1 = [];
+    const first = createResearchSession({
+      requirement: 'REQ-RESUME',
+      llm: scriptedLlm([reply(envelope('probe.count', { sel: '.a' }))], calls1),
+      tools: {
+        'probe.count': async (args, ctx) => { ctx.session.pause(); return { count: 2 }; }
+      }
+    });
+    await first.run();
+    const saved = first.state();   // captured AFTER the pause so it carries turn 1
+
+    const calls2 = [];
+    const second = createResearchSession({
+      requirement: 'REQ-RESUME',
+      llm: scriptedLlm([reply(finishEnvelope())], calls2),
+      tools: { 'probe.count': async () => ({ count: 0 }) },
+      seed: saved
+    });
+    const report = await second.run();
+    assert.equal(report.stopped.reason, 'completed');
+    assert.equal(report.turns, 2, 'turn count continues across the resume');
+    assert.equal(second.observationLog.size(), first.observationLog.size(), 'observation log carries over');
+    const msgs = calls2[0].messages;
+    assert.ok(msgs.some(m => m.role === 'user' && m.content.includes('REQ-RESUME')));
+    assert.ok(msgs.some(m => m.role === 'assistant' && m.content.includes('.a')));
+  });
+
+  it('state() is a deep copy — mutating it cannot corrupt the session', async () => {
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([reply(finishEnvelope())], []),
+      tools: {}
+    });
+    const s = session.state();
+    s.session.goals.push({ id: 'gX', text: 'fake', status: 'open' });
+    s.session.transcript.push({ kind: 'tool', name: 'x', ok: true, result: {}, summary: '' });
+    assert.equal(session.report().openQuestions.length, 0);
+    assert.equal(session.state().session.transcript.length, 0);
+  });
+});
+
+describe('universality: engine sources carry no site tokens', () => {
+  const FORBIDDEN = /facebook|twitter|linkedin|tiktok|reddit|\bfb\b/i;
+  it('research-session.js', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'research-session.js'), 'utf8');
+    assert.ok(!FORBIDDEN.test(src));
+  });
+  it('session-protocol.js', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'session-protocol.js'), 'utf8');
+    assert.ok(!FORBIDDEN.test(src));
+  });
+});
