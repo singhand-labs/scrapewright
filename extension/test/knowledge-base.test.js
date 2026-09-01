@@ -36,3 +36,65 @@ describe('knowledge units seed data', () => {
     assert.ok(/:has\(/.test(u.body), 'must show the inverted include form');
   });
 });
+
+// Part 2: knowledge base operations
+const { buildIndex, queryUnits, matchUnits, proposeUnit } = require('../lib/knowledge-base');
+
+describe('KnowledgeBase', () => {
+  it('buildIndex emits one compact line per unit, under budget', () => {
+    const idx = buildIndex(KNOWLEDGE_UNITS);
+    assert.equal(idx.length, KNOWLEDGE_UNITS.length);
+    for (const line of idx) {
+      assert.ok(line.id && line.title);
+      assert.ok(JSON.stringify(line).length < 200, 'index lines must stay compact');
+    }
+  });
+
+  it('queryUnits returns full bodies by id', () => {
+    const got = queryUnits(KNOWLEDGE_UNITS, ['card-polarity', 'no-such-id']);
+    assert.equal(got.length, 1);
+    assert.equal(got[0].id, 'card-polarity');
+    assert.ok(got[0].body.length > 100);
+  });
+
+  it('matchUnits intersects event tags with unit signatures', () => {
+    const got = matchUnits(KNOWLEDGE_UNITS, ['COUNT_SHORTFALL']);
+    assert.ok(got.some(u => u.id === 'card-polarity'));
+    const none = matchUnits(KNOWLEDGE_UNITS, ['UNRELATED_EVENT']);
+    assert.equal(none.length, 0);
+  });
+
+  it('proposeUnit validates shape, universality, and id uniqueness', () => {
+    const okR = proposeUnit(KNOWLEDGE_UNITS, {
+      id: 'new-lesson', title: 'T', body: 'A real generalized lesson body long enough to matter.',
+      matchEvents: ['EMPTY_FIELDS'], origin: 'session 2026-09-01'
+    });
+    assert.equal(okR.ok, true);
+    const badShape = proposeUnit(KNOWLEDGE_UNITS, { id: 'x', title: 'T', body: 'short', matchEvents: [], origin: '' });
+    assert.equal(badShape.ok, false);
+    assert.ok(badShape.errors.length >= 2, 'missing matchEvents + short body + empty origin');
+    const dupe = proposeUnit(KNOWLEDGE_UNITS, {
+      id: 'card-polarity', title: 'T', body: 'A real generalized lesson body long enough to matter.',
+      matchEvents: ['EMPTY_FIELDS'], origin: 'x'
+    });
+    assert.equal(dupe.ok, false);
+    assert.ok(dupe.errors.some(e => /id/.test(e)));
+    const siteToken = proposeUnit(KNOWLEDGE_UNITS, {
+      id: 'site-lesson', title: 'T', body: 'On facebook feeds do X — a real length body here.',
+      matchEvents: ['EMPTY_FIELDS'], origin: 'x'
+    });
+    assert.equal(siteToken.ok, false);
+    assert.ok(siteToken.errors.some(e => /site token/i.test(e)));
+  });
+
+  it('every seed unit matchEvents value is inside the documented vocabulary', () => {
+    const VOCAB = new Set(['COUNT_SHORTFALL', 'EMPTY_EXTRACTION', 'EMPTY_FIELDS', 'POPOVER_TIMEOUT',
+      'HOVER_NO_SIGNAL', 'COUNTER_FROZEN', 'DUPLICATE_RECORDS', 'SELECTOR_ZERO_MATCH',
+      'FIELD_COLLISION', 'SCRIPT_TIMEOUT', 'CARD_POLICY']);
+    for (const u of KNOWLEDGE_UNITS) {
+      for (const ev of u.matchEvents) {
+        assert.ok(VOCAB.has(ev), u.id + ' has out-of-vocabulary event: ' + ev);
+      }
+    }
+  });
+});
