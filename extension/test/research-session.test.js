@@ -490,3 +490,87 @@ describe('compaction', () => {
     assert.ok(tr.length >= 2, 'keep window is never compacted away');
   });
 });
+
+const { KNOWLEDGE_UNITS } = require('../lib/knowledge-units');
+const KnowledgeBase = require('../lib/knowledge-base');
+
+describe('knowledge integration', () => {
+  const knowledge = {
+    units: KNOWLEDGE_UNITS,
+    index: KnowledgeBase.buildIndex(KNOWLEDGE_UNITS)
+  };
+
+  it('auto-attaches matched unit bodies into the NEXT system prompt (spec §3 trigger a)', async () => {
+    const calls = [];
+    const events = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('verify.run', {})),
+        reply(finishEnvelope())
+      ], calls),
+      tools: { 'verify.run': async () => ({ ok: false, events: ['COUNT_SHORTFALL'] }) },
+      knowledge,
+      onEvent: (e) => events.push(e)
+    });
+    await session.run();
+    assert.ok(events.some(e => e.type === 'knowledge_attached' && /polarity|count/.test(e.id)),
+      'a COUNT_SHORTFALL-signature unit must attach');
+    const second = calls[1].messages;
+    const sys = second[0].content;
+    assert.ok(sys.includes('## Knowledge (auto-attached'), 'unit bodies injected into system prompt');
+    const first = calls[0].messages[0].content;
+    assert.ok(!first.includes('## Knowledge (auto-attached'), 'nothing attached before the signal');
+  });
+
+  it('attaches each unit at most once', async () => {
+    const events = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('verify.run', {})),
+        reply(envelope('verify.run', {})),
+        reply(finishEnvelope())
+      ], []),
+      tools: { 'verify.run': async () => ({ ok: false, events: ['COUNT_SHORTFALL'] }) },
+      knowledge,
+      onEvent: (e) => events.push(e)
+    });
+    await session.run();
+    const attaches = events.filter(e => e.type === 'knowledge_attached');
+    assert.equal(attaches.length, 1);
+  });
+
+  it('dispatches knowledge.query and returns unit bodies', async () => {
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('knowledge.query', { ids: ['card-polarity'] })),
+        reply(finishEnvelope())
+      ], []),
+      tools: {},
+      knowledge
+    });
+    await session.run();
+    const entry = session.state().session.transcript.find(e => e.kind === 'tool' && e.name === 'knowledge.query');
+    assert.equal(entry.ok, true);
+    assert.ok(entry.result.units[0].id === 'card-polarity');
+    assert.ok(entry.result.units[0].body.length > 100);
+  });
+
+  it('knowledge.query without ids is a structured error', async () => {
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('knowledge.query', {})),
+        reply(finishEnvelope())
+      ], []),
+      tools: {},
+      knowledge
+    });
+    await session.run();
+    const entry = session.state().session.transcript.find(e => e.kind === 'tool');
+    assert.equal(entry.ok, false);
+    assert.ok(entry.result.error.includes('ids'));
+  });
+});

@@ -196,6 +196,30 @@
       return 'SESSION STATE\n' + parts.join('\n\n');
     }
 
+    function attachedUnitBodies() {
+      return KB.queryUnits(knowledge.units, state.attachedUnits);
+    }
+
+    function attachKnowledge(result) {
+      const events = (result && Array.isArray(result.events))
+        ? result.events.filter(x => typeof x === 'string') : [];
+      if (!events.length || !knowledge.units.length) return;
+      const matched = KB.matchUnits(knowledge.units, events);
+      for (const u of matched) {
+        if (state.attachedUnits.indexOf(u.id) === -1) {
+          state.attachedUnits.push(u.id);
+          emit('knowledge_attached', { id: u.id, trigger: events.join(',') });
+        }
+      }
+    }
+
+    function handleKnowledgeQuery(args) {
+      const a = args || {};
+      const ids = Array.isArray(a.ids) ? a.ids.filter(x => typeof x === 'string') : [];
+      if (!ids.length) return { error: 'ids (array of unit ids) required — see the knowledge index in the system prompt' };
+      return { units: KB.queryUnits(knowledge.units, ids).map(u => ({ id: u.id, title: u.title, body: u.body })) };
+    }
+
     function transcriptChars() {
       let n = 0;
       for (const e of state.transcript) {
@@ -239,7 +263,7 @@
         base: cfg.systemPrompt || '',
         toolSpecs: toolSpecs(),
         knowledgeIndex: knowledge.index,
-        attachedUnits: []   // Task 10 fills this in
+        attachedUnits: attachedUnitBodies()
       });
       const messages = [
         { role: 'system', content: sys },
@@ -319,6 +343,7 @@
     }
 
     async function dispatchTool(name, args) {
+      if (name === 'knowledge.query') return handleKnowledgeQuery(args);
       const fn = tools[name];
       if (typeof fn !== 'function') {
         return { error: 'unknown tool: ' + name, available: availableToolNames() };
@@ -402,6 +427,7 @@
           const summary = Protocol.summarizeToolResult(turn.tool, result, toolResultCapChars);
           state.transcript.push({ kind: 'tool', name: turn.tool, ok: !isErrorResult(result), result: result, summary: summary });
           emit('tool_result', { tool: turn.tool, ok: !isErrorResult(result), summary: summary.slice(0, 200) });
+          attachKnowledge(result);
           maybeCompact();
           await persist();
         }
