@@ -23,18 +23,9 @@
     const observationLog = deps && deps.observationLog ? deps.observationLog : null;
     if (!executeDsl) throw new Error('createProbeTools requires an executeDsl(snippet) function');
 
-    async function runSnippet(snippet, observation) {
+    async function runSnippet(snippet) {
       try {
-        const result = await executeDsl(snippet);
-        if (observationLog && observation) {
-          observationLog.record({
-            tool: observation.tool,
-            selectors: observation.selectors || [],
-            attrs: observation.attrs || [],
-            summary: observation.summary || ''
-          });
-        }
-        return result;
+        return await executeDsl(snippet);
       } catch (err) {
         return { error: String((err && err.message) || err) };
       }
@@ -42,15 +33,9 @@
 
     async function count(sel) {
       if (typeof sel !== 'string' || !sel) return { error: 'selector required' };
-      const r = await runSnippet(
-        'return $count(' + JSON.stringify(sel) + ');',
-        { tool: 'probe.count', selectors: [sel], summary: 'pending' }
-      );
+      const r = await runSnippet('return $count(' + JSON.stringify(sel) + ');');
       if (r && typeof r.error === 'string') return r;
       const n = typeof r === 'number' ? r : 0;
-      // Rewrite the summary with the real count: receipts must carry what was
-      // actually observed, and the observation was already recorded above —
-      // re-record with the final summary so the log's LAST entry is truthful.
       if (observationLog) {
         observationLog.record({ tool: 'probe.count', selectors: [sel], summary: 'count=' + n });
       }
@@ -59,9 +44,11 @@
 
     async function text(sel) {
       if (typeof sel !== 'string' || !sel) return { error: 'selector required' };
-      const r = await runSnippet('return $list(' + JSON.stringify(sel) + ');',
-        { tool: 'probe.text', selectors: [sel], summary: 'text sample' });
+      const r = await runSnippet('return $list(' + JSON.stringify(sel) + ');');
       if (r && typeof r.error === 'string') return r;
+      if (observationLog) {
+        observationLog.record({ tool: 'probe.text', selectors: [sel], summary: 'text sample' });
+      }
       const arr = Array.isArray(r) ? r : [];
       const items = arr.slice(0, TEXT_ITEMS_MAX).map(el =>
         String((el && el.textContent) || '').replace(/\s+/g, ' ').trim().slice(0, TEXT_ITEM_CAP)
