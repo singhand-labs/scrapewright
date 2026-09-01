@@ -43,6 +43,17 @@ describe('ObservationLog', () => {
     assert.equal(e.id, 2, 'seq survives restore');
   });
 
+  it('is immune to caller mutation of returned entries (receipt integrity)', () => {
+    const log = createObservationLog();
+    const e = log.record({ tool: 'probe.count', selectors: ['a.x'], summary: 'count=1' });
+    e.selectors.push('guessed-selector');
+    assert.ok(!log.covers('guessed-selector'), 'mutating a returned entry must not affect the log');
+    const snap = log.serialize();
+    snap.entries[0].selectors.push('also-guessed');
+    assert.ok(!log.covers('also-guessed'), 'mutating serialize() output must not affect the log');
+    assert.ok(log.serialize().entries[0].selectors.length === 1, 'internal state unchanged');
+  });
+
   it('drops empty/non-string selectors and tolerates malformed input', () => {
     const log = createObservationLog();
     log.record({ tool: 'x', selectors: ['', null, 'ok.sel', 42], attrs: [null, { attr: 'data-v' }, { selector: 's' }] });

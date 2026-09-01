@@ -52,7 +52,7 @@
       });
       seq += 1;
       entries.push(e);
-      return e;
+      return sanitizeEntry(e);
     }
 
     function covers(selector) {
@@ -76,7 +76,7 @@
     function size() { return entries.length; }
 
     function serialize() {
-      return { entries: entries.slice(), seq: seq };
+      return { entries: entries.map(sanitizeEntry), seq: seq };
     }
 
     return { record, covers, coversAttr, size, serialize };
