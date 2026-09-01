@@ -69,3 +69,83 @@ describe('buildSystemPrompt', () => {
     }));
   });
 });
+
+describe('parseAssistantTurn', () => {
+  it('parses a clean tool envelope and normalizes optionals', () => {
+    const r = Protocol.parseAssistantTurn('{"think":"x","tool":"probe.count","args":{"sel":"div.card"}}');
+    assert.ok(r.ok);
+    assert.equal(r.turn.tool, 'probe.count');
+    assert.deepEqual(r.turn.args, { sel: 'div.card' });
+    assert.equal(r.turn.goalUpdates, null);
+    assert.equal(r.turn.hypothesisUpdates, null);
+    assert.equal(r.turn.finish, null);
+  });
+
+  it('defaults args to {} and tolerates missing think', () => {
+    const r = Protocol.parseAssistantTurn('{"tool":"probe.text","args":{"sel":"h1"}}');
+    assert.ok(r.ok);
+    assert.deepEqual(r.turn.args, { sel: 'h1' });
+    assert.equal(r.turn.think, '');
+  });
+
+  it('parses finish envelopes and normalizes missing summary', () => {
+    const r = Protocol.parseAssistantTurn('{"finish":{}}');
+    assert.ok(r.ok);
+    assert.equal(r.turn.finish.summary, '');
+    assert.equal(r.turn.tool, null);
+  });
+
+  it('extracts JSON from fenced code blocks and surrounding prose', () => {
+    const fenced = 'Here is my plan:\n```json\n{"tool":"probe.count","args":{"sel":"a"}}\n```\nDone.';
+    assert.ok(Protocol.parseAssistantTurn(fenced).ok);
+    const prose = 'I will count first. {"tool":"probe.count","args":{"sel":"b"}} hope that works';
+    assert.ok(Protocol.parseAssistantTurn(prose).ok);
+  });
+
+  it('survives trailing commas via the lenient parser fallback', () => {
+    const sloppy = '{"think":"x","tool":"probe.count","args":{"sel":"div.card",},}';
+    const r = Protocol.parseAssistantTurn(sloppy);
+    assert.ok(r.ok, 'trailing-comma JSON must parse leniently: ' + JSON.stringify(r));
+    assert.equal(r.turn.tool, 'probe.count');
+  });
+
+  it('rejects with precise violation codes', () => {
+    assert.equal(Protocol.parseAssistantTurn('no json at all').violation, 'no-json');
+    assert.equal(Protocol.parseAssistantTurn('[1,2,3]').violation, 'no-json');
+    assert.equal(Protocol.parseAssistantTurn('{"think":"x"}').violation, 'missing-action');
+    assert.equal(Protocol.parseAssistantTurn('{"tool":"a.b","finish":{}}').violation, 'ambiguous-action');
+    assert.equal(Protocol.parseAssistantTurn('{"tool":"not a name!","args":{}}').violation, 'bad-tool-name');
+    assert.equal(Protocol.parseAssistantTurn('{"tool":"probe.count","args":[1]}').ok, false);
+  });
+
+  it('normalizes goal/hypothesis updates leniently', () => {
+    const r = Protocol.parseAssistantTurn(
+      '{"goals":{"push":"find container"},"hypotheses":{"add":"feed is organic"},"tool":"probe.count","args":{}}');
+    assert.deepEqual(r.turn.goalUpdates, { push: 'find container' });
+    assert.deepEqual(r.turn.hypothesisUpdates, { add: 'feed is organic' });
+    const r2 = Protocol.parseAssistantTurn(
+      '{"goals":{"complete":"g1"},"hypotheses":{"resolve":{"n":2,"verdict":"refuted"}},"tool":"probe.count","args":{}}');
+    assert.deepEqual(r2.turn.goalUpdates, { complete: 'g1' });
+    assert.deepEqual(r2.turn.hypothesisUpdates, { resolve: { n: 2, verdict: 'refuted' } });
+    const r3 = Protocol.parseAssistantTurn('{"goals":"nonsense","tool":"probe.count","args":{}}');
+    assert.equal(r3.turn.goalUpdates, null);
+  });
+});
+
+describe('summarizeToolResult', () => {
+  it('renders name → capped json on one line', () => {
+    const s = Protocol.summarizeToolResult('probe.count', { count: 8 }, 200);
+    assert.ok(s.startsWith('probe.count → '));
+    assert.ok(s.includes('"count":8'));
+  });
+  it('truncates long results with an explicit marker', () => {
+    const big = { blob: 'x'.repeat(500) };
+    const s = Protocol.summarizeToolResult('probe.sample', big, 50);
+    assert.ok(s.length <= 50 + 40);
+    assert.ok(s.includes('…[truncated]'));
+  });
+  it('never throws on non-serializable results', () => {
+    const cyc = {}; cyc.self = cyc;
+    assert.ok(typeof Protocol.summarizeToolResult('t', cyc, 50) === 'string');
+  });
+});

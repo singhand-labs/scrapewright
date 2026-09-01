@@ -65,7 +65,108 @@
     return parts.join('\n\n');
   }
 
-  const api = { PROTOCOL_BLOCK, renderToolCatalog, buildSystemPrompt };
+  // First JSON-object candidate in the reply: fenced block, else a
+  // quote-aware balanced-brace scan. Best-effort extraction — the parse
+  // step decides validity.
+  function extractJsonObject(text) {
+    const t = String(text || '').trim();
+    if (!t) return null;
+    const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fence && fence[1].trim()) return fence[1].trim();
+    const start = t.indexOf('{');
+    if (start === -1) return null;
+    let depth = 0, quote = null;
+    for (let i = start; i < t.length; i++) {
+      const ch = t[i];
+      if (quote) {
+        if (ch === '\\') { i++; continue; }
+        if (ch === quote) quote = null;
+      } else if (ch === '"' || ch === "'") quote = ch;
+      else if (ch === '{') depth += 1;
+      else if (ch === '}') {
+        depth -= 1;
+        if (depth === 0) return t.slice(start, i + 1);
+      }
+    }
+    return null;
+  }
+
+  function lenientParse(candidate) {
+    try { return JSON.parse(candidate); } catch (e) { /* fall through */ }
+    // Reuse the corpus-hardened lenient parser (3 real incidents) when it is
+    // reachable: node require, else the wizard page global set by wizard-utils.
+    let parser = null;
+    if (typeof require !== 'undefined') {
+      try { parser = require('./wizard-utils').parseJsonLenient; } catch (e) { parser = null; }
+    }
+    if (!parser && typeof global !== 'undefined' && typeof global.parseJsonLenient === 'function') {
+      parser = global.parseJsonLenient;
+    }
+    if (parser) {
+      try {
+        const out = parser(candidate);
+        // wizard-utils parseJsonLenient returns { ok, value, repairs }, not the
+        // parsed object itself — unwrap; fall through on failed repairs.
+        if (out && typeof out === 'object' && 'value' in out) return out.ok ? out.value : undefined;
+        return out;
+      } catch (e) { return undefined; }
+    }
+    return undefined;
+  }
+
+  function normalizeGoalUpdates(g) {
+    if (!g || typeof g !== 'object') return null;
+    if (typeof g.push === 'string' && g.push.trim()) return { push: g.push.trim() };
+    if (typeof g.complete === 'string' && g.complete.trim()) return { complete: g.complete.trim() };
+    return null;
+  }
+
+  function normalizeHypothesisUpdates(h) {
+    if (!h || typeof h !== 'object') return null;
+    if (typeof h.add === 'string' && h.add.trim()) return { add: h.add.trim() };
+    const r = h.resolve;
+    if (r && typeof r === 'object' && typeof r.n === 'number' && typeof r.verdict === 'string') {
+      return { resolve: { n: r.n, verdict: r.verdict.trim() } };
+    }
+    return null;
+  }
+
+  function parseAssistantTurn(text) {
+    const candidate = extractJsonObject(text);
+    if (!candidate) return { ok: false, violation: 'no-json' };
+    let obj;
+    try { obj = JSON.parse(candidate); } catch (e) { obj = lenientParse(candidate); }
+    if (obj == null || typeof obj !== 'object' || Array.isArray(obj)) {
+      return { ok: false, violation: 'not-object' };
+    }
+    if (obj.args !== undefined && (typeof obj.args !== 'object' || obj.args === null || Array.isArray(obj.args))) {
+      return { ok: false, violation: 'bad-args' };
+    }
+    const turn = {
+      think: typeof obj.think === 'string' ? obj.think : '',
+      goalUpdates: normalizeGoalUpdates(obj.goals),
+      hypothesisUpdates: normalizeHypothesisUpdates(obj.hypotheses),
+      tool: typeof obj.tool === 'string' && obj.tool.trim() ? obj.tool.trim() : null,
+      args: (obj.args && typeof obj.args === 'object' && !Array.isArray(obj.args)) ? obj.args : {},
+      finish: (obj.finish && typeof obj.finish === 'object' && !Array.isArray(obj.finish)) ? obj.finish : null
+    };
+    if (turn.tool && turn.finish) return { ok: false, violation: 'ambiguous-action' };
+    if (!turn.tool && !turn.finish) return { ok: false, violation: 'missing-action' };
+    if (turn.tool && !/^[a-z][\w]*(\.[\w]+)*$/i.test(turn.tool)) return { ok: false, violation: 'bad-tool-name' };
+    if (turn.finish && typeof turn.finish.summary !== 'string') turn.finish.summary = '';
+    return { ok: true, turn: turn };
+  }
+
+  function summarizeToolResult(name, result, cap) {
+    const c = typeof cap === 'number' && cap > 0 ? cap : 200;
+    let s;
+    try { s = JSON.stringify(result); } catch (e) { s = String(result); }
+    if (typeof s !== 'string') s = String(s);
+    s = s.replace(/\s+/g, ' ');
+    return name + ' → ' + (s.length > c ? s.slice(0, c) + '…[truncated]' : s);
+  }
+
+  const api = { PROTOCOL_BLOCK, renderToolCatalog, buildSystemPrompt, extractJsonObject, parseAssistantTurn, summarizeToolResult };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.SessionProtocol = api;
 })(typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : self));
