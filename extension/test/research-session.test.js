@@ -122,3 +122,57 @@ describe('engine happy path', () => {
     assert.ok(entry.result.error.includes('unserializable'));
   });
 });
+
+describe('tool dispatch', () => {
+  it('returns a structured error for unknown tools and lists what exists', async () => {
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('probe.nope', {})),
+        reply(finishEnvelope())
+      ], []),
+      tools: { 'probe.count': async () => ({ count: 0 }) }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    const saved = session.state().session.transcript;
+    const toolEntry = saved.find(e => e.kind === 'tool');
+    assert.equal(toolEntry.ok, false);
+    assert.ok(toolEntry.result.error.includes('unknown tool: probe.nope'));
+    assert.ok(toolEntry.result.available.includes('probe.count'));
+    assert.ok(toolEntry.result.available.includes('ledger.add'));
+    assert.ok(toolEntry.result.available.includes('service.update'));
+  });
+
+  it('converts thrown tool errors into error results the LLM can read', async () => {
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('probe.count', {})),
+        reply(finishEnvelope())
+      ], []),
+      tools: { 'probe.count': async () => { throw new Error('tab died'); } }
+    });
+    await session.run();
+    const toolEntry = session.state().session.transcript.find(e => e.kind === 'tool');
+    assert.equal(toolEntry.result.error, 'tab died');
+  });
+
+  it('caps tool results replayed into later prompts (context diet)', async () => {
+    const calls = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('probe.sample', {})),
+        reply(finishEnvelope())
+      ], calls),
+      tools: { 'probe.sample': async () => ({ blob: 'y'.repeat(20000) }) },
+      toolResultCapChars: 300
+    });
+    await session.run();
+    const replay = calls[1].messages.filter(m => m.role === 'user' && m.content.startsWith('TOOL RESULT'));
+    assert.equal(replay.length, 1);
+    assert.ok(replay[0].content.length <= 300 + 60, 'replayed result must be capped');
+    assert.ok(replay[0].content.includes('…[truncated]'));
+  });
+});
