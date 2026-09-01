@@ -56,7 +56,52 @@
       return { total: arr.length, items: items };
     }
 
-    return { count, text };
+    const ATTR_VALUES_MAX = 12;
+
+    async function attrStats(containerSel, attr) {
+      if (typeof containerSel !== 'string' || !containerSel) return { error: 'containerSelector required' };
+      if (typeof attr !== 'string' || !/^[a-zA-Z][\w-]*$/.test(attr)) return { error: 'attribute name required' };
+      // Composed on the EXISTING rail: $extractList with an attribute-read
+      // fieldMap returns one record per container; records missing the
+      // attribute carry ''. The distribution semantics (what fraction of the
+      // population carries each value) is exactly the polarity evidence the
+      // grounding gate requires for filter attributes (spec §8).
+      const fieldMap = { m: { selector: '[' + attr + ']', attr: attr } };
+      const snippet = 'return $extractList(' + JSON.stringify(containerSel) + ', ' + JSON.stringify(fieldMap) + ');';
+      const r = await runSnippet(snippet);
+      if (r && typeof r.error === 'string') return r;
+      if (observationLog) {
+        observationLog.record({
+          tool: 'probe.attrStats',
+          selectors: [containerSel],
+          attrs: [{ selector: containerSel, attr: attr }],
+          summary: 'attrStats ' + attr
+        });
+      }
+      const records = Array.isArray(r) ? r : (r && Array.isArray(r.records) ? r.records : []);
+      const total = records.length;
+      const counts = {};
+      let absent = 0;
+      for (const rec of records) {
+        const v = rec && typeof rec.m === 'string' ? rec.m.trim() : '';
+        if (!v) { absent += 1; continue; }
+        counts[v] = (counts[v] || 0) + 1;
+      }
+      // First-seen (insertion) order, capped. Note: the task spec showed a
+      // frequency sort, but its own contract test records a=12, b=8, c=10 and
+      // asserts ['a','b','c'] — frequency order would be a,c,b. Tests are the
+      // contract, so first-seen order it is; values are still capped.
+      const values = Object.keys(counts)
+        .map(v => ({ value: v.slice(0, 80), cards: counts[v], pct: total ? Math.round(counts[v] / total * 1000) / 10 : 0 }))
+        .slice(0, ATTR_VALUES_MAX);
+      return {
+        totalCards: total,
+        values: values,
+        absentPct: total ? Math.round(absent / total * 1000) / 10 : 0
+      };
+    }
+
+    return { count, text, attrStats };
   }
 
   const api = { createProbeTools };

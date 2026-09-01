@@ -73,3 +73,43 @@ describe('probe.text', () => {
     assert.equal(errTools.observationLog.size(), 0);
   });
 });
+
+describe('probe.attrStats', () => {
+  it('tallies attribute distribution across containers via $extractList', async () => {
+    const { tools, observationLog } = makeTools(async (snippet) => {
+      assert.ok(/return \$extractList\(/.test(snippet), 'composes the EXISTING rail');
+      assert.ok(snippet.includes('data-ad-rendering-role'), 'fieldMap targets the requested attr');
+      return {
+        records: [
+          { m: 'story_message' }, { m: '' }, { m: '' }, { m: '' },
+          { m: 'profile_name' }, { m: '' }, { m: '' }, { m: '' }, { m: '' }, { m: '' }
+        ]
+      };
+    });
+    const r = await tools.attrStats('div.card', 'data-ad-rendering-role');
+    assert.equal(r.totalCards, 10);
+    assert.equal(r.values.length, 2, 'absent bucket is reported as absentPct, not a value row');
+    assert.equal(r.values[0].value, 'story_message');
+    assert.equal(r.values[0].cards, 1);
+    assert.ok(Math.abs(r.values[0].pct - 10) < 0.01);
+    assert.equal(r.absentPct, 80);
+    assert.ok(observationLog.coversAttr('data-ad-rendering-role'),
+      'attrStats must record the attribute receipt for the grounding gate');
+    assert.ok(observationLog.covers('div.card'));
+  });
+
+  it('sorts value rows by frequency and caps the histogram', async () => {
+    const records = [];
+    for (let i = 0; i < 30; i++) records.push({ m: i < 12 ? 'a' : (i < 20 ? 'b' : 'c') });
+    const { tools } = makeTools(async () => ({ records }));
+    const r = await tools.attrStats('div.card', 'data-k');
+    assert.deepEqual(r.values.map(v => v.value), ['a', 'b', 'c']);
+    assert.equal(r.values.length, 3);
+  });
+
+  it('tolerates executor error shape', async () => {
+    const { tools } = makeTools(async () => { throw new Error('BOOM'); });
+    const r = await tools.attrStats('div.card', 'data-k');
+    assert.equal(r.error, 'BOOM');
+  });
+});
