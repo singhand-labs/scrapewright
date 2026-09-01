@@ -39,6 +39,13 @@
   // attribute-distribution receipt demands. Semantic-bearing globals
   // (title, href, name, type, value) and all data-*/aria-* attrs DO
   // discriminate card types and still require a distribution receipt.
+  // 'has'/'not' are pseudo-class NAMES, never attribute names, but they are
+  // load-bearing here: the attr-token regex inside extractFilterAttributes
+  // captures bracket tokens `[name]` from :has(...)/:not(...) spans, and a
+  // selector like `a:not([href])` yields no stray `[not]` token to filter —
+  // the GLOBAL_ATTRS set is the ONLY exclusion check on captured names, so
+  // removing them would change nothing today yet invite confusion; keeping
+  // them documents that pseudo-class names never demand distributions.
   const GLOBAL_ATTRS = new Set([
     'class', 'id', 'style', 'dir', 'lang', 'tabindex', 'has', 'not'
   ]);
@@ -176,7 +183,16 @@
       } else if (ledgerSelectors.has(claim.selector)) {
         admitted = true;
       } else if (claim.kind === 'static' && autoVerify) {
-        const n = await autoVerify(claim.selector);
+        // A routine probe failure (tab closed mid-probe, CDP timeout) must
+        // reject the selector, not crash the gate: probe failed ⇒ count
+        // unknown ⇒ not verified ⇒ falls through to the 'observation'
+        // rejection. No separate rejection class (v1 keeps the taxonomy small).
+        let n = null;
+        try {
+          n = await autoVerify(claim.selector);
+        } catch (err) {
+          n = null;
+        }
         if (typeof n === 'number' && n > 0) {
           autoVerified.push(claim.selector);
           if (observationLog) {
@@ -199,9 +215,10 @@
               missing: 'observation',
               suggestion: 'No observation receipt. Run probe.count(' + JSON.stringify(claim.selector) + ') (or scope a probe that matches it exactly), or annotate.request.'
             });
-        continue;
       }
-      // Selector admitted — check filter-attribute distribution receipts.
+      // Filter-attribute distribution receipts are demanded for EVERY claim,
+      // admitted or not — default-deny: an unadmitted selector's filter attrs
+      // reject alongside (and independently of) the selector-level rejection.
       const filterAttrs = extractFilterAttributes(claim.selector);
       for (const attr of filterAttrs) {
         const haveAttr = (observationLog && observationLog.coversAttr(attr));
@@ -221,7 +238,10 @@
       ok: rejections.length === 0,
       rejections: rejections,
       overrideReceipts: overrideReceipts,
-      autoVerified: autoVerified
+      autoVerified: autoVerified,
+      // Claims returned for callers (Plan-3 UI may render them); already
+      // computed — callers may ignore.
+      claims: claims
     };
   }
 

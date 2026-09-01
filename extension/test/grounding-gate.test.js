@@ -159,6 +159,29 @@ describe('validateGrounding — receipt sources', () => {
     assert.ok(/diag|annotat/i.test(rej.suggestion), 'rejection teaches the right next probe');
   });
 
+  it('a throwing autoVerify probe rejects the selector instead of crashing the gate', async () => {
+    const s = session([]);
+    let r;
+    await assert.doesNotReject(async () => {
+      r = await validateGrounding({
+        steps: [{ id: '1', script: "await $count('div.card');" }],
+        observationLog: s.observationLog, ledger: s.ledger,
+        autoVerify: async () => { throw new Error('TAB_CLOSED'); }
+      });
+    });
+    assert.equal(r.ok, false);
+    assert.ok(r.rejections.some(x => x.selector === 'div.card' && x.missing === 'observation'));
+  });
+
+  it('default-deny with no observationLog at all (filter attrs reject too)', async () => {
+    const sel = 'div.card:has([data-k])';
+    const steps = [{ id: '1', script: 'return $extractList(' + JSON.stringify(sel) + ', { c: \'.t\' });' }];
+    const r = await validateGrounding({ steps, ledger: createFindingsLedger() });
+    assert.equal(r.ok, false);
+    assert.ok(r.rejections.some(x => x.missing === 'observation'));
+    assert.ok(r.rejections.some(x => x.missing === 'attr-distribution'));
+  });
+
   it('human overrides admit any selector and are reported', async () => {
     const s = session([{ sel: 'div.card' }, { sel: 'a.p' }]);
     const r = await validateGrounding({
@@ -210,5 +233,18 @@ describe('validateGrounding — filter attributes need distribution receipts', (
     ]);
     const userR = await validateGrounding({ steps, observationLog: withUser.observationLog, ledger: withUser.ledger });
     assert.equal(userR.ok, false, 'v1: user receipt is SELECTOR-scoped, attribute distribution still required — the user must annotate through the attrStats-approved flow or an override');
+  });
+
+  it('override admits the selector but NOT the filter-attr distribution demand', async () => {
+    const sel = 'div.card:has([title="Sponsored"])';
+    const steps = [{ id: '4', script: 'return $extractList(' + JSON.stringify(sel) + ', { c: \'.t\' });' }];
+    const s = session([{ sel: sel }]);
+    const r = await validateGrounding({
+      steps, observationLog: s.observationLog, ledger: s.ledger, overrides: [sel]
+    });
+    assert.equal(r.ok, false, 'override covers the selector receipt; the attr still needs attrStats');
+    assert.equal(r.rejections.find(x => x.missing === 'attr-distribution').attr, 'title');
+    assert.deepEqual(r.overrideReceipts, [sel]);
+    assert.ok(Array.isArray(r.claims) && r.claims.length === 1, 'claims returned for callers');
   });
 });
