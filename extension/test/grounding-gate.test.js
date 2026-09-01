@@ -57,6 +57,17 @@ describe('extractSelectorClaims', () => {
     assert.ok(!sels.includes('postingTime'));
     assert.ok(sels.includes('.feed'));
   });
+
+  it('extracts selectors from the scroll/stability DSL surface', () => {
+    const steps = [{ id: '5', script: `
+      await $scrollBy('div[role="feed"]', 800);
+      await $waitForStable('.loading');
+    ` }];
+    const claims = extractSelectorClaims(steps);
+    const sels = claims.map(c => c.selector);
+    assert.ok(sels.includes('div[role="feed"]'), '$scrollBy first arg is a selector claim');
+    assert.ok(sels.includes('.loading'), '$waitForStable first arg is a selector claim');
+  });
 });
 
 describe('extractFilterAttributes', () => {

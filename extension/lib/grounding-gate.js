@@ -19,11 +19,14 @@
 
 (function (global) {
 
-  // $ APIs whose first string argument is a selector.
+  // $ APIs whose first string argument is a selector. Longer names precede
+  // their prefixes (alternation is ordered); must cover the full DSL surface —
+  // any selector-bearing API missing here silently bypasses claim extraction.
   const SELECTOR_APIS = [
-    'extractListMulti', 'extractWithHover', 'extractList', 'extract',
-    'clickInList', 'scrollIntoView', 'scrollToBottom', 'hover',
-    'list', 'count', 'wait', 'exists', 'check', 'click', 'type'
+    'extractListMulti', 'extractWithHover', 'waitForStable', 'extractList',
+    'scrollIntoView', 'scrollToBottom', 'scrollBy', 'extract',
+    'clickInList', 'hover', 'list', 'count', 'wait', 'exists', 'check',
+    'click', 'type'
   ];
   // Module-level /g regexes: callers must not break out of the exec loop; lastIndex is reset per step.
   const SELECTOR_API_RE = new RegExp(
