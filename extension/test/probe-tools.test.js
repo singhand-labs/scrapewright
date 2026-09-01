@@ -74,6 +74,48 @@ describe('probe.text', () => {
   });
 });
 
+describe('probe.sample', () => {
+  it('returns capped element data for any index via $list', async () => {
+    const list = [
+      { tagName: 'DIV', id: 'c0', className: 'x1 y2', textContent: 'T0', href: '', src: '' },
+      { tagName: 'DIV', id: 'c1', className: 'x1', textContent: 'T1', href: '', src: '' }
+    ];
+    const { tools, observationLog } = makeTools(async (snippet) => {
+      assert.ok(/return \$list\(/.test(snippet));
+      return list;
+    });
+    const r = await tools.sample('div.card', { index: 1 });
+    assert.equal(r.match, 1);
+    assert.equal(r.element.id, 'c1');
+    assert.ok(observationLog.covers('div.card'));
+  });
+
+  it('element fields are capped (className 120, text 300)', async () => {
+    const list = [{ tagName: 'DIV', id: '', className: 'c'.repeat(500), textContent: 't'.repeat(1000) }];
+    const { tools } = makeTools(async () => list);
+    const r = await tools.sample('div.card');
+    assert.ok(r.element.className.length <= 120);
+    assert.ok(r.element.textContent.length <= 300);
+  });
+
+  it('attaches outerHTML only for index 0 via the $extract attr path, when asked', async () => {
+    const { tools } = makeTools(async (snippet) => {
+      if (/\$extract\(/.test(snippet)) return '<div class="cap">html</div>';
+      return [{ tagName: 'DIV', id: 'c0', className: '', textContent: '' }];
+    });
+    const r0 = await tools.sample('div.card', { wantHtml: true });
+    assert.equal(r0.html, '<div class="cap">html</div>');
+    const r1 = await tools.sample('div.card', { index: 1, wantHtml: true });
+    assert.equal(r1.html, undefined, 'nth-match HTML needs the live executor op (Plan 3)');
+  });
+
+  it('out-of-range index reports notFound without throwing', async () => {
+    const { tools } = makeTools(async () => [{ tagName: 'DIV', id: 'only', className: '', textContent: '' }]);
+    const r = await tools.sample('div.card', { index: 5 });
+    assert.equal(r.notFound, true);
+  });
+});
+
 describe('probe.attrStats', () => {
   it('tallies attribute distribution across containers via $extractList', async () => {
     const { tools, observationLog } = makeTools(async (snippet) => {

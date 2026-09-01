@@ -98,7 +98,42 @@
       };
     }
 
-    return { count, text, attrStats };
+    async function sample(sel, opts) {
+      const o = opts || {};
+      const index = typeof o.index === 'number' && o.index >= 0 ? Math.floor(o.index) : 0;
+      if (typeof sel !== 'string' || !sel) return { error: 'selector required' };
+      const r = await runSnippet('return $list(' + JSON.stringify(sel) + ');');
+      if (r && typeof r.error === 'string') return r;
+      if (observationLog) {
+        observationLog.record({ tool: 'probe.sample', selectors: [sel], summary: 'sample index=' + index });
+      }
+      const arr = Array.isArray(r) ? r : [];
+      const el = arr[index];
+      if (!el) return { notFound: true, total: arr.length };
+      const out = {
+        match: index,
+        total: arr.length,
+        element: {
+          tagName: String(el.tagName || ''),
+          id: String(el.id || '').slice(0, 80),
+          className: String(el.className || '').replace(/\s+/g, ' ').trim().slice(0, 120),
+          textContent: String(el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 300),
+          href: String(el.href || '').slice(0, 300),
+          src: String(el.src || '').slice(0, 300)
+        }
+      };
+      // outerHTML is only expressible for the FIRST match on the current rail
+      // ($extract(sel, 'outerHTML')). nth-match HTML arrives with the live
+      // executor op in Plan 3 — declared limitation, not a stub.
+      if (o.wantHtml && index === 0) {
+        const h = await runSnippet('return $extract(' + JSON.stringify(sel) + ", 'outerHTML');");
+        if (h && typeof h.error === 'string') out.htmlError = h.error;
+        else out.html = String(h || '').slice(0, 30000);
+      }
+      return out;
+    }
+
+    return { count, text, attrStats, sample };
   }
 
   const api = { createProbeTools };
