@@ -309,8 +309,28 @@
             report = await stop(s[0], s[1]);
             break;
           }
-          const parsed = Protocol.parseAssistantTurn(content);
-          if (!parsed.ok) { report = await stop('protocol', parsed.violation); break; }
+          let parsed = Protocol.parseAssistantTurn(content);
+          if (!parsed.ok) {
+            emit('protocol_violation', { violation: parsed.violation });
+            state.transcript.push({
+              kind: 'system',
+              text: 'PROTOCOL VIOLATION (' + parsed.violation + '): reply with ONE JSON object with exactly one of "tool" or "finish". No prose outside the JSON.'
+            });
+            let repaired = null;
+            try {
+              repaired = await callLlm(assembleMessages());
+            } catch (err) {
+              const s = llmStopFromError(err);
+              report = await stop(s[0], s[1]);
+              break;
+            }
+            parsed = Protocol.parseAssistantTurn(repaired);
+            if (!parsed.ok) {
+              report = await stop('protocol', parsed.violation);
+              break;
+            }
+            content = repaired;
+          }
           const turn = parsed.turn;
           state.spend.turns += 1;
 

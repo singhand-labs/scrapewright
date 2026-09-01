@@ -303,3 +303,55 @@ describe('LLM failure discipline', () => {
     assert.ok(Date.now() - t0 >= 5, 'at least one backoff wait happened');
   });
 });
+
+describe('protocol violations', () => {
+  it('one repair round recovers a sloppy reply', async () => {
+    const calls = [];
+    const events = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply('Sure! Let me count the cards for you.'),          // violation: no-json
+        reply(envelope('probe.count', { sel: 'div.card' })),
+        reply(finishEnvelope())
+      ], calls),
+      tools: { 'probe.count': async () => ({ count: 4 }) },
+      onEvent: (e) => events.push(e)
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    assert.equal(report.turns, 2);
+    assert.equal(calls.length, 3);
+    assert.ok(events.some(e => e.type === 'protocol_violation' && e.violation === 'no-json'));
+    const nudges = session.state().session.transcript.filter(e => e.kind === 'system');
+    assert.equal(nudges.length, 1);
+    assert.ok(nudges[0].text.includes('PROTOCOL VIOLATION (no-json)'));
+  });
+
+  it('a second consecutive violation stops the session with reason protocol', async () => {
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([reply('I will just describe it in prose.')], []),
+      tools: {}
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'protocol');
+    assert.equal(report.stopped.detail, 'no-json');
+    assert.equal(report.turns, 0);
+  });
+
+  it('a repaired turn does not count as two turns', async () => {
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply('prose'),
+        reply(envelope('probe.count', {})),
+        reply(finishEnvelope())
+      ], []),
+      tools: { 'probe.count': async () => ({ count: 1 }) }
+    });
+    const report = await session.run();
+    assert.equal(report.turns, 2);   // repair round is not a turn
+    assert.equal(report.spend.llmCalls, 3);
+  });
+});
