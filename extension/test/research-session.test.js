@@ -88,4 +88,37 @@ describe('engine happy path', () => {
   it('requires an llm function and throws at creation otherwise', () => {
     assert.throws(() => createResearchSession({ requirement: 'r', tools: {} }), /llm/);
   });
+
+  it('a cyclic tool result is sanitized at the dispatch boundary, never crashes state()', async () => {
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('probe.weird', {})),
+        reply(finishEnvelope())
+      ], []),
+      tools: { 'probe.weird': async () => { const c = {}; c.self = c; return c; } }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    const st = session.state();
+    const entry = st.session.transcript.find(e => e.kind === 'tool');
+    assert.equal(entry.ok, false);
+    assert.ok(entry.result.error.includes('unserializable'));
+  });
+
+  it('a tool returning undefined becomes an error result, not a crash', async () => {
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('probe.void', {})),
+        reply(finishEnvelope())
+      ], []),
+      tools: { 'probe.void': async () => {} }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    const entry = session.state().session.transcript.find(e => e.kind === 'tool');
+    assert.equal(entry.ok, false);
+    assert.ok(entry.result.error.includes('unserializable'));
+  });
 });

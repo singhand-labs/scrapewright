@@ -229,13 +229,24 @@
       return ['llm:error', String((err && err.message) || err)];
     }
 
+    // Transcripts are persisted and state()-copied via JSON round-trips, so
+    // the dispatch boundary OWNS serializability: a cyclic/undefined tool
+    // result must degrade to an error result, never crash persist()/state().
+    function sanitizeToolResult(r) {
+      try {
+        const s = JSON.stringify(r);
+        if (typeof s === 'string') return r;
+      } catch (e) { /* fall through */ }
+      return { error: 'unserializable result (cyclic or non-JSON value)' };
+    }
+
     async function dispatchTool(name, args) {
       const fn = tools[name];
       if (typeof fn !== 'function') {
         return { error: 'unknown tool: ' + name, available: availableToolNames() };
       }
       try {
-        return await fn(args, { observationLog: observationLog, ledger: ledger, session: publicApi });
+        return sanitizeToolResult(await fn(args, { observationLog: observationLog, ledger: ledger, session: publicApi }));
       } catch (err) {
         return { error: String((err && err.message) || err) };
       }
