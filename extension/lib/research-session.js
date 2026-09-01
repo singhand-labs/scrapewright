@@ -386,9 +386,9 @@
     }
 
     async function dispatchTool(name, args) {
-      if (name === 'knowledge.query') return handleKnowledgeQuery(args);
-      if (name === 'ledger.add') return handleLedgerAdd(args);
-      if (name === 'service.update') return await handleServiceUpdate(args);
+      if (name === 'knowledge.query') return sanitizeToolResult(handleKnowledgeQuery(args));
+      if (name === 'ledger.add') return sanitizeToolResult(handleLedgerAdd(args));
+      if (name === 'service.update') return sanitizeToolResult(await handleServiceUpdate(args));
       // Probe tools (probe-tools.js) take POSITIONAL args; the protocol carries
       // one args object — adapt the object shape to the positional contract.
       const PROBE_ARG_KEYS = {

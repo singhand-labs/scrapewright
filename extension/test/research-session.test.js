@@ -713,4 +713,28 @@ describe('service.update grounding chokepoint (spec §8)', () => {
     assert.equal(entry.result.totalCards, 8);
     assert.ok(entry.result.values.some(v => v.value === 'ad' && v.cards === 2));
   });
+
+  it('a cyclic handler return from service.update degrades to an error result, state() never throws', async () => {
+    const bag = {};
+    const session = createResearchSession({
+      requirement: 'collect cards',
+      llm: scriptedLlm([
+        reply(envelope('probe.attrStats', { containerSel: 'div.card', attr: 'data-kind' })),
+        reply(envelope('service.update', { steps: updateStep(AD_SELECTOR) })),
+        reply(finishEnvelope())
+      ], []),
+      tools: bag,
+      budgets: { maxTurns: 10 }
+    });
+    const probe = createProbeTools({ executeDsl: makeRail(8), observationLog: session.observationLog });
+    bag['probe.attrStats'] = probe.attrStats;
+    bag['probe.count'] = probe.count;
+    bag['service.update'] = async () => { const c = {}; c.self = c; return c; };
+
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    const entry = session.state().session.transcript.find(e => e.kind === 'tool' && e.name === 'service.update');
+    assert.equal(entry.ok, false);
+    assert.ok(entry.result.error.includes('unserializable'));
+  });
 });
