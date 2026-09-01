@@ -14,7 +14,7 @@ function makeRunner(orchestrate, overrides) {
     createTab: async (url) => ({ id: 11, url }),
     removeTab: async (id) => { calls.removeTab.push(id); },
     waitForTabLoad: async () => {},
-    sendMessage: async () => ({}),
+    sendMessage: async () => ({ pong: true }),
     executeScript: async (tabId, script, input, timeoutMs) => ({ result: 'ok', selectorDiagnostics: [] }),
     captureSnapshot: async () => ({ html: '<html></html>' }),
     evaluateCondition: async () => true
@@ -136,11 +136,14 @@ describe('createVerifyRunner', () => {
       t += 8000;
     }
     const out = await p;
-    Date.now = origNow;
-    assert.equal(out.report.ok, false);
+    try {
+      assert.equal(out.report.ok, false);
     assert.match(out.report.error.message, /ZERO_COUNTER_FROZEN/);
     assert.ok(out.report.events.indexOf('COUNTER_FROZEN') !== -1);
     assert.ok(out.raw.breaker, 'breaker state exposed on raw');
+    } finally {
+      Date.now = origNow;
+    }
   });
 
   it('popover failure reasons in STEP_ITERATION previews map to POPOVER_TIMEOUT tag', async () => {
@@ -171,5 +174,51 @@ describe('createVerifyRunner', () => {
     assert.equal(execCalls, 1, 'second executeScript never ran');
     assert.equal(out.report.aborted, true);
     assert.match(out.report.error.message, /TEST_ABORTED/);
+  });
+
+  it('tab-create timeout closes the late-arriving tab (leak guard)', async () => {
+    const removed = [];
+    const orch = async (svc, input, d) => {
+      try { await d.createTab('https://example.com'); } catch (e) { /* timeout expected */ }
+      return { finalResult: { posts: [{ title: 'a' }] }, steps: [], pages: [] };
+    };
+    const { runner } = makeRunner(orch, {
+      createTab: async () => { await new Promise((r) => setTimeout(r, 80)); return { id: 99 }; },
+      removeTab: async (x) => { removed.push(x); },
+      withTimeout: (p, ms, msg) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(msg || 'timeout')), 30))])
+    });
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object' } });
+    await new Promise((r) => setTimeout(r, 120));
+    assert.ok(removed.some((x) => (x && x.id) === 99 || x === 99), 'late-arriving tab was closed by the leak guard');
+    assert.equal(out.report.ok, true, 'the run itself still completes');
+  });
+
+  it('pagesTruncated renders as N+ in report.pages', async () => {
+    const orch = async () => ({ finalResult: { posts: [{ title: 'a' }] }, steps: [], pages: [1, 2, 3], pagesTruncated: true });
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object' } });
+    assert.equal(out.report.pages, '3+');
+  });
+
+  it('missing top-level schema fields are informational: schemaOk:false + schemaMissing, ok stays true', async () => {
+    const orch = async () => ({ finalResult: { posts: [{ title: 'a' }] }, steps: [{ stepId: 's1', stepName: 'one', result: {}, snapshot: null }], pages: [], pagesTruncated: false });
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object', required: ['posts', 'cursor'], properties: { posts: { type: 'array' }, cursor: { type: 'string' } } } });
+    assert.equal(out.report.ok, true, 'a missing scalar is not an extraction error (findEmptyExtractionFields skips scalars)');
+    assert.equal(out.report.schemaOk, false);
+    assert.ok(String(out.report.schemaMissing).indexOf('cursor') !== -1);
+  });
+
+  it('breaker does NOT trip when the streak spans less than the minimum elapsed time', async () => {
+    const orch = async (svc, input, d, opts) => {
+      for (let i = 1; i <= 10; i++) {
+        opts.onEvent({ type: 'STEP_ITERATION', stepId: 's1', iteration: i, resultPreview: '{"done":false,"count":0,"raw":5}' });
+      }
+      return { finalResult: { posts: [{ title: 'a' }] }, steps: [], pages: [] };
+    };
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object' } });
+    assert.equal(out.raw.breaker, null, 'streak ≥ 8 but elapsed < 60s → no trip');
+    assert.equal(out.report.ok, true);
   });
 });

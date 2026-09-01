@@ -28,7 +28,7 @@
     const m = resolveLib('./wizard-utils', '__wizardUtilsModuleMarker__');
     if (m && typeof m.scoreAttemptResult === 'function') return m;
     const w = (typeof window !== 'undefined' && window) || global || self;
-    return {
+    const bag = {
       parseCounterFields: w.parseCounterFields,
       isFrozenZeroNotReady: w.isFrozenZeroNotReady,
       FROZEN_ZERO_STREAK_THRESHOLD: w.FROZEN_ZERO_STREAK_THRESHOLD || 8,
@@ -47,6 +47,10 @@
       stripSnapshotsFromTestResult: w.stripSnapshotsFromTestResult,
       sampleRecordsForLLMContext: w.sampleRecordsForLLMContext
     };
+    for (const k of Object.keys(bag)) {
+      if (k.indexOf('FROZEN_') !== 0 && typeof bag[k] !== 'function') bag[k] = function () { return null; };
+    }
+    return bag;
   }
 
   function previewJson(p) {
@@ -63,6 +67,7 @@
     const getSignal = typeof d.getSignal === 'function' ? d.getSignal : () => null;
     const withTimeout = typeof d.withTimeout === 'function'
       ? d.withTimeout
+      // dev/test default — does not clear the loser's timer; production callers inject their own
       : (promise, ms, message) => Promise.race([
           promise,
           new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms))
@@ -190,12 +195,21 @@
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
       const detectors = { emptyFields: [], duplicateFields: [], countShortfall: null };
-      let error = orchestrationError ? Object.assign(new Error(orchestrationError.message), orchestrationError) : null;
+      let error = null;
+      if (orchestrationError) {
+        try {
+          error = Object.assign(new Error(orchestrationError.message), orchestrationError);
+        } catch (e) {
+          error = new Error(String(orchestrationError.message));
+          error.stepId = orchestrationError.stepId || null;
+        }
+      }
+
+      const finalData = result ? ((result.finalResult && result.finalResult.data) || result.finalResult) : null;
 
       if (error) {
         augmentError(error, stepsDefs, events);
       } else if (result) {
-        const finalData = (result.finalResult && result.finalResult.data) || result.finalResult;
         const toError = (msg, stepId, extra) => {
           const e = new Error(msg);
           if (stepId) e.stepId = stepId;
@@ -279,7 +293,6 @@
         }
       }
 
-      const finalData = result ? ((result.finalResult && result.finalResult.data) || result.finalResult) : null;
       const oc = result ? WU.validateOutputAgainstSchema(finalData, outputSchema) : { ok: true, missing: [] };
 
       const compactSteps = result && Array.isArray(result.steps)
@@ -288,10 +301,11 @@
             stepName: s.stepName,
             skipped: !!s.skipped,
             skipReason: s.skipReason || null,
-            iterations: events.filter((e) => e && e.type === 'STEP_ITERATION' && e.stepId === s.stepId).length
+            iterations: events.filter((e) => e && e.type === 'STEP_ITERATION' && String(e.stepId) === String(s.stepId)).length
           }))
         : [];
 
+      // hoisted — declared after the return for top-down reading
       function eventTags() {
         const tags = [];
         const add = (t) => { if (tags.indexOf(t) === -1) tags.push(t); };
@@ -333,6 +347,7 @@
           ? (result.pagesTruncated ? result.pages.length + '+' : String(result.pages.length))
           : '0',
         eventCount: events.length,
+        // TAG strings for knowledge auto-attach — the engine reads result.events on the tool result, so this key name is contract, not preference (raw event log is the sibling top-level return field)
         events: eventTags()
       };
 
@@ -341,6 +356,7 @@
       // Catch-path augmentation (moved verbatim from wizard.js testScript):
       // re-labels bare aborts/exhaustions with precise root causes so the
       // next actor (session LLM or the user) gets a fixable signal.
+      // hoisted — declared after the return for top-down reading
       function augmentError(e, stepDefsOfService, evts) {
         try {
           if (zeroCounterBreaker && /TEST_ABORTED/.test(e.message || '')) {
