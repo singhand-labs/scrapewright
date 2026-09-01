@@ -196,6 +196,44 @@
       return 'SESSION STATE\n' + parts.join('\n\n');
     }
 
+    function transcriptChars() {
+      let n = 0;
+      for (const e of state.transcript) {
+        if (e.kind === 'tool') {
+          n += 'TOOL RESULT '.length + String(e.name || '').length
+            + String(e.summary || '').length + JSON.stringify(e.result === undefined ? null : e.result).length;
+        } else {
+          n += String(e.text || '').length;
+        }
+      }
+      return n;
+    }
+
+    function maybeCompact() {
+      const keepEntries = Math.max(2, compaction.keepTurns * 2);
+      const chars = transcriptChars();
+      if (chars <= compaction.thresholdChars) return;
+      if (state.transcript.length <= keepEntries) return;
+      const keep = state.transcript.slice(-keepEntries);
+      const old = state.transcript.slice(0, state.transcript.length - keepEntries);
+      const lines = [];
+      for (const e of old) {
+        if (e.kind === 'assistant') {
+          const t = Protocol.parseAssistantTurn(e.text);
+          lines.push('- ' + (t.ok && t.turn.tool
+            ? t.turn.tool + ' ' + JSON.stringify(t.turn.args)
+            : 'assistant turn'));
+        } else if (e.kind === 'tool') {
+          lines.push('  → ' + String(e.summary || '').slice(0, 200));
+        } else {
+          lines.push('- [protocol nudge]');
+        }
+      }
+      state.digest = (state.digest ? state.digest + '\n' : '') + lines.join('\n');
+      state.transcript = keep;
+      emit('compaction', { collapsed: old.length, charsBefore: chars });
+    }
+
     function assembleMessages() {
       const sys = Protocol.buildSystemPrompt({
         base: cfg.systemPrompt || '',
@@ -364,6 +402,7 @@
           const summary = Protocol.summarizeToolResult(turn.tool, result, toolResultCapChars);
           state.transcript.push({ kind: 'tool', name: turn.tool, ok: !isErrorResult(result), result: result, summary: summary });
           emit('tool_result', { tool: turn.tool, ok: !isErrorResult(result), summary: summary.slice(0, 200) });
+          maybeCompact();
           await persist();
         }
       } finally {

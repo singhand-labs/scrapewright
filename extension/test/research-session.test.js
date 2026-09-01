@@ -429,3 +429,64 @@ describe('goals and hypotheses', () => {
     assert.ok(stateMsg.content.includes('1. X marks cards — refuted'));
   });
 });
+
+describe('compaction', () => {
+  function noisySession(calls) {
+    return createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('probe.count', { sel: '.a' })),
+        reply(envelope('probe.count', { sel: '.b' })),
+        reply(envelope('probe.count', { sel: '.c' })),
+        reply(envelope('probe.count', { sel: '.d' })),
+        reply(finishEnvelope())
+      ], calls),
+      tools: { 'probe.count': async (args) => ({ count: args.sel.length }) },
+      compaction: { thresholdChars: 400, keepTurns: 1 }
+    });
+  }
+
+  it('collapses older turns into the digest and keeps the last pair verbatim', async () => {
+    const calls = [];
+    const session = noisySession(calls);
+    await session.run();
+    const s = session.state().session;
+    assert.ok(s.digest.includes('probe.count'));
+    assert.ok(s.digest.length > 0);
+    const kinds = s.transcript.map(e => e.kind);
+    assert.ok(s.transcript.length <= 3, 'only the kept window (+ trailing) survives');
+    const lastCall = calls[calls.length - 1].messages;
+    const stateMsg = lastCall.find(m => m.role === 'system' && m.content.startsWith('SESSION STATE'));
+    assert.ok(stateMsg.content.includes('# Earlier investigation (digest)'), 'digest must be injected');
+    assert.ok(stateMsg.content.includes('.a'), 'collapsed turns survive as digest lines');
+  });
+
+  it('replays the kept window verbatim (assistant raw + TOOL RESULT)', async () => {
+    const calls = [];
+    const session = noisySession(calls);
+    await session.run();
+    const lastCall = calls[calls.length - 1].messages;
+    const toolReplays = lastCall.filter(m => m.role === 'user' && m.content.startsWith('TOOL RESULT'));
+    assert.equal(toolReplays.length, 1, 'keepTurns=1 keeps exactly one tool replay');
+    assert.ok(lastCall.some(m => m.role === 'assistant' && m.content.includes('probe.count')));
+  });
+
+  it('emits a compaction event and never compacts below the keep window', async () => {
+    const events = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('probe.count', { sel: '.a' })),
+        reply(envelope('probe.count', { sel: '.b' })),
+        reply(finishEnvelope())
+      ], []),
+      tools: { 'probe.count': async () => ({ count: 1 }) },
+      compaction: { thresholdChars: 10, keepTurns: 1 },
+      onEvent: (e) => events.push(e)
+    });
+    await session.run();
+    assert.ok(events.some(e => e.type === 'compaction'));
+    const tr = session.state().session.transcript;
+    assert.ok(tr.length >= 2, 'keep window is never compacted away');
+  });
+});
