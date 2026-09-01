@@ -82,11 +82,12 @@
     if (sid && c.stepIds.indexOf(sid) === -1) c.stepIds.push(sid);
   }
 
-  // Attribute names appearing inside :has(...) / :not(...) filter clauses,
-  // plus attribute filters on the same compound that carries the pseudo
-  // (e.g. the [href*="/p/"] in `a[href*="/p/"]:not([name="x"])` — same
-  // element, same polarity assumption). Attributes on OTHER compounds of
-  // the selector (e.g. `div[role='feed']` scoping) are not filter claims.
+  // Attribute names appearing inside :has(...) / :not(...) / :is(...) /
+  // :where(...) filter spans — there the attribute is used as a CARD-TYPE
+  // discriminator (the seventh-log polarity-inversion class). Attribute
+  // selectors directly on a compound (`a[href*="/p/"]`) are ordinary match
+  // constraints covered by the selector-level receipt (probe.count > 0) and
+  // are NOT collected.
   // Approximation: scans the argument spans of those pseudo-functions for
   // [attr] / [attr=value] tokens. Nested pseudo-functions inside the span
   // (like :not(:has([x]))) are included because the span extends to the
@@ -109,29 +110,7 @@
     const re = /:(has|not|is|where)\s*\(/g;
     let m;
     while ((m = re.exec(selector)) !== null) {
-      // Compound prefix: walk back from the ':' to the nearest combinator
-      // that sits outside brackets/parens/quotes — attr filters there belong
-      // to the same element as the pseudo and are part of the filter claim.
-      let start = m.index;
-      {
-        let depth = 0;
-        let quote = null;
-        while (start > 0) {
-          const ch = selector[start - 1];
-          if (quote) {
-            if (ch === '\\') { start -= 2; continue; }
-            if (ch === quote) quote = null;
-          } else if (ch === "'" || ch === '"') {
-            quote = ch;
-          } else if (ch === ']') depth += 1;
-          else if (ch === '[') depth -= 1;
-          else if (ch === ')') depth += 1;
-          else if (ch === '(') depth -= 1;
-          else if (depth <= 0 && (ch === ' ' || ch === '\t' || ch === '>' || ch === '+' || ch === '~')) break;
-          start -= 1;
-        }
-      }
-      collect(selector.slice(start, m.index));
+      // Quote-aware span walk: balance parens, skip quoted attr values.
       let depth = 1;
       let i = re.lastIndex;
       let quote = null;

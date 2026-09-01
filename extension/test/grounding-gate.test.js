@@ -88,8 +88,8 @@ describe('claim extraction hardening', () => {
 
   it('semantic global attrs (title/href/name/type) still demand distribution receipts', () => {
     assert.deepEqual(extractFilterAttributes('div.card:has([title="Sponsored"])'), ['title']);
-    assert.deepEqual(extractFilterAttributes('a[href*="/p/"]:not([name="x"])'), ['href', 'name']);
-    assert.ok(extractFilterAttributes('[type="button"][data-k]').every(a => a !== 'class'));
+    assert.deepEqual(extractFilterAttributes('a:not([href*="/p/"][name="x"])'), ['href', 'name']);
+    assert.deepEqual(extractFilterAttributes('[type="button"][data-k]'), [], 'direct compound attrs are NOT filter attrs — selector receipt covers them');
   });
 
   it('does not match $-suffixed identifiers as API calls', () => {
