@@ -231,3 +231,75 @@ describe('budgets and breakers', () => {
     assert.ok(report.spend.promptTokens > 0);
   });
 });
+
+describe('LLM failure discipline', () => {
+  it('empty + finish_reason length is NON-RETRYABLE: exactly one call, stop llm:length', async () => {
+    const calls = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([reply('', { finish_reason: 'length' })], calls),
+      tools: {},
+      retry: { attempts: 3, backoffMs: 0 }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'llm:length');
+    assert.equal(calls.length, 1, 'RC55: retrying empty+length burns the same budget again');
+    assert.equal(report.spend.llmCalls, 1);
+  });
+
+  it('transient errors retry with backoff and succeed', async () => {
+    const calls = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        { __throw: 'ECONNRESET' },
+        { __throw: 'timeout' },
+        reply(finishEnvelope('recovered'))
+      ], calls),
+      tools: {},
+      retry: { attempts: 3, backoffMs: 0 }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    assert.equal(calls.length, 3);
+  });
+
+  it('exhausted retries stop with llm:error', async () => {
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([{ __throw: 'down' }], []),
+      tools: {},
+      retry: { attempts: 2, backoffMs: 0 }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'llm:error');
+    assert.ok(String(report.stopped.detail).includes('down'));
+  });
+
+  it('empty replies WITHOUT length are retried, then stop as llm:error', async () => {
+    const calls = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([reply('')], calls),
+      tools: {},
+      retry: { attempts: 3, backoffMs: 0 }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'llm:error');
+    assert.equal(calls.length, 3);
+  });
+
+  it('honors exponential backoff (deterministic via timing-free config)', async () => {
+    // backoffMs 0 keeps tests instant; this pins that backoffMs is respected structurally
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([{ __throw: 'x' }, reply(finishEnvelope())], []),
+      tools: {},
+      retry: { attempts: 2, backoffMs: 5 }
+    });
+    const t0 = Date.now();
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    assert.ok(Date.now() - t0 >= 5, 'at least one backoff wait happened');
+  });
+});

@@ -215,13 +215,34 @@
     }
 
     async function callLlm(messages) {
-      const res = await llm({ messages: messages, maxTokens: budgets.maxTokensPerCall });
-      state.spend.llmCalls += 1;
-      accountUsage(messages, res);
-      const content = res && typeof res.content === 'string' ? res.content : '';
-      emit('llm_reply', { chars: content.length, finish_reason: res && res.finish_reason });
-      if (content.trim()) return content;
-      throw Object.assign(new Error('LLM_EMPTY'), { code: 'LLM_EMPTY' });
+      let attempt = 0;
+      while (true) {
+        attempt += 1;
+        let res = null;
+        let err = null;
+        try {
+          res = await llm({ messages: messages, maxTokens: budgets.maxTokensPerCall });
+        } catch (e) { err = e; }
+        if (!err) {
+          state.spend.llmCalls += 1;
+          accountUsage(messages, res);
+          const content = res && typeof res.content === 'string' ? res.content : '';
+          const finish = res && typeof res.finish_reason === 'string' ? res.finish_reason : '';
+          emit('llm_reply', { chars: content.length, finish_reason: finish });
+          if (!content.trim() && finish === 'length') {
+            // RC55: empty + length is deterministic budget exhaustion — a retry
+            // burns the same completion budget again. Non-retryable.
+            throw Object.assign(new Error('empty content with finish_reason=length (completion budget exhausted pre-content)'), { code: 'EMPTY_LENGTH' });
+          }
+          if (content.trim()) return content;
+          // empty without length: transient shape — retry
+        }
+        if (attempt >= retry.attempts) {
+          if (err) throw Object.assign(new Error(String((err && err.message) || err)), { code: 'LLM_ERROR' });
+          throw Object.assign(new Error('empty LLM reply (no finish_reason=length) after ' + attempt + ' attempts'), { code: 'LLM_EMPTY' });
+        }
+        if (retry.backoffMs > 0) await sleep(retry.backoffMs * Math.pow(2, attempt - 1));
+      }
     }
 
     function llmStopFromError(err) {
