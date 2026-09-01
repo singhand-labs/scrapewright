@@ -80,10 +80,16 @@ describe('claim extraction hardening', () => {
   });
 
   it('quote-aware span walk: parens inside quoted attr values do not truncate the span', () => {
-    const attrs = extractFilterAttributes(':not([title="f)"] [data-x])');
+    const attrs = extractFilterAttributes(':not([dir="f)"] [data-x])');
     assert.deepEqual(attrs, ['data-x']);
     const balanced = extractFilterAttributes('[aria-label="Close (X)"] :is([data-keep])');
     assert.deepEqual(balanced, ['data-keep']);
+  });
+
+  it('semantic global attrs (title/href/name/type) still demand distribution receipts', () => {
+    assert.deepEqual(extractFilterAttributes('div.card:has([title="Sponsored"])'), ['title']);
+    assert.deepEqual(extractFilterAttributes('a[href*="/p/"]:not([name="x"])'), ['href', 'name']);
+    assert.ok(extractFilterAttributes('[type="button"][data-k]').every(a => a !== 'class'));
   });
 
   it('does not match $-suffixed identifiers as API calls', () => {
@@ -177,6 +183,15 @@ describe('validateGrounding — filter attributes need distribution receipts', (
     assert.ok(rej, 'must demand the attrStats distribution receipt');
     assert.equal(rej.attr, 'data-ad-rendering-role');
     assert.ok(/attrStats/i.test(rej.suggestion));
+  });
+
+  it('a title= filter is rejected without an attrStats receipt (no global-attr bypass)', async () => {
+    const sel = 'div.card:has([title="Sponsored"])';
+    const steps = [{ id: '4', script: 'return $extractList(' + JSON.stringify(sel) + ', { c: \'.t\' });' }];
+    const s = session([{ sel: sel }]);
+    const r = await validateGrounding({ steps, observationLog: s.observationLog, ledger: s.ledger });
+    assert.equal(r.ok, false);
+    assert.equal(r.rejections.find(x => x.missing === 'attr-distribution').attr, 'title');
   });
 
   it('attrStats receipt admits the filter; user annotation does not substitute for it', async () => {

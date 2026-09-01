@@ -34,11 +34,13 @@
   // Module-level /g regexes: callers must not break out of the exec loop; lastIndex is reset per step.
   const CONFIG_KEY_RE = /\b(anchorSel|popoverSel|containerSelector|scopeSel)\s*:\s*(['"`])((?:\\.|(?!\2)[^\\])*)\2/g;
   const DYNAMIC_KEYS = new Set(['popoverSel']);
-  // Presentational/global HTML attributes that never serve as card-type
-  // filters — excluded from attribute-distribution receipt demands.
+  // Per-element presentational/global HTML attributes whose attrStats
+  // distribution is meaningless noise — the only attrs excluded from
+  // attribute-distribution receipt demands. Semantic-bearing globals
+  // (title, href, name, type, value) and all data-*/aria-* attrs DO
+  // discriminate card types and still require a distribution receipt.
   const GLOBAL_ATTRS = new Set([
-    'class', 'id', 'title', 'href', 'type', 'name', 'value', 'style',
-    'dir', 'lang', 'tabindex', 'has', 'not'
+    'class', 'id', 'style', 'dir', 'lang', 'tabindex', 'has', 'not'
   ]);
 
   function extractSelectorClaims(steps) {
@@ -80,7 +82,11 @@
     if (sid && c.stepIds.indexOf(sid) === -1) c.stepIds.push(sid);
   }
 
-  // Attribute names appearing inside :has(...) / :not(...) filter clauses.
+  // Attribute names appearing inside :has(...) / :not(...) filter clauses,
+  // plus attribute filters on the same compound that carries the pseudo
+  // (e.g. the [href*="/p/"] in `a[href*="/p/"]:not([name="x"])` — same
+  // element, same polarity assumption). Attributes on OTHER compounds of
+  // the selector (e.g. `div[role='feed']` scoping) are not filter claims.
   // Approximation: scans the argument spans of those pseudo-functions for
   // [attr] / [attr=value] tokens. Nested pseudo-functions inside the span
   // (like :not(:has([x]))) are included because the span extends to the
@@ -88,9 +94,44 @@
   function extractFilterAttributes(selector) {
     if (typeof selector !== 'string' || !selector) return [];
     const attrs = new Set();
+    const attrRe = /\[\s*([a-zA-Z][\w-]*)\s*(?:[*^$|~]?=\s*(?:"[^"]*"|'[^']*'|[^\]]*))?\s*\]/g;
+    const collect = (span) => {
+      attrRe.lastIndex = 0;
+      let a;
+      while ((a = attrRe.exec(span)) !== null) {
+        // Per-element presentational attributes (class/id/style/…) are noise;
+        // semantic globals (title/href/name/type/value) and custom
+        // (data-*/aria-*/role-style) attributes DO discriminate card types.
+        if (GLOBAL_ATTRS.has(a[1])) continue;
+        attrs.add(a[1]);
+      }
+    };
     const re = /:(has|not|is|where)\s*\(/g;
     let m;
     while ((m = re.exec(selector)) !== null) {
+      // Compound prefix: walk back from the ':' to the nearest combinator
+      // that sits outside brackets/parens/quotes — attr filters there belong
+      // to the same element as the pseudo and are part of the filter claim.
+      let start = m.index;
+      {
+        let depth = 0;
+        let quote = null;
+        while (start > 0) {
+          const ch = selector[start - 1];
+          if (quote) {
+            if (ch === '\\') { start -= 2; continue; }
+            if (ch === quote) quote = null;
+          } else if (ch === "'" || ch === '"') {
+            quote = ch;
+          } else if (ch === ']') depth += 1;
+          else if (ch === '[') depth -= 1;
+          else if (ch === ')') depth += 1;
+          else if (ch === '(') depth -= 1;
+          else if (depth <= 0 && (ch === ' ' || ch === '\t' || ch === '>' || ch === '+' || ch === '~')) break;
+          start -= 1;
+        }
+      }
+      collect(selector.slice(start, m.index));
       let depth = 1;
       let i = re.lastIndex;
       let quote = null;
@@ -106,14 +147,7 @@
         i += 1;
       }
       const span = selector.slice(re.lastIndex, i - 1);
-      const attrRe = /\[\s*([a-zA-Z][\w-]*)\s*(?:[*^$|~]?=\s*(?:"[^"]*"|'[^']*'|[^\]]*))?\s*\]/g;
-      let a;
-      while ((a = attrRe.exec(span)) !== null) {
-        // Well-known presentational/global HTML attributes do not discriminate
-        // card types — only custom (data-*/aria-*/role-style) attributes do.
-        if (GLOBAL_ATTRS.has(a[1])) continue;
-        attrs.add(a[1]);
-      }
+      collect(span);
     }
     return Array.from(attrs);
   }
