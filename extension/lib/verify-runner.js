@@ -57,6 +57,84 @@
     try { return JSON.parse(String(p)); } catch (e) { return null; }
   }
 
+  // Tenth-log N2: junk-value census over the extracted records. REPORT-ONLY —
+  // structural green (score/schema ok) can hide junk VALUES: bare
+  // redirect-query fragments posing as ids, inline data: URIs polluting
+  // url/media arrays (UI icons), markup dumps leaking into data fields.
+  // Surfaced so the model renegotiates the contract instead of shipping them.
+  const URLISH_FIELD = /(url|link|href|src|image|img|media|photo|pic|avatar)/i;
+  const RAWISH_FIELD = /(html|markup|raw)/i;
+
+  function isQueryBlob(v) {
+    return typeof v === 'string' && v.length > 3 && /^\?[^=]+=/.test(v);
+  }
+
+  function isMarkupDump(v) {
+    if (typeof v !== 'string' || v.length < 200) return false;
+    const lt = (v.match(/</g) || []).length;
+    const gt = (v.match(/>/g) || []).length;
+    return lt >= 3 && gt >= 3;
+  }
+
+  function capSample(v) {
+    const s = String(v);
+    return s.length <= 80 ? s : s.slice(0, 79) + '…';
+  }
+
+  function detectJunkValues(data, schema) {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+    const fields = [];
+    for (const key of Object.keys(data)) {
+      const val = data[key];
+      if (Array.isArray(val) && !val.length) continue;
+      if (Array.isArray(val) && val.every((x) => typeof x === 'string')) {
+        // top-level url-ish scalar-array: data: entries pollute it the same way
+        if (URLISH_FIELD.test(key)) {
+          const junk = val.filter((x) => x.indexOf('data:') === 0).length;
+          if (junk > 0) fields.push({ field: key, kind: 'dataUri', junkCount: junk, total: val.length });
+        }
+        continue;
+      }
+      if (!Array.isArray(val)) continue;
+      const recs = val.filter((r) => r && typeof r === 'object' && !Array.isArray(r));
+      if (!recs.length) continue;
+      const recKeys = [];
+      const seen = {};
+      for (const r of recs) {
+        for (const k of Object.keys(r)) {
+          if (!seen[k]) { seen[k] = 1; recKeys.push(k); }
+        }
+      }
+      for (const rk of recKeys) {
+        let blobs = 0; let blobSample = '';
+        let dataJunk = 0; let dataTotal = 0; let uriSample = '';
+        let dumps = 0; let dumpSample = '';
+        for (const r of recs) {
+          const v = r[rk];
+          if (typeof v === 'string') {
+            if (isQueryBlob(v)) { blobs += 1; if (!blobSample) blobSample = v; }
+            if (!RAWISH_FIELD.test(rk) && isMarkupDump(v)) { dumps += 1; if (!dumpSample) dumpSample = v; }
+          } else if (Array.isArray(v)) {
+            for (const x of v) {
+              if (typeof x !== 'string') continue;
+              dataTotal += 1;
+              if (x.indexOf('data:') === 0) { dataJunk += 1; if (!uriSample) uriSample = x; }
+            }
+          }
+        }
+        if (blobs) fields.push({ field: key + '.' + rk, kind: 'queryBlob', count: blobs, sample: capSample(blobSample) });
+        if (dataJunk && URLISH_FIELD.test(rk)) fields.push({ field: key + '.' + rk, kind: 'dataUri', junkCount: dataJunk, total: dataTotal });
+        if (dumps) fields.push({ field: key + '.' + rk, kind: 'markupDump', count: dumps, sample: capSample(dumpSample) });
+      }
+    }
+    if (!fields.length) return null;
+    return {
+      fields: fields,
+      note: 'JUNK VALUES: ' + fields.map((f) => f.field + '(' + f.kind + ')').join(', ') +
+        '. Structurally green but these values are junk: bare query strings ("?a=b…") are redirect/tracking href fragments, data: URIs inside url/media arrays are inline UI icons, markup dumps are raw HTML leaking into a data field. Fix the selector to read the real value, filter arrays in the step script (keep http(s) entries), or renegotiate the contract with io.confirm to drop/redefine the field. A green score with junk-valued fields is NOT a finished service.'
+    };
+  }
+
   function createVerifyRunner(deps) {
     const d = deps || {};
     if (typeof d.orchestrate !== 'function') throw new Error('createVerifyRunner requires an orchestrate(service, input, orchDeps, options) function');
@@ -199,7 +277,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], countShortfall: null, shapeDistribution: null, stepNoReturn: null };
+      const detectors = { emptyFields: [], duplicateFields: [], countShortfall: null, shapeDistribution: null, stepNoReturn: null, junkValues: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -324,6 +402,11 @@
           // card-type-heterogeneity / card-polarity knowledge units.
           detectors.shapeDistribution = RSD.formatShapeDistributionFromData(finalData, outputSchema) || null;
         }
+        if (!error) {
+          // Report-only (tenth-log N2): the human may have confirmed a
+          // contract that wants these values — surface, teach, never block.
+          detectors.junkValues = detectJunkValues(finalData, outputSchema);
+        }
       }
 
       const oc = result ? WU.validateOutputAgainstSchema(finalData, outputSchema) : { ok: true, missing: [] };
@@ -354,6 +437,7 @@
         if (detectors.countShortfall) add('COUNT_SHORTFALL');
         if (detectors.shapeDistribution) add('CARD_POLICY');
         if (detectors.stepNoReturn) add('STEP_NO_RETURN');
+        if (detectors.junkValues) add('JUNK_VALUES');
         for (const evt of events) {
           if (!evt || evt.type !== 'STEP_ITERATION') continue;
           const p = previewJson(evt.resultPreview);

@@ -477,7 +477,10 @@
       if (running) return buildReport();
       if (state.stopped && state.stopped.reason !== 'paused') return buildReport();
       running = true;
-      const resuming = state.spend.turns > 0;
+      // Tenth-log N3: the feedback continuation resets its budget segment
+      // (turns 0) but carries the full transcript — that history is what
+      // makes it a continuation, so the flag must key on either signal.
+      const resuming = state.spend.turns > 0 || (Array.isArray(state.transcript) && state.transcript.length > 0);
       state.status = 'running';
       state.stopped = null;
       segmentStart = now();

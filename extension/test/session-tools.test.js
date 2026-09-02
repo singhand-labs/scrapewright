@@ -385,3 +385,15 @@ describe('io.confirm — early I/O contract gate', () => {
     assert.ok(t.toolSpecs.some((s) => s.name === 'io.confirm'), 'io.confirm in the spec list');
   });
 });
+
+describe('tenth-log N1: rule 10 — never ship junk; renegotiate unextractable fields', () => {
+  it('system prompt teaches the junk-value rule and its detector', () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    assert.match(t.systemPromptBase, /Ship real values only/);
+    assert.match(t.systemPromptBase, /detectors\.junkValues/);
+    assert.match(t.systemPromptBase, /renegotiate the contract with io\.confirm/);
+    assert.match(t.systemPromptBase, /http\(s\) entries/);
+    assert.ok(!/facebook|twitter|linkedin|tiktok|reddit|\bfb\b/i.test(t.systemPromptBase), 'no site tokens');
+  });
+});

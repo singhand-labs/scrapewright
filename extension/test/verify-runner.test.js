@@ -415,3 +415,64 @@ describe('verify-runner shapeDistribution detector (record-shape-distribution co
     assert.equal(out.report.detectors.shapeDistribution, null);
   });
 });
+
+describe('verify-runner junkValues detector (tenth-log N2: structurally green, junk-valued)', () => {
+  const SCHEMA = {
+    type: 'object', required: ['posts'],
+    properties: { posts: { type: 'array', items: { type: 'object', properties: {
+      title: { type: 'string' }, postId: { type: 'string' },
+      mediaUrls: { type: 'array', items: { type: 'string' } }
+    } } } }
+  };
+
+  it('query-blob ids + data: URIs in url arrays → report-only detector + JUNK_VALUES tag, ok stays true', async () => {
+    const posts = [
+      { title: 'a', postId: '?__cft__[0]=AZge7token&a', mediaUrls: ['https://cdn.example.com/a.jpg', 'data:image/svg+xml,%3Csvg%20fill%3D%27none%27%3E'] },
+      { title: 'b', postId: '?__cft__[0]=ZZZother&b', mediaUrls: ['https://cdn.example.com/b.jpg'] }
+    ];
+    const orch = async () => ({ finalResult: { posts }, steps: [{ stepId: 's1', stepName: 'one', result: { done: true }, snapshot: null }], pages: [], pagesTruncated: false });
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: SCHEMA });
+    assert.equal(out.report.ok, true, 'junk values are surfaced, never blocking');
+    const jv = out.report.detectors.junkValues;
+    assert.ok(jv, 'detector block present');
+    const kinds = {};
+    for (const f of jv.fields) kinds[f.field] = f.kind;
+    assert.equal(kinds['posts.postId'], 'queryBlob', 'bare ?a=b redirect fragment flagged');
+    assert.equal(kinds['posts.mediaUrls'], 'dataUri', 'inline data: URI in a url-ish array flagged');
+    assert.ok(jv.fields.some((f) => f.kind === 'dataUri' && f.junkCount === 1 && f.total === 3), 'counts carried');
+    assert.ok(out.report.events.indexOf('JUNK_VALUES') !== -1, 'tag rides report.events');
+    assert.match(jv.note, /io\.confirm/, 'teaches renegotiation of the contract');
+  });
+
+  it('markup dump in a data field flagged; a field explicitly named html is left alone', async () => {
+    const dump = '<div class="a"><span>x</span><b>y</b><i>z</i></div>' + 'z'.repeat(200);
+    const posts = [
+      { title: 'a', caption: dump, html: dump },
+      { title: 'b', caption: dump, html: dump }
+    ];
+    const orch = async () => ({ finalResult: { posts }, steps: [], pages: [] });
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, caption: { type: 'string' }, html: { type: 'string' } } } } } } });
+    assert.equal(out.report.ok, true);
+    const jv = out.report.detectors.junkValues;
+    assert.ok(jv, 'detector fires');
+    const kinds = {};
+    for (const f of jv.fields) kinds[f.field] = f.kind;
+    assert.equal(kinds['posts.caption'], 'markupDump');
+    assert.ok(!('posts.html' in kinds), 'an explicit html-named field is a user choice, not junk');
+  });
+
+  it('clean values stay quiet (null detector, no tag)', async () => {
+    const posts = [
+      { title: 'a', postId: '12345', mediaUrls: ['https://cdn.example.com/a.jpg'] },
+      { title: 'b', postId: '67890', mediaUrls: ['https://cdn.example.com/b.jpg'] }
+    ];
+    const orch = async () => ({ finalResult: { posts }, steps: [], pages: [] });
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: SCHEMA });
+    assert.equal(out.report.ok, true);
+    assert.equal(out.report.detectors.junkValues, null);
+    assert.equal(out.report.events.indexOf('JUNK_VALUES'), -1);
+  });
+});

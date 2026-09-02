@@ -1141,3 +1141,44 @@ describe('service.update artifact contract mentions testInput (first-live-log P-
     assert.match(sys, /overrides[^\n]*array of selector strings/, 'and the plain string-array shape');
   });
 });
+
+describe('tenth-log N3: session_start resuming flag', () => {
+  it('a seed with transcript history but a reset budget segment still reports resuming:true (feedback continuation shape)', async () => {
+    const events = [];
+    const seed = {
+      session: {
+        id: 'rs-seed-cont', status: 'idle', requirement: 'r',
+        goals: [], hypotheses: [],
+        transcript: [{ kind: 'system', text: 'USER FEEDBACK (fix request): a field comes back empty' }],
+        digest: '',
+        spend: { turns: 0, llmCalls: 0, promptTokens: 0, completionTokens: 0, estimated: false },
+        attachedUnits: [], artifactVersions: [], elapsedMs: 0, stopped: null,
+        budgetAdvisories: []
+      }
+    };
+    const session = createResearchSession({
+      requirement: 'r',
+      seed: seed,
+      llm: scriptedLlm([reply(finishEnvelope())], []),
+      tools: {},
+      budgets: { maxTurns: 5 },
+      onEvent: (e) => events.push(e)
+    });
+    await session.run();
+    const start = events.find((e) => e.type === 'session_start');
+    assert.equal(start.resuming, true, 'transcript history marks the continuation');
+  });
+
+  it('a fresh session reports resuming:false', async () => {
+    const events = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([reply(finishEnvelope())], []),
+      tools: {},
+      onEvent: (e) => events.push(e)
+    });
+    await session.run();
+    const start = events.find((e) => e.type === 'session_start');
+    assert.equal(start.resuming, false);
+  });
+});
