@@ -101,7 +101,7 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
       }
     } else if (e.data.type === 'EXECUTE') {
       sendDebugLog('info', 'sandbox', 'EXECUTE received', { scriptPreview: e.data.script?.slice(0, 2000), scriptLength: e.data.script?.length });
-      executeInSandbox(e.data.script, e.data.input);
+      executeInSandbox(e.data.script, e.data.input, e.data.execId);
     } else if (e.data.type === 'SYNTAX_CHECK') {
       try {
         // Mirror the wrapping used by executeInSandbox so we catch the same
@@ -148,7 +148,7 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
     return null;
   }
 
-  async function executeInSandbox(scriptCode, input) {
+  async function executeInSandbox(scriptCode, input, execId) {
     // Reset before each execution — covers residue from prior failed runs
     // (the catch path does not reset, so without this a later successful
     // run would snapshot the previous run's diagnostics along with its own).
@@ -165,7 +165,7 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
           'Remove all window.location.* / location.replace() / location.assign() usage.'
         );
         sendDebugLog('error', 'sandbox', 'Forbidden navigation detected — refusing to execute', { match: navMatch, scriptPreview: (scriptCode || '').slice(0, 500) });
-        parent.postMessage({ type: 'EXECUTE_RESULT', error: err.message }, '*');
+        parent.postMessage({ type: 'EXECUTE_RESULT', execId: execId, error: err.message }, '*');
         return;
       }
       const fn = new Function('__input__', '__stepResults__', '__lastResult__', `return ${scriptCode};`);
@@ -175,7 +175,7 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
       const selectorDiagnostics = __selectorDiagnostics__;
       __selectorDiagnostics__ = [];
       sendDebugLog('info', 'sandbox', 'Script completed', { resultType: typeof result, resultPreview: JSON.stringify(result)?.slice(0, 500), selectorDiagnosticCount: selectorDiagnostics.length });
-      parent.postMessage({ type: 'EXECUTE_RESULT', result, selectorDiagnostics }, '*');
+      parent.postMessage({ type: 'EXECUTE_RESULT', execId: execId, result, selectorDiagnostics }, '*');
     } catch (error) {
       sendDebugLog('error', 'sandbox', 'Script execution error', { error: error.message, stack: error.stack, scriptPreview: scriptCode?.slice(0, 2000), hasSubTabSnapshot: !!error.subTabSnapshot });
       // B2: diagnostics ride the error path too — the failing call's own
@@ -183,7 +183,7 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
       const errorDiags = __selectorDiagnostics__.slice();
       if (error && error._diagnostics) errorDiags.push(error._diagnostics);
       __selectorDiagnostics__ = [];
-      parent.postMessage({ type: 'EXECUTE_RESULT', error: error.message || String(error), subTabSnapshot: error.subTabSnapshot || undefined, selectorDiagnostics: errorDiags }, '*');
+      parent.postMessage({ type: 'EXECUTE_RESULT', execId: execId, error: error.message || String(error), subTabSnapshot: error.subTabSnapshot || undefined, selectorDiagnostics: errorDiags }, '*');
     }
   }
 

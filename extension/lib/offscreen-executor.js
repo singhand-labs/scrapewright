@@ -1,3 +1,5 @@
+let EXEC_SEQ = 0; // B5: per-execution identity — disambiguates interleaved runs on the same tab
+
 class OffscreenExecutor {
   constructor(tabId) {
     this.tabId = tabId;
@@ -35,6 +37,7 @@ class OffscreenExecutor {
   async execute(scriptCode, input) {
     await this.ensureOffscreenDocument();
 
+    const execId = 'exec-' + Date.now() + '-' + (++EXEC_SEQ);
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         chrome.runtime.onMessage.removeListener(listener);
@@ -47,7 +50,10 @@ class OffscreenExecutor {
       }, this.timeoutMs);
 
       const listener = (message) => {
-        if (message.type === 'SCRIPT_RESULT' && message._fromOffscreen && message.tabId === this.tabId) {
+        // B5: match by execId — strictly stronger than the tabId check.
+        // Two interleaved executions on the SAME tab would cross-wire
+        // under tabId-only matching.
+        if (message.type === 'SCRIPT_RESULT' && message._fromOffscreen && message.execId === execId) {
           clearTimeout(timeout);
           chrome.runtime.onMessage.removeListener(listener);
           if (message.error) {
@@ -56,6 +62,7 @@ class OffscreenExecutor {
             // main-tab capture (which would snapshot the wrong page).
             const err = new Error(message.error);
             if (message.subTabSnapshot) err.subTabSnapshot = message.subTabSnapshot;
+            if (message.selectorDiagnostics) err.selectorDiagnostics = message.selectorDiagnostics;
             reject(err);
           } else {
             // Resolve with an envelope so step-orchestrator can read
@@ -71,6 +78,7 @@ class OffscreenExecutor {
 
       chrome.runtime.sendMessage({
         type: 'EXECUTE_SCRIPT_OFFSCREEN',
+        execId,
         script: this.wrapScript(scriptCode),
         input,
         tabId: this.tabId,

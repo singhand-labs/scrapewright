@@ -8,6 +8,7 @@
   let sandboxRecreateCount = 0;
   const SANDBOX_MAX_RECREATES = 3;
   const pendingExecutes = [];
+  const execTabMap = new Map(); // B5: execId → tabId, recorded at dispatch, consumed at EXECUTE_RESULT
   const forwardedResponseIds = new Set();
 
   // Build the payload to postMessage to the sandbox iframe when a DOM_RESPONSE
@@ -121,11 +122,22 @@
       clearSandboxReadyTimer();
       sendDebugLog('info', 'offscreen', 'Sandbox ready, processing pending executes', { count: pendingExecutes.length });
       while (pendingExecutes.length) {
-        const { script, input } = pendingExecutes.shift();
-        forwardExecute(script, input);
+        const { script, input, execId } = pendingExecutes.shift();
+        forwardExecute(script, input, execId);
       }
     } else if (e.data.type === 'EXECUTE_RESULT') {
-      const tabId = tabIdStack.pop() || null;
+      // B5: resolve the completing execution's tabId by identity instead of
+      // blindly popping — interleaved executions no longer cross-wire.
+      let tabId = null;
+      if (e.data.execId !== undefined && execTabMap.has(e.data.execId)) {
+        tabId = execTabMap.get(e.data.execId);
+        execTabMap.delete(e.data.execId);
+        const idx = tabIdStack.lastIndexOf(tabId);
+        if (idx !== -1) tabIdStack.splice(idx, 1);
+      } else {
+        // Fallback for legacy sandbox versions that don't echo execId.
+        tabId = tabIdStack.pop() || null;
+      }
       sendDebugLog('info', 'offscreen', 'EXECUTE_RESULT from sandbox', { error: e.data.error, resultType: typeof e.data.result, hasSubTabSnapshot: !!e.data.subTabSnapshot, selectorDiagnosticCount: (e.data.selectorDiagnostics || []).length });
       chrome.runtime.sendMessage({
         type: 'SCRIPT_RESULT',
@@ -160,12 +172,13 @@
     }
   });
 
-  function forwardExecute(script, input) {
+  function forwardExecute(script, input, execId) {
     if (sandboxIframe?.contentWindow) {
       sandboxIframe.contentWindow.postMessage({
         type: 'EXECUTE',
         script,
-        input
+        input,
+        execId
       }, '*');
     }
   }
@@ -190,12 +203,13 @@
 
     if (message.type === 'EXECUTE_SCRIPT_OFFSCREEN' && message._toOffscreen) {
       tabIdStack.push(message.tabId);
+      if (message.execId !== undefined) execTabMap.set(message.execId, message.tabId);
       sendDebugLog('info', 'offscreen', 'EXECUTE_SCRIPT_OFFSCREEN received', { tabId: message.tabId, scriptPreview: message.script?.slice(0, 2000), scriptLength: message.script?.length });
       if (sandboxReady) {
-        forwardExecute(message.script, message.input);
+        forwardExecute(message.script, message.input, message.execId);
       } else {
         sendDebugLog('info', 'offscreen', 'Sandbox not ready yet, queuing execute');
-        pendingExecutes.push({ script: message.script, input: message.input });
+        pendingExecutes.push({ script: message.script, input: message.input, execId: message.execId });
       }
       return false;
     }
@@ -225,6 +239,11 @@
       if (idx !== -1) {
         tabIdStack.splice(idx, 1);
         sendDebugLog('warn', 'offscreen', 'Cleaned up timed-out tabId from stack', { tabId: message.tabId, remainingStack: tabIdStack.length });
+      }
+      // B5: purge map entries for the timed-out tab — otherwise a stale
+      // execId would mislabel a later result.
+      for (const [k, v] of execTabMap) {
+        if (v === message.tabId) execTabMap.delete(k);
       }
       return false;
     }
