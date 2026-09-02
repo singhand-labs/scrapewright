@@ -970,8 +970,17 @@
         }
         case 'type': {
           const __t0 = Date.now();
-          result = await domType(data.selector, data.args[0]);
-          recordDomActivity('$type', data.selector, 1, Date.now() - __t0);
+          try {
+            const __r = await domType(data.selector, data.args && data.args[0], data.args && data.args[1]);
+            result = __r && typeof __r === 'object' && 'result' in __r ? __r.result : __r;
+            _diagnostics = __r && typeof __r === 'object' ? __r._diagnostics : undefined;
+            recordDomActivity('$type', data.selector, 1, Date.now() - __t0);
+          } catch (e) {
+            // B13: the activity log must see failures too — outcome 1 was
+            // hardcoded and the throw path recorded nothing.
+            recordDomActivity('$type', data.selector, 0, Date.now() - __t0);
+            throw e;
+          }
           break;
         }
         case 'extract': {
@@ -1253,15 +1262,27 @@
     if (!isInputtable) {
       throw new Error('ELEMENT_NOT_INPUTTABLE: ' + sel + ' (found ' + el.tagName + ', id=' + (el.id || 'none') + ', class=' + (el.className || 'none') + ')');
     }
+    const textIsString = typeof text === 'string';
+    const textStr = textIsString ? text : String(text);
     if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
-      el.value = text;
+      el.value = textStr;
     } else {
-      el.innerText = text;
+      el.innerText = textStr;
     }
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
-    sendDebugLog('info', 'content-script', 'domType value set', { selector: sel, textLength: text?.length });
-    return true;
+    sendDebugLog('info', 'content-script', 'domType value set', { selector: sel, textLength: textStr.length });
+    // B12: a non-string text previously hit the DOMString IDL coercion and
+    // literally typed "undefined"/"null" into the field with no signal.
+    // Coerce explicitly and surface the original type.
+    if (textIsString) return { result: true };
+    return {
+      result: true,
+      _diagnostics: {
+        typeCoercedFrom: (text === null ? 'null' : typeof text),
+        note: '$type received a non-string value — coerced with String() before setting. Check that the step script computes the text instead of passing an unset variable.'
+      }
+    };
   }
 
   async function domExtract(sel, attr, timeoutMs) {
