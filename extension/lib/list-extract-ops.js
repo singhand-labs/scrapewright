@@ -138,13 +138,13 @@ function clickInListItems(containers, subSel, clickFn, delayMs) {
     try {
       const el = container.querySelector(subSel);
       if (!el) {
-        errors.push({ index, container, reason: 'subSel not found' });
+        errors.push({ index, reason: 'subSel not found' });
         return;
       }
       clickFn(el);
       clicked++;
     } catch (err) {
-      errors.push({ index, container, reason: err.message || String(err) });
+      errors.push({ index, reason: err.message || String(err) });
     }
   });
   return { clicked, errors, delayMs: delay };

@@ -161,6 +161,17 @@ describe('clickInListItems', () => {
     assert.equal(r.errors.length, 2);
     assert.match(r.errors[0].reason, /boom/);
   });
+
+  it('B1b: error entries are {index, reason} — no Element (serializes to {} over postMessage)', () => {
+    document.body.innerHTML = `
+      <div class="post"><button class="go">A</button></div>
+      <div class="post"><span>no button here</span></div>
+    `;
+    const containers = Array.from(document.querySelectorAll('.post'));
+    const r = clickInListItems(containers, '.go', () => {}, 0);
+    assert.equal(r.clicked, 1);
+    assert.deepEqual(r.errors, [{ index: 1, reason: 'subSel not found' }]);
+  });
 });
 
 // Regression for console.log 2026-07-26: $extractList's readField uses
