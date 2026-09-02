@@ -1324,3 +1324,28 @@ describe('audit C13: budget advisories coordinate with the io.confirm gate', () 
     assert.ok(!/facebook|twitter|linkedin|tiktok|reddit|\bfb\b/i.test(src));
   });
 });
+
+describe('audit C3: service.update gate consults cfg.epochOf', () => {
+  it('a mid-session reload rejects receipts recorded in an earlier page epoch', async () => {
+    const Obs = require('../lib/observation-log');
+    let fakeEpoch = 2; // the research tab reloaded AFTER the probe was recorded
+    const seedLog = Obs.createObservationLog();
+    seedLog.record({ tool: 'probe.count', selectors: ['div.card'], summary: 'count=4', epoch: 1 });
+    const session = createResearchSession({
+      requirement: 'collect cards',
+      llm: scriptedLlm([
+        reply(envelope('service.update', { steps: [{ id: '1', script: 'return $extractList("div.card", { t: { selector: ".t" } });' }] })),
+        reply(finishEnvelope())
+      ], []),
+      tools: {},
+      epochOf: () => fakeEpoch,
+      seed: { observation: seedLog.serialize() }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    const entry = session.state().session.transcript.find(e => e.kind === 'tool' && e.name === 'service.update');
+    assert.ok(entry, 'service.update ran');
+    assert.equal(entry.result.grounding, 'rejected');
+    assert.match(JSON.stringify(entry.result.rejections), /stale/);
+  });
+});

@@ -81,6 +81,9 @@
     const now = typeof cfg.now === 'function' ? cfg.now : () => Date.now();
     const onEvent = typeof cfg.onEvent === 'function' ? cfg.onEvent : () => {};
     const persistence = cfg.persistence || null;
+    // Audit C3: the live rail's page epoch, consulted at service.update so
+    // receipts recorded before a mid-session tab reload count as stale.
+    const epochOf = typeof cfg.epochOf === 'function' ? cfg.epochOf : null;
     const budgets = Object.assign({}, DEFAULTS.budgets, cfg.budgets || {});
     const retry = Object.assign({}, DEFAULTS.retry, cfg.retry || {});
     const compaction = Object.assign({}, DEFAULTS.compaction, cfg.compaction || {});
@@ -327,11 +330,14 @@
             return (r && typeof r.count === 'number') ? r.count : null;
           }
         : null;
+      const gateEpochRaw = epochOf ? epochOf() : undefined;
+      const gateEpoch = (typeof gateEpochRaw === 'number') ? gateEpochRaw : undefined;
       const v = await Gate.validateGrounding({
         steps: steps,
         observationLog: observationLog,
         ledger: ledger,
         autoVerify: autoVerify,
+        epoch: gateEpoch,
         // Sixth-live-log I2a: the model sent {"selectors":[...]} and the
         // bare Array.isArray check silently dropped it — an explicit waiver
         // must never be lost to a shape mismatch. Accept both shapes.

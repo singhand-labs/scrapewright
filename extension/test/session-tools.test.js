@@ -473,3 +473,30 @@ describe('audit C14 (pin): artifact version is read AFTER apply, one source of t
     assert.ok(state.applied.length >= 1);
   });
 });
+
+describe('audit C3: probe receipts stamped with the rail page epoch', () => {
+  it('epoch at record time — a reload between probes bumps the stamp', async () => {
+    const base = makeDeps();
+    const rail = Object.assign(base.deps.rail, { epoch: 1 });
+    const { deps } = makeDeps({ rail });
+    const t = createSessionTools(deps);
+    const recorded = [];
+    t.bindEngine({ observationLog: { record: (o) => recorded.push(o) } });
+    await t.tools['probe.count']({ sel: 'div.card' });
+    rail.epoch = 2; // the research tab reloaded between probes
+    await t.tools['probe.count']({ sel: 'div.card' });
+    assert.equal(recorded.length, 2);
+    assert.equal(recorded[0].epoch, 1);
+    assert.equal(recorded[1].epoch, 2);
+  });
+
+  it('no rail.epoch on the rail (legacy) leaves receipts unstamped', async () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    const recorded = [];
+    t.bindEngine({ observationLog: { record: (o) => recorded.push(o) } });
+    await t.tools['probe.count']({ sel: 'div.card' });
+    assert.equal(recorded.length, 1);
+    assert.equal(recorded[0].epoch, undefined);
+  });
+});

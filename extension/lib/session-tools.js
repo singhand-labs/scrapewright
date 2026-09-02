@@ -168,7 +168,16 @@
     // Late-bound engine surfaces (connected by bindEngine after the engine
     // exists — the engine creates the observation log internally).
     let engineLog = null;
-    const lateBoundLog = { record: (obs) => { if (engineLog) engineLog.record(obs); } };
+    // C3: stamp every probe receipt with the rail's current page epoch so a
+    // mid-session reload invalidates earlier evidence at the gate. Probes all
+    // record through this wrapper — one stamping point, no per-probe changes.
+    const lateBoundLog = {
+      record: (obs) => {
+        if (!engineLog) return;
+        const ep = (d.rail && typeof d.rail.epoch === 'number') ? d.rail.epoch : undefined;
+        engineLog.record(typeof ep === 'number' ? Object.assign({}, obs, { epoch: ep }) : obs);
+      }
+    };
     const probes = probeFactory({ executeDsl: d.rail.executeDsl, observationLog: lateBoundLog });
 
     let lastVerify = null;
