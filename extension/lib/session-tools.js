@@ -258,8 +258,41 @@
       return { updated: true, version: version };
     }
 
+    // Ninth-log M3: the research tab must never open a LITERAL {{param}}
+    // placeholder — the resulting page is a real search for the placeholder
+    // string, its probes return plausible-but-wrong evidence, and the ninth
+    // log burned ~30 of 60 turns on it. Substitute every {{key}} the test
+    // input can fill; refuse to open while any placeholder remains (the model
+    // re-opens with a concrete sample value one turn later).
+    function renderTemplateUrl(url, input) {
+      return String(url).replace(/\{\{\s*(\w+)\s*\}\}/g, (m, key) => (
+        input && typeof input === 'object' && key in input &&
+        input[key] !== undefined && input[key] !== null ? String(input[key]) : m
+      ));
+    }
+
+    async function pageOpen(args) {
+      const a = args && typeof args === 'object' ? args : {};
+      let url = typeof a.url === 'string' ? a.url : '';
+      if (url) {
+        const input = typeof d.getTestInput === 'function' ? (d.getTestInput() || {}) : {};
+        url = renderTemplateUrl(url, input);
+        const left = url.match(/\{\{\s*\w+\s*\}\}/g);
+        if (left && left.length) {
+          return {
+            error: 'url contains unsubstituted template parameter(s) ' + left.join(', ') +
+              ' — opening it would run the site\'s search FOR THE LITERAL PLACEHOLDER, and every probe on that page returns misleading evidence. ' +
+              'testInput keys available: [' + Object.keys(input).join(', ') + ']. ' +
+              'Re-open with a concrete sample value substituted for every {{param}}, then probe.'
+          };
+        }
+      }
+      const substituted = typeof a.url === 'string' && url !== a.url;
+      return d.rail.pageOpen(substituted ? Object.assign({}, a, { url: url }) : args);
+    }
+
     const tools = {
-      'page.open': d.rail.pageOpen,
+      'page.open': pageOpen,
       'page.state': d.rail.pageState,
       'probe.count': probes.count,
       'probe.text': probes.text,
@@ -275,7 +308,7 @@
     };
 
     const toolSpecs = [
-      { name: 'page.open', args: '{url?}', returns: '{tabId,url,ready,warning?}' },
+      { name: 'page.open', args: '{url?}', returns: '{tabId,url,ready,warning?} — {{param}} placeholders are filled from the test input; a URL that still has one is rejected (never probe the literal placeholder page)' },
       { name: 'page.state', args: '{}', returns: '{open,tabId,url,title,status}' },
       { name: 'probe.count', args: '{sel}', returns: '{count}' },
       { name: 'probe.text', args: '{sel}', returns: '{total,items[]}' },

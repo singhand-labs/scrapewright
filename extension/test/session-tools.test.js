@@ -221,3 +221,60 @@ describe('createSessionTools', () => {
     assert.equal(r2.cancelled, true);
   });
 });
+
+describe('page.open template parameters (ninth-log M3: the literal {{keyword}} tab poisoned ~30 turns of probes)', () => {
+  it('substitutes {{param}} from testInput before the rail opens the tab', async () => {
+    const opened = [];
+    const base = makeDeps();
+    const { deps } = makeDeps({
+      rail: Object.assign(base.deps.rail, { pageOpen: async (a) => { opened.push(a.url); return { tabId: 1, url: a.url, ready: true }; } }),
+      getTestInput: () => ({ keyword: 'news' })
+    });
+    const t = createSessionTools(deps);
+    const r = await t.tools['page.open']({ url: 'https://example.com/search?q={{keyword}}' });
+    assert.deepEqual(opened, ['https://example.com/search?q=news'], 'placeholder substituted from testInput');
+    assert.equal(r.url, 'https://example.com/search?q=news');
+    assert.ok(!r.error);
+  });
+
+  it('REFUSES to open when a {{param}} has no testInput value — a literal-placeholder page returns plausible-but-wrong evidence', async () => {
+    let opened = 0;
+    const base = makeDeps();
+    const { deps } = makeDeps({
+      rail: Object.assign(base.deps.rail, { pageOpen: async (a) => { opened += 1; return { tabId: 1, url: a.url, ready: true }; } }),
+      getTestInput: () => ({})
+    });
+    const t = createSessionTools(deps);
+    const r = await t.tools['page.open']({ url: 'https://example.com/search?q={{keyword}}&n={{count}}' });
+    assert.equal(opened, 0, 'the rail must never be called with a literal placeholder');
+    assert.ok(/error/.test(Object.keys(r).join(',')), 'returns an error');
+    assert.match(r.error, /\{\{keyword\}\}/);
+    assert.match(r.error, /\{\{count\}\}/);
+    assert.match(r.error, /concrete sample/i);
+  });
+
+  it('urls without placeholders pass through to the rail untouched', async () => {
+    const opened = [];
+    const base = makeDeps();
+    const { deps } = makeDeps({
+      rail: Object.assign(base.deps.rail, { pageOpen: async (a) => { opened.push(a.url); return { tabId: 1, url: a.url, ready: true }; } })
+    });
+    const t = createSessionTools(deps);
+    await t.tools['page.open']({ url: 'https://example.com/search?q=news' });
+    assert.deepEqual(opened, ['https://example.com/search?q=news']);
+  });
+
+  it('partial substitution still refuses on the leftover token', async () => {
+    let opened = 0;
+    const base = makeDeps();
+    const { deps } = makeDeps({
+      rail: Object.assign(base.deps.rail, { pageOpen: async (a) => { opened += 1; return { tabId: 1, url: a.url, ready: true }; } }),
+      getTestInput: () => ({ keyword: 'news' })
+    });
+    const t = createSessionTools(deps);
+    const r = await t.tools['page.open']({ url: 'https://example.com/search?q={{keyword}}&near={{city}}' });
+    assert.equal(opened, 0);
+    assert.match(r.error, /\{\{city\}\}/);
+    assert.ok(!/\{\{keyword\}\}/.test(r.error), 'the substituted token is not reported as missing');
+  });
+});

@@ -157,8 +157,8 @@ describe('ninth-log L1-L5: session completion hands back to the wizard flow', ()
     assert.ok(body.includes('presentTestOutcome('), 'fresh verify is presented through the shared path');
     assert.ok(body.includes('testScript()'), 'stale/missing verify falls back to a fresh end-to-end run');
     const srs = fnBody('startResearchSession');
-    assert.ok(/'completed'\)\s*\{\s*await presentSessionCompletion\(\)/.test(srs.replace(/\n/g, ' ')),
-      'the completed branch hands off to presentSessionCompletion (no bare goToPhase)');
+    assert.ok(/sessionStopPresentsOutcome\(report\.stopped\.reason\)\)\s*\{/.test(srs.replace(/\n/g, ' ')),
+      'the completed/maxTurns branch hands off to presentSessionCompletion (no bare goToPhase)');
   });
 
   it('L2b: the in-phase-4 Resume button presents the same outcome on completion', () => {
@@ -199,5 +199,41 @@ describe('ninth-log L1-L5: session completion hands back to the wizard flow', ()
     const m = SRC.match(/serviceNameEdit'\)\.addEventListener\('input'[^)]*\)\s*=>\s*\{[^}]*wizardState\.serviceName\s*=/);
     assert.ok(m, 'typing updates wizardState.serviceName (generateUniqueSlug reads it at deploy)');
     assert.ok(!HTML.includes('id="serviceNameDisplay"'), 'the static display div is gone');
+  });
+});
+
+describe('ninth-log M1/M2/M5: feedback continuation budget + maxTurns presentation', () => {
+  // Live evidence (rs-1788355496224): the user's feedback resumed the COMPLETED
+  // session at turn 53/60 — the continuation inherited a nearly-exhausted
+  // budget, fixed both fields, verified ok:true at turn 60, and then died
+  // 'maxTurns' BEFORE it could finish — so presentSessionCompletion never ran
+  // and phase 5 stayed blank again.
+
+  it('M1: feedback continuation resets the budget segment (fresh turns, advisories, wall clock)', () => {
+    const body = fnBody('sendSessionFeedback');
+    assert.match(body, /st\.spend\s*=\s*\{\s*turns:\s*0/, 'turn counter reset to a fresh segment');
+    assert.match(body, /st\.budgetAdvisories\s*=\s*\[\]/, 'advisory keys reset so pacing re-fires');
+    assert.match(body, /st\.elapsedMs\s*=\s*0/, 'wall-clock segment reset');
+    assert.match(body, /page\.open/, 'the fix-request text tells the model the research tab closed — reopen first');
+  });
+
+  it('M2: a maxTurns stop with a built+verified artifact presents the outcome too, not just completed', () => {
+    assert.ok(SRC.includes('function sessionStopPresentsOutcome'), 'shared stop-reason classifier');
+    const cls = fnBody('sessionStopPresentsOutcome');
+    assert.ok(cls.includes("'completed'"), 'completed presents');
+    assert.ok(cls.includes("'maxTurns'"), 'maxTurns presents (the turn budget dying is not a reason to hide the artifact)');
+    assert.ok(!cls.includes("'paused'"), 'paused stays on phase 4 for Resume');
+    assert.ok(!cls.includes("'aborted'"), 'aborted stays on phase 4 for Resume');
+    const srs = fnBody('startResearchSession');
+    assert.ok(/sessionStopPresentsOutcome\(/.test(srs), 'the start path classifies via the helper');
+    const m = SRC.match(/btnSessionResume'\)\.addEventListener\('click',\s*async \(\) => \{([\s\S]*?)\}\);/);
+    assert.ok(m && m[1].includes('sessionStopPresentsOutcome('), 'the resume button classifies via the helper');
+    assert.match(srs, /'maxTurns'[^;]*appendLog|appendLog[^;]*max-turns|raise the max-turns/, 'maxTurns presentation carries a budget note');
+  });
+
+  it('M5: the shared presentation logs presentation-scoped labels, not testScript', () => {
+    const body = fnBody('presentTestOutcome');
+    assert.match(body, /presentTestOutcome (ok|failed)/, 'debug labels describe the presentation');
+    assert.ok(!/testScript (success|failed)/.test(body), 'the session path is not a testScript run — labels must not mislead');
   });
 });

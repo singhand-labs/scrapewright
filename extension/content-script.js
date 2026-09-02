@@ -1336,8 +1336,11 @@
     try {
       els = querySelectorAllDeep(sel);
     } catch (err) {
+      // Ninth-log M4: an invalid selector must surface as an error — a silent
+      // 0 poisons the caller's grounding ("no such element" from a selector
+      // that never ran). The DSL guide teaches the same contract for steps.
       sendDebugLog('error', 'content-script', 'domCount invalid selector', { selector: sel, error: err.message });
-      els = [];
+      throw err;
     }
     const count = els.length;
     const ops = getListExtractOps();
@@ -1355,7 +1358,9 @@
       els = querySelectorAllDeep(sel);
       els.forEach(el => results.push(elToData(el)));
     } catch (err) {
+      // Ninth-log M4: see domCount — invalid selectors throw, never [] .
       sendDebugLog('error', 'content-script', 'domList invalid selector', { selector: sel, error: err.message });
+      throw err;
     }
     const ops = getListExtractOps();
     const _diagnostics = ops && ops.computeSimpleSelectorDiagnostics

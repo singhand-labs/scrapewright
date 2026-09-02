@@ -313,7 +313,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!wizardSession) { await resumeResearchSession(); return; }
     setSessionControls('running');
     const report = await wizardSession.run();
-    if (report && report.stopped && report.stopped.reason === 'completed') { await presentSessionCompletion(); }
+    if (report && report.stopped && sessionStopPresentsOutcome(report.stopped.reason)) { await presentSessionCompletion(); }
   });
   document.getElementById('btnSessionAbort').addEventListener('click', () => {
     sessionAbortRequested = true;
@@ -1322,7 +1322,7 @@ async function presentTestOutcome(out) {
       if (tr) tr.textContent += '\n\nOUTPUT SCHEMA MISMATCH:\n  result fields: [' + gotKeys.join(', ') + ']\n  required:     [' + wantKeys.join(', ') + ']\n  missing:      [' + out.report.schemaMissing.join(', ') + ']\nThe extraction step must return the EXACT field names declared in outputSchema.';
       debugLogger.log('warn', 'wizard', 'Output schema mismatch', { got: gotKeys, want: wantKeys, missing: out.report.schemaMissing });
     }
-    debugLogger.log('info', 'wizard', 'testScript success', { finalResult: out.raw.testResult.finalResult });
+    debugLogger.log('info', 'wizard', 'presentTestOutcome ok', { finalResult: out.raw.testResult.finalResult });
   } else {
     const err = out.raw.error || new Error(out.report.error.message);
     wizardState.lastError = out.report.error.message;
@@ -1336,7 +1336,7 @@ async function presentTestOutcome(out) {
     if (raw) raw.classList.remove('hidden');
     appendLog(out.report.aborted ? 'Test aborted.' : 'Execution failed: ' + out.report.error.message, out.report.aborted ? 'info' : 'error');
     if (out.raw.testResult && out.raw.testResult.steps) renderExecutionTimeline(out.raw.testResult.steps);
-    debugLogger.log('error', 'wizard', 'testScript failed', { error: out.report.error.message, stepId: out.report.error.stepId });
+    debugLogger.log('error', 'wizard', 'presentTestOutcome failed', { error: out.report.error.message, stepId: out.report.error.stepId });
     updatePhaseUI('failure');
   }
 
@@ -2038,7 +2038,10 @@ async function startResearchSession(seedOverride) {
     return;
   }
   updateSessionSpendLine(wizardSession.state());
-  if (report && report.stopped && report.stopped.reason === 'completed') {
+  if (report && report.stopped && sessionStopPresentsOutcome(report.stopped.reason)) {
+    if (report.stopped.reason === 'maxTurns') {
+      appendLog('Turn budget exhausted. Presenting the latest artifact state — raise the max-turns knob (Phase 1) and press Resume to continue, or send feedback below for a fresh-budget continuation.', 'warn');
+    }
     await presentSessionCompletion();
   } else if (report) {
     appendLog('Session stopped early (' + report.status + '). Open questions: ' +
@@ -2048,6 +2051,15 @@ async function startResearchSession(seedOverride) {
       '. You can Resume from the pause point or refine manually in Phase 2.', 'warn');
   }
   } finally { releaseBoot(); }
+}
+
+// Ninth-log M2: which stop reasons land on a PRESENTED phase 5. 'completed'
+// obviously; 'maxTurns' too — the ninth log's continuation fixed both fields,
+// verified ok:true on its final turn, and died at the budget ceiling BEFORE it
+// could finish, which must not hide the built artifact. Paused/aborted stay on
+// phase 4 so Resume is the natural next action.
+function sessionStopPresentsOutcome(reason) {
+  return reason === 'completed' || reason === 'maxTurns';
 }
 
 // Ninth-log L2: a completed session must land on a PRESENTED phase 5 —
@@ -2106,8 +2118,15 @@ async function sendSessionFeedback() {
     return;
   }
   const st = persisted.session;
+  // Ninth-log M1: the feedback continuation gets a FRESH budget segment — the
+  // ninth log resumed a completed session at turn 53/60, fixed both fields,
+  // verified ok, and died at the ceiling before it could finish. The
+  // transcript (real history) is untouched; only budget accounting resets.
+  st.spend = { turns: 0, llmCalls: 0, promptTokens: 0, completionTokens: 0, estimated: false };
+  st.budgetAdvisories = [];
+  st.elapsedMs = 0;
   if (!Array.isArray(st.transcript)) st.transcript = [];
-  st.transcript.push({ kind: 'system', text: 'USER FEEDBACK (fix request): ' + text + ' — continue: probe the live page to diagnose the reported problem, fix the artifact via service.update, then verify.run again before finishing.' });
+  st.transcript.push({ kind: 'system', text: 'USER FEEDBACK (fix request): ' + text + ' — continue: the research tab was closed when the session ended, so page.open the target (with a concrete sample input) first; probe the live page to diagnose the reported problem, fix the artifact via service.update, then verify.run again before finishing.' });
   try {
     await wizardPersistence.save({ session: st, observation: persisted.observation, ledger: persisted.ledger });
     await wizardPersistence.flush();
