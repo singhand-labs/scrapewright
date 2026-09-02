@@ -80,6 +80,32 @@ describe('createVerifyRunner', () => {
     assert.match(out.report.error.message, /\$count|\$extract/, 'names the offending API family');
   });
 
+  it('JS syntax paren-imbalance gets the balanced-brackets hint (seventh-log J2: first verify at turn 60 died on "missing ) after argument list")', async () => {
+    const orch = async () => {
+      const e = new Error('Step failed: missing ) after argument list');
+      e.stepId = 'extract';
+      throw e;
+    };
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object' } });
+    assert.equal(out.report.ok, false);
+    assert.match(out.report.error.message, /missing \) after argument list/);
+    assert.match(out.report.error.message, /balanced/i);
+    assert.match(out.report.error.message, /\}\)\)/, 'names the .map((r) => ({ ... })) double-closer shape');
+  });
+
+  it('missing } after property list gets the same balanced-brackets hint (seventh-log J2)', async () => {
+    const orch = async () => {
+      const e = new Error('Step failed: missing } after property list');
+      e.stepId = 's1';
+      throw e;
+    };
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object' } });
+    assert.match(out.report.error.message, /missing \} after property list/);
+    assert.match(out.report.error.message, /balanced/i);
+  });
+
   it('$list data-object misuse gets the not-a-DOM-node hint (fourth-live-log G4)', async () => {
     const orch = async () => {
       const e = new Error('Step failed: TypeError: c.querySelectorAll is not a function');

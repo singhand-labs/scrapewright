@@ -241,6 +241,69 @@ describe('budgets and breakers', () => {
     assert.ok(report.spend.estimated);
     assert.ok(report.spend.promptTokens > 0);
   });
+
+  it('every llm call carries a turn-budget line in the session-state block (seventh-log J1)', async () => {
+    const calls = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([reply(toolTurn)], calls),
+      tools: { 'probe.count': async () => ({ count: 1 }) },
+      budgets: { maxTurns: 3 }
+    });
+    await session.run();
+    assert.ok(calls.length >= 3);
+    for (const c of calls) {
+      const sys = c.messages.filter(m => m.role === 'system').map(m => m.content).join('\n');
+      assert.match(sys, /Turn budget: \d+ used \/ 3 max — \d+ left/, 'budget line visible on every call');
+    }
+  });
+
+  it('fires one directional advisory per bucket (50%/75%/90%) and never repeats (seventh-log J1)', async () => {
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([reply(toolTurn)], []),
+      tools: { 'probe.count': async () => ({ count: 1 }) },
+      budgets: { maxTurns: 20 }   // buckets at turns 10 / 15 / 18
+    });
+    await session.run();
+    const st = session.state().session;
+    const advisories = st.transcript.filter(e => e.kind === 'system' && /BUDGET ADVISORY/.test(e.text));
+    assert.equal(advisories.length, 3, 'exactly one advisory per bucket');
+    assert.match(advisories[0].text, /half the turn budget spent: 10 of 20/);
+    assert.match(advisories[1].text, /75% of the turn budget spent: 15 of 20/);
+    assert.match(advisories[2].text, /90% of the turn budget spent: 18 of 20/);
+    assert.match(advisories[2].text, /FINALIZE/);
+    assert.deepEqual(st.budgetAdvisories.sort(), ['author', 'finalize', 'half']);
+  });
+
+  it('a resumed session past all buckets fires only the highest advisory once (seventh-log J1)', async () => {
+    const seed = {
+      session: {
+        id: 'rs-seed-1', status: 'idle', requirement: 'r',
+        goals: [], hypotheses: [], transcript: [], digest: '',
+        spend: { turns: 16, llmCalls: 16, promptTokens: 100, completionTokens: 10, estimated: false },
+        attachedUnits: [], artifactVersions: [], elapsedMs: 0, stopped: null,
+        budgetAdvisories: ['half']   // half fired pre-resume; author (15) was passed while stopped
+      }
+    };
+    const session = createResearchSession({
+      requirement: 'r',
+      seed: seed,
+      llm: scriptedLlm([reply(toolTurn)], []),
+      tools: { 'probe.count': async () => ({ count: 1 }) },
+      budgets: { maxTurns: 20 }
+    });
+    await session.run();
+    const st = session.state().session;
+    const advisories = st.transcript.filter(e => e.kind === 'system' && /BUDGET ADVISORY/.test(e.text));
+    // At resume (turns 16): only the 75% advisory fires — 'half' is marked
+    // sent and 16 < 18. The 90% advisory still fires later at turn 18 as the
+    // run continues toward maxTurns.
+    assert.equal(advisories.length, 2);
+    assert.match(advisories[0].text, /75% of the turn budget spent: 16 of 20/);
+    assert.match(advisories[1].text, /90% of the turn budget spent: 18 of 20/);
+    assert.deepEqual(st.budgetAdvisories.sort(), ['author', 'finalize', 'half']);
+  });
 });
 
 describe('LLM failure discipline', () => {

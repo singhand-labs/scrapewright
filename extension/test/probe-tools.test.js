@@ -379,7 +379,7 @@ describe('probe.hover canonical popover receipt (sixth-live-log turns 17-24 dead
     assert.ok(observationLog.covers("div[aria-label='Link preview'][role='dialog']"));
   });
 
-  it('keeps the placeholder when nothing distinguishing is derivable (no weak receipts)', async () => {
+  it('keeps popoverSelector null when nothing distinguishing is derivable — the sentinel NEVER leaks (seventh-log J3)', async () => {
     const { tools, observationLog } = makeTools(async () => ({
       hovered: true,
       autoDiscovered: true,
@@ -387,10 +387,40 @@ describe('probe.hover canonical popover receipt (sixth-live-log turns 17-24 dead
       htmlSnippet: '<div class="x9f619"><span>y</span></div>'
     }));
     const r = await tools.hover({ anchorSel: 'a.q' });
-    assert.equal(r.popoverSelector, '[auto-discovered popover]');
-    assert.equal(r.popoverSelectorNote, undefined, 'no canonical → no verbatim note');
+    assert.equal(r.popoverSelector, null, 'the [auto-discovered popover] sentinel is not a selector and must not be returned as one');
+    assert.match(r.popoverSelectorNote || '', /popoverSel/, 'no-canonical note teaches the escape path');
     assert.equal(observationLog.covers('div'), false, 'a bare tag is never a receipt');
     assert.ok(observationLog.covers('a.q'), 'anchor receipt still recorded');
+  });
+
+  it('derives the canonical from a DESCENDANT opening tag when the snippet opens with a bare portal wrapper (seventh-log J3 turns 50-53)', async () => {
+    const { tools, observationLog } = makeTools(async () => ({
+      hovered: true,
+      autoDiscovered: true,
+      hoverDispatched: true,
+      popoverSelector: '[auto-discovered popover]',
+      htmlSnippet: '<div class="x9f619 x1n2onr6"><div aria-label="Link preview" role="dialog" aria-modal="true" dir="ltr"><h2>name</h2></div></div>'
+    }));
+    const r = await tools.hover({ anchorSel: "div[role='feed'] h2 a" });
+    assert.equal(r.popoverSelector, "div[aria-label='Link preview'][role='dialog']",
+      'outermost-first scan descends past bare wrappers to the first token-bearing element');
+    assert.ok(/VERBATIM/.test(r.popoverSelectorNote || ''));
+    assert.ok(observationLog.covers("div[aria-label='Link preview'][role='dialog']"),
+      'the descendant canonical is the receipt — the model copies it instead of hand-deriving across 3 extra turns');
+  });
+
+  it('caps the descendant scan (first 8 opening tags) so a deep wrapper stack yields null, not a slow crawl', async () => {
+    let deep = '';
+    for (let i = 0; i < 9; i++) deep += '<div class="w' + i + '">';
+    deep += '<div aria-label="deep">x</div>';
+    const { tools } = makeTools(async () => ({
+      hovered: true,
+      autoDiscovered: true,
+      popoverSelector: '[auto-discovered popover]',
+      htmlSnippet: deep
+    }));
+    const r = await tools.hover({ anchorSel: 'a.deep' });
+    assert.equal(r.popoverSelector, null, '9 bare wrappers push the token tag past the 8-tag scan cap');
   });
 
   it('a long aria-label is skipped rather than emitting a truncated (unmatchable) selector', async () => {

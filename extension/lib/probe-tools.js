@@ -290,33 +290,42 @@
     // model rewrites from the evidence could never match a receipt, so the
     // grounding gate deadlocked the session (turns 19-24). Derive a canonical
     // selector from the observed structural identity (or the htmlSnippet
-    // opening tag), record THAT exact string as the receipt, and hand it back
+    // opening tags), record THAT exact string as the receipt, and hand it back
     // as popoverSelector so the model copies it verbatim (RC51 anchorHref
     // pattern: the framework supplies the field instead of letting the LLM
     // invent a variant like adding [aria-modal='true']).
-    function popoverIdentityFromHtml(html) {
-      if (typeof html !== 'string' || !html) return null;
-      const t = html.replace(/^\s+/, '');
-      const m = /^<([a-zA-Z][\w-]*)/.exec(t);
-      if (!m) return null;
-      // Quote-aware opening-tag end (attr values may contain '>').
-      let i = m[0].length, quote = null, end = -1;
-      while (i < t.length) {
-        const ch = t[i];
-        if (quote) {
-          if (ch === '\\') { i += 2; continue; }
-          if (ch === quote) quote = null;
-        } else if (ch === '"' || ch === "'") quote = ch;
-        else if (ch === '>') { end = i; break; }
-        i += 1;
+    //
+    // Seventh-live-log J3: the snippet usually opens with a BARE portal
+    // wrapper (hashed classes only) while the semantic tokens live on a
+    // descendant — the first-tag-only parse produced no canonical and the
+    // model hand-derived the selector across 3 extra turns. Scan the first 8
+    // opening tags, outermost-first, and take the first token-bearing element.
+    function popoverOpeningTags(html) {
+      if (typeof html !== 'string' || !html) return [];
+      const head = html.slice(0, 4000);
+      const out = [];
+      const re = /<([a-zA-Z][\w-]*)((?:"[^"]*"|'[^']*'|[^>"'])*)>/g;
+      let m;
+      while (out.length < 8 && (m = re.exec(head)) !== null) {
+        out.push({ tag: m[1], attrs: m[2] || '' });
       }
-      if (end < 0) return null;
-      const attrs = t.slice(m[0].length, end);
+      return out;
+    }
+
+    function identityFromAttrs(tag, attrs) {
       const get = (name) => {
         const am = new RegExp('(?:^|\\s)' + name + '\\s*=\\s*(["\'])(.*?)\\1', 'i').exec(attrs);
         return am ? am[2].trim() : '';
       };
-      return { tag: m[1], id: get('id'), role: get('role'), ariaLabel: get('aria-label') };
+      return { tag: tag, id: get('id'), role: get('role'), ariaLabel: get('aria-label') };
+    }
+
+    function canonicalFromHtml(html) {
+      for (const t of popoverOpeningTags(html)) {
+        const c = canonicalPopoverSelector(identityFromAttrs(t.tag, t.attrs));
+        if (c) return c;
+      }
+      return null;
     }
 
     function canonicalPopoverSelector(op) {
@@ -365,8 +374,8 @@
       if (!r || typeof r !== 'object') return { error: 'unexpected $hover result shape' };
       const op = (r.observedPopover && typeof r.observedPopover === 'object')
         ? r.observedPopover
-        : popoverIdentityFromHtml(typeof r.htmlSnippet === 'string' ? r.htmlSnippet : '');
-      const canonical = canonicalPopoverSelector(op);
+        : null;
+      const canonical = canonicalPopoverSelector(op) || canonicalFromHtml(typeof r.htmlSnippet === 'string' ? r.htmlSnippet : '');
       if (observationLog) {
         const receiptSels = popoverSel ? [anchorSel, popoverSel] : [anchorSel];
         if (canonical && receiptSels.indexOf(canonical) === -1) receiptSels.push(canonical);
@@ -377,9 +386,15 @@
             + (canonical ? ' popover=' + canonical : '')
         });
       }
+      // '[auto-discovered popover]' is a human-readable SENTINEL from the
+      // hover layer, not a CSS selector — it must never be handed back as one
+      // (seventh-log J3: the model ignored it, but a copy would throw).
+      const matchedSel = (typeof r.popoverSelector === 'string' && r.popoverSelector && r.popoverSelector.charAt(0) !== '[')
+        ? r.popoverSelector
+        : null;
       const out = {
         hovered: !!r.hovered,
-        popoverSelector: canonical || ((typeof r.popoverSelector === 'string' && r.popoverSelector) || null),
+        popoverSelector: canonical || matchedSel,
         autoDiscovered: !!r.autoDiscovered,
         hoverDispatched: !!r.hoverDispatched,
         reason: (typeof r.reason === 'string' && r.reason) || null,
@@ -390,6 +405,8 @@
       };
       if (canonical) {
         out.popoverSelectorNote = 'canonical popoverSelector derived from the observed popover — an observation receipt was recorded for THIS EXACT STRING. If you configure popoverSel in a step, copy it VERBATIM; an embellished variant (e.g. adding [aria-modal=\'true\']) is a new string the grounding gate must reject.';
+      } else if (out.htmlSnippet) {
+        out.popoverSelectorNote = 'auto-discovery captured the popover HTML but no stable token (id, aria-label, or role with a value of 60 chars or less) could be derived from its opening tags. Read htmlSnippet, pick a specific selector you can SEE in it (e.g. div[aria-label=\'...\']), and pass it as popoverSel to probe.hover again — a run that observes the popover via that selector records the receipt.';
       }
       return out;
     }

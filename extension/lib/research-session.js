@@ -49,6 +49,27 @@
 
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+  // Seventh-live-log J1: the 60-turn session spent turns 1-55 on research,
+  // authored at 56-59 and hit its FIRST verify at turn 60 — the model had no
+  // visibility into the remaining budget, so whatever ceiling G5 raises gets
+  // filled with research. Two carriers: a persistent budget line in the
+  // session-state block (every call) and one-shot directional advisories at
+  // 50/75/90%.
+  const BUDGET_ADVISORIES = [
+    {
+      key: 'half', pct: 0.5,
+      text: (used, max) => 'BUDGET ADVISORY (half the turn budget spent: ' + used + ' of ' + max + '): keep research focused — prefer the cheapest probe that answers the current question, and do not re-confirm selectors you already hold receipts for.'
+    },
+    {
+      key: 'author', pct: 0.75,
+      text: (used, max) => 'BUDGET ADVISORY (75% of the turn budget spent: ' + used + ' of ' + max + '): move to authoring now — dry-run the fieldMap with probe.extract in the live tab, then service.update. Leave the remaining turns for verify.run and fixing its findings.'
+    },
+    {
+      key: 'finalize', pct: 0.9,
+      text: (used, max) => 'BUDGET ADVISORY (90% of the turn budget spent: ' + used + ' of ' + max + ' — only ' + (max - used) + ' left): FINALIZE — submit your best-grounded artifact via service.update immediately and run verify.run; spend what remains ONLY on defects verify reports.'
+    }
+  ];
+
   function createResearchSession(config) {
     const cfg = config || {};
     if (typeof cfg.llm !== 'function') throw new Error('createResearchSession requires an llm({messages,maxTokens}) function');
@@ -85,7 +106,8 @@
       attachedUnits: [],
       artifactVersions: [],
       elapsedMs: 0,
-      stopped: null
+      stopped: null,
+      budgetAdvisories: []
     };
     if (cfg.seed && cfg.seed.session) {
       state = JSON.parse(JSON.stringify(cfg.seed.session));
@@ -185,6 +207,10 @@
 
     function buildSessionStateBlock() {
       const parts = [];
+      // J1: the model is the only actor that can pace the session, and it
+      // never saw the budget. First line, every call, always present.
+      parts.push('Turn budget: ' + state.spend.turns + ' used / ' + budgets.maxTurns + ' max — ' +
+        Math.max(0, budgets.maxTurns - state.spend.turns) + ' left. Pace the work: research early, author mid-session, verify and fix at the end.');
       if (state.goals.length) {
         parts.push('# Goals\n' + state.goals.map(g => '- [' + g.status + '] ' + g.id + ': ' + g.text).join('\n'));
       }
@@ -322,6 +348,29 @@
       emit('compaction', { collapsed: old.length, charsBefore: chars });
     }
 
+    // Fires the HIGHEST due unsent advisory once and marks every due bucket
+    // as sent — a resume that skipped past 50% (and 75%) shows only the
+    // strongest directive instead of replaying stale ones.
+    function maybeBudgetAdvisory() {
+      if (!Array.isArray(state.budgetAdvisories)) state.budgetAdvisories = [];
+      let due = null;
+      for (const adv of BUDGET_ADVISORIES) {
+        if (state.spend.turns >= Math.floor(budgets.maxTurns * adv.pct) &&
+            state.budgetAdvisories.indexOf(adv.key) === -1) {
+          due = adv;
+        }
+      }
+      if (!due) return;
+      for (const adv of BUDGET_ADVISORIES) {
+        if (state.spend.turns >= Math.floor(budgets.maxTurns * adv.pct) &&
+            state.budgetAdvisories.indexOf(adv.key) === -1) {
+          state.budgetAdvisories.push(adv.key);
+        }
+      }
+      state.transcript.push({ kind: 'system', text: due.text(state.spend.turns, budgets.maxTurns) });
+      emit('budget_advisory', { key: due.key, turns: state.spend.turns, maxTurns: budgets.maxTurns });
+    }
+
     function assembleMessages() {
       const sys = Protocol.buildSystemPrompt({
         base: cfg.systemPrompt || '',
@@ -450,6 +499,7 @@
           if (state.spend.turns >= budgets.maxTurns) { report = await stop('maxTurns'); break; }
           if (state.elapsedMs + (now() - segmentStart) >= budgets.wallClockMs) { report = await stop('wallClock'); break; }
           if (state.spend.promptTokens + state.spend.completionTokens >= budgets.tokenCap) { report = await stop('tokenCap'); break; }
+          maybeBudgetAdvisory();
 
           emit('turn_start', { turn: state.spend.turns + 1 });
           const messages = assembleMessages();
