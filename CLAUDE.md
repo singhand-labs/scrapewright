@@ -169,12 +169,19 @@ The step chain topology is validated everywhere services are persisted (`Service
 
 ### Script DSL ($ API)
 
-User scripts (LLM-generated) run as `return <expr>` in the sandbox with these async globals:
+User scripts (LLM-generated) run as `return <expr>` in the sandbox with these async globals — 19 primitives. Full table with error shapes: `docs/technical-whitepaper.md` §7.2. Selector diagnostics (`_diagnostics`) are injected at the source of every list/extract/hover call and relayed up on success AND error paths (`DOM_RESPONSE` → offscreen → sandbox → `EXECUTE_RESULT.selectorDiagnostics`) for autoFix.
 
-- `$(sel)` — querySelector (returns element data)
-- `$click(sel)`, `$type(sel, text)`, `$extract(sel, attr?)`, `$wait(sel, ms?)`, `$check(sel, prop)`
-- `$exists(sel, timeoutMs?)`, `$count(sel)`, `$list(sel)` — presence/count/collection reads
-- `$openTab(url, fn)` — open a new tab, run `fn` in it (legacy content-script path), return result; on failure the sub-tab's DOM is captured as `error.subTabSnapshot` before the tab is destroyed
+**Reads** — `$(sel)` waits for an element (30s) and returns ElementData (`textContent` capped at 50000 chars). `$count(sel)` / `$list(sel)` count/collect across the main doc + same-origin iframes; invalid selectors throw (no silent 0). `$extract(sel, attr?, timeoutMs?)` reads text or an attribute (`outerHTML`/`innerHTML` are DOM properties, not attributes; fail-fast default 5s, third param overrides; an absent attribute yields null + an `attrAbsent` diagnostic). `$check(sel, prop)` reads a property. `$exists(sel, timeoutMs?)` polls for a visible match (default 5s; `timeoutMs: 0` = one immediate query). `$wait(sel, ms?)` waits for a selector (30s cap) then sleeps `ms`; an empty selector throws `WAIT_SELECTOR_EMPTY`.
+
+**Interaction** — `$click(sel, timeoutMs?)` / `$type(sel, text, timeoutMs?)`: element wait defaults 10s (override via the timeout param; reads keep 30s). `$type` coerces non-string `text` with `String()` and records the original type in `_diagnostics`. `$clickInList(containerSel, subSel, opts?)` clicks a sub-element in each container (`{clicked, errors[{index,reason}]}`, default `delayMs=500`). `$waitForStable(sel, opts?)` polls textContent until stable (streaming-content completion, default 20000ms).
+
+**Lists** — `$extractList(containerSel, fieldMap, opts?)` extracts one record per container (first-match per sub-selector; `opts.allowEmpty` waives the empty-throw). `$extractListMulti(containerSel, fieldMap, opts?)` returns arrays of ALL matches per field per container.
+
+**Scroll** — `$scrollBy(deltaY, selector?)`, `$scrollToBottom(selector?)` (incremental growth-probe loop; dual-signal stall: 3 no-progress iterations OR 3000ms without height growth; trusted-wheel fallback when stalled; returns `{scrolled, newY, newScrollHeight, stalled, stallReason, attempts, stallWindowMs}`), `$scrollIntoView(selector)`.
+
+**Hover** — `$hover(anchorSel, popoverSel?, opts?)` dispatches a trusted mouseMoved at the anchor and captures the popover (`{hovered, htmlSnippet, popoverSelector, reason?, observedPopover?}`; default timeout 4500ms with a 3000ms no-signal early exit; `opts.index` selects the Nth match). `$extractWithHover(containerSel, fieldMap, opts)` is the container-scoped atomic extract+hover primitive (per-record `hovercards[]` with `anchorHref`/`anchorText`; `containerIndex`/`containerRange`/`maxContainers` split large batches).
+
+**Tabs** — `$openTab(url, fn)` opens a new tab, runs `fn` in it (legacy content-script path; 60s local timeout; on failure the sub-tab's DOM is captured as `error.subTabSnapshot` before the tab is destroyed).
 
 Plus the injected context globals `__input__`, `__stepResults__`, `__lastResult__` (see Step Graph model).
 
