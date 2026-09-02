@@ -1292,3 +1292,26 @@ describe('audit C12+C5: terminal persistence + budget-stop hints', () => {
     assert.match(r.stopped.detail, /raise the budget \(wallClockMs\)/);
   });
 });
+
+describe('audit C6: digest keeps assistant think excerpts and is capped', () => {
+  it('compaction digests include think summaries and cap at 24000 chars', async () => {
+    const think = 'hypothesis H1 looks wrong because the second anchor carried the metadata link and the popover mounted there — '.repeat(3);
+    const replies = [];
+    for (let i = 0; i < 150; i++) replies.push(reply(envelope('probe.count', { sel: '.c' + i }, { think })));
+    replies.push(reply(finishEnvelope()));
+    const session = createResearchSession({
+      requirement: 'r',
+      compaction: { thresholdChars: 4000, keepTurns: 2 },
+      budgets: { maxTurns: 200 },
+      llm: scriptedLlm(replies, []),
+      tools: { 'probe.count': async () => ({ count: 1 }) }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    const st = session.state().session;
+    assert.ok(st.digest.length > 0, 'digest built');
+    assert.ok(st.digest.length <= 24500, 'digest capped (got ' + st.digest.length + ')');
+    assert.match(st.digest, /chars elided/, 'elision disclosed');
+    assert.match(st.digest, /hypothesis H1 looks wrong/, 'assistant think survives into the digest');
+  });
+});

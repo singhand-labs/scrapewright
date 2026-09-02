@@ -372,6 +372,8 @@
       return n;
     }
 
+    const DIGEST_CAP = 24000;
+
     function maybeCompact() {
       const keepEntries = Math.max(2, compaction.keepTurns * 2);
       const chars = transcriptChars();
@@ -383,9 +385,13 @@
       for (const e of old) {
         if (e.kind === 'assistant') {
           const t = Protocol.parseAssistantTurn(e.text);
+          // Audit C6: the WHY a hypothesis was abandoned lived only in think
+          // text and was dropped on compaction — resumed sessions re-walked
+          // dead ends. Keep a 200-char excerpt next to the action.
+          const thinkBit = (t.ok && t.turn && t.turn.think) ? ' — ' + String(t.turn.think).slice(0, 200) : '';
           lines.push('- ' + (t.ok && t.turn.tool
             ? t.turn.tool + ' ' + JSON.stringify(t.turn.args)
-            : 'assistant turn'));
+            : 'assistant turn') + thinkBit);
         } else if (e.kind === 'tool') {
           lines.push('  → ' + String(e.summary || '').slice(0, 200));
         } else {
@@ -393,6 +399,17 @@
         }
       }
       state.digest = (state.digest ? state.digest + '\n' : '') + lines.join('\n');
+      // Audit C6: the digest only ever grew — long sessions carried an
+      // unbounded block into every prompt. Cap head 70% / tail 30% with a
+      // disclosed elision marker (never silent truncation).
+      if (state.digest.length > DIGEST_CAP) {
+        const headLen = Math.floor(DIGEST_CAP * 0.7);
+        const tailLen = DIGEST_CAP - headLen;
+        const elided = state.digest.length - DIGEST_CAP;
+        state.digest = state.digest.slice(0, headLen) +
+          '\n… ' + elided + ' chars elided (digest cap ' + DIGEST_CAP + ') …\n' +
+          state.digest.slice(-tailLen);
+      }
       state.transcript = keep;
       emit('compaction', { collapsed: old.length, charsBefore: chars });
     }
