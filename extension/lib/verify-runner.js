@@ -24,10 +24,15 @@
   }
 
   // wizard-utils: module.exports in Node; individual window/self globals in page contexts.
-  function resolveWU() {
-    const m = resolveLib('./wizard-utils', '__wizardUtilsModuleMarker__');
-    if (m && typeof m.scoreAttemptResult === 'function') return m;
-    const w = (typeof window !== 'undefined' && window) || global || self;
+  // Audit C11: silent sentinel degradation disclosed — __missing lists the
+  // functions a host failed to export so the report can say a detector
+  // never ran instead of looking complete.
+  function resolveWU(forceBag) {
+    if (!forceBag) {
+      const m = resolveLib('./wizard-utils', '__wizardUtilsModuleMarker__');
+      if (m && typeof m.scoreAttemptResult === 'function') return m;
+    }
+    const w = forceBag || (typeof window !== 'undefined' && window) || global || self;
     const bag = {
       parseCounterFields: w.parseCounterFields,
       isFrozenZeroNotReady: w.isFrozenZeroNotReady,
@@ -47,8 +52,13 @@
       stripSnapshotsFromTestResult: w.stripSnapshotsFromTestResult,
       sampleRecordsForLLMContext: w.sampleRecordsForLLMContext
     };
+    const missing = [];
     for (const k of Object.keys(bag)) {
-      if (k.indexOf('FROZEN_') !== 0 && typeof bag[k] !== 'function') bag[k] = function () { return null; };
+      if (k.indexOf('FROZEN_') !== 0 && typeof bag[k] !== 'function') { bag[k] = function () { return null; }; missing.push(k); }
+    }
+    if (missing.length) {
+      try { console.warn('[verify-runner] wizard-utils functions unavailable (detectors degraded): ' + missing.join(', ')); } catch (e) { /* warn is best-effort */ }
+      bag.__missing = missing;
     }
     return bag;
   }
@@ -70,7 +80,8 @@
   }
 
   function isMarkupDump(v) {
-    if (typeof v !== 'string' || v.length < 200) return false;
+    if (typeof v !== 'string' || v.length < 150) return false;
+    if (v.trim().charAt(0) !== '<') return false; // audit C9: legit text can contain tags; dumps LEAD with one
     const lt = (v.match(/</g) || []).length;
     const gt = (v.match(/>/g) || []).length;
     return lt >= 3 && gt >= 3;
@@ -81,52 +92,91 @@
     return s.length <= 80 ? s : s.slice(0, 79) + '…';
   }
 
-  function detectJunkValues(data, schema) {
-    if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
-    const fields = [];
-    for (const key of Object.keys(data)) {
-      const val = data[key];
-      if (Array.isArray(val) && !val.length) continue;
-      if (Array.isArray(val) && val.every((x) => typeof x === 'string')) {
-        // top-level url-ish scalar-array: data: entries pollute it the same way
-        if (URLISH_FIELD.test(key)) {
-          const junk = val.filter((x) => x.indexOf('data:') === 0).length;
-          if (junk > 0) fields.push({ field: key, kind: 'dataUri', junkCount: junk, total: val.length });
+  // Audit C7/C20: the census now walks nested containers (depth <= 3) so
+  // {result:{items:[...]}} is scanned like top-level arrays, and field-name
+  // classification ALSO honors schema descriptions (non-English field names
+  // escape the English regexes; a description mentioning links/urls or
+  // embedded html is a first-class hint).
+  function collectFieldHints(schema, re) {
+    const names = new Set();
+    (function rec(node, depth) {
+      if (!node || typeof node !== 'object' || depth > 3) return;
+      const props = (node.properties && typeof node.properties === 'object' && !Array.isArray(node.properties)) ? node.properties : null;
+      if (props) {
+        for (const k of Object.keys(props)) {
+          const p = props[k];
+          const desc = (p && typeof p.description === 'string') ? p.description : '';
+          if (re.test(k) || re.test(desc)) names.add(k);
         }
-        continue;
+        for (const k of Object.keys(props)) rec(props[k], depth + 1);
       }
-      if (!Array.isArray(val)) continue;
-      const recs = val.filter((r) => r && typeof r === 'object' && !Array.isArray(r));
-      if (!recs.length) continue;
-      const recKeys = [];
-      const seen = {};
-      for (const r of recs) {
-        for (const k of Object.keys(r)) {
-          if (!seen[k]) { seen[k] = 1; recKeys.push(k); }
-        }
-      }
-      for (const rk of recKeys) {
-        let blobs = 0; let blobSample = '';
-        let dataJunk = 0; let dataTotal = 0; let uriSample = '';
-        let dumps = 0; let dumpSample = '';
-        for (const r of recs) {
-          const v = r[rk];
-          if (typeof v === 'string') {
-            if (isQueryBlob(v)) { blobs += 1; if (!blobSample) blobSample = v; }
-            if (!RAWISH_FIELD.test(rk) && isMarkupDump(v)) { dumps += 1; if (!dumpSample) dumpSample = v; }
-          } else if (Array.isArray(v)) {
-            for (const x of v) {
-              if (typeof x !== 'string') continue;
-              dataTotal += 1;
-              if (x.indexOf('data:') === 0) { dataJunk += 1; if (!uriSample) uriSample = x; }
-            }
-          }
-        }
-        if (blobs) fields.push({ field: key + '.' + rk, kind: 'queryBlob', count: blobs, sample: capSample(blobSample) });
-        if (dataJunk && URLISH_FIELD.test(rk)) fields.push({ field: key + '.' + rk, kind: 'dataUri', junkCount: dataJunk, total: dataTotal });
-        if (dumps) fields.push({ field: key + '.' + rk, kind: 'markupDump', count: dumps, sample: capSample(dumpSample) });
+      if (node.items) rec(node.items, depth + 1);
+    })(schema, 0);
+    return names;
+  }
+
+  const isUrlishName = (key, hints) => URLISH_FIELD.test(key) || hints.has(key);
+  const isRawishName = (key, hints) => RAWISH_FIELD.test(key) || hints.has(key);
+
+  function scanRecords(recs, fieldPath, urlishHints, rawishHints, fields) {
+    const recKeys = [];
+    const seen = {};
+    for (const r of recs) {
+      for (const k of Object.keys(r)) {
+        if (!seen[k]) { seen[k] = 1; recKeys.push(k); }
       }
     }
+    for (const rk of recKeys) {
+      let blobs = 0; let blobSample = '';
+      let dataJunk = 0; let dataTotal = 0;
+      let dumps = 0; let dumpSample = '';
+      for (const r of recs) {
+        const v = r[rk];
+        if (typeof v === 'string') {
+          if (isQueryBlob(v)) { blobs += 1; if (!blobSample) blobSample = v; }
+          if (!isRawishName(rk, rawishHints) && isMarkupDump(v)) { dumps += 1; if (!dumpSample) dumpSample = v; }
+        } else if (Array.isArray(v)) {
+          for (const x of v) {
+            if (typeof x !== 'string') continue;
+            dataTotal += 1;
+            if (x.indexOf('data:') === 0) { dataJunk += 1; }
+          }
+        }
+      }
+      if (blobs) fields.push({ field: fieldPath + '.' + rk, kind: 'queryBlob', count: blobs, sample: capSample(blobSample) });
+      if (dataJunk && isUrlishName(rk, urlishHints)) fields.push({ field: fieldPath + '.' + rk, kind: 'dataUri', junkCount: dataJunk, total: dataTotal });
+      if (dumps) fields.push({ field: fieldPath + '.' + rk, kind: 'markupDump', count: dumps, sample: capSample(dumpSample) });
+    }
+  }
+
+  function detectJunkValues(data, schema) {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+    const urlishHints = collectFieldHints(schema, /(url|link|href|src|image|photo|picture|media|avatar)/i);
+    const rawishHints = collectFieldHints(schema, /(html|markup|raw source|embedded)/i);
+    const fields = [];
+    (function walk(obj, path, depth) {
+      if (!obj || typeof obj !== 'object' || depth > 3) return;
+      for (const key of Object.keys(obj)) {
+        const val = obj[key];
+        const fieldPath = path.concat(key).join('.');
+        if (Array.isArray(val)) {
+          if (!val.length) continue;
+          if (val.every((x) => typeof x === 'string')) {
+            // top-level url-ish scalar-array: data: entries pollute it the same way
+            if (isUrlishName(key, urlishHints)) {
+              const junk = val.filter((x) => x.indexOf('data:') === 0).length;
+              if (junk > 0) fields.push({ field: fieldPath, kind: 'dataUri', junkCount: junk, total: val.length });
+            }
+            continue;
+          }
+          const recs = val.filter((r) => r && typeof r === 'object' && !Array.isArray(r));
+          if (recs.length) scanRecords(recs, fieldPath, urlishHints, rawishHints, fields);
+          for (const r of recs) walk(r, path.concat(key), depth + 1);
+        } else if (val && typeof val === 'object') {
+          walk(val, path.concat(key), depth + 1);
+        }
+      }
+    })(data, [], 0);
     if (!fields.length) return null;
     return {
       fields: fields,
@@ -138,7 +188,13 @@
   function createVerifyRunner(deps) {
     const d = deps || {};
     if (typeof d.orchestrate !== 'function') throw new Error('createVerifyRunner requires an orchestrate(service, input, orchDeps, options) function');
-    const WU = resolveWU();
+    // Audit C11: a host that failed to export a wizard-utils function used to
+    // degrade SILENTLY (sentinel null) — the report looked complete while a
+    // detector never ran. Injectable for tests; degradation is disclosed.
+    const WU = (d.wizardUtils && typeof d.wizardUtils.scoreAttemptResult === 'function')
+      ? resolveWU(d.wizardUtils)
+      : resolveWU();
+    const wuMissing = (Array.isArray(WU.__missing) && WU.__missing.length) ? WU.__missing : null;
     const RSD = resolveLib('./record-shape-distribution', 'RecordShapeDistribution');
     const log = typeof d.log === 'function' ? d.log : function () {};
     const onEventCb = typeof d.onEvent === 'function' ? d.onEvent : function () {};
@@ -249,7 +305,7 @@
                 const counters = WU.parseCounterFields(evt.resultPreview);
                 if (counters && counters.positive && counters.positive.length > 0) {
                   zeroCounterStreaks.delete(String(evt.stepId));
-                } else if (WU.isFrozenZeroNotReady(evt.resultPreview)) {
+                } else if (counters && WU.isFrozenZeroNotReady(evt.resultPreview)) {
                   const prev = zeroCounterStreaks.get(String(evt.stepId)) || null;
                   const streak = (prev ? prev.n : 0) + 1;
                   const since = prev ? prev.since : Date.now();
@@ -368,7 +424,7 @@
           }
         }
         if (!error) {
-          const emptyFields = WU.findEmptyExtractionFields(finalData, outputSchema);
+          const emptyFields = WU.findEmptyExtractionFields(finalData, outputSchema) || []; // null when degraded (C11)
           if (emptyFields.length > 0) {
             const nominalStepId = lastStepEntry && lastStepEntry.stepId;
             detectors.emptyFields = emptyFields;
@@ -379,7 +435,7 @@
           }
         }
         if (!error) {
-          const duplicateFields = WU.detectDuplicateRecords(finalData, outputSchema);
+          const duplicateFields = WU.detectDuplicateRecords(finalData, outputSchema) || []; // null when degraded (C11)
           if (duplicateFields.length > 0) {
             const nominalStepId = lastStepEntry && lastStepEntry.stepId;
             detectors.duplicateFields = duplicateFields;
@@ -409,7 +465,7 @@
         }
       }
 
-      const oc = result ? WU.validateOutputAgainstSchema(finalData, outputSchema) : { ok: true, missing: [] };
+      const oc = (result ? WU.validateOutputAgainstSchema(finalData, outputSchema) : { ok: true, missing: [] }) || { ok: true, missing: [] };
 
       const compactSteps = result && Array.isArray(result.steps)
         ? result.steps.map((s) => ({
@@ -485,6 +541,7 @@
           ? (result.pagesTruncated ? result.pages.length + '+' : String(result.pages.length))
           : '0',
         eventCount: events.length,
+        degraded: wuMissing ? ('wizard-utils functions unavailable, detectors degraded: ' + wuMissing.join(', ')) : undefined,
         // TAG strings for knowledge auto-attach — the engine reads result.events on the tool result, so this key name is contract, not preference (raw event log is the sibling top-level return field)
         events: eventTags()
       };
@@ -501,7 +558,7 @@
             const stepDefZ = stepDefsOfService.find((s) => String(s.id) === String(zeroCounterBreaker.stepId));
             e.message = 'ZERO_COUNTER_FROZEN: step "' + (stepDefZ ? stepDefZ.name : zeroCounterBreaker.stepId) + '" returned not-ready for ' + zeroCounterBreaker.streak +
               ' consecutive iterations (over ' + Math.round((zeroCounterBreaker.elapsedMs || 0) / 1000) + 's) while its counter field(s) [' + zeroCounterBreaker.counterFields.join(', ') + '] stayed 0 and never once rose. ' +
-              'The counting FILTER inside the step (JS logic — e.g. a permalink-href regex) matched nothing on the page, and an exhausted exit guarded by `count > 0` can never fire at count 0, so the run scrolled toward maxIterations and was stopped by the circuit breaker. ' +
+              'The counting FILTER inside the step (JS logic — e.g. a stable-detail-link filter such as a URL-pattern check) matched nothing on the page, and an exhausted exit guarded by `count > 0` can never fire at count 0, so the run scrolled toward maxIterations and was stopped by the circuit breaker. ' +
               'Fix per the zero-trap method: (1) SAMPLE the raw values before filtering — extract them (e.g. $extractListMulti(containerSel, { h: { selector: \'a[href]\', attr: \'href\' } }, { allowEmpty: true })) and inspect what the hrefs actually look like, then write the regex around the observed shapes; ' +
               '(2) remove any `count > 0` guard from the exhausted exit; (3) keep a RAW fallback counter (records.length / $count(containerSel)) so the loop can still exit when the filter matches nothing. Original error: ' + e.message;
             e.stepId = zeroCounterBreaker.stepId;
@@ -523,7 +580,7 @@
                 const stepDefF = stepDefsOfService.find((s) => String(s.id) === String(frozen.stepId));
                 e.message = 'POLL_EXHAUSTED — root cause: ZERO_COUNTER_FROZEN. Step "' + (stepDefF ? stepDefF.name : frozen.stepId) + '" returned not-ready for ' +
                   frozen.frozenIterations + ' iterations while its counter field(s) [' + frozen.counterFields.join(', ') + '] were 0 on EVERY iteration and never once rose' +
-                  (frozen.selectorMatchedSomething ? ' — even though its selectors DID match elements (check SELECTOR DIAGNOSTICS), so a counting FILTER inside the step (JS logic such as a permalink-href regex), not the selector, excluded everything' : '') +
+                  (frozen.selectorMatchedSomething ? ' — even though its selectors DID match elements (check SELECTOR DIAGNOSTICS), so a counting FILTER inside the step (JS logic such as a URL-pattern filter), not the selector, excluded everything' : '') +
                   '. Fix per the zero-trap method: sample the raw values before filtering, write the filter regex around the OBSERVED shapes, remove any `count > 0` guard from the exhausted exit, and keep a RAW fallback counter. Original error: ' + e.message;
                 if (!e.stepId) e.stepId = frozen.stepId;
               }
@@ -551,7 +608,7 @@
     };
   }
 
-  const api = { createVerifyRunner };
+  const api = { createVerifyRunner, detectJunkValues };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.VerifyRunner = api;
 })(typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : self));

@@ -476,3 +476,65 @@ describe('verify-runner junkValues detector (tenth-log N2: structurally green, j
     assert.equal(out.report.events.indexOf('JUNK_VALUES'), -1);
   });
 });
+
+describe('audit batch: junk/depth/hints/degradation (C7/C9/C11/C19/C20/C26)', () => {
+  const { detectJunkValues } = require('../lib/verify-runner');
+
+  it('C9: markupDump only fires on values that START with "<"', () => {
+    const data = { posts: [
+      { caption: 'Use <b>bold</b> and <i>italic</i> and <u>underline</u> in your posts — this is a legitimate sentence containing tags mid-text and is long enough to pass the length gate so the prefix rule is what must reject it.' },
+      { caption: '<div class="card"><span>item one</span><span>item two</span><span>item three</span> real markup dump at the start of the value, long enough to trip the detector when it leads with a tag.' }
+    ] };
+    const r = detectJunkValues(data, { type: 'object' });
+    assert.ok(r, 'detector fires');
+    const cap = r.fields.find((f) => f.kind === 'markupDump');
+    assert.ok(cap, 'markupDump flagged');
+    assert.equal(cap.count, 1, 'only the leading-tag value counts');
+  });
+
+  it('C7: junk detection recurses into nested containers (depth <= 3)', () => {
+    const data = { result: { items: [ { id: '?ref=abc123' } ] } };
+    const r = detectJunkValues(data, { type: 'object' });
+    assert.ok(r, 'nested record array scanned');
+    assert.ok(r.fields.some((f) => f.field === 'result.items.id' && f.kind === 'queryBlob'), 'field path names the nested location');
+  });
+
+  it('C20: schema description hints mark url-ish/raw-ish fields the regex misses', () => {
+    const data = { anexos: [ { enlace: ['data:image/png;base64,AAAA', 'https://ok.example/a.png'] } ] };
+    const schema = { type: 'object', properties: { anexos: { type: 'array', items: { type: 'object', properties: { enlace: { type: 'array', description: 'attachment links (URLs)' } } } } } };
+    const r = detectJunkValues(data, schema);
+    assert.ok(r, 'hinted field treated as url-ish');
+    assert.ok(r.fields.some((f) => f.kind === 'dataUri'), 'data: entry counted');
+  });
+
+  it('C20: raw-ish hint exempts a field named in the schema description', () => {
+    const data = { posts: [ { cuerpo: '<div class="x"><p>one</p><p>two</p><p>three</p><p>four</p> markup-ish body that the schema declares as embedded html content by description.' } ] };
+    const schema = { type: 'object', properties: { posts: { type: 'array', items: { type: 'object', properties: { cuerpo: { type: 'string', description: 'embedded html body' } } } } } };
+    const r = detectJunkValues(data, schema);
+    assert.ok(!r || !r.fields.some((f) => f.kind === 'markupDump'), 'schema-declared html field exempt');
+  });
+
+  it('C11: a wizard-utils bag missing functions reports degradation in the verify report', async () => {
+    const orch = async (svc, input, d, opts) => ({ finalResult: { posts: [{ a: 1 }] }, steps: [], pages: [] });
+    const partialBag = { scoreAttemptResult: () => null };
+    const { runner } = makeRunner(orch, { wizardUtils: partialBag });
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object' } });
+    assert.equal(out.report.ok, true);
+    assert.match(out.report.degraded, /unavailable/, 'degradation disclosed');
+    assert.match(out.report.degraded, /findEmptyExtractionFields/);
+  });
+
+  it('C26: not-ready iterations with NO counter fields never build a zero-counter streak', async () => {
+    const orch = async (svc, input, d, opts) => {
+      for (let i = 0; i < 12; i++) {
+        opts.onEvent({ type: 'STEP_ITERATION', stepId: 's1', iteration: i + 1, resultPreview: '{"done":false,"ready":false}' });
+      }
+      opts.onEvent({ type: 'STEP_ITERATION', stepId: 's1', iteration: 13, resultPreview: '{"done":true}' });
+      return { finalResult: { posts: [{ a: 1 }] }, steps: [], pages: [] };
+    };
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object' } });
+    assert.equal(out.report.ok, true, 'no breaker without counter fields');
+    assert.equal(out.raw.breaker, null);
+  });
+});
