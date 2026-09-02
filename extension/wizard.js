@@ -313,7 +313,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!wizardSession) { await resumeResearchSession(); return; }
     setSessionControls('running');
     const report = await wizardSession.run();
-    if (report && report.stopped && report.stopped.reason === 'completed') { goToPhase(5); }
+    if (report && report.stopped && report.stopped.reason === 'completed') { await presentSessionCompletion(); }
   });
   document.getElementById('btnSessionAbort').addEventListener('click', () => {
     sessionAbortRequested = true;
@@ -324,6 +324,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('btnDeployAnyway').addEventListener('click', () => {
     goToPhase(5);
     confirmDeploy();
+  });
+  document.getElementById('btnSessionFeedback').addEventListener('click', sendSessionFeedback);
+  document.getElementById('serviceNameEdit').addEventListener('input', (e) => {
+    wizardState.serviceName = e.target.value;
   });
   document.getElementById('btnAddStep')?.addEventListener('click', addStep);
   document.getElementById('btnApplyTemplate')?.addEventListener('click', () => {
@@ -436,7 +440,10 @@ function updatePhaseUI(state) {
   [btnRetryTest, btnDeployAnyway, btnPhase5Deploy].forEach(b => b.classList.add('hidden'));
   testStatus.className = '';
 
-  document.getElementById('serviceNameDisplay').textContent = 'Service: ' + (wizardState.serviceName || 'Unnamed');
+  const nameInput = document.getElementById('serviceNameEdit');
+  if (nameInput && document.activeElement !== nameInput) {
+    nameInput.value = wizardState.serviceName || '';
+  }
   renderIOSummary();
 
   if (state === 'success') {
@@ -1277,6 +1284,13 @@ async function testScript() {
     wizardRail.releaseLock(); // manual runs release; the session holds it across turns
   }
 
+  await presentTestOutcome(out);
+}
+
+// Shared post-run presentation for BOTH the manual test run (testScript) and
+// the research-session completion path (presentSessionCompletion): stores the
+// outcome into wizardState, renders phase 5, and lands on it.
+async function presentTestOutcome(out) {
   wizardState.lastExecutionEvents = out.events;
   wizardState.countShortfall = out.report.detectors.countShortfall || null;
   wizardState.shapeDistribution = out.report.detectors.shapeDistribution || null;
@@ -2025,9 +2039,7 @@ async function startResearchSession(seedOverride) {
   }
   updateSessionSpendLine(wizardSession.state());
   if (report && report.stopped && report.stopped.reason === 'completed') {
-    await wizardPersistence.flush();
-    appendLog('Session complete. Review the steps and deploy.', 'success');
-    goToPhase(5);
+    await presentSessionCompletion();
   } else if (report) {
     appendLog('Session stopped early (' + report.status + '). Open questions: ' +
       (report.openQuestions && report.openQuestions.length
@@ -2036,6 +2048,76 @@ async function startResearchSession(seedOverride) {
       '. You can Resume from the pause point or refine manually in Phase 2.', 'warn');
   }
   } finally { releaseBoot(); }
+}
+
+// Ninth-log L2: a completed session must land on a PRESENTED phase 5 —
+// result confirmation, feedback-driven repair continuation, name edit,
+// deploy — not a blank page. Presentation source, in order of trust:
+//   1. the session's last verify.run, if it is fresh (no service.update
+//      landed after it) — presented through the shared presentTestOutcome;
+//   2. otherwise a fresh end-to-end testScript run of the final artifact;
+//   3. an artifact-less completion keeps the historical bare landing.
+async function presentSessionCompletion() {
+  if (wizardPersistence) { try { await wizardPersistence.flush(); } catch (_) {} }
+  const lv = (wizardToolsBag && typeof wizardToolsBag.getLastVerify === 'function')
+    ? wizardToolsBag.getLastVerify() : null;
+  const st = wizardSession ? wizardSession.state() : null;
+  const hasArtifact = !!(st && Array.isArray(st.artifactVersions) && st.artifactVersions.length);
+  wizardState.testAborted = false;
+  wizardState.trustedWheelSkipCount = 0;
+  if (lv && lv.raw && !lv.staleArtifact) {
+    appendLog('Session complete — presenting the last verified run. Review the result, send feedback to continue fixing, or deploy.', 'success');
+    showSessionFeedbackPanel();
+    await presentTestOutcome({ events: lv.events, report: lv.report, raw: lv.raw });
+  } else if (hasArtifact) {
+    appendLog('Session complete. Running a fresh end-to-end verification of the authored steps…', 'success');
+    showSessionFeedbackPanel();
+    await testScript();
+  } else {
+    appendLog('Session complete. Review the steps and deploy.', 'success');
+    goToPhase(5);
+  }
+}
+
+function showSessionFeedbackPanel() {
+  const panel = document.getElementById('sessionFeedbackPanel');
+  if (panel) panel.classList.remove('hidden');
+}
+
+// Ninth-log L4: feedback-driven repair continuation. The completed session is
+// parked in storage; the fix request enters its transcript as a system entry
+// (rendered to the LLM as a user-role message), and the engine restarts from
+// the seeded state — the engine nulls state.stopped at construction, so a
+// 'completed' stop reason resumes cleanly.
+async function sendSessionFeedback() {
+  const textEl = document.getElementById('sessionFeedbackText');
+  const text = String((textEl && textEl.value) || '').trim();
+  if (!text) {
+    showToast('Describe what needs fixing first.', 'warn', 3000);
+    return;
+  }
+  if (!wizardPersistence) {
+    wizardPersistence = SessionPersistence.createSessionPersistence(chrome.storage.local, 'wizardResearchSession');
+  }
+  let persisted = null;
+  try { persisted = await wizardPersistence.load(); } catch (e) { /* storage unavailable */ }
+  if (!persisted || !persisted.session) {
+    showToast('No saved research session to continue.', 'error');
+    return;
+  }
+  const st = persisted.session;
+  if (!Array.isArray(st.transcript)) st.transcript = [];
+  st.transcript.push({ kind: 'system', text: 'USER FEEDBACK (fix request): ' + text + ' — continue: probe the live page to diagnose the reported problem, fix the artifact via service.update, then verify.run again before finishing.' });
+  try {
+    await wizardPersistence.save({ session: st, observation: persisted.observation, ledger: persisted.ledger });
+    await wizardPersistence.flush();
+  } catch (e) {
+    showToast('Could not persist the feedback: ' + String((e && e.message) || e), 'error');
+    return;
+  }
+  if (textEl) textEl.value = '';
+  const seed = { session: st, observation: persisted.observation, ledger: persisted.ledger };
+  await startResearchSession(seed);
 }
 
 async function resumeResearchSession() {
@@ -2052,8 +2134,13 @@ async function resumeResearchSession() {
     wizardState.steps = JSON.parse(JSON.stringify(st.artifactVersions[st.artifactVersions.length - 1].steps || []));
     renderStepList();
   }
-  if (st.stopped && st.stopped.reason !== 'paused' && st.stopped.reason !== 'aborted') {
-    showToast('That session already ended (' + st.stopped.reason + '). Starting fresh.', 'info');
+  // Ninth-log L3: maxTurns is resumable — raise the phase-1 knob, hit Resume,
+  // and the session continues from the pause point (G5 promise). 'completed'
+  // stays non-resumable here: its continuation path is the phase-5 feedback
+  // panel. llm:*/wallClock/tokenCap/protocol remain terminal.
+  const stopReason = st.stopped && st.stopped.reason;
+  if (stopReason && stopReason !== 'paused' && stopReason !== 'aborted' && stopReason !== 'maxTurns') {
+    showToast('That session already ended (' + stopReason + '). Starting fresh.', 'info');
     await wizardPersistence.clear();
     return;
   }

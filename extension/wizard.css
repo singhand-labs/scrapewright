@@ -753,11 +753,48 @@ pre {
 }
 
 /* --- Phase 5: results -------------------------------------------------------------- */
-#serviceNameDisplay {
+.service-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
   font-weight: 650;
   font-size: 16px;
   letter-spacing: -0.01em;
-  margin: 8px 0;
+}
+
+.service-name-row label {
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+#serviceNameEdit {
+  flex: 1;
+  max-width: 420px;
+}
+
+#sessionFeedbackPanel {
+  margin-top: 16px;
+  padding: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-ctl);
+}
+
+#sessionFeedbackPanel h4 {
+  margin: 0 0 8px;
+}
+
+#sessionFeedbackText {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 8px;
+}
+
+.sessionFeedbackActions {
+  display: flex;
+  gap: 8px;
 }
 
 #ioSummary {

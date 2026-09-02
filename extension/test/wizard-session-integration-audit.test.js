@@ -130,3 +130,74 @@ describe('wizard research-session integration (source audit)', () => {
       'targetUrl is captured from the URL box before the description is built');
   });
 });
+
+describe('ninth-log L1-L5: session completion hands back to the wizard flow', () => {
+  // Live evidence (eighth log, rs-1788353172269-1): the session finished
+  // 'completed' and the wizard jumped to a BLANK phase 5 — no result
+  // confirmation, no feedback-driven repair continuation, no service-name
+  // edit, no deploy. The completion path must reuse the same presentation
+  // the manual test run uses.
+
+  it('L1: the post-run presentation is a shared function both testScript and the session path call', () => {
+    const pres = fnBody('presentTestOutcome');
+    assert.ok(pres.includes('wizardState.testResult'), 'stores testResult');
+    assert.ok(pres.includes('renderResultSummary'), 'renders the summary');
+    assert.ok(pres.includes('updatePhaseUI'), 'drives the phase-5 buttons');
+    assert.ok(pres.includes('goToPhase(5)'), 'lands on phase 5');
+    const ts = fnBody('testScript');
+    assert.ok(ts.includes('presentTestOutcome('), 'testScript delegates to the shared presentation');
+    assert.ok(!ts.includes("document.getElementById('testResults').textContent = JSON.stringify"),
+      'the presentation block moved out of testScript');
+  });
+
+  it('L2: completion presents the verified result instead of a blank phase 5', () => {
+    const body = fnBody('presentSessionCompletion');
+    assert.ok(body.includes('getLastVerify'), 'reads the session tools bag last verify');
+    assert.ok(body.includes('staleArtifact'), 'a stale verify (artifact changed after it) is not trusted');
+    assert.ok(body.includes('presentTestOutcome('), 'fresh verify is presented through the shared path');
+    assert.ok(body.includes('testScript()'), 'stale/missing verify falls back to a fresh end-to-end run');
+    const srs = fnBody('startResearchSession');
+    assert.ok(/'completed'\)\s*\{\s*await presentSessionCompletion\(\)/.test(srs.replace(/\n/g, ' ')),
+      'the completed branch hands off to presentSessionCompletion (no bare goToPhase)');
+  });
+
+  it('L2b: the in-phase-4 Resume button presents the same outcome on completion', () => {
+    const m = SRC.match(/btnSessionResume'\)\.addEventListener\('click',\s*async \(\) => \{([\s\S]*?)\}\);/);
+    assert.ok(m, 'btnSessionResume handler found');
+    assert.ok(m[1].includes('presentSessionCompletion('), 'completed run presents the result');
+    assert.ok(!/goToPhase\(5\);\s*\}/.test(m[1]), 'no bare goToPhase(5) on completion');
+  });
+
+  it('L3: resume allows a maxTurns-stopped session (G5 promise: raise the knob, then Resume)', () => {
+    const body = fnBody('resumeResearchSession');
+    assert.ok(/'maxTurns'/.test(body), 'maxTurns is in the resumable allowlist');
+    // The allowlist must still block genuinely-ended sessions: 'completed'
+    // continues via the feedback panel; llm:*/wallClock/tokenCap/protocol are
+    // terminal engine states. (Comments stripped — the rationale mentions it.)
+    const stripped = body.replace(/\/\/[^\n]*/g, '');
+    const guard = stripped.match(/st\.stopped\.reason[^;]*;/g) || [];
+    assert.ok(guard.length > 0, 'stop-reason guard present');
+    assert.ok(!/'completed'/.test(stripped), "'completed' must NOT be resumable here — the feedback panel is its continuation");
+  });
+
+  it('L4: the feedback panel continues a completed session with a USER FEEDBACK transcript entry', () => {
+    for (const id of ['sessionFeedbackPanel', 'sessionFeedbackText', 'btnSessionFeedback']) {
+      assert.ok(HTML.includes('id="' + id + '"'), id + ' exists in HTML');
+    }
+    const body = fnBody('sendSessionFeedback');
+    assert.ok(body.includes('USER FEEDBACK'), 'feedback enters the transcript as a system entry');
+    assert.ok(body.includes('service.update'), 'the entry directs diagnose → fix artifact → re-verify');
+    assert.ok(/transcript\.push\(/.test(body), 'pushed onto the persisted transcript');
+    assert.ok(body.includes('flush()'), 'durably written before the engine boots');
+    assert.ok(/startResearchSession\(seed\)/.test(body), 'restarts the engine from the seeded state');
+  });
+
+  it('L5: the service name is editable on phase 5 (deploy reads wizardState.serviceName)', () => {
+    assert.ok(HTML.includes('id="serviceNameEdit"'), 'editable input exists');
+    const up = fnBody('updatePhaseUI');
+    assert.ok(up.includes('serviceNameEdit'), 'prefilled from wizardState.serviceName');
+    const m = SRC.match(/serviceNameEdit'\)\.addEventListener\('input'[^)]*\)\s*=>\s*\{[^}]*wizardState\.serviceName\s*=/);
+    assert.ok(m, 'typing updates wizardState.serviceName (generateUniqueSlug reads it at deploy)');
+    assert.ok(!HTML.includes('id="serviceNameDisplay"'), 'the static display div is gone');
+  });
+});

@@ -107,7 +107,12 @@
 
     <div id="phase5" class="step hidden">
       <h2>Phase 5: Results</h2>
-      <div id="serviceNameDisplay"></div>
+      <!-- Ninth-log L5: editable at the last moment before deploy (the model's
+           picked name may not be what the user wants to publish under). -->
+      <div class="service-name-row">
+        <label for="serviceNameEdit">Service name:</label>
+        <input type="text" id="serviceNameEdit" placeholder="Unnamed" />
+      </div>
       <div id="ioSummary"></div>
       <div id="testStatus"></div>
       <div id="resultSummary"></div>
@@ -130,6 +135,15 @@
         <button id="btnPhase5Deploy" class="hidden btn-primary">Looks Good - Deploy</button>
         <button id="btnPhase5EditSteps">Edit Steps</button>
         <button id="btnPhase5Back">Back</button>
+      </div>
+      <!-- Ninth-log L4: completed-session continuation — user feedback restarts
+           the research engine from the persisted state with the fix request. -->
+      <div id="sessionFeedbackPanel" class="hidden">
+        <h4>Result not right? Continue the research session</h4>
+        <textarea id="sessionFeedbackText" rows="3" placeholder="Describe what is wrong or missing (e.g. a field comes back empty, records are missing, wrong page region) — the completed session resumes and fixes it."></textarea>
+        <div class="sessionFeedbackActions">
+          <button id="btnSessionFeedback" class="btn-secondary">Send Feedback — Continue Fixing</button>
+        </div>
       </div>
     </div>
   </div>
