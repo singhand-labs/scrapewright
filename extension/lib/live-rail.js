@@ -29,6 +29,13 @@
     let currentTab = null;
     let lockHeld = false;
     let opening = null;
+    // Audit C3: page epoch — 0 = no page open; 1 = fresh page.open; +1 for
+    // every same-tab reload/navigation observed via deps.watchTab. Probe
+    // receipts are stamped with this number; the grounding gate only honors
+    // receipts from the current epoch, so a mid-session reload invalidates
+    // all prior DOM evidence instead of silently admitting stale selectors.
+    let epoch = 0;
+    let unwatchTab = null;
 
     async function ensureLock() {
       if (lockHeld) return;
@@ -50,10 +57,31 @@
       }
     }
 
+    function disengageWatch() {
+      if (unwatchTab) {
+        try { unwatchTab(); } catch (e) { /* best-effort */ }
+        unwatchTab = null;
+      }
+    }
+
+    function engageWatch(tabId) {
+      disengageWatch();
+      if (typeof d.watchTab !== 'function') return;
+      try {
+        unwatchTab = d.watchTab(tabId, function onReload() {
+          epoch += 1;
+          log('warn', 'Research tab reloaded (same tabId) — page epoch is now ' + epoch +
+            '; observation receipts recorded in earlier epochs no longer ground selectors.');
+        });
+      } catch (e) { /* watching is best-effort */ }
+    }
+
     async function closeTab() {
       if (!currentTab) return;
       const t = currentTab;
       currentTab = null;
+      epoch = 0;
+      disengageWatch();
       try { await d.removeTab(t.id); } catch (e) { /* idempotent close */ }
     }
 
@@ -87,6 +115,8 @@
         } catch (e) {
           warning = 'load timeout: ' + String((e && e.message) || e);
         }
+        epoch = 1;
+        engageWatch(tab.id);
         let ready = true;
         if (typeof d.pingReady === 'function') {
           try { ready = await d.pingReady(tab.id); }
@@ -112,6 +142,8 @@
       try { t = await d.getTab(currentTab.id); } catch (e) { t = null; }
       if (!t) {
         currentTab = null;
+        epoch = 0;
+        disengageWatch();
         return { open: false, hint: 'tab closed — re-open via page.open, then replay from ledger findings instead of re-discovering the page' };
       }
       return {
@@ -119,7 +151,8 @@
         tabId: t.id,
         url: String(t.url || currentTab.url),
         title: String(t.title || ''),
-        status: String(t.status || '')
+        status: String(t.status || ''),
+        epoch: epoch
       };
     }
 
@@ -148,7 +181,8 @@
       ensureLock: ensureLock,
       releaseLock: releaseLock,
       dispose: dispose,
-      get tabId() { return currentTab ? currentTab.id : null; }
+      get tabId() { return currentTab ? currentTab.id : null; },
+      get epoch() { return epoch; }
     };
   }
 

@@ -180,4 +180,46 @@ describe('createLiveRail', () => {
     await rail.dispose();
     assert.equal(d.lockReleases, 1, 'dispose retries the release');
   });
+
+  it('C3: pageState carries the page epoch; same-tab reload bumps it, re-open resets to 1', async () => {
+    let fireReload = null;
+    const d = makeDeps({ watchTab: (tabId, onReload) => { fireReload = onReload; return () => { fireReload = null; }; } });
+    const rail = createLiveRail(d);
+    let s = await rail.pageState();
+    assert.equal(s.open, false);
+    await rail.pageOpen({});
+    assert.equal(rail.epoch, 1);
+    s = await rail.pageState();
+    assert.equal(s.epoch, 1);
+    fireReload(); // the user reloads the research tab (same tabId)
+    assert.equal(rail.epoch, 2);
+    s = await rail.pageState();
+    assert.equal(s.epoch, 2);
+    await rail.pageOpen({ url: 'https://example.com/other' });
+    assert.equal(rail.epoch, 1, 'a fresh tab open resets the epoch');
+  });
+
+  it('C3: dead-tab self-heal resets the epoch and disengages the watch', async () => {
+    let unwatchCalls = 0;
+    let fireReload = null;
+    const d = makeDeps({ watchTab: (tabId, onReload) => { fireReload = onReload; return () => { unwatchCalls += 1; fireReload = null; }; } });
+    const rail = createLiveRail(d);
+    await rail.pageOpen({});
+    assert.equal(rail.epoch, 1);
+    d.getTab = async () => null;
+    const s = await rail.pageState();
+    assert.equal(s.open, false);
+    assert.equal(rail.epoch, 0);
+    assert.equal(unwatchCalls, 1);
+    if (fireReload) fireReload(); // must be a no-op after disengage
+    assert.equal(rail.epoch, 0);
+  });
+
+  it('C3: watchTab is optional — hosts without the dep still track epoch 1', async () => {
+    const rail = createLiveRail(makeDeps());
+    await rail.pageOpen({});
+    assert.equal(rail.epoch, 1);
+    const s = await rail.pageState();
+    assert.equal(s.epoch, 1);
+  });
 });
