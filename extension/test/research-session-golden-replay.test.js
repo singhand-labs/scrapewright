@@ -9,8 +9,6 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { createResearchSession } = require('../lib/research-session');
 const { createSessionTools } = require('../lib/session-tools');
-const { createObservationLog } = require('../lib/observation-log');
-const { createFindingsLedger } = require('../lib/findings-ledger');
 
 function turnEnvelope(obj) {
   return JSON.stringify(obj);
@@ -142,7 +140,7 @@ describe('golden replay — seventh-log ad-polarity incident (spec §7/§8)', ()
     // the observation log carries the receipts:
     assert.ok(session.observationLog.covers('div[data-kind="post"]'));
     assert.ok(session.observationLog.coversAttr('data-ad-rendering-role'));
-    // no site tokens leaked into the assembled prompt:
+    // all 7 scripted turns were consumed as assistant entries:
     const lastAssistant = st.session.transcript.filter((e) => e.kind === 'assistant').length;
     assert.ok(lastAssistant >= 7);
   });
