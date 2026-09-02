@@ -2786,18 +2786,36 @@
 
   const openTabPending = new Map();
   let openTabCounter = 0;
+  const OPEN_TAB_LOCAL_TIMEOUT_MS = 60000; // B9: local cap — background must answer within this
 
-  async function domOpenTab(url, fnStr) {
+  async function domOpenTab(url, fnStr, timeoutMs) {
+    const budget = (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs : OPEN_TAB_LOCAL_TIMEOUT_MS;
     return new Promise((resolve, reject) => {
       const reqId = ++openTabCounter;
-      openTabPending.set(reqId, { resolve, reject });
-      chrome.runtime.sendMessage({
-        type: 'OPEN_TAB_EXECUTE',
-        reqId,
-        url,
-        script: fnStr,
-        parentTabId: currentSenderTabId
+      const timer = setTimeout(() => {
+        if (openTabPending.delete(reqId)) {
+          reject(new Error('OPEN_TAB_TIMEOUT: sub-tab execution did not answer within ' + budget + 'ms (reqId=' + reqId + ') — the pending request was cleaned up; check the background service worker, and do not retry in a tight loop.'));
+        }
+      }, budget);
+      // Wrap so the TAB_RESULT handler's plain resolve/reject clears the
+      // timer and the map entry on the normal path too.
+      openTabPending.set(reqId, {
+        resolve: (v) => { clearTimeout(timer); openTabPending.delete(reqId); resolve(v); },
+        reject: (e) => { clearTimeout(timer); openTabPending.delete(reqId); reject(e); }
       });
+      try {
+        chrome.runtime.sendMessage({
+          type: 'OPEN_TAB_EXECUTE',
+          reqId,
+          url,
+          script: fnStr,
+          parentTabId: currentSenderTabId
+        });
+      } catch (e) {
+        clearTimeout(timer);
+        openTabPending.delete(reqId);
+        reject(e);
+      }
     });
   }
 
