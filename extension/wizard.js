@@ -1921,8 +1921,8 @@ async function startResearchSession(seedOverride) {
     systemPrompt: wizardToolsBag.systemPromptBase,
     knowledge: { units: units, index: KnowledgeBase.buildIndex(units) },
     persistence: wizardPersistence,
-    // RC53: the Settings-page maxOutputTokens knob is authoritative; fall
-    // back to 16384 when blank/invalid (NaN || 16384).
+    // RC53: the Settings-page maxOutputTokens knob is authoritative; falls
+    // back to 16384 when blank/invalid.
     budgets: { maxTokensPerCall: (config.config.maxOutputTokens && +config.config.maxOutputTokens) || 16384 },
     seed: seed,
     onEvent: handleSessionEvent
