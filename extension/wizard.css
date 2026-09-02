@@ -1061,3 +1061,6 @@ pre {
     animation-duration: 0.01ms !important;
   }
 }
+
+/* A7: trimmed-lines disclosure at the top of #executionLog */
+.log-trimmed { color: var(--text-faint, #999); font-style: italic; font-size: 12px; padding: 2px 0; }

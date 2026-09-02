@@ -1009,13 +1009,37 @@ function annotationBadges(a) {
   return b.join(' ');
 }
 
+// A7: 60-turn sessions used to append thousands of DOM nodes here. Cap the
+// log at LOG_MAX_ENTRIES entries; when the cap is exceeded drop the OLDEST
+// log lines and keep a single sticky disclosure at the top of the container.
 function appendLog(message, level = 'info') {
+  const LOG_MAX_ENTRIES = 500;
   const logEl = document.getElementById('executionLog');
   if (!logEl) return;
   const line = document.createElement('div');
   line.className = 'log-line' + (level === 'error' ? ' error' : level === 'success' ? ' success' : '');
   line.textContent = '[' + new Date().toLocaleTimeString() + '] ' + message;
   logEl.appendChild(line);
+  // Trim: keep at most LOG_MAX_ENTRIES real log lines, plus one disclosure.
+  let trimmed = logEl.querySelector('.log-trimmed');
+  let dropped = trimmed ? parseInt(trimmed.dataset.dropped || '0', 10) : 0;
+  let lines = logEl.querySelectorAll('.log-line');
+  while (lines.length > LOG_MAX_ENTRIES) {
+    const oldest = lines[0];
+    if (!oldest || !oldest.parentNode) break;
+    logEl.removeChild(oldest);
+    dropped += 1;
+    lines = logEl.querySelectorAll('.log-line');
+  }
+  if (dropped > 0) {
+    if (!trimmed) {
+      trimmed = document.createElement('div');
+      trimmed.className = 'log-trimmed';
+      logEl.insertBefore(trimmed, logEl.firstChild);
+    }
+    trimmed.dataset.dropped = String(dropped);
+    trimmed.textContent = '… ' + dropped + ' earlier lines trimmed';
+  }
   logEl.scrollTop = logEl.scrollHeight;
 }
 

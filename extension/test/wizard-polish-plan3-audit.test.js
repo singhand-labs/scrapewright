@@ -20,4 +20,19 @@ describe('Plan 3: wizard polish', () => {
     assert.ok(region.includes('await testScript()'), 'still awaits testScript');
     assert.ok(/finally\s*\{\s*hideLoading\(\)/.test(region), 'hides the overlay on success AND failure');
   });
+
+  it('A7: appendLog caps the log at 500 entries with a trimmed disclosure line', () => {
+    const start = SRC.indexOf('function appendLog(');
+    assert.ok(start !== -1, 'appendLog exists');
+    let i = SRC.indexOf('{', start), depth = 0, end = start;
+    for (; i < SRC.length; i++) {
+      if (SRC[i] === '{') depth += 1;
+      else if (SRC[i] === '}') { depth -= 1; if (depth === 0) { end = i + 1; break; } }
+    }
+    const body = SRC.slice(start, end);
+    assert.ok(/LOG_MAX_ENTRIES\s*=\s*500/.test(body), 'cap constant 500');
+    assert.ok(body.includes('log-trimmed'), 'disclosure line class');
+    assert.ok(/earlier lines trimmed/.test(body), 'disclosure copy');
+    assert.ok(/removeChild\(logEl\.firstChild\)|logEl\.removeChild/.test(body) || /firstElementChild/.test(body), 'oldest nodes are dropped');
+  });
 });
