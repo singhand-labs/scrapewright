@@ -114,6 +114,21 @@ describe('RC60: sampleRecordsForLLMContext', () => {
     const out = sampleRecordsForLLMContext({ finalResult: { posts: makePosts(5) } });
     assert.doesNotThrow(() => JSON.stringify(out));
   });
+
+  it('stringCap (opt-in) truncates long string values with a disclosure marker (eighth-log K1: verify report records carried 75K html fields)', () => {
+    const posts = [{ index: 1, content: 'ok', html: 'x'.repeat(5000) }];
+    const out = sampleRecordsForLLMContext({ finalResult: { posts } }, { stringCap: 100 });
+    const p = out.finalResult.posts[0];
+    assert.equal(p.content, 'ok', 'short fields untouched');
+    assert.ok(p.html.length <= 100 + 40, 'html bounded by the cap plus marker, got ' + p.html.length);
+    assert.match(p.html, /\[truncated from 5000 chars\]/);
+  });
+
+  it('stringCap is OFF by default — existing callers keep full strings (deepEqual contract)', () => {
+    const posts = [{ html: 'x'.repeat(5000) }];
+    const out = sampleRecordsForLLMContext({ finalResult: { posts } });
+    assert.equal(out.finalResult.posts[0].html.length, 5000);
+  });
 });
 
 describe('RC60: elideDuplicateFinalResults predecessor elision', () => {
@@ -186,8 +201,8 @@ describe('RC60: context sampling wiring (post-research-session)', () => {
     // removed with the wizard-time autoFix flow; the surviving LLM-context
     // surface is the verify-runner report.
     const src = readSrc('lib/verify-runner.js');
-    assert.match(src, /WU\.sampleRecordsForLLMContext\(result\.finalResult, \{ recordKeep: 3 \}\)/,
-      'the runner report must sample finalResult records before publishing');
+    assert.match(src, /WU\.sampleRecordsForLLMContext\(result\.finalResult, \{ recordKeep: 3, stringCap: 2000 \}\)/,
+      'the runner report must sample finalResult records and cap string fields (eighth-log K1) before publishing');
   });
 
   it('trimLlmHistory floor is 2 (last user/assistant pair), not 4', () => {

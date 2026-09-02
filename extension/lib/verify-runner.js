@@ -396,7 +396,7 @@
         schemaMissing: oc.missing || [],
         detectors: detectors,
         steps: compactSteps,
-        finalResult: result ? WU.sampleRecordsForLLMContext(result.finalResult, { recordKeep: 3 }) : null,
+        finalResult: result ? WU.sampleRecordsForLLMContext(result.finalResult, { recordKeep: 3, stringCap: 2000 }) : null,
         pages: result && Array.isArray(result.pages)
           ? (result.pagesTruncated ? result.pages.length + '+' : String(result.pages.length))
           : '0',

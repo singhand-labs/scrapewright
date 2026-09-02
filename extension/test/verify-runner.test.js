@@ -50,6 +50,18 @@ describe('createVerifyRunner', () => {
     assert.deepEqual(calls.removeTab, [11], 'scrape tab closed');
   });
 
+  it('report.finalResult caps long string fields (eighth-log K1: 3 kept records × 75K html = 226K-char transcript entry)', async () => {
+    const bigHtml = 'z'.repeat(75000);
+    const orch = async () => ({ finalResult: { posts: [{ id: 1, html: bigHtml }] }, steps: [], pages: [] });
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object' } });
+    const p = out.report.finalResult.posts[0];
+    assert.equal(p.id, 1);
+    assert.ok(p.html.length <= 2040, 'string fields capped in the sampled report, got ' + p.html.length);
+    assert.match(p.html, /\[truncated from 75000 chars\]/);
+    assert.equal(out.raw.testResult.finalResult.posts[0].html.length, 75000, 'raw untouched');
+  });
+
   it('orchestrator throw → augmented error report with stepId, aborted=false, tags derived from message', async () => {
     const orch = async () => {
       const e = new Error('Step failed: POLL_EXHAUSTED step s1 gave up');

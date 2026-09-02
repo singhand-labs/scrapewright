@@ -2529,6 +2529,15 @@ function sampleRecordsForLLMContext(value, opts) {
     ? Math.floor(opts.recordKeep) : OUTPUT_RECORD_KEEP;
   const primitiveKeep = (opts && Number.isFinite(opts.primitiveKeep) && opts.primitiveKeep > 0)
     ? Math.floor(opts.primitiveKeep) : OUTPUT_PRIMITIVE_ARRAY_KEEP;
+  // Eighth-log K1: sampling bounded the record COUNT but not string LENGTH —
+  // a verify report kept 3 records whose html fields (per-card outerHTML)
+  // totaled 226K chars and landed whole in the session transcript. Opt-in
+  // (default 0 = off) so existing autoFix serialization is unchanged.
+  const stringCap = (opts && Number.isFinite(opts.stringCap) && opts.stringCap > 0)
+    ? Math.floor(opts.stringCap) : 0;
+  const capString = (s) => (stringCap && s.length > stringCap)
+    ? s.slice(0, stringCap) + '…[truncated from ' + s.length + ' chars]'
+    : s;
   const walk = (node) => {
     if (Array.isArray(node)) {
       const mapped = node.map(walk);
@@ -2550,6 +2559,7 @@ function sampleRecordsForLLMContext(value, opts) {
       }
       return out;
     }
+    if (typeof node === 'string') return capString(node);
     return node;
   };
   return walk(value);
