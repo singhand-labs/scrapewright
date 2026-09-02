@@ -16,9 +16,9 @@ CRITICAL RULES:
 
 AVAILABLE API FUNCTIONS:
 - $(selector): Wait up to 30s for element to appear, return { tagName, id, className, textContent, value, href, src, checked, disabled }. THROWS if element is not found within 30s. IMPORTANT: This returns a plain data object, NOT a DOM Element — no .closest(), .parentElement, or any DOM methods.
-- $exists(selector, timeoutMs?): Check if a VISIBLE element exists (skips display:none / visibility:hidden / zero-size elements). Returns true immediately if found, false if not found within timeoutMs (default 5000ms). Use this for polling loops instead of $().
-- $click(selector): Find element, click it. Returns true.
-- $type(selector, text): Find element, set value, dispatch input/change events. Works on INPUT, TEXTAREA, and contenteditable elements. If selector matches a container, searches inside for an inputtable child. Returns true.
+- $exists(selector, timeoutMs?): Check if a VISIBLE element exists (skips display:none / visibility:hidden / zero-size elements). Returns true immediately if found, false if not found within timeoutMs (default 5000ms). Pass timeoutMs=0 for a single immediate query with no waiting. Use this for polling loops instead of $().
+- $click(selector, timeoutMs?): Find element, wait for it up to timeoutMs (default 10000ms), click it. Returns true.
+- $type(selector, text, timeoutMs?): Find element, wait for it up to timeoutMs (default 10000ms), set value, dispatch input/change events. Works on INPUT, TEXTAREA, and contenteditable elements. If selector matches a container, searches inside for an inputtable child. Returns true.
 - $extract(selector, attribute?, timeoutMs?): Get textContent (or attribute if specified). Returns string. IMPORTANT: $extract waits only up to timeoutMs (default 5000ms, NOT 30s) for the element — if the selector is wrong it fails fast instead of burning the step's whole timeout. Prefer this over $() for reading known content; pass a longer timeoutMs only when you genuinely need to wait for content to render.
 - $wait(selector, delayMs?): Wait for element (up to 30s via MutationObserver), then optional extra delay. Returns true. The selector is REQUIRED. If you only need a delay without waiting for an element, use 'await new Promise(r => setTimeout(r, ms))' instead.
 - $check(selector, property): Read element property (e.g., 'checked', 'disabled'). Returns value.
@@ -2636,6 +2636,17 @@ function summarizeExecutionDiagnostics(events, failingStepId) {
   lines.push('');
   if (failed) {
     lines.push(`Step failed: ${failed.error}`);
+    // B2 consumer end: a THROWN step's diagnostics live on the STEP_FAILED
+    // event itself (no STEP_ITERATION was ever emitted for it).
+    if (Array.isArray(failed.selectorDiagnostics) && failed.selectorDiagnostics.length > 0) {
+      lines.push('  SELECTOR DIAGNOSTICS (from the failing call):');
+      for (const d of failed.selectorDiagnostics.slice(0, 10)) {
+        let s;
+        try { s = JSON.stringify(d); } catch { s = String(d); }
+        if (s.length > 400) s = s.slice(0, 400) + '…[truncated]';
+        lines.push('    - ' + s);
+      }
+    }
   }
   if (iterations.length > 0) {
     const previews = iterations.map(it => (it.resultPreview == null ? '(empty)' : it.resultPreview));
@@ -2665,10 +2676,33 @@ function summarizeExecutionDiagnostics(events, failingStepId) {
   return '\n' + lines.join('\n') + '\n';
 }
 
+// formatSelectorDiagnosticsForPrompt(diags) → string
+//
+// Compact rendering of selector-diagnostics entries for LLM prompts
+// (background autoFix on a THROWN step; the error object carries them
+// even though no STEP_ITERATION was ever emitted). Caps at 10 entries
+// and 400 chars per entry — diagnostics can embed HTML snippets.
+// Returns '' when there is nothing to show.
+function formatSelectorDiagnosticsForPrompt(diags) {
+  if (!Array.isArray(diags) || diags.length === 0) return '';
+  const lines = [];
+  for (const d of diags.slice(0, 10)) {
+    if (!d) continue;
+    let s;
+    try { s = JSON.stringify(d); } catch { s = String(d); }
+    if (s.length > 400) s = s.slice(0, 400) + '…[truncated]';
+    lines.push('  - ' + s);
+  }
+  return lines.length === 0 ? '' :
+    'Selector diagnostics (empirical — what the failing call actually observed):\n' + lines.join('\n');
+}
+
 // summarizeAllStepDiagnostics(events, steps) → string
 //
 // Like summarizeExecutionDiagnostics, but iterates over EVERY step in `steps`
-// that has at least one STEP_ITERATION event. Used by the user-feedback autoFix
+// that has at least one STEP_ITERATION event (or a STEP_FAILED event carrying
+// selectorDiagnostics — a step that THREW before completing an iteration).
+// Used by the user-feedback autoFix
 // path where there is no single failing step to anchor on — the LLM needs the
 // per-step trace for ALL poll-style steps to diagnose "scroll never progressed"
 // vs "selector too narrow" (bugx.log 2026-07-24 misdiagnosis).
@@ -2680,7 +2714,7 @@ function summarizeExecutionDiagnostics(events, failingStepId) {
 //     ...
 //     [collapse marker if N identical consecutive previews]
 //
-// Returns '' if no step has iterations.
+// Returns '' if no step has iterations and no step THREW with diagnostics.
 function summarizeAllStepDiagnostics(events, steps) {
   if (!Array.isArray(events) || events.length === 0) return '';
   if (!Array.isArray(steps) || steps.length === 0) return '';
@@ -2691,11 +2725,35 @@ function summarizeAllStepDiagnostics(events, steps) {
     if (!byStep.has(evt.stepId)) byStep.set(evt.stepId, []);
     byStep.get(evt.stepId).push(evt);
   }
+  // B2 consumer end: a step that THREW before completing an iteration emits
+  // zero STEP_ITERATION events — without this fold, its selector diagnostics
+  // (attached to the thrown error) would never reach the LLM.
+  const failedByStep = new Map();
+  for (const evt of events) {
+    if (!evt || evt.type !== 'STEP_FAILED') continue;
+    if (!Array.isArray(evt.selectorDiagnostics) || evt.selectorDiagnostics.length === 0) continue;
+    if (!failedByStep.has(evt.stepId)) failedByStep.set(evt.stepId, []);
+    failedByStep.get(evt.stepId).push(evt);
+  }
 
   const lines = [];
   for (const step of steps) {
     if (!step || !step.id) continue;
     const iterEvents = byStep.get(step.id);
+    if ((!iterEvents || iterEvents.length === 0) && failedByStep.has(step.id)) {
+      lines.push('Step ' + step.id + ' (' + (step.name || '(unnamed)') + ') — THREW before completing an iteration:');
+      const failEvt = failedByStep.get(step.id)[0];
+      lines.push('  Error: ' + (failEvt.error || '(unknown)'));
+      lines.push('  SELECTOR DIAGNOSTICS (from the failing call):');
+      for (const d of failEvt.selectorDiagnostics.slice(0, 10)) {
+        let s;
+        try { s = JSON.stringify(d); } catch { s = String(d); }
+        if (s.length > 400) s = s.slice(0, 400) + '…[truncated]';
+        lines.push('    - ' + s);
+      }
+      lines.push('');
+      continue;
+    }
     if (!iterEvents || iterEvents.length === 0) continue;
 
     lines.push('Step ' + step.id + ' (' + (step.name || '(unnamed)') + ') — ' + iterEvents.length + ' iteration(s):');
@@ -3641,7 +3699,7 @@ function formatElementsForPrompt(elements, opts) {
 
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectCountShortfall, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectCountShortfall, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.hoverAwareTimeoutMs = hoverAwareTimeoutMs;
@@ -3680,6 +3738,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.formatDomActivitySummary = formatDomActivitySummary;
   window.summarizeExecutionDiagnostics = summarizeExecutionDiagnostics;
   window.summarizeAllStepDiagnostics = summarizeAllStepDiagnostics;
+  window.formatSelectorDiagnosticsForPrompt = formatSelectorDiagnosticsForPrompt;
   window.scoreAttemptResult = scoreAttemptResult;
                 window.getStepTemplates = getStepTemplates;
   window.applyTemplate = applyTemplate;
@@ -3737,6 +3796,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.formatDomActivitySummary = formatDomActivitySummary;
   self.summarizeExecutionDiagnostics = summarizeExecutionDiagnostics;
   self.summarizeAllStepDiagnostics = summarizeAllStepDiagnostics;
+  self.formatSelectorDiagnosticsForPrompt = formatSelectorDiagnosticsForPrompt;
   self.scoreAttemptResult = scoreAttemptResult;
                 self.appendStepWithChainLink = appendStepWithChainLink;
   self.removeStepWithRelink = removeStepWithRelink;

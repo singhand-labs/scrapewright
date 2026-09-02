@@ -33,6 +33,20 @@ describe('B5: offscreen/sandbox execId routing (source audit)', () => {
     assert.match(OFFSCREEN_SRC, /pendingExecutes\.push\(\{\s*script:\s*message\.script,\s*input:\s*message\.input,\s*execId:\s*message\.execId\s*\}\)/);
   });
 
+  it('timeout purge targets only the timed-out execId (legacy branch for execId-less messages)', () => {
+    // offscreen-executor must carry execId on EXECUTE_SCRIPT_TIMEOUT so the
+    // purge can drop ONLY that map entry — purging every entry for the tab
+    // would strand a concurrently running same-tab execution into the
+    // legacy stack-pop fallback (cross-wire).
+    const EXEC_SRC = fs.readFileSync(path.join(__dirname, '..', 'lib', 'offscreen-executor.js'), 'utf8');
+    const timeoutRegion = EXEC_SRC.slice(EXEC_SRC.indexOf('EXECUTE_SCRIPT_TIMEOUT'), EXEC_SRC.indexOf('EXECUTE_SCRIPT_TIMEOUT') + 300);
+    assert.match(timeoutRegion, /execId/);
+    // offscreen.js: execId-guarded branch + legacy else branch both exist.
+    assert.match(OFFSCREEN_SRC, /if \(message\.execId\)/);
+    assert.match(OFFSCREEN_SRC, /execTabMap\.get\(message\.execId\) === message\.tabId\) execTabMap\.delete\(message\.execId\)/);
+    assert.match(OFFSCREEN_SRC, /Array\.from\(execTabMap\.values\(\)\)\.some/);
+  });
+
   it('timeout purges execTabMap entries for the timed-out tab', () => {
     assert.match(OFFSCREEN_SRC, /if \(v === message\.tabId\) execTabMap\.delete\(k\)/);
   });

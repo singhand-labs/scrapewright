@@ -398,6 +398,7 @@ class StepOrchestrator {
         emit('STEP_FAILED', {
           stepId: error.stepId,
           error: error.message,
+          selectorDiagnostics: Array.isArray(error.selectorDiagnostics) ? error.selectorDiagnostics : [],
           iterations: stepIterationCounts[error.stepId] || 0
         });
       }

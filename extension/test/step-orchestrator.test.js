@@ -496,6 +496,48 @@ describe('StepOrchestrator onEvent callback', () => {
     assert.equal(types[types.length - 1], 'EXECUTION_DONE');
   });
 
+  it('STEP_FAILED carries selectorDiagnostics when executeScript throws with them', async () => {
+    // B2 consumer end: a THROWN step (e.g. $extractWithHover zero containers)
+    // attaches _diagnostics on the error; the STEP_FAILED event must relay
+    // them so summarize*/autoFix consumers see evidence without any
+    // STEP_ITERATION existing.
+    const service = {
+      targetUrl: 'about:blank',
+      steps: [{ id: 's1', name: 'hover', script: 'h', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }]
+    };
+    const events = [];
+    await assert.rejects(
+      () => StepOrchestrator.execute(service, {}, buildDeps({
+        executeScript: async () => {
+          const e = new Error('boom');
+          e.selectorDiagnostics = [{ api: 'extractWithHover', containerMatches: 0 }];
+          throw e;
+        }
+      }), { onEvent: (e) => events.push(e) }),
+      /boom/
+    );
+    const failed = events.find(e => e.type === 'STEP_FAILED');
+    assert.ok(failed, 'STEP_FAILED emitted');
+    assert.deepEqual(failed.selectorDiagnostics, [{ api: 'extractWithHover', containerMatches: 0 }]);
+  });
+
+  it('STEP_FAILED has selectorDiagnostics === [] for a plain thrown error', async () => {
+    const service = {
+      targetUrl: 'about:blank',
+      steps: [{ id: 's1', name: 'one', script: 'x', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }]
+    };
+    const events = [];
+    await assert.rejects(
+      () => StepOrchestrator.execute(service, {}, buildDeps({
+        executeScript: async () => { throw new Error('SCRIPT_TIMEOUT: exceeded budget'); }
+      }), { onEvent: (e) => events.push(e) }),
+      /SCRIPT_TIMEOUT/
+    );
+    const failed = events.find(e => e.type === 'STEP_FAILED');
+    assert.ok(failed, 'STEP_FAILED emitted');
+    assert.deepEqual(failed.selectorDiagnostics, []);
+  });
+
   it('swallows exceptions thrown by onEvent without breaking execution', async () => {
     const service = {
       targetUrl: 'about:blank',

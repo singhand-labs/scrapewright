@@ -235,15 +235,26 @@
     }
 
     if (message.type === 'EXECUTE_SCRIPT_TIMEOUT' && message._toOffscreen) {
-      const idx = tabIdStack.indexOf(message.tabId);
-      if (idx !== -1) {
-        tabIdStack.splice(idx, 1);
-        sendDebugLog('warn', 'offscreen', 'Cleaned up timed-out tabId from stack', { tabId: message.tabId, remainingStack: tabIdStack.length });
-      }
-      // B5: purge map entries for the timed-out tab — otherwise a stale
-      // execId would mislabel a later result.
-      for (const [k, v] of execTabMap) {
-        if (v === message.tabId) execTabMap.delete(k);
+      // B5: purge the timed-out execution's map entry — and ONLY that one.
+      // Purging every entry for the tab would strand a concurrently running
+      // same-tab execution into the legacy stack-pop fallback (cross-wire).
+      if (message.execId) {
+        if (execTabMap.get(message.execId) === message.tabId) execTabMap.delete(message.execId);
+        const tabStillBusy = Array.from(execTabMap.values()).some((v) => v === message.tabId);
+        const idx = tabIdStack.indexOf(message.tabId);
+        if (idx !== -1 && !tabStillBusy) {
+          tabIdStack.splice(idx, 1);
+          sendDebugLog('warn', 'offscreen', 'Cleaned up timed-out tabId from stack', { tabId: message.tabId, remainingStack: tabIdStack.length });
+        }
+      } else {
+        const idx = tabIdStack.indexOf(message.tabId);
+        if (idx !== -1) {
+          tabIdStack.splice(idx, 1);
+          sendDebugLog('warn', 'offscreen', 'Cleaned up timed-out tabId from stack', { tabId: message.tabId, remainingStack: tabIdStack.length });
+        }
+        for (const [k, v] of execTabMap) {
+          if (v === message.tabId) execTabMap.delete(k);
+        }
       }
       return false;
     }

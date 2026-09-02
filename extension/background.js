@@ -795,6 +795,10 @@ async function tryAutoFixStep(service, stepId, error) {
       console.warn('Could not capture snapshot for auto-fix:', e);
     }
 
+    // B2 consumer end: a THROWN step carries its selector diagnostics on the
+    // error object (relayed through STEP_FAILED / the executor rejection) —
+    // surface them so autoFix sees empirical evidence, not just the message.
+    const diagBlock = formatSelectorDiagnosticsForPrompt(error.selectorDiagnostics);
     const prompt = `${SCRIPT_DSL_GUIDE}
 
 The following step script failed. Fix ONLY this step's script code. Do not change step flow (onSuccess/onFailure).
@@ -805,7 +809,7 @@ On success → ${step.onSuccess}
 On failure → ${step.onFailure}
 
 Error: ${error.message}
-
+${diagBlock ? '\n' + diagBlock + '\n' : ''}
 Target URL: ${service.targetUrl}
 Original requirement: ${service.userDescription || service.displayName || service.name}
 

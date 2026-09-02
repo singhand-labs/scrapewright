@@ -43,6 +43,7 @@ class OffscreenExecutor {
         chrome.runtime.onMessage.removeListener(listener);
         chrome.runtime.sendMessage({
           type: 'EXECUTE_SCRIPT_TIMEOUT',
+          execId,
           tabId: this.tabId,
           _toOffscreen: true
         }).catch(() => {});
