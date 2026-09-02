@@ -36,6 +36,17 @@
 
   const DEFAULT_DIAG_CAP = 4000;
 
+  // Fourth-live-log G1: the LLM kept sending natural-language maps
+  // ({"posts":"array of post objects"}) as outputSchema. Verify scoring and
+  // every detector read .required/.properties — such maps leave them all
+  // blind, so verify.run reports score 0 even after a fully successful
+  // extraction. Acceptance = JSON-Schema object shape.
+  function isJsonObjectSchema(s) {
+    return !!s && typeof s === 'object' && !Array.isArray(s) &&
+      (s.type === 'object' ||
+        (s.properties && typeof s.properties === 'object' && !Array.isArray(s.properties)));
+  }
+
   function cap(s, n) {
     const t = String(s == null ? '' : s);
     if (t.length <= n) return t;
@@ -220,6 +231,14 @@
     async function serviceUpdate(args, ctx) {
       const a = args && typeof args === 'object' ? args : {};
       const steps = Array.isArray(a.steps) ? a.steps : [];
+      const schemaBad = [];
+      if (a.inputSchema != null && !isJsonObjectSchema(a.inputSchema)) schemaBad.push('inputSchema');
+      if (a.outputSchema != null && !isJsonObjectSchema(a.outputSchema)) schemaBad.push('outputSchema');
+      if (schemaBad.length) {
+        return {
+          error: 'SCHEMA_NOT_JSON_SCHEMA: ' + schemaBad.join(' and ') + ' must be a JSON Schema object like {"type":"object","required":["posts"],"properties":{"posts":{"type":"array","items":{"type":"object"}}}}, not a natural-language map like {"posts":"array of post objects"}. Verify scoring and every detector read "required"/"properties" — a natural-language map leaves them all blind, so verify.run reports score 0 even after a fully successful extraction. Resend with JSON-Schema-shaped schemas: list every output field under properties and put the must-have keys in required.'
+        };
+      }
       const chain = WU.validateChain(steps);
       if (!chain || chain.valid !== true) {
         return { error: 'step chain invalid: ' + String((chain && chain.error) || 'validation failed') };

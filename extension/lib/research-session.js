@@ -27,7 +27,7 @@
   const INTERNAL_TOOL_SPECS = [
     { name: 'ledger.add', args: '{finding, evidence?, confidence?, selectors?}', returns: '{added:true, id}' },
     { name: 'knowledge.query', args: '{ids:["unitId"]}', returns: '{units:[{id,title,body}]}' },
-    { name: 'service.update', args: '{steps, inputSchema?, outputSchema?, testInput?, name?, overrides?} — REPLACES the whole artifact (send the complete steps array every time); overrides only waives grounding receipts and never carries steps; testInput (sample input values) is REQUIRED when the target URL has {{param}} placeholders, or verify.run fails with MISSING_URL_PARAM', returns: '{version} | {grounding:"rejected", rejections}' }
+    { name: 'service.update', args: '{steps, inputSchema?, outputSchema?, testInput?, name?, overrides?} — REPLACES the whole artifact (send the complete steps array every time); overrides only waives grounding receipts and never carries steps; testInput (sample input values) is REQUIRED when the target URL has {{param}} placeholders, or verify.run fails with MISSING_URL_PARAM; inputSchema/outputSchema, when sent, MUST be JSON Schema objects like {"type":"object","required":["posts"],"properties":{"posts":{"type":"array","items":{"type":"object"}}}} — natural-language maps ({"posts":"array of post objects"}) are rejected: verify scoring reads "required"/"properties" and cannot see through descriptions', returns: '{version} | {grounding:"rejected", rejections}' }
   ];
 
   const DEFAULTS = {
@@ -38,7 +38,13 @@
   };
 
   function isErrorResult(r) {
-    return !!r && typeof r === 'object' && typeof r.error === 'string';
+    if (!r || typeof r !== 'object') return false;
+    if (typeof r.error === 'string') return true;
+    // Grounding rejections (§8) are failures the model must act on — but the
+    // transcript/mirror flagged them "ok" because they carry no .error
+    // (fourth-live-log G3).
+    if (r.grounding === 'rejected') return true;
+    return false;
   }
 
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -250,6 +256,11 @@
       const handler = tools['service.update'];
       if (typeof handler !== 'function') return { error: 'no service.update handler wired' };
       const out = await handler(a, { observationLog: observationLog, ledger: ledger, session: publicApi });
+      // The handler is the authority on whether an artifact was actually
+      // created (chain/schema validation, apply). A handler error means NO
+      // version exists — announcing one anyway (fourth-log turn 19) sent the
+      // session and the UI off to verify a phantom artifact.
+      if (out && typeof out === 'object' && typeof out.error === 'string') return out;
       const version = state.artifactVersions.length + 1;
       state.artifactVersions.push({ version: version, steps: steps, at: now() });
       emit('artifact_version', { version: version });

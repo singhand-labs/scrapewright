@@ -714,6 +714,62 @@ describe('service.update grounding chokepoint (spec §8)', () => {
     assert.equal(session.state().session.artifactVersions[0].steps[0].id, '1');
   });
 
+  it('a failed write handler creates NO version and emits NO artifact_version event (fourth-live-log G2)', async () => {
+    const bag = {};
+    const events = [];
+    const session = createResearchSession({
+      requirement: 'collect cards',
+      llm: scriptedLlm([
+        reply(envelope('probe.attrStats', { containerSel: 'div.card', attr: 'data-kind' })),
+        reply(envelope('service.update', { steps: updateStep(AD_SELECTOR) })),
+        reply(finishEnvelope())
+      ], []),
+      tools: bag,
+      budgets: { maxTurns: 10 },
+      onEvent: (e) => events.push(e)
+    });
+    const probe = createProbeTools({ executeDsl: makeRail(8), observationLog: session.observationLog });
+    bag['probe.attrStats'] = probe.attrStats;
+    bag['probe.count'] = probe.count;
+    // Fourth-log turn-19 shape: grounding admitted the update, but the
+    // handler rejected the artifact (invalid chain). The engine must not
+    // announce a version that was never created.
+    bag['service.update'] = async () => ({ error: 'step chain invalid: unknown onSuccess target NOPE' });
+
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    assert.equal(report.artifactVersions, 0, 'failed handler → no version counted');
+    assert.ok(!events.some(e => e.type === 'artifact_version'), 'no artifact_version event emitted');
+    const entry = session.state().session.transcript.find(e => e.kind === 'tool' && e.name === 'service.update');
+    assert.match(entry.result.error, /chain invalid/);
+    assert.equal(entry.ok, false, 'handler failure flagged not-ok in the transcript');
+  });
+
+  it('a grounding rejection is flagged not-ok in transcript and tool_result event (fourth-live-log G3)', async () => {
+    const bag = {};
+    const events = [];
+    const session = createResearchSession({
+      requirement: 'collect cards',
+      llm: scriptedLlm([
+        reply(envelope('service.update', { steps: updateStep(AD_SELECTOR) })),
+        reply(finishEnvelope())
+      ], []),
+      tools: bag,
+      budgets: { maxTurns: 10 },
+      onEvent: (e) => events.push(e)
+    });
+    const probe = createProbeTools({ executeDsl: makeRail(8), observationLog: session.observationLog });
+    bag['probe.count'] = probe.count;
+
+    await session.run();
+    const entry = session.state().session.transcript.find(e => e.kind === 'tool' && e.name === 'service.update');
+    assert.equal(entry.result.grounding, 'rejected');
+    assert.equal(entry.ok, false, 'grounding rejection is an error result');
+    const ev = events.find(e => e.type === 'tool_result' && e.tool === 'service.update');
+    assert.ok(ev, 'tool_result event captured');
+    assert.equal(ev.ok, false, 'mirror event says ERR, not ok');
+  });
+
   it('the attrStats result itself reaches the LLM (the semantic revealer)', async () => {
     const bag = {};
     const session = createResearchSession({
@@ -928,5 +984,19 @@ describe('service.update artifact contract mentions testInput (first-live-log P-
     assert.match(sys, /service\.update[^\n]*testInput/);
     assert.match(sys, /MISSING_URL_PARAM/);
     assert.match(sys, /service\.update[^\n]*REPLACES/, 'second-live-log D3: replace-whole-artifact semantics stated');
+  });
+
+  it('the spec demands JSON-Schema-shaped inputSchema/outputSchema (fourth-live-log G1)', async () => {
+    const calls = [];
+    const session = createResearchSession({
+      requirement: 'collect cards',
+      llm: scriptedLlm([reply(finishEnvelope())], calls),
+      tools: {},
+      budgets: { maxTurns: 3 }
+    });
+    await session.run();
+    const sys = calls[0].messages[0].content;
+    assert.match(sys, /outputSchema[^\n]*JSON Schema/i, 'schema shape requirement stated on the service.update line');
+    assert.match(sys, /"required"/, 'the example shows the required array that unlocks verify scoring');
   });
 });

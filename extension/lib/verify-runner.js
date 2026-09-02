@@ -429,6 +429,12 @@
           if (/is not a valid selector/i.test(e.message || '')) {
             e.message += " — NOTE: only standard CSS selectors are valid in querySelector/querySelectorAll. Playwright-only pseudo-classes such as :has-text(...), :text=..., :contains(...) do NOT exist here and throw instantly. Select by structure (tag/role/aria/class), then filter by visible text in JS: const els = await $list('h2, div[role=\"heading\"]'); const hit = els.find(el => /your phrase/i.test(el.textContent || ''));";
           }
+          if (/could not be cloned/i.test(e.message || '')) {
+            e.message += ' — NOTE: the step returned an object containing an un-awaited Promise. Every $ API call ($count, $extract, $extractList, ...) is async: await it first (const n = await $count(sel);) before using its value, and never place a bare call inside the returned object.';
+          }
+          if (/querySelectorAll is not a function|\.closest is not a function/i.test(e.message || '')) {
+            e.message += ' — NOTE: $list (and element data from $) returns serializable DATA objects — plain snapshots with text/attrs — not live DOM nodes: you cannot call querySelector(All)/closest on them. Query the page itself instead ($extractList with per-field sub-selectors) or read the snapshot properties directly.';
+          }
         } catch (_) { /* augmentation must never mask the original error */ }
         return e;
       }

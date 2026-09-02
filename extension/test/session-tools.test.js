@@ -120,6 +120,29 @@ describe('createSessionTools', () => {
     assert.deepEqual(out, { updated: true, version: 2 });
   });
 
+  it('service.update rejects natural-language schemas with a teaching error; JSON-Schema shapes pass (fourth-live-log G1)', async () => {
+    const { deps, state } = makeDeps();
+    const t = createSessionTools(deps);
+    const ctx = { session: { state: () => ({ session: { artifactVersions: [] } }) } };
+    // Exact fourth-live-log shapes: {"posts":"array of post objects"} /
+    // {"keyword":"搜索关键词"} — maps of field→description, not JSON Schema.
+    const badOut = await t.tools['service.update'](
+      { steps: GOOD_STEPS, outputSchema: { posts: 'array of post objects' } }, ctx);
+    assert.match(badOut.error, /SCHEMA_NOT_JSON_SCHEMA/);
+    assert.match(badOut.error, /score 0/, 'teaches WHY: every detector reads .required/.properties');
+    assert.equal(state.applied.length, 0, 'artifact NOT applied on schema rejection');
+    const badIn = await t.tools['service.update'](
+      { steps: GOOD_STEPS, inputSchema: { keyword: '搜索关键词' } }, ctx);
+    assert.match(badIn.error, /SCHEMA_NOT_JSON_SCHEMA/);
+    const ok = await t.tools['service.update'](
+      {
+        steps: GOOD_STEPS,
+        inputSchema: { type: 'object', required: ['keyword'], properties: { keyword: { type: 'string' } } },
+        outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } }
+      }, ctx);
+    assert.deepEqual(ok, { updated: true, version: 1 });
+  });
+
   it('diag.read failingStep channel keys off report.error.stepId; service.update marks lastVerify stale', async () => {
     const { deps, state } = makeDeps({
       runVerify: async () => ({

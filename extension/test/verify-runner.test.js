@@ -66,6 +66,33 @@ describe('createVerifyRunner', () => {
     assert.equal(out.raw.testResult && out.raw.testResult.steps ? out.raw.testResult.steps.length : 1, 1, 'partial steps preserved on raw');
   });
 
+  it('sandbox DataCloneError gets the un-awaited-Promise hint (fourth-live-log G4)', async () => {
+    const orch = async () => {
+      const e = new Error('Step failed: Error in invoked script script: #[object Promise] could not be cloned.');
+      e.stepId = 's1';
+      throw e;
+    };
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object' } });
+    assert.equal(out.report.ok, false);
+    assert.match(out.report.error.message, /could not be cloned/);
+    assert.match(out.report.error.message, /await/i);
+    assert.match(out.report.error.message, /\$count|\$extract/, 'names the offending API family');
+  });
+
+  it('$list data-object misuse gets the not-a-DOM-node hint (fourth-live-log G4)', async () => {
+    const orch = async () => {
+      const e = new Error('Step failed: TypeError: c.querySelectorAll is not a function');
+      e.stepId = 's1';
+      throw e;
+    };
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object' } });
+    assert.equal(out.report.ok, false);
+    assert.match(out.report.error.message, /querySelectorAll is not a function/);
+    assert.match(out.report.error.message, /\$list[^\n]*data/i, 'explains $list returns data snapshots, not DOM nodes');
+  });
+
   it('empty extraction converts a green orchestration into an error report with EMPTY_EXTRACTION + EMPTY_FIELDS tags', async () => {
     const orch = async (svc, input, d, opts) => ({
       finalResult: { posts: [] },
