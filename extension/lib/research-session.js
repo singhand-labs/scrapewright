@@ -442,10 +442,14 @@
           }
           let parsed = Protocol.parseAssistantTurn(content);
           if (!parsed.ok) {
-            emit('protocol_violation', { violation: parsed.violation });
+            emit('protocol_violation', { violation: parsed.violation, detail: parsed.detail || null });
+            // The detail names the REAL failure (parse position, keys seen) —
+            // "missing-action" alone sent the model hunting for an action it
+            // had already written while the true problem was unescaped quotes
+            // (third live log).
             state.transcript.push({
               kind: 'system',
-              text: 'PROTOCOL VIOLATION (' + parsed.violation + '): reply with ONE JSON object with exactly one of "tool" or "finish". No prose outside the JSON.'
+              text: 'PROTOCOL VIOLATION (' + parsed.violation + (parsed.detail ? ' — ' + parsed.detail : '') + '): reply with ONE JSON object with exactly one of "tool" or "finish". No prose outside the JSON. A token/position error usually means unescaped double quotes inside a string value — escape them (\") or do not quote text with ".'
             });
             let repaired = null;
             try {

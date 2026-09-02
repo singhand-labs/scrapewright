@@ -149,3 +149,25 @@ describe('summarizeToolResult', () => {
     assert.ok(typeof Protocol.summarizeToolResult('t', cyc, 50) === 'string');
   });
 });
+
+describe('parseAssistantTurn malformed-JSON classification (third live log)', () => {
+  it('an unrepairable reply classifies not-object, never missing-action (lenient wrapper leak)', () => {
+    const r = Protocol.parseAssistantTurn('{"think":"He said "ok", and left the room","tool":"page.state"}');
+    assert.equal(r.ok, false);
+    assert.equal(r.violation, 'not-object', 'the failure wrapper must not leak in as a parsed turn');
+    assert.ok(r.detail && /position|unexpected/i.test(r.detail), 'detail names the parse error: ' + r.detail);
+  });
+
+  it('the live Cat Hwang reply parses via the unescaped-quote repair', () => {
+    const r = Protocol.parseAssistantTurn('{"think":"第一个子卡片是"Cat Hwang"的推荐信息。","goals":null,"hypotheses":null,"tool":"probe.sample","args":{"sel":"div[role=feedback]>div"}}');
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.turn.tool, 'probe.sample');
+  });
+
+  it('missing-action carries the keys the reply actually contained', () => {
+    const r = Protocol.parseAssistantTurn('{"think":"x","goals":null}');
+    assert.equal(r.ok, false);
+    assert.equal(r.violation, 'missing-action');
+    assert.ok(r.detail.indexOf('think') !== -1, 'detail lists observed keys');
+  });
+});

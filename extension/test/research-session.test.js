@@ -328,6 +328,24 @@ describe('protocol violations', () => {
     assert.ok(nudges[0].text.includes('PROTOCOL VIOLATION (no-json)'));
   });
 
+  it('the repair nudge carries the parse-error detail so the model can fix quoting (third live log F3)', async () => {
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply('{"think":"He said "ok", and left the room","tool":"page.state"}'), // unrepairable → not-object + detail
+        reply(envelope('probe.count', {})),
+        reply(finishEnvelope())
+      ], []),
+      tools: { 'probe.count': async () => ({ count: 4 }) }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    const nudges = session.state().session.transcript.filter(e => e.kind === 'system');
+    assert.ok(nudges[0].text.includes('PROTOCOL VIOLATION (not-object'), 'violation named');
+    assert.ok(/position/i.test(nudges[0].text), 'parse position carried into the nudge');
+    assert.ok(nudges[0].text.includes('unescaped'), 'nudge teaches the quoting fix');
+  });
+
   it('a second consecutive violation stops the session with reason protocol', async () => {
     const session = createResearchSession({
       requirement: 'r',

@@ -105,10 +105,15 @@
     if (parser) {
       try {
         const out = parser(candidate);
-        // wizard-utils parseJsonLenient returns { ok, value, repairs }, not the
-        // parsed object itself — unwrap; fall through on failed repairs.
-        if (out && typeof out === 'object' && 'value' in out) return out.ok ? out.value : undefined;
-        return out;
+        // wizard-utils parseJsonLenient returns {ok, value, repairs}. Its
+        // FAILURE shape has no 'value' key — returning the wrapper then would
+        // leak a {ok:false,...} object into parseAssistantTurn as if it were
+        // the parsed turn (misclassifies as missing-action; third-live-log
+        // root cause). Only a successful unwrap or a legacy raw value passes.
+        if (out && typeof out === 'object' && !Array.isArray(out) && 'ok' in out) {
+          return out.ok && out.value !== undefined ? out.value : undefined;
+        }
+        return out === undefined ? undefined : out;
       } catch (e) { return undefined; }
     }
     return undefined;
@@ -135,9 +140,13 @@
     const candidate = extractJsonObject(text);
     if (!candidate) return { ok: false, violation: 'no-json' };
     let obj;
-    try { obj = JSON.parse(candidate); } catch (e) { obj = lenientParse(candidate); }
+    let parseErr = null;
+    try { obj = JSON.parse(candidate); } catch (e) {
+      parseErr = e && e.message ? String(e.message) : 'unparseable';
+      obj = lenientParse(candidate);
+    }
     if (obj == null || typeof obj !== 'object' || Array.isArray(obj)) {
-      return { ok: false, violation: 'not-object' };
+      return { ok: false, violation: 'not-object', detail: parseErr.slice(0, 140) };
     }
     if (obj.args !== undefined && (typeof obj.args !== 'object' || obj.args === null || Array.isArray(obj.args))) {
       return { ok: false, violation: 'bad-args' };
@@ -151,7 +160,9 @@
       finish: (obj.finish && typeof obj.finish === 'object' && !Array.isArray(obj.finish)) ? obj.finish : null
     };
     if (turn.tool && turn.finish) return { ok: false, violation: 'ambiguous-action' };
-    if (!turn.tool && !turn.finish) return { ok: false, violation: 'missing-action' };
+    if (!turn.tool && !turn.finish) {
+      return { ok: false, violation: 'missing-action', detail: 'reply had keys: ' + Object.keys(obj).slice(0, 12).join(', ').slice(0, 140) };
+    }
     if (turn.tool && !/^[a-z][\w]*(\.[\w]+)*$/i.test(turn.tool)) return { ok: false, violation: 'bad-tool-name' };
     if (turn.finish && typeof turn.finish.summary !== 'string') turn.finish.summary = '';
     return { ok: true, turn: turn };

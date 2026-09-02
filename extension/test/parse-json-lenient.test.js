@@ -366,13 +366,19 @@ describe('parseJsonLenient', () => {
         "document.querySelector('div[role=\"article\"]') !== null");
     });
 
-    it('does NOT apply code-bearing repair to non-code-bearing keys (too risky)', () => {
-      // `name` is free text — we deliberately do not escape unescaped " here.
-      // If we did, we'd paper over genuine truncation in non-code fields.
+    it('non-code-bearing keys get the quote-aware repair as a LAST RESORT (third-live-log policy flip)', () => {
+      // Old policy: never escape unescaped " in free-text fields — "too risky".
+      // Third live log: glm-5.2 quoted English names with bare " inside think,
+      // the reply became unparseable, and the session died on two protocol
+      // strikes. The quote-aware rewrite now runs AFTER every other repair
+      // failed, so the old corpus behavior is untouched; truncation (no
+      // closing quote) still fails loudly, and ambiguous content quotes
+      // followed by ',' mis-terminate and fail too.
       const input = `{"name":"a"b","script":"x"}`;
       const res = parseJsonLenient(input);
-      assert.equal(res.ok, false);
-      assert.match(res.error, /property name|property value/i);
+      assert.equal(res.ok, true);
+      assert.equal(res.value.name, 'a"b');
+      assert.ok(res.repairs.includes('escape-content-quotes'));
     });
 
     it('code-bearing mode handles trailing semicolon before closing "', () => {
@@ -393,5 +399,39 @@ describe('parseJsonLenient', () => {
       // No repair was needed — the input is already valid JSON.
       assert.deepEqual(res.repairs, []);
     });
+  });
+});
+
+describe('unescaped double quotes inside string values (third-live-log incident 4)', () => {
+  it('repairs the exact live reply: think quotes an English name with bare ASCII quotes', () => {
+    const raw = '{"think":"第一个子卡片是"Cat Hwang"的推荐信息。先确认这些div的data属性分布。","goals":null,"hypotheses":null,"tool":"probe.sample","args":{"sel":"div[role=feedback]>div","opts":{"index":1,"wantHtml":true}}}';
+    const res = parseJsonLenient(raw);
+    assert.equal(res.ok, true, res.error);
+    assert.equal(res.value.tool, 'probe.sample');
+    assert.equal(res.value.args.opts.index, 1);
+    assert.ok(res.value.think.includes('"Cat Hwang"'), 'the quoted name survives inside think');
+    assert.ok(res.repairs.includes('escape-content-quotes'));
+  });
+
+  it('repairs bare quotes around English inside CJK parens (second malformed reply)', () => {
+    const raw = '{"think":"第一个是账号推荐卡片（"View profile"），说明结构。","goals":null,"hypotheses":{"add":"feed直接子div包含账号推荐等非帖子卡片"},"tool":"probe.sample","args":{"sel":"div[role=feed] > div > div","opts":{"wantHtml":false}}}';
+    const res = parseJsonLenient(raw);
+    assert.equal(res.ok, true, res.error);
+    assert.equal(res.value.tool, 'probe.sample');
+    assert.ok(res.value.think.includes('"View profile"'));
+  });
+
+  it('a content quote followed by a comma cannot be recovered — stays ok:false (no false success)', () => {
+    const raw = '{"think":"He said "ok", and left the room","tool":"page.state"}';
+    const res = parseJsonLenient(raw);
+    assert.equal(res.ok, false);
+  });
+
+  it('strictly valid JSON with escaped quotes passes untouched (no regression)', () => {
+    const raw = '{"think":"He said \\"ok\\"","tool":"page.state"}';
+    const res = parseJsonLenient(raw);
+    assert.equal(res.ok, true);
+    assert.equal(res.value.think, 'He said "ok"');
+    assert.deepEqual(res.repairs, []);
   });
 });

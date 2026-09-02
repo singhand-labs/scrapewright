@@ -1470,6 +1470,54 @@ function repairCommonJsonMistakes(text) {
   return out;
 }
 
+// Quote-aware string rewrite for the "unescaped double quotes inside a string
+// value" failure class (third-live-log incident 4: the model quoted English
+// names with bare ASCII quotes inside think text). Inside a double-quoted
+// string, a `"` is treated as the string terminator ONLY when the next
+// non-whitespace char is a JSON structural separator (, } ]) or `:` (key
+// close); every other `"` is content and gets escaped. A no-op on valid JSON
+// (all real terminators match the rule; content quotes are already escaped).
+// Returns null when a string never closes (truncated input).
+function repairUnescapedQuotes(text) {
+  if (typeof text !== 'string' || !text) return text;
+  let out = '';
+  let i = 0;
+  const n = text.length;
+  while (i < n) {
+    const c = text[i];
+    if (c === '"') {
+      out += '"';
+      i++;
+      let closed = false;
+      while (i < n) {
+        const d = text[i];
+        if (d === '\\') { out += text.slice(i, i + 2); i += 2; continue; }
+        if (d === '"') {
+          let q = i + 1;
+          while (q < n && /\s/.test(text[q])) q++;
+          const nc = q < n ? text[q] : '';
+          if (nc === '' || nc === ',' || nc === '}' || nc === ']' || nc === ':') {
+            out += '"';
+            i++;
+            closed = true;
+            break;
+          }
+          out += '\\"';
+          i++;
+          continue;
+        }
+        out += d;
+        i++;
+      }
+      if (!closed) return null;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
 // Lenient JSON parser for LLM output. Tries strict JSON.parse first; on
 // failure, applies a small set of safe repairs (strip JS comments outside
 // strings, repair bare keys / single-quotes / missing commas, drop trailing
@@ -1510,6 +1558,17 @@ function parseJsonLenient(text) {
   try {
     return { ok: true, value: JSON.parse(s), repairs };
   } catch (e) {
+    // Last resort: quote-aware rewrite of the comment-stripped ORIGINAL (the
+    // common-mistakes pass above has already corrupted unescaped-quote strings
+    // by then). Only fires when everything above failed, so the corpus-proven
+    // behavior is untouched; purely additive coverage.
+    const rewritten = repairUnescapedQuotes(stripped);
+    if (rewritten != null && rewritten !== stripped) {
+      const rewrittenFixed = rewritten.replace(/,(\s*[}\]])/g, '$1');
+      try {
+        return { ok: true, value: JSON.parse(rewrittenFixed), repairs: repairs.concat(['escape-content-quotes']) };
+      } catch (e2) { /* fall through to the failure report */ }
+    }
     return { ok: false, error: e.message, repairs, repairedPreview: s.slice(0, 500) };
   }
 }
