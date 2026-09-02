@@ -199,7 +199,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], countShortfall: null, shapeDistribution: null };
+      const detectors = { emptyFields: [], duplicateFields: [], countShortfall: null, shapeDistribution: null, stepNoReturn: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -228,6 +228,27 @@
             : nominal;
           return upstream || nominal;
         };
+
+        // Second-live-log D1: a green orchestration where step scripts yielded
+        // undefined is broken authoring, not a page problem — the async-IIFE
+        // pattern without an internal `return`. No data can flow (every
+        // __stepResults__ consumer reads undefined) and every downstream
+        // detector stays quiet, which sent the LLM chasing page-side ghost
+        // causes. Skipped steps are excluded: their result is legitimately
+        // absent.
+        const noReturnIds = result.steps
+          .filter((s) => !s.skipped && s.result === undefined)
+          .map((s) => s.stepId);
+        if (noReturnIds.length) {
+          detectors.stepNoReturn = noReturnIds;
+          const finalEntry = result.steps[result.steps.length - 1];
+          const dataEmpty = !finalData || (typeof finalData === 'object' && !Array.isArray(finalData) && Object.keys(finalData).length === 0);
+          if (dataEmpty || (finalEntry && finalEntry.result === undefined)) {
+            error = toError(
+              'STEP_NO_RETURN: step script(s) [' + noReturnIds.join(', ') + '] produced undefined — every step script must return a value (an async IIFE needs `return <value>;` as its last line; await every $ call you depend on before returning). Later steps read __stepResults__[stepId] and got nothing, so no data could reach the output.',
+              noReturnIds[noReturnIds.length - 1]);
+          }
+        }
 
         const clickFail = WU.detectClickInListTotalFailure(events);
         if (clickFail) {
@@ -332,6 +353,7 @@
         if (detectors.emptyFields.length) add('EMPTY_FIELDS');
         if (detectors.countShortfall) add('COUNT_SHORTFALL');
         if (detectors.shapeDistribution) add('CARD_POLICY');
+        if (detectors.stepNoReturn) add('STEP_NO_RETURN');
         for (const evt of events) {
           if (!evt || evt.type !== 'STEP_ITERATION') continue;
           const p = previewJson(evt.resultPreview);

@@ -223,6 +223,62 @@ describe('createVerifyRunner', () => {
   });
 });
 
+describe('verify-runner STEP_NO_RETURN detector (second-live-log D1)', () => {
+  it('all steps yielded undefined + empty finalResult → loud error, ok:false, tag present', async () => {
+    const orch = async (svc, input, d, opts) => {
+      opts.onEvent({ type: 'EXECUTION_START' });
+      opts.onEvent({ type: 'STEP_ITERATION', stepId: 's1', iteration: 1, resultPreview: 'undefined' });
+      return {
+        finalResult: {},
+        steps: [
+          { stepId: 's1', stepName: 'load', result: undefined, snapshot: null },
+          { stepId: 's2', stepName: 'extract', result: undefined, snapshot: null }
+        ],
+        pages: [], pagesTruncated: false
+      };
+    };
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array' } } } });
+    assert.equal(out.report.ok, false, 'scripts without returns cannot be green');
+    assert.match(out.report.error.message, /STEP_NO_RETURN/);
+    assert.match(out.report.error.message, /s1, s2/);
+    assert.match(out.report.error.message, /return <value>/);
+    assert.deepEqual(out.report.detectors.stepNoReturn, ['s1', 's2']);
+    assert.ok(out.report.events.indexOf('STEP_NO_RETURN') !== -1, 'tag rides report.events');
+  });
+
+  it('data flowed but an earlier step returned undefined → report-only detector + tag, ok stays true', async () => {
+    const orch = async () => ({
+      finalResult: { posts: [{ title: 'a' }, { title: 'b' }] },
+      steps: [
+        { stepId: 's1', stepName: 'scroll', result: undefined, snapshot: null },
+        { stepId: 's2', stepName: 'extract', result: { posts: [{ title: 'a' }, { title: 'b' }] }, snapshot: null }
+      ],
+      pages: [], pagesTruncated: false
+    });
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' } } } } } } });
+    assert.equal(out.report.ok, true, 'data reached the output — the undefined step is a hygiene note, not a run blocker');
+    assert.deepEqual(out.report.detectors.stepNoReturn, ['s1']);
+    assert.ok(out.report.events.indexOf('STEP_NO_RETURN') !== -1);
+  });
+
+  it('skipped steps are excluded (their result is legitimately absent)', async () => {
+    const orch = async () => ({
+      finalResult: { posts: [{ title: 'a' }] },
+      steps: [
+        { stepId: 's0', stepName: 'cond', skipped: true, skipReason: 'condition false', result: undefined, snapshot: null },
+        { stepId: 's1', stepName: 'extract', result: { posts: [{ title: 'a' }] }, snapshot: null }
+      ],
+      pages: [], pagesTruncated: false
+    });
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' } } } } } } });
+    assert.equal(out.report.detectors.stepNoReturn, null);
+    assert.equal(out.report.events.indexOf('STEP_NO_RETURN'), -1);
+  });
+});
+
 describe('verify-runner shapeDistribution detector (record-shape-distribution consumer)', () => {
   const SCHEMA_ARR_OBJ = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } };
 

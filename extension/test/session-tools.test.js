@@ -45,6 +45,7 @@ describe('createSessionTools', () => {
     assert.ok(p.includes('$extractList'), 'DSL contract covers core APIs');
     assert.ok(p.includes('STANDARD CSS'), 'selector constraint present');
     assert.ok(p.includes('probe.hover'), 'methodology teaches the hover probe (do NOT call $hover as a tool)');
+    assert.ok(p.includes('STEP_NO_RETURN'), 'second-live-log D1a: return-value contract taught with its detector name');
     assert.ok(!/facebook|twitter|linkedin|tiktok|reddit|\bfb\b/i.test(p), 'no site tokens');
   });
 

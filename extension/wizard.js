@@ -1775,6 +1775,19 @@ function updateSessionSpendLine(st) {
 }
 
 function handleSessionEvent(ev) {
+  // Console mirror (second-live-log D2): the UI execution log is invisible in
+  // exported console logs — the verify#2 anomaly was undiagnosable because
+  // tool results never reached the console. Mirror every session event with
+  // its key fields; the mirror must never break the handler.
+  try {
+    if (ev && ev.type === 'tool_result') {
+      console.log('[session] TOOL RESULT', ev.tool, ev.ok ? 'ok' : 'ERR', String(ev.summary || '').slice(0, 300));
+    } else if (ev && ev.type === 'tool_call') {
+      console.log('[session] TOOL', ev.tool, JSON.stringify(ev.args || {}).slice(0, 200));
+    } else if (ev && ev.type) {
+      console.log('[session]', ev.type, JSON.stringify(ev).slice(0, 200));
+    }
+  } catch (e) { /* mirror is best-effort */ }
   try {
     switch (ev.type) {
       case 'session_start':

@@ -909,5 +909,6 @@ describe('service.update artifact contract mentions testInput (first-live-log P-
     const sys = calls[0].messages[0].content;
     assert.match(sys, /service\.update[^\n]*testInput/);
     assert.match(sys, /MISSING_URL_PARAM/);
+    assert.match(sys, /service\.update[^\n]*REPLACES/, 'second-live-log D3: replace-whole-artifact semantics stated');
   });
 });

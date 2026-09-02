@@ -48,6 +48,7 @@ describe('wizard research-session integration (source audit)', () => {
     for (const ev of ['turn_start', 'tool_call', 'tool_result', 'knowledge_attached', 'artifact_version', 'paused', 'stopped']) {
       assert.ok(SRC.includes("'" + ev + "'"), 'event handled: ' + ev);
     }
+    assert.ok(fnBody('handleSessionEvent').includes("'[session]'"), 'second-live-log D2: session events mirrored to console so exported logs show tool results');
     for (const id of ['btnSessionPause', 'btnSessionResume', 'btnSessionAbort', 'btnAnnotationFinish', 'btnAnnotationCancel']) {
       assert.ok(SRC.includes("getElementById('" + id + "')"), id + ' wired');
       assert.ok(HTML.includes('id="' + id + '"'), id + ' exists in HTML');
