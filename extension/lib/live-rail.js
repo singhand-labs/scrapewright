@@ -59,7 +59,7 @@
 
     function disengageWatch() {
       if (unwatchTab) {
-        try { unwatchTab(); } catch (e) { /* best-effort */ }
+        try { unwatchTab(); } catch (e) { /* best-effort — if this throws the old listener may survive and bump the epoch once more; harmless (epoch only grows) */ }
         unwatchTab = null;
       }
     }
@@ -68,12 +68,16 @@
       disengageWatch();
       if (typeof d.watchTab !== 'function') return;
       try {
-        unwatchTab = d.watchTab(tabId, function onReload() {
+        const handle = d.watchTab(tabId, function onReload() {
+          if (handle !== unwatchTab) return; // stale callback after disengage — must be a no-op
           epoch += 1;
           log('warn', 'Research tab reloaded (same tabId) — page epoch is now ' + epoch +
             '; observation receipts recorded in earlier epochs no longer ground selectors.');
         });
-      } catch (e) { /* watching is best-effort */ }
+        unwatchTab = handle;
+      } catch (e) {
+        log('warn', 'watchTab registration failed — reload detection disabled for this page: ' + (e && e.message || String(e)));
+      }
     }
 
     async function closeTab() {

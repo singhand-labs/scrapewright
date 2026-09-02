@@ -202,7 +202,7 @@ describe('createLiveRail', () => {
   it('C3: dead-tab self-heal resets the epoch and disengages the watch', async () => {
     let unwatchCalls = 0;
     let fireReload = null;
-    const d = makeDeps({ watchTab: (tabId, onReload) => { fireReload = onReload; return () => { unwatchCalls += 1; fireReload = null; }; } });
+    const d = makeDeps({ watchTab: (tabId, onReload) => { fireReload = onReload; return () => { unwatchCalls += 1; }; } });
     const rail = createLiveRail(d);
     await rail.pageOpen({});
     assert.equal(rail.epoch, 1);
@@ -211,7 +211,7 @@ describe('createLiveRail', () => {
     assert.equal(s.open, false);
     assert.equal(rail.epoch, 0);
     assert.equal(unwatchCalls, 1);
-    if (fireReload) fireReload(); // must be a no-op after disengage
+    fireReload(); // must be a no-op after disengage — the rail dropped its watch handle
     assert.equal(rail.epoch, 0);
   });
 
