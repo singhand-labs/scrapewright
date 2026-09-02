@@ -1809,7 +1809,7 @@ function createWizardAnnotationBridge(getRail) {
     document.getElementById('annotationRequestScope').textContent =
       (req.containerSel ? 'Annotate inside: ' + req.containerSel + '. ' : '') +
       (req.fields && req.fields.length ? 'Fields: ' + req.fields.join(', ') + '. ' : '') +
-      'The page tab was brought to the front — click elements to mark them, then come back and press Finish Annotation.';
+      'The page tab was brought to the front — click elements to mark them, then come back and press Submit Annotations.';
     panel().classList.remove('hidden');
   };
   const hide = () => panel().classList.add('hidden');
@@ -2057,7 +2057,7 @@ let sessionBooting = false; // re-entrancy guard for the await-config window
 
 async function startResearchSession(seedOverride) {
   if (sessionBooting) {
-    showToast('Session is already starting…', 'warn', 3000);
+    showToast('Session is already starting — please wait.', 'warn', 3000);
     return;
   }
   // Double-start guard: a live session's loop holds status 'running'

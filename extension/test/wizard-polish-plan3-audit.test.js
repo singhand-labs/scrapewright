@@ -102,4 +102,21 @@ describe('Plan 3: wizard polish', () => {
     assert.ok(!region.includes('goToPhase(5)'), 'redundant phase call removed');
     assert.ok(region.includes('confirmDeploy('), 'still deploys');
   });
+
+  it('A10: session annotation panel says Submit Annotations; step-card keeps Finish Annotation', () => {
+    const btnLine = HTML.split('\n').find((l) => l.includes('id="btnAnnotationFinish"'));
+    assert.ok(btnLine, 'btnAnnotationFinish in HTML');
+    assert.ok(/Submit Annotations/.test(btnLine), 'session panel relabeled');
+    assert.ok(SRC.includes('btn-step-complete-annotation" data-index'), 'step-card button still rendered');
+    assert.ok(/btn-step-complete-annotation[^<]*Finish Annotation/.test(SRC), 'step-card keeps its label');
+    // Session-flow toast references the NEW label only.
+    assert.ok(!/press Finish Annotation/.test(SRC), 'session-flow toast no longer says "press Finish Annotation"');
+    assert.ok(/press Submit Annotations/.test(SRC), 'session-flow toast uses the new label');
+  });
+
+  it('13a/13b: message style unified + Research button tooltip', () => {
+    assert.ok(SRC.includes("'Session is already starting — please wait.'"), 'starting message uses the em-dash style');
+    assert.ok(!SRC.includes('Session is already starting…'), 'ellipsis variant gone');
+    assert.ok(/id="btnPhase1Research"[^>]*title="[^"]*research session/i.test(HTML), 'Research button carries a tooltip mentioning the research session');
+  });
 });
