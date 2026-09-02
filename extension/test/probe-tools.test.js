@@ -4,9 +4,9 @@ const assert = require('node:assert/strict');
 const { createProbeTools } = require('../lib/probe-tools');
 const { createObservationLog } = require('../lib/observation-log');
 
-function makeTools(executorImpl) {
+function makeTools(executorImpl, extra) {
   const observationLog = createObservationLog();
-  const tools = createProbeTools({ executeDsl: executorImpl, observationLog });
+  const tools = createProbeTools(Object.assign({ executeDsl: executorImpl, observationLog }, extra || {}));
   return { tools, observationLog };
 }
 
@@ -127,6 +127,53 @@ describe('probe.sample', () => {
     assert.equal(r.html.length, 30000);
   });
 
+  it('clean:true routes the outerHTML through the cleaner before capping (page-cleaning gap)', async () => {
+    const seen = [];
+    const { tools } = makeTools(async (snippet) => {
+      if (/return \$extractList\(/.test(snippet)) return [{ h: '<div><script>noise()</script><span>real</span></div>' }];
+      return [{ tagName: 'DIV', id: 'c0', className: '', textContent: '' }];
+    }, {
+      cleanHtml: (h) => { seen.push(h); return '<div><span>real</span></div>'; }
+    });
+    const r = await tools.sample('div.card', { wantHtml: true, clean: true });
+    assert.equal(seen.length, 1, 'cleaner invoked exactly once');
+    assert.equal(seen[0], '<div><script>noise()</script><span>real</span></div>');
+    assert.equal(r.html, '<div><span>real</span></div>');
+  });
+
+  it('clean:true without a wired cleaner still returns the raw HTML (graceful degradation)', async () => {
+    const { tools } = makeTools(async (snippet) => {
+      if (/return \$extractList\(/.test(snippet)) return [{ h: '<div>raw</div>' }];
+      return [{ tagName: 'DIV', id: 'c0', className: '', textContent: '' }];
+    });
+    const r = await tools.sample('div.card', { wantHtml: true, clean: true });
+    assert.equal(r.html, '<div>raw</div>');
+  });
+
+  it('clean:true against the REAL dom-cleaner consumes its {html} object shape (jsdom)', async () => {
+    const jsdom = require('jsdom');
+    const DC = require('../lib/dom-cleaner');
+    const dom = new jsdom.JSDOM('', { url: 'https://example.com/page' });
+    const saved = {};
+    for (const g of ['DOMParser', 'NodeFilter', 'Node', 'CSS', 'document']) {
+      saved[g] = global[g];
+      global[g] = dom.window[g] || dom.window;
+    }
+    try {
+      const { tools } = makeTools(async (snippet) => {
+        if (/return \$extractList\(/.test(snippet)) return [{ h: '<div><script>noise()</script><span>real</span></div>' }];
+        return [{ tagName: 'DIV', id: 'c0', className: '', textContent: '' }];
+      }, { cleanHtml: DC.cleanHtmlForLLM });
+      const r = await tools.sample('div.card', { wantHtml: true, clean: true });
+      assert.ok(String(r.html).indexOf('noise()') === -1, 'script stripped');
+      assert.ok(String(r.html).indexOf('real') !== -1, 'content kept');
+    } finally {
+      for (const g of Object.keys(saved)) {
+        if (saved[g] === undefined) delete global[g]; else global[g] = saved[g];
+      }
+    }
+  });
+
   it('out-of-range index reports notFound without throwing', async () => {
     const { tools } = makeTools(async () => [{ tagName: 'DIV', id: 'only', className: '', textContent: '' }]);
     const r = await tools.sample('div.card', { index: 5 });
@@ -209,6 +256,56 @@ describe('probe.attrStats', () => {
     const { tools } = makeTools(async () => { throw new Error('BOOM'); });
     const r = await tools.attrStats('div.card', 'data-k');
     assert.equal(r.error, 'BOOM');
+  });
+});
+
+describe('probe.extract (sixth-log turn-sink: verify loop t26-t40)', () => {
+  const FIELDS = { title: { selector: 'h2' }, href: { selector: 'a', attr: 'href' } };
+
+  function records(n) {
+    const out = [];
+    for (let i = 0; i < n; i++) out.push({ title: i === 1 ? '' : 't' + i, href: i === 2 ? '' : '/p/' + i });
+    return out;
+  }
+
+  it('dry-runs $extractList in the live tab: sampled records, empty-field census, receipts for container AND field selectors', async () => {
+    const snippets = [];
+    const { tools, observationLog } = makeTools(async (s) => { snippets.push(s); return records(5); });
+    const r = await tools.extract({ containerSel: 'div.card', fieldMap: FIELDS });
+    assert.ok(snippets[0].includes('return $extractList("div.card", {"title":{"selector":"h2"},"href":{"selector":"a","attr":"href"}});'),
+      'fieldMap composed verbatim: ' + snippets[0]);
+    assert.equal(r.total, 5);
+    assert.equal(r.records.length, 3, 'context diet: 3 sampled records, total carries the real count');
+    assert.deepEqual(r.emptyFields, { title: 1, href: 1 }, 'census names only fields that HAVE empties');
+    assert.ok(observationLog.covers('div.card'), 'container receipt');
+    assert.ok(observationLog.covers('h2'), 'field selector receipt — a later step fieldMap is grounded by this probe');
+    assert.ok(observationLog.covers('a'));
+  });
+
+  it('multi:true runs $extractListMulti and allowEmpty forwards as opts', async () => {
+    const snippets = [];
+    const { tools } = makeTools(async (s) => { snippets.push(s); return [{ tags: ['a', 'b'] }]; });
+    const r = await tools.extract({ containerSel: 'div.card', fieldMap: { tags: { selector: 'a' } }, multi: true, allowEmpty: true });
+    assert.ok(snippets[0].includes('return $extractListMulti("div.card",'), 'multi flag selects the array-valued primitive');
+    assert.ok(snippets[0].includes(', {"allowEmpty":true});'), 'allowEmpty forwarded: ' + snippets[0]);
+    assert.deepEqual(r.records, [{ tags: ['a', 'b'] }]);
+    assert.deepEqual(r.emptyFields, {});
+  });
+
+  it('caps long string field values so one outerHTML field cannot flood the transcript', async () => {
+    const { tools } = makeTools(async () => [{ html: 'x'.repeat(5000) }]);
+    const r = await tools.extract({ containerSel: 'div.card', fieldMap: { html: { attr: 'outerHTML' } } });
+    assert.ok(r.records[0].html.length <= 500 + 20, 'long values capped ~500 with a truncation marker');
+    assert.ok(/…|\[trunc/.test(r.records[0].html), 'cap is disclosed, not silent');
+  });
+
+  it('validates args and forwards executor errors without a receipt', async () => {
+    const { tools, observationLog } = makeTools(async () => { throw new Error('SYNTAX_ERR: bad selector'); });
+    assert.equal((await tools.extract({ fieldMap: FIELDS })).error, 'containerSel required');
+    assert.equal((await tools.extract({ containerSel: 'div.card' })).error, 'fieldMap required — {field:{selector,attr?}} (a field without "selector" reads the container itself)');
+    const r = await tools.extract({ containerSel: 'div[', fieldMap: FIELDS });
+    assert.equal(r.error, 'SYNTAX_ERR: bad selector');
+    assert.equal(observationLog.size(), 0, 'a failed extract is not an observation');
   });
 });
 

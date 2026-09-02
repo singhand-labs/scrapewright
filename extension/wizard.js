@@ -294,6 +294,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   // would land in startResearchSession's seedOverride param.
   const startResearchSessionFromClick = () => startResearchSession();
   document.getElementById('btnPhase1Research').addEventListener('click', startResearchSessionFromClick);
+  document.getElementById('sessionMaxTurns').addEventListener('change', () => { getSessionMaxTurns(); });
+  loadSessionMaxTurns();
   document.getElementById('btnPhase2Next').addEventListener('click', () => goToPhase(3));
   document.getElementById('btnPhase2Back').addEventListener('click', () => goToPhase(1));
   document.getElementById('btnPhase3Test').addEventListener('click', runTestFromStep5);
@@ -1757,6 +1759,31 @@ function createWizardAnnotationBridge(getRail) {
 
 let wizardAnnotationBridge = null;
 
+// Sixth-log G5: the turn budget is a user knob (engine default 60). Read
+// live so raising it before Resume extends a session that stopped at the cap.
+let wizardMaxTurns = 60;
+
+async function loadSessionMaxTurns() {
+  try {
+    const o = await chrome.storage.local.get('wizardMaxTurns');
+    if (o && +o.wizardMaxTurns >= 10 && +o.wizardMaxTurns <= 500) wizardMaxTurns = Math.floor(+o.wizardMaxTurns);
+    const el = document.getElementById('sessionMaxTurns');
+    if (el) el.value = String(wizardMaxTurns);
+  } catch (e) { /* storage unavailable — keep the default */ }
+}
+
+function getSessionMaxTurns() {
+  const el = document.getElementById('sessionMaxTurns');
+  const v = el ? +el.value : NaN;
+  if (v >= 10 && v <= 500) {
+    wizardMaxTurns = Math.floor(v);
+    try { chrome.storage.local.set({ wizardMaxTurns: wizardMaxTurns }); } catch (e) { /* best-effort persistence */ }
+  } else if (el) {
+    el.value = String(wizardMaxTurns);
+  }
+  return wizardMaxTurns;
+}
+
 function setSessionControls(mode) {
   const bar = document.getElementById('sessionControls');
   if (!bar) return;
@@ -1770,7 +1797,7 @@ function updateSessionSpendLine(st) {
   const el = document.getElementById('sessionSpend');
   if (!el || !st) return;
   const sp = st.session.spend;
-  el.textContent = 'turns ' + sp.turns + ' · tokens ~' + (sp.promptTokens + sp.completionTokens) +
+  el.textContent = 'turns ' + sp.turns + '/' + wizardMaxTurns + ' · tokens ~' + (sp.promptTokens + sp.completionTokens) +
     (sp.estimated ? ' (est)' : '') + ' · ledger ' + st.ledger.entries.length;
 }
 
@@ -1977,8 +2004,11 @@ async function startResearchSession(seedOverride) {
     knowledge: { units: units, index: KnowledgeBase.buildIndex(units) },
     persistence: wizardPersistence,
     // RC53: the Settings-page maxOutputTokens knob is authoritative; falls
-    // back to 16384 when blank/invalid.
-    budgets: { maxTokensPerCall: (config.config.maxOutputTokens && +config.config.maxOutputTokens) || 16384 },
+    // back to 16384 when blank/invalid. maxTurns: the phase-1 knob (G5).
+    budgets: {
+      maxTokensPerCall: (config.config.maxOutputTokens && +config.config.maxOutputTokens) || 16384,
+      maxTurns: getSessionMaxTurns()
+    },
     seed: seed,
     onEvent: handleSessionEvent
   });

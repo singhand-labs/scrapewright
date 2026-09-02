@@ -31,7 +31,7 @@
   ];
 
   const DEFAULTS = {
-    budgets: { maxTurns: 40, maxTokensPerCall: 8192, tokenCap: 2000000, wallClockMs: 1800000 },
+    budgets: { maxTurns: 60, maxTokensPerCall: 8192, tokenCap: 2000000, wallClockMs: 1800000 },
     retry: { attempts: 3, backoffMs: 400 },
     compaction: { thresholdChars: 60000, keepTurns: 6 },
     toolResultCapChars: 4000

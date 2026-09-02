@@ -30,6 +30,8 @@
       <textarea id="reqOutputStruct" rows="3" placeholder="e.g. { title, price, publishedAt, detailUrl } (leave empty for AI to infer)"></textarea>
 
       <button id="btnPhase1Research" class="btn-primary">Research</button>
+      <label for="sessionMaxTurns" title="Research session turn budget (engine default 60). Raise it before Resume to extend a session that stopped at the cap.">Max turns</label>
+      <input type="number" id="sessionMaxTurns" min="10" max="500" step="5" value="60" />
 
     </div>
 

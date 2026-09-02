@@ -193,6 +193,17 @@ describe('budgets and breakers', () => {
     assert.equal(report.status, 'stopped');
   });
 
+  it('DEFAULT maxTurns is 60 (sixth-log G5: first two full sessions died at the 40 cap)', async () => {
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([reply(toolTurn)], []),
+      tools: { 'probe.count': async () => ({ count: 1 }) }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'maxTurns');
+    assert.equal(report.turns, 60, 'no budgets override → engine default 60');
+  });
+
   it('stops at the wall-clock cap using the injected clock', async () => {
     let clock = 1000;
     const session = createResearchSession({

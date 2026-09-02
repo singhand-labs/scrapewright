@@ -43,6 +43,16 @@ describe('wizard research-session integration (source audit)', () => {
     assert.ok(/maxTokensPerCall:\s*\(config\.config\.maxOutputTokens[^)]*\)\s*\|\|\s*16384/.test(SRC), 'budgets.maxTokensPerCall = config knob || 16384');
   });
 
+  it('maxTurns is user-configurable (sixth-log G5: default raised to 60)', () => {
+    assert.ok(HTML.includes('id="sessionMaxTurns"'), 'phase-1 max-turns input exists');
+    assert.ok(/budgets:\s*\{[^}]*maxTurns:\s*getSessionMaxTurns\(\)/.test(SRC), 'budgets.maxTurns comes from the live knob');
+    const body = fnBody('getSessionMaxTurns');
+    assert.ok(body.includes('sessionMaxTurns'), 'reads the input');
+    assert.ok(/chrome\.storage\.local\.set\(\{\s*wizardMaxTurns/.test(body), 'persisted to chrome.storage');
+    assert.ok(/wizardMaxTurns\s*=\s*60/.test(SRC), 'default 60');
+    assert.ok(fnBody('updateSessionSpendLine').includes("sp.turns + '/' + wizardMaxTurns"), 'spend line shows turns against the budget');
+  });
+
   it('session events stream into the log UI; pause/abort/resume buttons wired', () => {
     assert.ok(SRC.includes('function handleSessionEvent'));
     for (const ev of ['turn_start', 'tool_call', 'tool_result', 'knowledge_attached', 'artifact_version', 'paused', 'stopped']) {

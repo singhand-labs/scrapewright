@@ -21,7 +21,30 @@
   function createProbeTools(deps) {
     const executeDsl = deps && typeof deps.executeDsl === 'function' ? deps.executeDsl : null;
     const observationLog = deps && deps.observationLog ? deps.observationLog : null;
+    const cleanHtmlFn = deps && typeof deps.cleanHtml === 'function' ? deps.cleanHtml : null;
     if (!executeDsl) throw new Error('createProbeTools requires an executeDsl(snippet) function');
+
+    // Page-cleaning hook for probe.sample clean:true — strips the noise the
+    // DOM carries (scripts/styles/tracking attrs) so the model reads
+    // STRUCTURE, not 30K of raw outerHTML. Injected for tests; in the wizard
+    // the DomCleaner global is resolved lazily so script load order never
+    // matters. cleanHtmlForLLM returns {mode,html,fingerprint,error?} and
+    // needs a DOMParser (browser): any failure degrades to raw HTML —
+    // cleaning is an aid, never a gate.
+    function applyClean(html) {
+      try {
+        let out = null;
+        if (cleanHtmlFn) out = cleanHtmlFn(html);
+        else {
+          const dc = (typeof DomCleaner !== 'undefined') ? DomCleaner
+            : ((typeof window !== 'undefined' && window.DomCleaner) || null);
+          if (dc && typeof dc.cleanHtmlForLLM === 'function') out = dc.cleanHtmlForLLM(html);
+        }
+        if (typeof out === 'string') return out;
+        if (out && typeof out === 'object' && typeof out.html === 'string' && out.html && !out.error) return out.html;
+      } catch (e) { /* cleaner failure must not break the probe */ }
+      return html;
+    }
 
     async function runSnippet(snippet) {
       try {
@@ -161,11 +184,77 @@
         } else {
           const recs = Array.isArray(r2) ? r2 : (r2 && Array.isArray(r2.records) ? r2.records : []);
           const rec = recs[index];
-          if (rec && typeof rec.h === 'string' && rec.h) out.html = rec.h.slice(0, 30000);
-          else out.htmlError = 'no outerHTML for match ' + index + ' (' + recs.length + ' match(es))';
+          if (rec && typeof rec.h === 'string' && rec.h) {
+            const html = o.clean === true ? applyClean(rec.h) : rec.h;
+            out.html = html.slice(0, 30000);
+          } else out.htmlError = 'no outerHTML for match ' + index + ' (' + recs.length + ' match(es))';
         }
       }
       return out;
+    }
+
+    // Sixth-log turn-sink: t26-t40 burned 15 turns on the verify loop — every
+    // fieldMap revision needed a full service.update rewrite plus a verify.run
+    // on a FRESH tab (cold-load divergence re-introducing doubt). This probe
+    // dry-runs the extraction DSL in the LIVE research tab: one turn per
+    // fieldMap revision, warm DOM, and the container + field selectors all
+    // become observation receipts (grounding the eventual step fieldMap).
+    const FIELD_VALUE_CAP = 500;
+
+    async function extract(args0) {
+      const a = args0 && typeof args0 === 'object' ? args0 : {};
+      const containerSel = typeof a.containerSel === 'string' ? a.containerSel.trim() : '';
+      if (!containerSel) return { error: 'containerSel required' };
+      const fieldMap = (a.fieldMap && typeof a.fieldMap === 'object' && !Array.isArray(a.fieldMap)) ? a.fieldMap : null;
+      const fieldKeys = fieldMap ? Object.keys(fieldMap) : [];
+      if (!fieldKeys.length) {
+        return { error: 'fieldMap required — {field:{selector,attr?}} (a field without "selector" reads the container itself)' };
+      }
+      const snippet = 'return $extractList' + (a.multi === true ? 'Multi' : '') + '(' +
+        JSON.stringify(containerSel) + ', ' + JSON.stringify(fieldMap) +
+        (a.allowEmpty === true ? ', ' + JSON.stringify({ allowEmpty: true }) : '') + ');';
+      const r = await runSnippet(snippet);
+      if (r && typeof r.error === 'string') return r;
+      const records = Array.isArray(r) ? r : (r && Array.isArray(r.records) ? r.records : []);
+      if (!records.length) {
+        return { total: 0, records: [], emptyFields: {}, note: '0 records — the container matched nothing (probe.count the containerSel first) or every record was filtered' };
+      }
+      if (observationLog) {
+        const sels = [containerSel];
+        for (const k of fieldKeys) {
+          const f = fieldMap[k];
+          if (f && typeof f === 'object' && typeof f.selector === 'string' && f.selector && sels.indexOf(f.selector) === -1) {
+            sels.push(f.selector);
+          }
+        }
+        observationLog.record({
+          tool: 'probe.extract',
+          selectors: sels,
+          summary: 'extract' + (a.multi === true ? 'Multi' : '') + ' ' + records.length + ' records over ' + fieldKeys.length + ' fields'
+        });
+      }
+      const capValue = (v) => {
+        if (typeof v !== 'string') return v;
+        return v.length > FIELD_VALUE_CAP ? v.slice(0, FIELD_VALUE_CAP) + '…[truncated]' : v;
+      };
+      const sampled = records.slice(0, 3).map(rec => {
+        if (!rec || typeof rec !== 'object') return rec;
+        const out = {};
+        for (const k of Object.keys(rec)) out[k] = capValue(rec[k]);
+        return out;
+      });
+      // RC15 census: which fields came back empty, and how often — the
+      // cheapest signal that a field selector misses the card population.
+      const emptyFields = {};
+      for (const rec of records) {
+        for (const k of fieldKeys) {
+          const v = rec ? rec[k] : null;
+          if (v === '' || v == null || (Array.isArray(v) && !v.length)) {
+            emptyFields[k] = (emptyFields[k] || 0) + 1;
+          }
+        }
+      }
+      return { total: records.length, records: sampled, emptyFields: emptyFields };
     }
 
     // Sixth-live-log I1: the session bag had no scroll probe, so the model
@@ -305,7 +394,7 @@
       return out;
     }
 
-    return { count, text, attrStats, sample, hover, scroll };
+    return { count, text, attrStats, sample, hover, scroll, extract };
   }
 
   const api = { createProbeTools };
