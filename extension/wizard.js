@@ -1831,7 +1831,22 @@ function buildRequirementText() {
   return { inputParams, pageOps, outputStruct };
 }
 
+let sessionBooting = false; // re-entrancy guard for the await-config window
+
 async function startResearchSession(seedOverride) {
+  if (sessionBooting) {
+    showToast('Session is already starting…', 'warn', 3000);
+    return;
+  }
+  // Double-start guard: a live session's loop holds status 'running'
+  // (set at loop start; 'paused'/'stopped' once it ends).
+  if (wizardSession && wizardSession.state().session.status === 'running') {
+    showToast('A research session is already running — pause or abort it first.', 'warn', 4000);
+    return;
+  }
+  sessionBooting = true;
+  const releaseBoot = () => { sessionBooting = false; };
+  try {
   const config = await chrome.runtime.sendMessage({ type: 'GET_LLM_CONFIG' });
   if (!config.config) {
     showToast('Please configure LLM in Options first', 'error');
@@ -1846,6 +1861,15 @@ async function startResearchSession(seedOverride) {
   wizardState.requirements = { inputParams, pageOps, outputStruct };
   wizardState.description = buildRequirementsBlock(wizardState.requirements);
   if (!wizardState.userDescription) wizardState.userDescription = wizardState.description;
+
+  // Dispose any previous rail before creating a new one — otherwise every
+  // re-run of Research orphans the previous scrape tab. The 'stopped' event
+  // handler deliberately does NOT dispose: the tab stays for post-session
+  // inspection (phase 5 may view the page).
+  if (wizardRail) {
+    try { await wizardRail.dispose(); } catch (e) { /* old rail cleanup is best-effort */ }
+    wizardRail = null;
+  }
 
   goToPhase(4);
   const title = document.getElementById('phase4Title');
@@ -1905,7 +1929,15 @@ async function startResearchSession(seedOverride) {
   });
   wizardToolsBag.bindEngine(wizardSession);
 
-  const report = await wizardSession.run();
+  let report;
+  try {
+    report = await wizardSession.run();
+  } catch (e) {
+    appendLog('Session crashed: ' + String((e && e.message) || e), 'error');
+    setSessionControls('stopped');
+    if (wizardPersistence) { try { await wizardPersistence.flush(); } catch (_) {} }
+    return;
+  }
   updateSessionSpendLine(wizardSession.state());
   if (report && report.stopped && report.stopped.reason === 'completed') {
     await wizardPersistence.flush();
@@ -1918,6 +1950,7 @@ async function startResearchSession(seedOverride) {
         : '(none)') +
       '. You can Resume from the pause point or refine manually in Phase 2.', 'warn');
   }
+  } finally { releaseBoot(); }
 }
 
 async function resumeResearchSession() {
