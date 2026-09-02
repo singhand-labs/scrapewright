@@ -3,6 +3,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { extractSelectorClaims, extractFilterAttributes, validateGrounding } = require('../lib/grounding-gate');
 const { createObservationLog } = require('../lib/observation-log');
+const Obs = { createObservationLog };
 const { createFindingsLedger } = require('../lib/findings-ledger');
 
 describe('extractSelectorClaims', () => {
@@ -260,5 +261,50 @@ describe('validateGrounding — filter attributes need distribution receipts', (
     assert.equal(r.rejections.find(x => x.missing === 'attr-distribution').attr, 'title');
     assert.deepEqual(r.overrideReceipts, [sel]);
     assert.ok(Array.isArray(r.claims) && r.claims.length === 1, 'claims returned for callers');
+  });
+
+  it('C3: receipts from a stale page epoch no longer admit a selector, with a reload-specific rejection', async () => {
+    const log = Obs.createObservationLog();
+    log.record({ tool: 'probe.count', selectors: ['div.card'], summary: 'count=4', epoch: 1 });
+    const steps = [{ id: 's1', script: 'return $count("div.card");' }];
+    const v1 = await validateGrounding({ steps, observationLog: log, epoch: 1 });
+    assert.equal(v1.ok, true);
+    const v2 = await validateGrounding({ steps, observationLog: log, epoch: 2 });
+    assert.equal(v2.ok, false);
+    assert.equal(v2.rejections[0].missing, 'observation');
+    assert.match(v2.rejections[0].suggestion, /stale/);
+    assert.match(v2.rejections[0].suggestion, /reloaded/);
+  });
+
+  it('C3: epoch omitted — legacy behavior (any-epoch receipts still admit)', async () => {
+    const log = Obs.createObservationLog();
+    log.record({ tool: 'probe.count', selectors: ['div.card'], summary: 'count=4', epoch: 1 });
+    const v = await validateGrounding({ steps: [{ id: 's1', script: 'return $count("div.card");' }], observationLog: log });
+    assert.equal(v.ok, true);
+  });
+
+  it('C3: gate.autoVerify receipts are stamped with the gate epoch', async () => {
+    const log = Obs.createObservationLog();
+    const v = await validateGrounding({
+      steps: [{ id: 's1', script: 'return $count("div.card");' }],
+      observationLog: log,
+      epoch: 3,
+      autoVerify: async () => 2
+    });
+    assert.equal(v.ok, true);
+    assert.equal(log.covers('div.card', 3), true);
+    assert.equal(log.covers('div.card', 4), false);
+  });
+
+  it('C3: attr-distribution receipts are epoch-filtered too', async () => {
+    const log = Obs.createObservationLog();
+    log.record({ tool: 'probe.attrStats', selectors: ['div.card'], attrs: [{ selector: 'div.card', attr: 'data-kind' }], summary: 'dist', epoch: 1 });
+    const steps = [{ id: 's1', script: 'return $extractList("div.card:has([data-kind])", { t: ".t" });' }];
+    const v1 = await validateGrounding({ steps, observationLog: log, epoch: 1, autoVerify: async () => 2 });
+    assert.equal(v1.ok, true);
+    const v2 = await validateGrounding({ steps, observationLog: log, epoch: 2, autoVerify: async () => 2 });
+    assert.equal(v2.ok, false);
+    const attrRej = v2.rejections.find(r => r.missing === 'attr-distribution');
+    assert.ok(attrRej, 'attr-distribution rejection present after reload');
   });
 });

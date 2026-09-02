@@ -163,6 +163,12 @@
       Array.isArray(opts && opts.overrides) ? opts.overrides.filter(s => typeof s === 'string') : []
     );
 
+    // Audit C3: current page epoch (from the live rail). When present, only
+    // observation receipts recorded in this epoch count — a reload of the
+    // research tab invalidates every earlier DOM observation.
+    const epoch = (opts && typeof opts.epoch === 'number') ? opts.epoch : null;
+    const ep = epoch !== null ? epoch : undefined;
+
     const ledgerSelectors = new Set();
     if (ledger) {
       const entries = (ledger.serialize && ledger.serialize().entries) || [];
@@ -181,7 +187,7 @@
       if (overrides.has(claim.selector)) {
         overrideReceipts.push(claim.selector);
         admitted = true;
-      } else if (observationLog && observationLog.covers(claim.selector)) {
+      } else if (observationLog && observationLog.covers(claim.selector, ep)) {
         admitted = true;
       } else if (ledgerSelectors.has(claim.selector)) {
         admitted = true;
@@ -199,12 +205,18 @@
         if (typeof n === 'number' && n > 0) {
           autoVerified.push(claim.selector);
           if (observationLog) {
-            observationLog.record({ tool: 'gate.autoVerify', selectors: [claim.selector], summary: 'count=' + n });
+            observationLog.record({ tool: 'gate.autoVerify', selectors: [claim.selector], summary: 'count=' + n, epoch: ep });
           }
           admitted = true;
         }
       }
       if (!admitted) {
+        // Audit C3: the selector WAS observed once, but only in an older page
+        // epoch — the receipt is stale after a mid-session tab reload.
+        const staleObserved = epoch !== null && observationLog
+          && typeof observationLog.covers === 'function'
+          && observationLog.covers(claim.selector)
+          && !observationLog.covers(claim.selector, epoch);
         rejections.push(claim.kind === 'dynamic'
           ? {
               selector: claim.selector,
@@ -217,6 +229,7 @@
               stepIds: claim.stepIds,
               missing: 'observation',
               suggestion: 'No observation receipt. Run probe.count(' + JSON.stringify(claim.selector) + ') (or scope a probe that matches it exactly), or annotate.request.'
+                + (staleObserved ? ' This selector WAS observed earlier, but the page has reloaded since (page epoch changed) — that evidence is stale: page.open the target again or re-probe the live page to rebuild the receipt.' : '')
             });
       }
       // Filter-attribute distribution receipts are demanded for EVERY claim,
@@ -224,7 +237,7 @@
       // reject alongside (and independently of) the selector-level rejection.
       const filterAttrs = extractFilterAttributes(claim.selector);
       for (const attr of filterAttrs) {
-        const haveAttr = (observationLog && observationLog.coversAttr(attr));
+        const haveAttr = (observationLog && observationLog.coversAttr(attr, ep));
         if (!haveAttr) {
           rejections.push({
             selector: claim.selector,
