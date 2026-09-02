@@ -1289,12 +1289,24 @@
     const _diagnostics = ops && ops.computeSimpleSelectorDiagnostics
       ? ops.computeSimpleSelectorDiagnostics(matchedEls, sel, 'extract')
       : { api: 'extract', selector: sel, matchCount: result != null ? 1 : 0, sampleTexts: [], sampleHrefs: [] };
+    // B10: distinguish "element matched but attribute absent" from "selector
+    // wrong" — getAttribute returns null for both today, and autoFix cannot
+    // tell them apart.
+    if (attr && attr !== 'outerHTML' && attr !== 'innerHTML' && result == null) {
+      _diagnostics.attrAbsent = true;
+      _diagnostics.attrAbsentNote = 'element matched but attribute "' + attr + '" is absent — the selector is likely right and the attribute wrong or optional; check nearby attributes or drop the attr argument to read textContent';
+    }
     sendDebugLog('info', 'content-script', 'domExtract result', { selector: sel, attr, resultPreview: result?.slice(0, 200), resultLength: result?.length });
     return { result, _diagnostics };
   }
 
   async function domWait(sel, ms) {
-    if (sel) await domQuerySelector(sel);
+    // B4: an empty/missing selector used to skip the wait and return a fake
+    // success — throw with teaching text instead (M4 precedent).
+    if (typeof sel !== 'string' || !sel.trim()) {
+      throw new Error('WAIT_SELECTOR_EMPTY: $wait requires a selector string as its first argument — e.g. $wait(\'div.results\', 1000) waits for the element then sleeps 1000ms. If you only need a delay, pass the element you are waiting on, not an empty string.');
+    }
+    await domQuerySelector(sel);
     if (ms) {
       sendDebugLog('info', 'content-script', 'domWait sleeping', { delayMs: ms });
       await new Promise(r => setTimeout(r, ms));
