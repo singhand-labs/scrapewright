@@ -128,6 +128,14 @@ button:hover { background: var(--surface-2); border-color: var(--text-faint); }
 button:active { background: var(--bg); }
 button:disabled { opacity: 0.55; cursor: not-allowed; }
 
+/* A14: subtle outline variant for secondary actions (e.g. session feedback) */
+.btn-secondary {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+.btn-secondary:hover { background: rgba(0, 0, 0, 0.04); }
+
 button:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
@@ -265,6 +273,7 @@ pre {
 .toast.info { border-left-color: #38bdf8; }
 .toast.error { border-left-color: #f87171; }
 .toast.success { border-left-color: #34d399; }
+.toast.warn { border-left-color: #fbbf24; }
 .toast.dismissible { display: flex; align-items: center; gap: 16px; text-align: left; }
 .toast-message { flex: 1; }
 .toast-close {

@@ -70,4 +70,11 @@ describe('Plan 3: wizard polish', () => {
     assert.ok(!/renderPagesViewer\(wizardState\.testResult\)/.test(region), 'failure branch does not render wizardState.testResult');
     assert.ok(/renderPagesViewer\(null\)/.test(region), 'failure branch explicitly hides the viewer');
   });
+
+  it('A11/A14: .toast.warn and .btn-secondary CSS rules exist', () => {
+    assert.ok(/\.toast\.warn\s*\{[^}]*border-left-color:\s*#fbbf24/.test(CSS), '.toast.warn amber rule');
+    assert.ok(/\.btn-secondary\s*\{/.test(CSS), '.btn-secondary rule exists');
+    // A14 sanity: the class is actually used in HTML (session feedback button)
+    assert.ok(HTML.includes('btn-secondary'), 'btn-secondary used in HTML');
+  });
 });
