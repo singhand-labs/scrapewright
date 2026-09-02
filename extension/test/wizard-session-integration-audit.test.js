@@ -347,6 +347,25 @@ describe('audit plan1: wizard lifecycle state machine (A1/A2/A3/A5/A6/A17/A18 + 
   });
 });
 
+describe('audit C3 (page epoch): wizard supplies watchTab + engine epochOf', () => {
+  it('C3: makeWizardRail supplies a watchTab dep firing only on complete→loading of the same tab', () => {
+    const body = fnBody('makeWizardRail');
+    assert.match(body, /watchTab\s*:/, 'makeWizardRail deps include watchTab');
+    assert.match(body, /onUpdated\.addListener/, 'wires chrome.tabs.onUpdated');
+    assert.match(body, /removeListener/, 'returns an unwatch function');
+    assert.match(body, /'complete'/);
+    assert.match(body, /'loading'/);
+    assert.match(body, /onReload\(\)/, 'fires the rail callback on the transition');
+  });
+
+  it('C3: createResearchSession config passes epochOf reading the rail epoch', () => {
+    const m = SRC.match(/createResearchSession\(\{[\s\S]*?\}\)/);
+    assert.ok(m, 'createResearchSession call found');
+    assert.match(m[0], /epochOf\s*:/, 'epochOf wired into the engine config');
+    assert.match(m[0], /wizardRail/);
+  });
+});
+
 describe('audit C2 (pin): the runner signal includes the session abort flag', () => {
   it('getWizardRunner getSignal reads sessionAbortRequested', () => {
     assert.match(SRC, /getSignal: \(\) => \(\{[\s\S]{0,220}sessionAbortRequested/);

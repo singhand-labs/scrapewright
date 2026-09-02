@@ -1680,6 +1680,21 @@ function makeWizardRail() {
     removeTab: (tabId) => chrome.tabs.remove(tabId).catch(() => {}),
     waitForTabLoad: (tabId) => withTimeout(waitForTabLoad(tabId), 60000, 'Page load timeout (60s)'),
     getTab: (tabId) => chrome.tabs.get(tabId),
+    watchTab: (tabId, onReload) => {
+      // C3: a complete→loading transition on the SAME tab is a reload or
+      // same-tab navigation — the DOM resets and every probe receipt from
+      // before is stale. Registration happens after waitForTabLoad settled,
+      // so the initial load never counts (last starts as 'complete').
+      const last = { status: 'complete' };
+      function listener(updatedTabId, info) {
+        if (updatedTabId !== tabId || typeof info.status !== 'string') return;
+        const prev = last.status;
+        last.status = info.status;
+        if (prev === 'complete' && info.status === 'loading') onReload();
+      }
+      chrome.tabs.onUpdated.addListener(listener);
+      return () => chrome.tabs.onUpdated.removeListener(listener);
+    },
     pingReady: async (tabId) => {
       for (let i = 0; i < 20; i++) {
         try {
@@ -2132,6 +2147,7 @@ async function startResearchSession(seedOverride) {
   wizardSession = ResearchSessionLib.createResearchSession({
     requirement: wizardState.description,
     llm: makeLlmAdapter(new LLMClient(config.config)),
+    epochOf: () => (wizardRail && typeof wizardRail.epoch === 'number') ? wizardRail.epoch : undefined,
     tools: wizardToolsBag.tools,
     toolSpecs: wizardToolsBag.toolSpecs,
     systemPrompt: wizardToolsBag.systemPromptBase,
