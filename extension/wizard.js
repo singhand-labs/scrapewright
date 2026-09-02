@@ -357,7 +357,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   document.getElementById('btnIoReject').addEventListener('click', () => { wizardIoBridge && wizardIoBridge.reject(); });
   document.getElementById('btnDeployAnyway').addEventListener('click', () => {
-    goToPhase(5);
+    // A16: the button only exists on phase5 — no phase switch needed.
     confirmDeploy();
   });
   document.getElementById('btnSessionFeedback').addEventListener('click', sendSessionFeedback);
@@ -567,11 +567,12 @@ function renderPagesViewer(testResult) {
   const pages = Array.isArray(testResult && testResult.pages) ? testResult.pages : [];
   const countEl = document.getElementById('pages-count');
   const listEl = document.getElementById('pages-list');
+  // A15: unified visibility — the .hidden class everywhere, not the attribute.
   if (pages.length === 0) {
-    viewer.hidden = true;
+    viewer.classList.add('hidden');
     return;
   }
-  viewer.hidden = false;
+  viewer.classList.remove('hidden');
   if (countEl) countEl.textContent = String(pages.length);
   if (!listEl) return;
   // Cap DOM rendering at 20 entries to avoid browser slowdown on huge lists.

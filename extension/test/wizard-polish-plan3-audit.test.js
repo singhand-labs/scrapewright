@@ -77,4 +77,29 @@ describe('Plan 3: wizard polish', () => {
     // A14 sanity: the class is actually used in HTML (session feedback button)
     assert.ok(HTML.includes('btn-secondary'), 'btn-secondary used in HTML');
   });
+
+  it('A9: dead <pre id="currentScript"> removed from HTML and CSS', () => {
+    assert.ok(!HTML.includes('id="currentScript"'), 'element gone from HTML');
+    assert.ok(!/#currentScript\s*\{/.test(CSS), 'CSS rule gone');
+    assert.ok(!SRC.includes("getElementById('currentScript')"), 'no JS reads it (verified none existed)');
+  });
+
+  it('A15: pages-viewer uses the .hidden class, not the hidden attribute', () => {
+    assert.ok(!/id="pages-viewer"[^>]*\shidden[>\s]/.test(HTML), 'no bare hidden attribute on pages-viewer');
+    assert.ok(/class="pages-viewer hidden"/.test(HTML), 'starts hidden via class');
+    const start = SRC.indexOf('function renderPagesViewer(');
+    assert.ok(start !== -1);
+    const region = SRC.slice(start, start + 900);
+    assert.ok(!/\.hidden\s*=/.test(region), 'renderPagesViewer no longer assigns the hidden property');
+    assert.ok(/classList\.(add|remove)\('hidden'\)/.test(region), 'toggles the .hidden class');
+    assert.ok(!/pages-viewer\[hidden\]/.test(CSS), '[hidden] CSS fallback dropped');
+  });
+
+  it('A16: btnDeployAnyway no longer calls goToPhase(5) redundantly', () => {
+    const start = SRC.indexOf("getElementById('btnDeployAnyway').addEventListener");
+    assert.ok(start !== -1);
+    const region = SRC.slice(start, SRC.indexOf('});', start) + 3);
+    assert.ok(!region.includes('goToPhase(5)'), 'redundant phase call removed');
+    assert.ok(region.includes('confirmDeploy('), 'still deploys');
+  });
 });

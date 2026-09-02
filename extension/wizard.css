@@ -213,7 +213,6 @@ pre {
   margin: 8px 0;
 }
 
-#currentScript { max-height: 200px; overflow: auto; }
 
 #executionLog {
   padding: 12px 14px;
@@ -933,7 +932,6 @@ pre {
   border-radius: var(--radius-ctl);
   background: var(--surface-2);
 }
-.pages-viewer[hidden] { display: none; }
 .pages-viewer h4 {
   margin: 0 0 8px 0;
   font-size: 12px;
