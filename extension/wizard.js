@@ -2203,6 +2203,8 @@ async function startResearchSession(seedOverride) {
     report = await wizardSession.run();
   } catch (e) {
     appendLog('Session crashed: ' + String((e && e.message) || e), 'error');
+    // A8: a crashed session leaves phase4 looking alive — surface it loudly.
+    showToast('Session crashed: ' + String((e && e.message) || e), 'error');
     setSessionControls('stopped');
     if (wizardPersistence) { try { await wizardPersistence.flush(); } catch (_) {} }
     return;
@@ -2214,13 +2216,28 @@ async function startResearchSession(seedOverride) {
     }
     await presentSessionCompletion();
   } else if (report) {
-    appendLog('Session stopped early (' + report.status + '). Open questions: ' +
+    appendLog('Session stopped early — ' + friendlyStopReason((report.stopped && report.stopped.reason) || report.status) + '. Open questions: ' +
       (report.openQuestions && report.openQuestions.length
         ? report.openQuestions.slice(0, 3).map((q) => (q.kind === 'hypothesis' ? 'H' + q.n : q.id) + ' ' + q.text).join(' | ')
         : '(none)') +
       '. You can Resume from the pause point or refine manually in Phase 2.', 'warn');
   }
   } finally { releaseBoot(); }
+}
+
+// A20: raw engine status codes ('aborted', 'maxTurns', …) mean nothing to a
+// user reading the log — map the known stop reasons to plain copy and keep
+// the code in parens only for unknown reasons.
+function friendlyStopReason(reason) {
+  switch (reason) {
+    case 'user':
+    case 'aborted': return 'you stopped it';
+    case 'maxTurns': return 'the turn budget ran out';
+    case 'wallClock': return 'the time budget ran out';
+    case 'tokenCap': return 'the token budget ran out';
+    case 'error': return 'it hit an error';
+    default: return 'it stopped early (' + reason + ')';
+  }
 }
 
 // Ninth-log M2: which stop reasons land on a PRESENTED phase 5. 'completed'
