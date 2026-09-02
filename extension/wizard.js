@@ -1853,13 +1853,51 @@ async function startResearchSession(seedOverride) {
     return;
   }
   const { inputParams, pageOps, outputStruct } = buildRequirementText();
-  if (!pageOps) {
+  // Final-review fix: the reload toast promises that Ctrl+Enter / Research
+  // resumes a parked session. After a reload the requirement boxes are empty —
+  // treat an empty box + parked session as a resume; typed text means the user
+  // is starting fresh and the parked session is superseded.
+  let seed = seedOverride || null;
+  if (!seed && !pageOps) {
+    try {
+      const p = SessionPersistence.createSessionPersistence(chrome.storage.local, 'wizardResearchSession');
+      const saved = await p.load();
+      if (saved && saved.session && (!saved.session.stopped || saved.session.stopped.reason === 'paused' || saved.session.stopped.reason === 'aborted')) {
+        seed = { session: saved.session, observation: saved.observation, ledger: saved.ledger };
+      }
+    } catch (e) { /* storage unavailable — start fresh */ }
+  }
+  if (!pageOps && !(seed && seed.session)) {
     showToast('Please describe the page operations and data to collect before researching', 'error', 5000);
     return;
   }
   wizardState.targetUrl = document.getElementById('targetUrl').value;
-  wizardState.requirements = { inputParams, pageOps, outputStruct };
-  wizardState.description = buildRequirementsBlock(wizardState.requirements);
+  if (seed && seed.session) {
+    // Reload recovery: the engine state carries the requirement and artifacts;
+    // targetUrl is NOT persisted — recover it from the last successful
+    // page.open recorded in the transcript.
+    const st = seed.session;
+    if (Array.isArray(st.artifactVersions) && st.artifactVersions.length) {
+      wizardState.steps = JSON.parse(JSON.stringify(st.artifactVersions[st.artifactVersions.length - 1].steps || []));
+      renderStepList();
+    }
+    if (!wizardState.targetUrl && Array.isArray(st.transcript)) {
+      for (let i = st.transcript.length - 1; i >= 0; i--) {
+        const t = st.transcript[i];
+        if (t && t.kind === 'tool' && t.name === 'page.open' && t.ok && t.result && typeof t.result.url === 'string' && /^https?:\/\//i.test(t.result.url)) {
+          wizardState.targetUrl = t.result.url;
+          document.getElementById('targetUrl').value = t.result.url;
+          break;
+        }
+      }
+    }
+    wizardState.requirements = { inputParams: inputParams, pageOps: pageOps, outputStruct: outputStruct };
+    wizardState.description = String(st.requirement || '') || buildRequirementsBlock(wizardState.requirements);
+    appendLog('Resuming the parked research session' + (st.stopped && st.stopped.reason ? ' (interrupted: ' + st.stopped.reason + ')' : '') + '.');
+  } else {
+    wizardState.requirements = { inputParams, pageOps, outputStruct };
+    wizardState.description = buildRequirementsBlock(wizardState.requirements);
+  }
   if (!wizardState.userDescription) wizardState.userDescription = wizardState.description;
 
   // Dispose any previous rail before creating a new one — otherwise every
@@ -1899,7 +1937,6 @@ async function startResearchSession(seedOverride) {
 
   wizardPersistence = SessionPersistence.createSessionPersistence(chrome.storage.local, 'wizardResearchSession');
   const units = (typeof KnowledgeUnits !== 'undefined') ? KnowledgeUnits.KNOWLEDGE_UNITS : [];
-  let seed = seedOverride || null;
   if (!seed && wizardState.editingServiceId) {
     // Edit mode: seed the ledger from the deployed service's per-site memory
     // (spec §3B — a repair session does NOT re-discover the page).

@@ -95,4 +95,17 @@ describe('wizard research-session integration (source audit)', () => {
     assert.ok(body.includes('artifactVersions'), 'steps restored from artifact stack');
     assert.ok(body.includes('persistence.load') || body.includes('.load()'));
   });
+
+  it('Research/Ctrl+Enter resumes a parked session after reload (advertised resume is reachable)', () => {
+    const body = fnBody('startResearchSession');
+    // Empty requirement box + parked persisted session => resume seed, not a fresh session.
+    assert.ok(body.includes("'wizardResearchSession'"), 'loads the parked session from persistence');
+    assert.ok(/seed\s*=\s*\{\s*session:\s*saved\.session/.test(body), 'parked record becomes the seed');
+    // The empty-box validation must not block a resume (the seed carries the requirement).
+    assert.ok(body.includes('!(seed && seed.session)'), 'empty box only errors when not resuming');
+    // targetUrl is not part of the engine state — recovered from the last successful page.open.
+    assert.ok(body.includes("'page.open'"), 'targetUrl recovered from the transcript');
+    // Typed requirements win over the parked session (fresh start is still possible).
+    assert.ok(/!seed\s*&&\s*!pageOps/.test(body), 'fallback only when the box is empty');
+  });
 });
