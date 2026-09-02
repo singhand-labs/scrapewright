@@ -9,7 +9,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const LIBS = [
-  'session-persistence.js', 'live-rail.js', 'verify-runner.js', 'session-tools.js'
+  'session-persistence.js', 'live-rail.js', 'verify-runner.js', 'session-tools.js',
+  'research-session.js', 'probe-tools.js'
 ].map((f) => path.join(__dirname, '..', 'lib', f));
 
 const RE = /facebook|twitter|linkedin|tiktok|reddit|\bfb\b/i;
