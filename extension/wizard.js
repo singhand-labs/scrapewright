@@ -1966,12 +1966,15 @@ function setSessionControls(mode) {
   document.getElementById('btnSessionAbort').classList.toggle('hidden', mode !== 'running' && mode !== 'paused');
 }
 
-function updateSessionSpendLine(st) {
+function updateSessionSpendLine(st, parkedMs) {
   const el = document.getElementById('sessionSpend');
   if (!el || !st) return;
   const sp = st.session.spend;
   el.textContent = 'turns ' + sp.turns + '/' + wizardMaxTurns + ' · tokens ~' + (sp.promptTokens + sp.completionTokens) +
-    (sp.estimated ? ' (est)' : '') + ' · ledger ' + st.ledger.entries.length;
+    (sp.estimated ? ' (est)' : '') + ' · ledger ' + st.ledger.entries.length +
+    // Parked time (io.confirm / annotation waits) does not burn the session
+    // clock — disclose it so the wall-clock arithmetic adds up for the user.
+    (parkedMs > 60000 ? ' (excl. ' + Math.round(parkedMs / 60000) + ' min paused)' : '');
 }
 
 function handleSessionEvent(ev) {
@@ -2212,7 +2215,7 @@ async function startResearchSession(seedOverride) {
     if (wizardPersistence) { try { await wizardPersistence.flush(); } catch (_) {} }
     return;
   }
-  updateSessionSpendLine(wizardSession.state());
+  updateSessionSpendLine(wizardSession.state(), report && report.spend && report.spend.parkedMs);
   if (report && report.stopped && sessionStopPresentsOutcome(report.stopped.reason)) {
     if (report.stopped.reason === 'maxTurns') {
       appendLog('Turn budget exhausted. Presenting the latest artifact state — raise the max-turns knob (Phase 1) and press Resume to continue, or send feedback below for a fresh-budget continuation.', 'warn');

@@ -119,4 +119,19 @@ describe('Plan 3: wizard polish', () => {
     assert.ok(!SRC.includes('Session is already starting…'), 'ellipsis variant gone');
     assert.ok(/id="btnPhase1Research"[^>]*title="[^"]*research session/i.test(HTML), 'Research button carries a tooltip mentioning the research session');
   });
+
+  it('parkedMs: spend line appends paused time when parkedMs > 0', () => {
+    const start = SRC.indexOf('function updateSessionSpendLine(');
+    assert.ok(start !== -1);
+    let i = SRC.indexOf('{', start), depth = 0, end = start;
+    for (; i < SRC.length; i++) {
+      if (SRC[i] === '{') depth += 1;
+      else if (SRC[i] === '}') { depth -= 1; if (depth === 0) { end = i + 1; break; } }
+    }
+    const body = SRC.slice(start, end);
+    assert.ok(body.includes("sp.turns + '/' + wizardMaxTurns"), 'existing pinned shape survives');
+    assert.ok(/parkedMs/.test(body), 'reads parkedMs');
+    assert.ok(/excl\./.test(body), 'discloses excluded paused time');
+    assert.ok(/updateSessionSpendLine\(wizardSession\.state\(\),\s*report\s*&&\s*report\.spend\s*&&\s*report\.spend\.parkedMs\)/.test(SRC), 'post-run call passes report.spend.parkedMs');
+  });
 });
