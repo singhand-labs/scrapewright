@@ -178,7 +178,6 @@ describe('inline ScrollOps behavior diff (B1)', () => {
       const sleep = (ms) => { t += ms; return Promise.resolve(); };
       const now = () => t;
       const iters = [];
-      let theRoot = null;
       const fallback = async () => {
         // simulate the trusted wheel triggering lazy-load: content now grows on scroll
         root.activate();
@@ -204,7 +203,6 @@ describe('inline ScrollOps behavior diff (B1)', () => {
         };
         return r;
       })();
-      theRoot = root;
       outcomes[side] = await fn(root, { sleep, now, onIter: (x) => iters.push(x), trustedWheelFallback: fallback });
       outcomes[side + 'Iters'] = iters;
     }
