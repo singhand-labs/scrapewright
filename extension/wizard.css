@@ -327,6 +327,7 @@ pre {
   font-size: 12px;
 }
 .url-template-hint .hint-label { font-weight: 600; }
+.hint-label { font-weight: 600; }
 
 .exploration-panel {
   margin-top: 16px;

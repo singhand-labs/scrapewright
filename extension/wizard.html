@@ -31,16 +31,6 @@
 
       <button id="btnPhase1Research" class="btn-primary">Research</button>
 
-      <div id="explorationPanel" class="exploration-panel hidden">
-        <h3>Interactive Exploration</h3>
-        <p id="explorationDescription"></p>
-        <label>Sample Input (JSON):</label>
-        <textarea id="explorationSampleInput" rows="4"></textarea>
-        <div class="exploration-buttons">
-          <button id="btnRunExploration" class="btn-primary">Run Exploration</button>
-          <button id="btnSkipExploration">Skip Exploration</button>
-        </div>
-      </div>
     </div>
 
     <div id="phase2" class="step hidden">
@@ -85,7 +75,22 @@
     </div>
 
     <div id="phase4" class="step hidden">
-      <h2>Phase 4: Execute Test (step by step)</h2>
+      <h2 id="phase4Title">Phase 4: Research Session</h2>
+      <div id="sessionControls" class="step-nav hidden">
+        <button id="btnSessionPause">Pause</button>
+        <button id="btnSessionResume" class="hidden">Resume</button>
+        <button id="btnSessionAbort">Abort</button>
+        <span id="sessionSpend" class="hint-label"></span>
+      </div>
+      <div id="annotationRequestPanel" class="exploration-panel hidden">
+        <h3>The AI needs your help</h3>
+        <p id="annotationRequestWhy"></p>
+        <p id="annotationRequestScope" class="hint-label"></p>
+        <div class="exploration-buttons">
+          <button id="btnAnnotationFinish" class="btn-primary">Finish Annotation</button>
+          <button id="btnAnnotationCancel">Cancel</button>
+        </div>
+      </div>
       <div id="executionProgress" class="hidden">
         <h4>Execution progress</h4>
         <table>
@@ -117,10 +122,8 @@
         </details>
       </div>
       <pre id="currentScript"></pre>
-      <textarea id="feedbackInput" rows="3" placeholder="Point out the problem with the extracted data — e.g. &quot;createdAt is missing&quot;, &quot;only 3 records extracted&quot;, &quot;images should have multiple URLs&quot;"></textarea>
       <div id="phase5Actions">
         <button id="btnRetryTest" class="hidden">Retry Test</button>
-        <button id="btnAutoFix" class="hidden">Auto-Fix</button>
         <button id="btnDeployAnyway" class="hidden">Deploy Anyway</button>
         <button id="btnPhase5Deploy" class="hidden btn-primary">Looks Good - Deploy</button>
         <button id="btnPhase5EditSteps">Edit Steps</button>
@@ -154,6 +157,10 @@
   <script src="lib/grounding-gate.js"></script>
   <script src="lib/session-protocol.js"></script>
   <script src="lib/research-session.js"></script>
+  <script src="lib/session-persistence.js"></script>
+  <script src="lib/live-rail.js"></script>
+  <script src="lib/verify-runner.js"></script>
+  <script src="lib/session-tools.js"></script>
   <script src="lib/dom-cleaner.js"></script>
   <script src="lib/url-template.js"></script>
   <script src="lib/step-orchestrator.js"></script>
