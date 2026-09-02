@@ -895,3 +895,19 @@ describe('universality: engine sources carry no site tokens', () => {
     assert.ok(!FORBIDDEN.test(src));
   });
 });
+
+describe('service.update artifact contract mentions testInput (first-live-log P-E)', () => {
+  it('the rendered system prompt tells the LLM that artifacts can carry testInput for {{param}} URLs', async () => {
+    const calls = [];
+    const session = createResearchSession({
+      requirement: 'collect cards',
+      llm: scriptedLlm([reply(finishEnvelope())], calls),
+      tools: {},
+      budgets: { maxTurns: 3 }
+    });
+    await session.run();
+    const sys = calls[0].messages[0].content;
+    assert.match(sys, /service\.update[^\n]*testInput/);
+    assert.match(sys, /MISSING_URL_PARAM/);
+  });
+});

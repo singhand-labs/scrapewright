@@ -732,6 +732,27 @@ describe('buildRequirementsBlock', () => {
     assert.ok(block.startsWith('## User Requirements'));
     assert.ok(block.includes('(none specified)'));
   });
+
+  test('includes the Target URL line right after the header when provided', () => {
+    const block = buildRequirementsBlock({ inputParams: 'keyword', pageOps: 'search', outputStruct: '' }, 'https://example.com/search?q={{keyword}}');
+    const lines = block.split('\n');
+    assert.equal(lines[1], '- Target URL: https://example.com/search?q={{keyword}} — {{keyword}} are URL template parameters: each MUST appear as a service input parameter (verify.run input / run-time input substitutes them; the research tab shows the literal placeholder)');
+    assert.equal(lines[2], '- Input parameters: keyword');
+  });
+
+  test('a plain URL gets no template annotation; placeholder tokens are deduped and space-normalized', () => {
+    const plain = buildRequirementsBlock({ inputParams: '', pageOps: 'x', outputStruct: '' }, 'https://example.com/');
+    assert.ok(plain.includes('- Target URL: https://example.com/'));
+    assert.ok(!plain.includes('template parameters'), 'no placeholder talk for a plain URL');
+    const dup = buildRequirementsBlock({}, 'https://example.com/{{ keyword }}?ref={{keyword}}');
+    assert.ok(dup.includes('— {{keyword}} are URL template parameters'), 'space-normalized token deduped against exact form, listed once');
+    assert.ok(dup.includes('- Target URL: https://example.com/{{ keyword }}?ref={{keyword}} — {{keyword}}'));
+  });
+
+  test('empty/blank targetUrl adds no line (backward compatible)', () => {
+    const block = buildRequirementsBlock({ inputParams: 'k', pageOps: 'p', outputStruct: 'o' }, '  ');
+    assert.ok(!block.includes('Target URL'));
+  });
 });
 
 describe('suggestServiceName', () => {

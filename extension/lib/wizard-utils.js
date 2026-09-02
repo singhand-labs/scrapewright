@@ -3174,17 +3174,34 @@ function buildAutoFixSystemMessage(description) {
   return base + '\n\n[GLOBAL CONTEXT]\nThe user\'s original scraping requirement:\n"' + desc + '"\n[/GLOBAL CONTEXT]';
 }
 
-function buildRequirementsBlock(requirements) {
+function buildRequirementsBlock(requirements, targetUrl) {
   const r = requirements || {};
   const inputParams = (r.inputParams || '').trim();
   const pageOps = (r.pageOps || '').trim();
   const outputStruct = (r.outputStruct || '').trim();
-  return [
+  const lines = [
     '## User Requirements',
     '- Input parameters: ' + (inputParams || '(none specified)'),
     '- Page operations & data to collect: ' + (pageOps || '(unspecified)'),
     '- Output structure: ' + (outputStruct || '(unspecified — infer)')
-  ].join('\n');
+  ];
+  const url = (targetUrl || '').trim();
+  if (url) {
+    // First-live-log P-C: without the URL the session starts blind — the LLM
+    // cannot know which site to open (it misused annotate.request to ask) or
+    // that {{param}} placeholders exist and must become inputSchema properties.
+    const params = [];
+    const re = /\{\{\s*(\w+)\s*\}\}/g;
+    let m;
+    while ((m = re.exec(url)) !== null) {
+      const tok = '{{' + m[1] + '}}';
+      if (params.indexOf(tok) === -1) params.push(tok);
+    }
+    lines.splice(1, 0, '- Target URL: ' + url + (params.length
+      ? ' — ' + params.join(', ') + ' are URL template parameters: each MUST appear as a service input parameter (verify.run input / run-time input substitutes them; the research tab shows the literal placeholder)'
+      : ''));
+  }
+  return lines.join('\n');
 }
 
 function suggestServiceName(url) {

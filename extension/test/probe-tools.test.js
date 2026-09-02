@@ -163,7 +163,8 @@ describe('probe.attrStats', () => {
   it('tallies attribute distribution across containers via $extractList', async () => {
     const { tools, observationLog } = makeTools(async (snippet) => {
       assert.ok(/return \$extractList\(/.test(snippet), 'composes the EXISTING rail');
-      assert.ok(snippet.includes('data-ad-rendering-role'), 'fieldMap targets the requested attr');
+      assert.ok(snippet.includes('"m":{"attr":"data-ad-rendering-role"}'),
+        'empty-selector fieldMap = the container ITSELF carries the attr (first-live-log P-D self-read, not descendants)');
       return [
         { m: 'story_message' }, { m: undefined }, { m: null }, { m: '' },
         { m: 'profile_name' }, { m: '' }, { m: '' }, { m: '' }, { m: '' }, { m: '' }
@@ -208,5 +209,40 @@ describe('probe.attrStats', () => {
     const { tools } = makeTools(async () => { throw new Error('BOOM'); });
     const r = await tools.attrStats('div.card', 'data-k');
     assert.equal(r.error, 'BOOM');
+  });
+});
+
+describe('probe.hover', () => {
+  it('composes $hover over the rail, records the receipt, and diets the result', async () => {
+    const { tools, observationLog } = makeTools(async (snippet) => {
+      assert.ok(/^return \$hover\("a\.author", "div\[role=dialog\]", \{"index":0\}\);?$/.test(snippet),
+        'anchorSel+popoverSel+opts composed in order: ' + snippet);
+      return { hovered: true, htmlSnippet: 'x'.repeat(9000), popoverSelector: 'div[role=dialog]', autoDiscovered: false, hoverDispatched: true, hoverReason: null };
+    });
+    const r = await tools.hover({ anchorSel: 'a.author', popoverSel: 'div[role=dialog]', opts: { index: 0 } });
+    assert.equal(r.hovered, true);
+    assert.equal(r.htmlSnippet.length, 8000, 'popover HTML capped at the record-HTML 8000 precedent');
+    assert.equal(r.popoverSelector, 'div[role=dialog]');
+    assert.ok(observationLog.covers('a.author'), 'anchor selector grounded by the receipt');
+    assert.ok(observationLog.covers('div[role=dialog]'), 'popover selector grounded too');
+  });
+
+  it('opts without popoverSel keeps opts in 3rd position via an explicit null', async () => {
+    const { tools } = makeTools(async (snippet) => {
+      assert.ok(snippet.includes('"a.x", null, {"timeoutMs":4500}'), 'null placeholder: ' + snippet);
+      return { hovered: false, reason: 'no_hover_signal_early_exit', observedPopover: { role: 'dialog' } };
+    });
+    const r = await tools.hover({ anchorSel: 'a.x', opts: { timeoutMs: 4500 } });
+    assert.equal(r.hovered, false);
+    assert.equal(r.reason, 'no_hover_signal_early_exit');
+    assert.deepEqual(r.observedPopover, { role: 'dialog' });
+    assert.equal(r.htmlSnippet, null);
+  });
+
+  it('rejects a missing anchorSel and forwards executor errors', async () => {
+    const { tools } = makeTools(async () => { throw new Error('ELEMENT_NOT_FOUND: a.z'); });
+    assert.equal((await tools.hover({})).error, 'anchorSel required');
+    const r = await tools.hover({ anchorSel: 'a.z' });
+    assert.equal(r.error, 'ELEMENT_NOT_FOUND: a.z');
   });
 });

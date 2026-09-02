@@ -112,9 +112,10 @@
       '# Methodology meta-rules',
       '1. Ground every selector and attribute filter in an observation (probe or user annotation) BEFORE service.update — ungrounded writes are rejected with the missing receipt named.',
       '2. Prefer the cheapest probe that answers the current question; never ask for raw pages.',
-      '3. Attribute DISTRIBUTIONS (probe.attrStats), not single samples, reveal what a data-* attribute means.',
+      '3. Attribute DISTRIBUTIONS (probe.attrStats), not single samples, reveal what a data-* attribute means (attr is read on every element containerSel matches — the elements themselves, not their descendants).',
       '4. After any container/filter fix, propagate it to every step sharing that selector.',
-      '5. When verify.run fails, read diag.read BEFORE changing anything.'
+      '5. When verify.run fails, read diag.read BEFORE changing anything.',
+      '6. To observe a hover popover during research call probe.hover (a session tool — do NOT call the $hover DSL primitive as a tool); it returns the popover evidence (observedPopover identity + htmlSnippet). Learn the real popoverSel from that evidence BEFORE writing $extractWithHover into steps.'
     ].join('\n');
   }
 
@@ -243,6 +244,7 @@
       'probe.text': probes.text,
       'probe.attrStats': probes.attrStats,
       'probe.sample': probes.sample,
+      'probe.hover': probes.hover,
       'diag.read': diagRead,
       'verify.run': verifyRun,
       'annotate.request': annotateRequest,
@@ -256,6 +258,7 @@
       { name: 'probe.text', args: '{sel}', returns: '{total,items[]}' },
       { name: 'probe.attrStats', args: '{containerSel, attr}', returns: '{totalCards,values[{value,cards,pct}],absentPct}' },
       { name: 'probe.sample', args: '{sel, opts:{index,wantHtml}}', returns: '{match,total,element,html?}' },
+      { name: 'probe.hover', args: '{anchorSel, popoverSel?, opts:{index,timeoutMs}}', returns: '{hovered,htmlSnippet,popoverSelector,reason,observedPopover?}' },
       { name: 'diag.read', args: '{stepId?, kind?}', returns: '{selectorDiagnostics, failingStep?, popover, counters, lastError?}' },
       { name: 'verify.run', args: '{input?}', returns: '{ok,score,error,detectors,steps,finalResult,schemaOk}' },
       { name: 'annotate.request', args: '{why, fields?, containerSel?}', returns: '{annotations[{selector,purpose,outputField}]} | {cancelled}' }

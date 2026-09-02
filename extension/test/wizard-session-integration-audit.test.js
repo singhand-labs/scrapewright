@@ -108,4 +108,14 @@ describe('wizard research-session integration (source audit)', () => {
     // Typed requirements win over the parked session (fresh start is still possible).
     assert.ok(/!seed\s*&&\s*!pageOps/.test(body), 'fallback only when the box is empty');
   });
+
+  it('the requirement block carries the Target URL (first-live-log P-C: sessions must not start blind)', () => {
+    const body = fnBody('startResearchSession');
+    // Both the fresh and the resume-fallback description build pass the URL —
+    // without it the LLM misused annotate.request to ask for the site.
+    const passes = body.match(/buildRequirementsBlock\(wizardState\.requirements,\s*wizardState\.targetUrl\)/g) || [];
+    assert.equal(passes.length, 2, 'fresh branch AND resume-fallback branch both pass wizardState.targetUrl');
+    assert.ok(body.indexOf('wizardState.targetUrl = document') < body.indexOf('buildRequirementsBlock(wizardState.requirements, wizardState.targetUrl)'),
+      'targetUrl is captured from the URL box before the description is built');
+  });
 });

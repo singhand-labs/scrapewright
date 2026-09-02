@@ -399,7 +399,7 @@ async function loadEditMode() {
     pageOps: svc.userDescription || svc.displayName || '',
     outputStruct: ''
   };
-  wizardState.description = buildRequirementsBlock(wizardState.requirements);
+  wizardState.description = buildRequirementsBlock(wizardState.requirements, svc.targetUrl);
   wizardState.serviceName = svc.displayName || '';
   wizardState.steps = svc.steps || [];
   wizardState.inputSchema = svc.inputSchema || { type: 'object' };
@@ -1897,11 +1897,11 @@ async function startResearchSession(seedOverride) {
       }
     }
     wizardState.requirements = { inputParams: inputParams, pageOps: pageOps, outputStruct: outputStruct };
-    wizardState.description = String(st.requirement || '') || buildRequirementsBlock(wizardState.requirements);
+    wizardState.description = String(st.requirement || '') || buildRequirementsBlock(wizardState.requirements, wizardState.targetUrl);
     resumeNote = 'Resuming the parked research session' + (st.stopped && st.stopped.reason ? ' (interrupted: ' + st.stopped.reason + ')' : '') + '.';
   } else {
     wizardState.requirements = { inputParams, pageOps, outputStruct };
-    wizardState.description = buildRequirementsBlock(wizardState.requirements);
+    wizardState.description = buildRequirementsBlock(wizardState.requirements, wizardState.targetUrl);
   }
   if (!wizardState.userDescription) wizardState.userDescription = wizardState.description;
 

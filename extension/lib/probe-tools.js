@@ -77,12 +77,17 @@
       }
       if (typeof containerSel !== 'string' || !containerSel) return { error: 'containerSelector required' };
       if (typeof attr !== 'string' || !/^[a-zA-Z][\w-]*$/.test(attr)) return { error: 'attribute name required' };
-      // Composed on the EXISTING rail: $extractList with an attribute-read
-      // fieldMap returns one record per container; records missing the
-      // attribute carry ''. The distribution semantics (what fraction of the
-      // population carries each value) is exactly the polarity evidence the
-      // grounding gate requires for filter attributes (spec §8).
-      const fieldMap = { m: { selector: '[' + attr + ']', attr: attr } };
+      // Composed on the EXISTING rail: $extractList with an EMPTY-selector
+      // attribute fieldMap reads the attribute on EACH CONTAINER ITSELF (the
+      // list-extract-ops readField self-read form, same mechanism probe.sample
+      // wantHtml uses). First-live-log P-D: the previous descendant form
+      // ({selector:'[attr]'}) answered "which containers CONTAIN a descendant
+      // carrying attr" — probe.sample('[role=feed] > [role=article]') then
+      // contradicted it (direct children), burning turns. The distribution
+      // semantics here (what fraction of the population carries each value ON
+      // the selected elements) is exactly the polarity evidence the grounding
+      // gate requires for filter attributes (spec §8).
+      const fieldMap = { m: { attr: attr } };
       const snippet = 'return $extractList(' + JSON.stringify(containerSel) + ', ' + JSON.stringify(fieldMap) + ');';
       const r = await runSnippet(snippet);
       if (r && typeof r.error === 'string') return r;
@@ -163,7 +168,53 @@
       return out;
     }
 
-    return { count, text, attrStats, sample };
+    // First-live-log P-A: the session bag had no way to OBSERVE a hover
+    // popover, so the LLM invoked the DSL primitive "$hover" as a tool name
+    // (unknown tool) and fell back to attrStats. This probe runs the SAME
+    // primitive once over the rail and keeps the receipt — anchor/popover
+    // selectors for later $extractWithHover steps ground like any selector.
+    async function hover(args0) {
+      const a = args0 && typeof args0 === 'object' ? args0 : {};
+      const anchorSel = typeof a.anchorSel === 'string' ? a.anchorSel.trim() : '';
+      const popoverSel = (typeof a.popoverSel === 'string' && a.popoverSel.trim()) ? a.popoverSel.trim() : null;
+      const o = (a.opts && typeof a.opts === 'object') ? a.opts : {};
+      if (!anchorSel) return { error: 'anchorSel required' };
+      const opts = {};
+      if (typeof o.index === 'number' && o.index >= 0) opts.index = Math.floor(o.index);
+      if (typeof o.timeoutMs === 'number' && o.timeoutMs > 0) opts.timeoutMs = o.timeoutMs;
+      // Position-preserving $hover(anchorSel, popoverSel?, opts?) build:
+      // a leading null keeps opts in 3rd place when no popoverSel is guessed.
+      const parts = [JSON.stringify(anchorSel)];
+      if (popoverSel) parts.push(JSON.stringify(popoverSel));
+      if (Object.keys(opts).length) {
+        if (!popoverSel) parts.push('null');
+        parts.push(JSON.stringify(opts));
+      }
+      const r = await runSnippet('return $hover(' + parts.join(', ') + ');');
+      if (r && typeof r.error === 'string') return r;
+      if (observationLog) {
+        observationLog.record({
+          tool: 'probe.hover',
+          selectors: popoverSel ? [anchorSel, popoverSel] : [anchorSel],
+          summary: 'hover probe' + (typeof opts.index === 'number' ? ' index=' + opts.index : '')
+        });
+      }
+      if (!r || typeof r !== 'object') return { error: 'unexpected $hover result shape' };
+      const out = {
+        hovered: !!r.hovered,
+        popoverSelector: (typeof r.popoverSelector === 'string' && r.popoverSelector) || null,
+        autoDiscovered: !!r.autoDiscovered,
+        hoverDispatched: !!r.hoverDispatched,
+        reason: (typeof r.reason === 'string' && r.reason) || null,
+        observedPopover: r.observedPopover || null,
+        // Generous evidence budget (popover structure is exactly what the LLM
+        // rewrites popoverSel from); matches the record-HTML 8000 precedent.
+        htmlSnippet: typeof r.htmlSnippet === 'string' && r.htmlSnippet ? r.htmlSnippet.slice(0, 8000) : null
+      };
+      return out;
+    }
+
+    return { count, text, attrStats, sample, hover };
   }
 
   const api = { createProbeTools };

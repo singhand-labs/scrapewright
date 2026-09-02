@@ -62,6 +62,14 @@
       const url = (typeof a.url === 'string' && a.url.trim()) ? a.url.trim() : defaultUrl;
       if (!url) return { error: 'url required (no default target URL configured)' };
       if (!/^https?:\/\//i.test(url)) return { error: 'url must be http(s)' };
+      // First-live-log P-E: the research tab shows the LITERAL placeholder —
+      // the rail does no template substitution (verify.run does, from input).
+      // Surfacing this once per open stops the LLM from treating the literal
+      // as the real page contract.
+      const tmpl = url.match(/\{\{\s*\w+\s*\}\}/g);
+      const templateWarn = tmpl && tmpl.length
+        ? 'url template parameter(s) unreplaced in the research tab (' + tmpl.join(', ') + ') — probes run against the literal placeholder; verify.run substitutes them from input'
+        : null;
       if (opening) return { error: 'page open already in progress — wait for it to finish, then retry' };
       opening = (async () => {
         await closeTab();
@@ -86,6 +94,7 @@
         }
         const out = { tabId: tab.id, url: url, ready: !!ready };
         if (warning) out.warning = warning;
+        else if (templateWarn) out.warning = templateWarn;
         else if (!ready) out.warning = 'content script not responding yet';
         return out;
       })();

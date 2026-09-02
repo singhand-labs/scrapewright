@@ -46,6 +46,17 @@ describe('createLiveRail', () => {
     assert.equal(r2.tabId, 7);
   });
 
+  it('pageOpen warns when the url carries unreplaced {{template}} placeholders (first-live-log P-E)', async () => {
+    const d = makeDeps({ defaultUrl: 'https://example.com/search?q={{keyword}}' });
+    const rail = createLiveRail(d);
+    const r = await rail.pageOpen({});
+    assert.equal(r.url, 'https://example.com/search?q={{keyword}}');
+    assert.match(r.warning, /\{\{keyword\}\}/);
+    assert.match(r.warning, /verify\.run/);
+    const plain = await createLiveRail(makeDeps()).pageOpen({});
+    assert.equal(plain.warning, undefined, 'plain urls stay silent');
+  });
+
   it('pageOpen closes the previous tab first (single-tab model)', async () => {
     const closed = [];
     const d = makeDeps({ removeTab: async (id) => closed.push(id), createTab: async (url) => ({ id: url.length, url }) }); // tab ids = url lengths (19, 20) — distinct, so the close/reopen order is observable
