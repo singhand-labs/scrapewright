@@ -304,9 +304,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('btnPhase5Deploy').addEventListener('click', confirmDeploy);
   document.getElementById('btnPhase5Back').addEventListener('click', () => goToPhase(4));
   document.getElementById('btnPhase5EditSteps').addEventListener('click', () => goToPhase(2));
-  document.getElementById('btnRetryTest').addEventListener('click', () => {
+  document.getElementById('btnRetryTest').addEventListener('click', async () => {
     wizardState.testAborted = false;
-    testScript();
+    // A4: phase5 has no progress UI of its own (log/progress live on the
+    // hidden phase4) — surface the overlay for the whole retry run.
+    showLoading('Running test…');
+    try {
+      await testScript();
+    } finally {
+      hideLoading();
+    }
   });
   document.getElementById('btnSessionPause').addEventListener('click', () => { wizardSession && wizardSession.pause(); });
   document.getElementById('btnSessionResume').addEventListener('click', async () => {
