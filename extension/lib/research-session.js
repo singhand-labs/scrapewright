@@ -120,6 +120,22 @@
     let running = false;
     let segmentStart = now();
 
+    // Audit C4: user-parked bridges (io.confirm / annotate.request) hold the
+    // loop open — abort/stop must cancel them or run() hangs forever and
+    // `running` stays true (deadlock). Pause deliberately does NOT cancel:
+    // the user may answer while paused and the parked clock does not run.
+    const userBridges = Array.isArray(cfg.userBridges)
+      ? cfg.userBridges.filter((b) => b && typeof b.cancel === 'function')
+      : [];
+    const cancelledBridges = new Set();
+    function cancelUserBridges(reason) {
+      for (const b of userBridges) {
+        if (cancelledBridges.has(b)) continue; // abort() then stop() must not double-cancel
+        cancelledBridges.add(b);
+        try { b.cancel(reason); } catch (e) { /* bridge cancellation must never throw into the engine */ }
+      }
+    }
+
     function emit(type, data) {
       try { onEvent(Object.assign({ type: type, at: now() }, data || {})); } catch (e) { /* never throw from UI */ }
     }
@@ -167,6 +183,7 @@
     }
 
     async function stop(reason, detail) {
+      cancelUserBridges('session stopped: ' + reason);
       state.status = 'stopped';
       state.stopped = { reason: reason, detail: detail == null ? null : detail };
       emit('stopped', { reason: reason, detail: state.stopped.detail });
@@ -573,7 +590,11 @@
       return report || buildReport();
     }
 
-    function abort(reason) { abortFlag = true; abortReason = String(reason || 'user'); }
+    function abort(reason) {
+      abortFlag = true;
+      abortReason = String(reason || 'user');
+      cancelUserBridges('user aborted session');
+    }
     function pause() { pauseFlag = true; }
 
     const publicApi = {

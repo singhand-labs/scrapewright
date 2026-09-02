@@ -1182,3 +1182,50 @@ describe('tenth-log N3: session_start resuming flag', () => {
     assert.equal(start.resuming, false);
   });
 });
+
+describe('audit C4: abort/stop cancels pending user bridges (no deadlock)', () => {
+  it('abort() while a user bridge is parked resolves run() and cancels the bridge', async () => {
+    const cancelled = [];
+    let releaseRequest = null;
+    const bridge = {
+      request: () => new Promise((resolve) => { releaseRequest = resolve; }),
+      cancel: (reason) => { cancelled.push(String(reason)); releaseRequest({ confirmed: false, cancelled: true, feedback: 'user stopped' }); }
+    };
+    const toolResults = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('io.confirm', { note: 'x' })),
+        reply(finishEnvelope())
+      ], []),
+      tools: { 'io.confirm': async () => { const r = await bridge.request({}); toolResults.push(r); return r; } },
+      userBridges: [bridge]
+    });
+    const runP = session.run();
+    const deadline = Date.now() + 2000;
+    while (!releaseRequest && Date.now() < deadline) await new Promise((r) => setTimeout(r, 2));
+    assert.ok(releaseRequest, 'bridge must be parked before abort');
+    session.abort('user');
+    const report = await Promise.race([
+      runP,
+      new Promise((_, rej) => setTimeout(() => rej(new Error('deadlock: run() never resolved')), 1000))
+    ]);
+    assert.equal(report.stopped.reason, 'aborted');
+    assert.equal(cancelled.length, 1);
+    assert.ok(toolResults.length === 1 && toolResults[0].cancelled === true, 'cancelled response flows back as the tool result');
+  });
+
+  it('stop() (natural completion) also cancels any pending bridge', async () => {
+    const cancelled = [];
+    const bridge = { request: () => new Promise(() => {}), cancel: (r) => cancelled.push(String(r)) };
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([reply(finishEnvelope())], []),
+      tools: {},
+      userBridges: [bridge]
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    assert.equal(cancelled.length, 1, 'stop() cancels bridges even when none pending matters not — it must be idempotent-safe');
+  });
+});
