@@ -1256,3 +1256,39 @@ describe('audit C1: parked bridge time does not consume wallClock', () => {
     assert.equal(report.spend.parkedMs, 4000);
   });
 });
+
+describe('audit C12+C5: terminal persistence + budget-stop hints', () => {
+  it('stop() flushes persistence (debounce cannot swallow the final state)', async () => {
+    const ops = [];
+    const persistence = {
+      save: async (s) => { ops.push(['save', s.session.status]); },
+      flush: async () => { ops.push(['flush']); }
+    };
+    const session = createResearchSession({
+      requirement: 'r', llm: scriptedLlm([reply(finishEnvelope())], []), tools: {},
+      persistence: persistence
+    });
+    await session.run();
+    assert.ok(ops.some((o) => o[0] === 'flush'), 'stop() must flush, not only debounce-save');
+    assert.equal(ops[ops.length - 1][0], 'flush');
+  });
+
+  it('C5: a maxTurns-exhausted seed reports HOW to continue', async () => {
+    const seed = { session: { id: 'rs-x', status: 'stopped', requirement: 'r', goals: [], hypotheses: [], transcript: [], digest: '', spend: { turns: 60, llmCalls: 60, promptTokens: 1, completionTokens: 1, estimated: false, parkedMs: 0 }, attachedUnits: [], artifactVersions: [], elapsedMs: 0, stopped: { reason: 'maxTurns', detail: null }, budgetAdvisories: ['half', 'author', 'finalize'] } };
+    const s1 = createResearchSession({ requirement: 'r', llm: scriptedLlm([], []), tools: {}, seed });
+    const r1 = await s1.run();
+    assert.equal(r1.stopped.reason, 'maxTurns');
+    assert.match(r1.stopped.detail, /raise the budget \(maxTurns\)/);
+    const s2 = createResearchSession({ requirement: 'r', budgets: { maxTurns: 61 }, llm: scriptedLlm([reply(finishEnvelope())], []), tools: {}, seed });
+    const r2 = await s2.run();
+    assert.equal(r2.stopped.reason, 'completed', 'raised budget resumes past the old ceiling');
+  });
+
+  it('C5: wallClock stop carries the same hint shape', async () => {
+    const seed = { session: { id: 'rs-y', status: 'stopped', requirement: 'r', goals: [], hypotheses: [], transcript: [], digest: '', spend: { turns: 0, llmCalls: 0, promptTokens: 0, completionTokens: 0, estimated: false, parkedMs: 0 }, attachedUnits: [], artifactVersions: [], elapsedMs: 999999, stopped: { reason: 'wallClock', detail: null }, budgetAdvisories: [] } };
+    const s = createResearchSession({ requirement: 'r', budgets: { wallClockMs: 500000 }, llm: scriptedLlm([], []), tools: {}, seed });
+    const r = await s.run();
+    assert.equal(r.stopped.reason, 'wallClock');
+    assert.match(r.stopped.detail, /raise the budget \(wallClockMs\)/);
+  });
+});

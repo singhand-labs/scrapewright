@@ -203,12 +203,23 @@
       }
     }
 
+    // Audit C12: persist() lands on the debounce trailing edge — a stop (or
+    // pause) followed immediately by SW suspension / window close would lose
+    // the terminal state. Terminal points force the flush.
+    async function persistFinal() {
+      await persist();
+      if (persistence && typeof persistence.flush === 'function') {
+        try { await persistence.flush(); }
+        catch (e) { emit('persist_error', { error: 'flush: ' + String((e && e.message) || e) }); }
+      }
+    }
+
     async function stop(reason, detail) {
       cancelUserBridges('session stopped: ' + reason);
       state.status = 'stopped';
       state.stopped = { reason: reason, detail: detail == null ? null : detail };
       emit('stopped', { reason: reason, detail: state.stopped.detail });
-      await persist();
+      await persistFinal();
       return buildReport();
     }
 
@@ -534,12 +545,20 @@
             state.status = 'paused';
             state.stopped = { reason: 'paused', detail: null };
             emit('paused', {});
-            await persist();
+            await persistFinal();
             report = buildReport();
             break;
           }
-          if (state.spend.turns >= budgets.maxTurns) { report = await stop('maxTurns'); break; }
-          if (state.elapsedMs + netSegmentMs() >= budgets.wallClockMs) { report = await stop('wallClock'); break; }
+          if (state.spend.turns >= budgets.maxTurns) {
+            report = await stop('maxTurns', state.spend.turns > 0
+              ? 'budget exhausted at ' + state.spend.turns + '/' + budgets.maxTurns + ' turns — raise the budget (maxTurns) in the resume seed to continue'
+              : null);
+            break;
+          }
+          if (state.elapsedMs + netSegmentMs() >= budgets.wallClockMs) {
+            report = await stop('wallClock', 'time budget exhausted after ~' + Math.round((state.elapsedMs + netSegmentMs()) / 1000) + 's (parked ' + Math.round(parkedTotal / 1000) + 's excluded) — raise the budget (wallClockMs) in the resume seed to continue');
+            break;
+          }
           if (state.spend.promptTokens + state.spend.completionTokens >= budgets.tokenCap) { report = await stop('tokenCap'); break; }
           maybeBudgetAdvisory();
 
