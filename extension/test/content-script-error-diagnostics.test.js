@@ -49,4 +49,31 @@ describe('B2: error diagnostics survive handleDomRequest', () => {
     assert.match(out.error, /plain/);
     assert.equal('_diagnostics' in out && out._diagnostics !== undefined, false);
   });
+
+  it('B2 producer: domExtractWithHover no-containers throw carries _diagnostics', async () => {
+    // Slice the real function and inject its free variables; the no-containers
+    // throw fires before any hover machinery, so only the container resolver
+    // and the log relays need stubbing.
+    const factory = eval('(function (querySelectorAllDeep, sendDebugLog, notifyBackgroundDiagnostic, getListExtractOps, domHover) { return (async ' + sliceFn('domExtractWithHover') + '); })');
+    const fn = factory(
+      () => [], // zero containers matched
+      () => {},
+      () => {}
+    );
+    await assert.rejects(
+      fn('.no-such-container', { title: 'x' }, { hover: { anchorSel: '.a' } }),
+      (err) => {
+        assert.match(err.message, /no containers matched/);
+        assert.ok(err._diagnostics && typeof err._diagnostics === 'object',
+          'thrown Error carries _diagnostics');
+        assert.equal(err._diagnostics.api, 'extractWithHover');
+        assert.equal(err._diagnostics.containerSelector, '.no-such-container');
+        assert.equal(err._diagnostics.containerMatches, 0);
+        assert.equal(err._diagnostics.processedContainers, 0);
+        assert.deepEqual(err._diagnostics.hoverSummary,
+          { anchorsFound: 0, hovercardsCaptured: 0, hoverFailures: 0 });
+        return true;
+      }
+    );
+  });
 });

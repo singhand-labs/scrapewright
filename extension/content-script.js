@@ -2639,8 +2639,19 @@
           }
         };
       }
-      throw new Error('$extractWithHover: no containers matched' +
+      var _noContainersErr = new Error('$extractWithHover: no containers matched' +
         (rangeOptsSet === 1 ? ' (after range filtering)' : ''));
+      _noContainersErr._diagnostics = {
+        api: 'extractWithHover',
+        containerSelector: containerSel,
+        containerMatches: 0,
+        processedContainers: 0,
+        perField: [],
+        hoverSummary: { anchorsFound: 0, hovercardsCaptured: 0, hoverFailures: 0 },
+        note: 'no containers matched' + (rangeOptsSet === 1 ? ' after range filtering' : '') +
+          (opts.allowEmpty ? '' : ' (allowEmpty not set)')
+      };
+      throw _noContainersErr;
     }
     var ops = getListExtractOps();
     if (!ops) {
