@@ -1858,6 +1858,7 @@ async function startResearchSession(seedOverride) {
   // treat an empty box + parked session as a resume; typed text means the user
   // is starting fresh and the parked session is superseded.
   let seed = seedOverride || null;
+  let resumeNote = null;
   if (!seed && !pageOps) {
     try {
       const p = SessionPersistence.createSessionPersistence(chrome.storage.local, 'wizardResearchSession');
@@ -1893,7 +1894,7 @@ async function startResearchSession(seedOverride) {
     }
     wizardState.requirements = { inputParams: inputParams, pageOps: pageOps, outputStruct: outputStruct };
     wizardState.description = String(st.requirement || '') || buildRequirementsBlock(wizardState.requirements);
-    appendLog('Resuming the parked research session' + (st.stopped && st.stopped.reason ? ' (interrupted: ' + st.stopped.reason + ')' : '') + '.');
+    resumeNote = 'Resuming the parked research session' + (st.stopped && st.stopped.reason ? ' (interrupted: ' + st.stopped.reason + ')' : '') + '.';
   } else {
     wizardState.requirements = { inputParams, pageOps, outputStruct };
     wizardState.description = buildRequirementsBlock(wizardState.requirements);
@@ -1949,7 +1950,7 @@ async function startResearchSession(seedOverride) {
     } catch (e) { /* edit-mode ledger seed is best-effort */ }
   }
 
-  appendLog('Starting research session — the AI will open the page, probe it, author the steps, and verify.');
+  appendLog(resumeNote || 'Starting research session — the AI will open the page, probe it, author the steps, and verify.');
   wizardSession = ResearchSessionLib.createResearchSession({
     requirement: wizardState.description,
     llm: makeLlmAdapter(new LLMClient(config.config)),
