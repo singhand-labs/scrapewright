@@ -102,7 +102,7 @@
       hypotheses: [],
       transcript: [],
       digest: '',
-      spend: { turns: 0, llmCalls: 0, promptTokens: 0, completionTokens: 0, estimated: false },
+      spend: { turns: 0, llmCalls: 0, promptTokens: 0, completionTokens: 0, estimated: false, parkedMs: 0 },
       attachedUnits: [],
       artifactVersions: [],
       elapsedMs: 0,
@@ -136,6 +136,27 @@
       }
     }
 
+    // Audit C1: time the engine spends parked on a user bridge (io.confirm /
+    // annotate.request) is user time, not research time. Track it separately;
+    // wallClock consumption is computed NET of parked windows, and the report
+    // discloses parkedMs so nobody wonders where the clock went.
+    let parkedTotal = 0;
+    let parkedThisSegment = 0;
+    let parkOpenSince = null;
+    function parkBegin() { if (parkOpenSince == null) parkOpenSince = now(); }
+    function parkEnd() {
+      if (parkOpenSince == null) return;
+      const d = now() - parkOpenSince;
+      parkOpenSince = null;
+      parkedTotal += d;
+      parkedThisSegment += d;
+    }
+    function netSegmentMs() {
+      let seg = now() - segmentStart - parkedThisSegment;
+      if (parkOpenSince != null) seg -= (now() - parkOpenSince);
+      return Math.max(0, seg);
+    }
+
     function emit(type, data) {
       try { onEvent(Object.assign({ type: type, at: now() }, data || {})); } catch (e) { /* never throw from UI */ }
     }
@@ -156,7 +177,7 @@
         stopped: state.stopped,
         openQuestions: openQuestions(),
         turns: state.spend.turns,
-        spend: Object.assign({}, state.spend),
+        spend: Object.assign({}, state.spend, { parkedMs: parkedTotal }),
         artifactVersions: state.artifactVersions.length,
         ledgerEntries: ledger.serialize().entries.length,
         observations: observationLog.size()
@@ -508,7 +529,8 @@
           if (abortFlag) { report = await stop('aborted', abortReason); break; }
           if (pauseFlag) {
             pauseFlag = false;
-            state.elapsedMs += now() - segmentStart;
+            state.elapsedMs += netSegmentMs();
+            parkedThisSegment = 0;
             state.status = 'paused';
             state.stopped = { reason: 'paused', detail: null };
             emit('paused', {});
@@ -517,7 +539,7 @@
             break;
           }
           if (state.spend.turns >= budgets.maxTurns) { report = await stop('maxTurns'); break; }
-          if (state.elapsedMs + (now() - segmentStart) >= budgets.wallClockMs) { report = await stop('wallClock'); break; }
+          if (state.elapsedMs + netSegmentMs() >= budgets.wallClockMs) { report = await stop('wallClock'); break; }
           if (state.spend.promptTokens + state.spend.completionTokens >= budgets.tokenCap) { report = await stop('tokenCap'); break; }
           maybeBudgetAdvisory();
 
@@ -601,6 +623,8 @@
       run: loop,
       abort: abort,
       pause: pause,
+      parkBegin: parkBegin,
+      parkEnd: parkEnd,
       state: () => JSON.parse(JSON.stringify(stateForPersist())),
       report: buildReport,
       get observationLog() { return observationLog; },

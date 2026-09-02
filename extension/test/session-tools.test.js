@@ -408,3 +408,27 @@ describe('eleventh-log O1: rule 6 — popover absence is anchor-specific', () =>
     assert.ok(!/facebook|twitter|linkedin|tiktok|reddit|\bfb\b/i.test(t.systemPromptBase), 'no site tokens');
   });
 });
+
+describe('audit C1: bridge waits park the engine clock', () => {
+  it('io.confirm wraps bridge.request with parkBegin/parkEnd', async () => {
+    const parks = [];
+    const { deps } = makeDeps({ ioConfirmBridge: { request: async () => ({ confirmed: true }) } });
+    const t = createSessionTools(deps);
+    const ctx = { ledger: null, session: { parkBegin: () => parks.push('b'), parkEnd: () => parks.push('e') } };
+    const r = await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object' } }, ctx);
+    assert.equal(r.confirmed, true);
+    assert.deepEqual(parks, ['b', 'e']);
+  });
+
+  it('annotate.request wraps bridge.request with parkBegin/parkEnd', async () => {
+    const parks = [];
+    const { deps } = makeDeps({
+      annotationBridge: { request: async () => ({ cancelled: true }) }
+    });
+    const t = createSessionTools(deps);
+    const ctx = { ledger: null, session: { parkBegin: () => parks.push('b'), parkEnd: () => parks.push('e') } };
+    const r = await t.tools['annotate.request']({ why: 'w' }, ctx);
+    assert.equal(r.cancelled, true);
+    assert.deepEqual(parks, ['b', 'e']);
+  });
+});

@@ -204,11 +204,18 @@
           error: 'SCHEMA_NOT_JSON_SCHEMA: ' + schemaBad.join(' and ') + ' must be a JSON Schema object like {"type":"object","required":["keyword"],"properties":{"keyword":{"type":"string"}}}. Resend io.confirm with both schemas properly shaped.'
         };
       }
-      const res = await bridge.request({
-        inputSchema: a.inputSchema,
-        outputSchema: a.outputSchema,
-        note: typeof a.note === 'string' ? a.note : ''
-      });
+      const sess = (ctx && ctx.session) || null;
+      let res;
+      if (sess && typeof sess.parkBegin === 'function') sess.parkBegin();
+      try {
+        res = await bridge.request({
+          inputSchema: a.inputSchema,
+          outputSchema: a.outputSchema,
+          note: typeof a.note === 'string' ? a.note : ''
+        });
+      } finally {
+        if (sess && typeof sess.parkEnd === 'function') sess.parkEnd();
+      }
       if (res && res.confirmed) {
         ioConfirmed = true;
         ioConfirmedShape = { input: schemaShape(a.inputSchema), output: schemaShape(a.outputSchema) };
@@ -274,12 +281,19 @@
       if (!bridge || typeof bridge.request !== 'function') {
         return { error: 'annotation bridge not wired in this host' };
       }
-      const res = await bridge.request({
-        why: typeof a.why === 'string' ? a.why : '',
-        fields: Array.isArray(a.fields) ? a.fields.filter((f) => typeof f === 'string') : [],
-        containerSel: typeof a.containerSel === 'string' ? a.containerSel : '',
-        hint: typeof a.hint === 'string' ? a.hint : ''
-      });
+      const sess = (ctx && ctx.session) || null;
+      let res;
+      if (sess && typeof sess.parkBegin === 'function') sess.parkBegin();
+      try {
+        res = await bridge.request({
+          why: typeof a.why === 'string' ? a.why : '',
+          fields: Array.isArray(a.fields) ? a.fields.filter((f) => typeof f === 'string') : [],
+          containerSel: typeof a.containerSel === 'string' ? a.containerSel : '',
+          hint: typeof a.hint === 'string' ? a.hint : ''
+        });
+      } finally {
+        if (sess && typeof sess.parkEnd === 'function') sess.parkEnd();
+      }
       if (!res || res.cancelled) {
         return { cancelled: true, note: 'user cancelled annotation — try a probe (probe.sample / probe.attrStats) instead' };
       }

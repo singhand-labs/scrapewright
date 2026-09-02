@@ -1229,3 +1229,30 @@ describe('audit C4: abort/stop cancels pending user bridges (no deadlock)', () =
     assert.equal(cancelled.length, 1, 'stop() cancels bridges even when none pending matters not — it must be idempotent-safe');
   });
 });
+
+describe('audit C1: parked bridge time does not consume wallClock', () => {
+  it('parkBegin/parkEnd window is excluded and reported as spend.parkedMs', async () => {
+    let t = 1000;
+    const now = () => t;
+    const session = createResearchSession({
+      requirement: 'r',
+      now: now,
+      budgets: { wallClockMs: 1000, maxTurns: 10 },
+      llm: scriptedLlm([
+        reply(envelope('ask.user', {})),
+        reply(finishEnvelope())
+      ], []),
+      tools: { 'ask.user': async (args, ctx) => {
+        ctx.session.parkBegin();
+        t += 4000; // the user thinks for 4s while parked
+        await new Promise((r) => setTimeout(r, 1));
+        ctx.session.parkEnd();
+        t += 500; // 500ms of real work afterwards
+        return { ok: true };
+      } }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed', 'net elapsed 500ms < wallClock 1000ms — parked 4000ms must not count');
+    assert.equal(report.spend.parkedMs, 4000);
+  });
+});
