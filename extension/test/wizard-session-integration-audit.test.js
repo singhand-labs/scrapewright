@@ -275,3 +275,67 @@ describe('ninth-log follow-up: early I/O contract confirmation (io.confirm)', ()
     assert.match(ST, /EARLY contract confirmation/, 'methodology rule 9');
   });
 });
+
+describe('audit plan1: wizard lifecycle state machine (A1/A2/A3/A5/A6/A17/A18 + budget resume routing)', () => {
+  it('A1: testScript resets sessionAbortRequested so an aborted session cannot poison manual tests', () => {
+    const m = SRC.match(/async function testScript\(\) \{[\s\S]{0,900}?sessionAbortRequested = false;/);
+    assert.ok(m, 'testScript body must reset sessionAbortRequested');
+  });
+
+  it('A2: the io panel has a Reject button wired to bridge.reject()', () => {
+    assert.match(HTML, /id="btnIoReject"/);
+    assert.match(SRC, /btnIoReject[\s\S]{0,200}wizardIoBridge && wizardIoBridge\.reject\(\)/);
+    assert.match(SRC, /reject\(\) \{/);
+    assert.match(SRC, /User rejected this contract proposal/);
+  });
+
+  it('A3: stopped shows Resume (budget continuation) and hides Pause/Abort; idle hides the bar', () => {
+    const m = SRC.match(/function setSessionControls\(mode\) \{[\s\S]{0,700}?\n\}/);
+    assert.ok(m, 'setSessionControls found');
+    const body = m[0];
+    assert.match(body, /mode === 'idle'[\s\S]{0,80}classList\.add\('hidden'\)/, 'idle hides the whole bar');
+    assert.match(body, /btnSessionResume[\s\S]{0,120}mode !== 'paused' && mode !== 'stopped'/, 'stopped keeps Resume');
+    assert.match(body, /btnSessionAbort[\s\S]{0,120}mode !== 'running' && mode !== 'paused'/, 'stopped hides Abort');
+  });
+
+  it('A5: manual test from phase 4/5 parks the session controls and hides bridge panels', () => {
+    const m = SRC.match(/async function runTestFromStep5\(\) \{[\s\S]{0,900}?await testScript\(\);/);
+    assert.ok(m);
+    assert.match(m[0], /setSessionControls\('idle'\)/);
+    assert.match(m[0], /annotationRequestPanel[\s\S]{0,60}add\('hidden'\)/);
+    assert.match(m[0], /ioConfirmPanel[\s\S]{0,60}add\('hidden'\)/);
+  });
+
+  it('A6: the paused notice explains an open bridge request keeps waiting (clock parked)', () => {
+    const m = SRC.match(/case 'paused':[\s\S]{0,700}?break;/);
+    assert.ok(m);
+    assert.match(m[0], /still waiting/);
+    assert.match(m[0], /does not consume the session clock/);
+  });
+
+  it('A17: startResearchSession hides the stale feedback panel', () => {
+    const m = SRC.match(/async function startResearchSession\(seedOverride\) \{[\s\S]{0,5000}?goToPhase\(4\);/);
+    assert.ok(m);
+    assert.match(m[0], /sessionFeedbackPanel[\s\S]{0,60}add\('hidden'\)/);
+  });
+
+  it('A18/A19: Resume and annotation-finish buttons disable in flight', () => {
+    assert.match(SRC, /btnSessionResume'\)\.addEventListener\('click', async \(\) => \{[\s\S]{0,500}?disabled = true/);
+    assert.match(SRC, /btnAnnotationFinish'\)\.addEventListener\('click', async \(\) => \{[\s\S]{0,300}?disabled = true/);
+  });
+
+  it('budget-class stops route Resume through a fresh engine (G5 truthfulness)', () => {
+    const m = SRC.match(/btnSessionResume'\)\.addEventListener\('click', async \(\) => \{[\s\S]{0,800}?return;\n  \}\);/);
+    assert.ok(m);
+    assert.match(m[0], /maxTurns/);
+    assert.match(m[0], /resumeResearchSession\(\)/);
+  });
+
+  it('seed whitelist + resume guard accept budget-class stop reasons', () => {
+    const wl = SRC.match(/saved\.session\.stopped\.reason === 'paused' \|\| saved\.session\.stopped\.reason === 'aborted'/);
+    assert.ok(!wl, 'old two-reason whitelist replaced');
+    assert.match(SRC, /'maxTurns'/);
+    assert.match(SRC, /'wallClock'/);
+    assert.match(SRC, /'tokenCap'/);
+  });
+});

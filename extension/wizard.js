@@ -310,16 +310,34 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   document.getElementById('btnSessionPause').addEventListener('click', () => { wizardSession && wizardSession.pause(); });
   document.getElementById('btnSessionResume').addEventListener('click', async () => {
+    const btn = document.getElementById('btnSessionResume');
     if (!wizardSession) { await resumeResearchSession(); return; }
+    const stopped = wizardSession.state().session.stopped;
+    const budgetStop = stopped && ['maxTurns', 'wallClock', 'tokenCap'].indexOf(stopped.reason) !== -1;
+    if (budgetStop) {
+      // G5: a fresh engine honors raised budget knobs.
+      btn.disabled = true;
+      try { await resumeResearchSession(); } finally { btn.disabled = false; }
+      return;
+    }
+    btn.disabled = true;
     setSessionControls('running');
-    const report = await wizardSession.run();
-    if (report && report.stopped && sessionStopPresentsOutcome(report.stopped.reason)) { await presentSessionCompletion(); }
+    try {
+      const report = await wizardSession.run();
+      if (report && report.stopped && sessionStopPresentsOutcome(report.stopped.reason)) await presentSessionCompletion();
+    } finally { btn.disabled = false; }
+    return;
   });
   document.getElementById('btnSessionAbort').addEventListener('click', () => {
     sessionAbortRequested = true;
     wizardSession && wizardSession.abort('user');
   });
-  document.getElementById('btnAnnotationFinish').addEventListener('click', () => { wizardAnnotationBridge && wizardAnnotationBridge.finish(); });
+  document.getElementById('btnAnnotationFinish').addEventListener('click', async () => {
+    const btn = document.getElementById('btnAnnotationFinish');
+    btn.disabled = true;
+    try { wizardAnnotationBridge && await wizardAnnotationBridge.finish(); }
+    finally { btn.disabled = false; }
+  });
   document.getElementById('btnAnnotationCancel').addEventListener('click', () => { wizardAnnotationBridge && wizardAnnotationBridge.cancel(); });
   document.getElementById('btnIoConfirm').addEventListener('click', () => { wizardIoBridge && wizardIoBridge.confirm(); });
   document.getElementById('btnIoRevise').addEventListener('click', () => {
@@ -330,6 +348,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     wizardIoBridge && wizardIoBridge.revise(text);
   });
+  document.getElementById('btnIoReject').addEventListener('click', () => { wizardIoBridge && wizardIoBridge.reject(); });
   document.getElementById('btnDeployAnyway').addEventListener('click', () => {
     goToPhase(5);
     confirmDeploy();
@@ -388,7 +407,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       const p = SessionPersistence.createSessionPersistence(chrome.storage.local, 'wizardResearchSession');
       const saved = await p.load();
-      if (saved && saved.session && (!saved.session.stopped || saved.session.stopped.reason === 'paused' || saved.session.stopped.reason === 'aborted')) {
+      if (saved && saved.session && (!saved.session.stopped || ['paused', 'aborted', 'maxTurns', 'wallClock', 'tokenCap'].indexOf(saved.session.stopped.reason) !== -1)) {
         showToast('An interrupted research session was found. Press Ctrl+Enter on the requirement box or click Research to resume it.', 'info', 8000);
       }
     } catch (e) { /* storage unavailable */ }
@@ -1249,6 +1268,9 @@ async function runTestFromStep5() {
   wizardState.outputSchema = parsed.outputSchema;
   wizardState.testInput = parsed.testInput;
   goToPhase(4);
+  setSessionControls('idle');
+  document.getElementById('annotationRequestPanel').classList.add('hidden');
+  document.getElementById('ioConfirmPanel').classList.add('hidden');
   document.getElementById('executionLog').innerHTML = '';
   appendLog('Starting test...');
   await testScript();
@@ -1268,6 +1290,7 @@ async function testScript() {
   wizardState.lastExecutionEvents = [];
   wizardState.testAbortController = new AbortController();
   wizardState.testAborted = false;
+  sessionAbortRequested = false; // A1: an aborted session must not poison manual tests
   wizardState.trustedWheelSkipCount = 0;
   debugLogger.log('info', 'wizard', 'testScript start', {
     targetUrl: wizardState.targetUrl,
@@ -1832,6 +1855,15 @@ function createWizardIoBridge() {
       pendingResolve = null;
       hidePanel();
       if (r) r({ confirmed: false, feedback: '(cancelled — session stopped before confirmation)' });
+    },
+    reject() {
+      const r = pendingResolve;
+      pendingResolve = null;
+      hidePanel();
+      if (r) {
+        appendLog('I/O contract rejected by the user — the session will renegotiate.', 'warn');
+        r({ confirmed: false, feedback: 'User rejected this contract proposal — renegotiate based on evidence: re-propose with different fields, or justify adding/dropping them.' });
+      }
     }
   };
 }
@@ -1864,10 +1896,11 @@ function getSessionMaxTurns() {
 function setSessionControls(mode) {
   const bar = document.getElementById('sessionControls');
   if (!bar) return;
+  if (mode === 'idle') { bar.classList.add('hidden'); return; }
   bar.classList.remove('hidden');
   document.getElementById('btnSessionPause').classList.toggle('hidden', mode !== 'running');
-  document.getElementById('btnSessionResume').classList.toggle('hidden', mode !== 'paused');
-  document.getElementById('btnSessionAbort').classList.toggle('hidden', mode === 'idle');
+  document.getElementById('btnSessionResume').classList.toggle('hidden', mode !== 'paused' && mode !== 'stopped');
+  document.getElementById('btnSessionAbort').classList.toggle('hidden', mode !== 'running' && mode !== 'paused');
 }
 
 function updateSessionSpendLine(st) {
@@ -1932,7 +1965,11 @@ function handleSessionEvent(ev) {
       case 'paused':
         setSessionControls('paused');
         if (wizardRail) wizardRail.releaseLock(); // API jobs may run while paused
-        appendLog('Session paused. Resume when ready.', 'warn');
+        appendLog('Session paused. Resume when ready.' + (
+          !document.getElementById('annotationRequestPanel').classList.contains('hidden') ||
+          !document.getElementById('ioConfirmPanel').classList.contains('hidden')
+            ? ' An open request is still waiting — you can answer it while paused (its wait does not consume the session clock).'
+            : ''), 'warn');
         break;
       case 'stopped':
         setSessionControls('stopped');
@@ -1969,6 +2006,9 @@ async function startResearchSession(seedOverride) {
   sessionBooting = true;
   const releaseBoot = () => { sessionBooting = false; };
   try {
+  // A17: hide the stale feedback panel from a previous session.
+  const feedbackPanel = document.getElementById('sessionFeedbackPanel');
+  if (feedbackPanel) feedbackPanel.classList.add('hidden');
   const config = await chrome.runtime.sendMessage({ type: 'GET_LLM_CONFIG' });
   if (!config.config) {
     showToast('Please configure LLM in Options first', 'error');
@@ -1985,7 +2025,7 @@ async function startResearchSession(seedOverride) {
     try {
       const p = SessionPersistence.createSessionPersistence(chrome.storage.local, 'wizardResearchSession');
       const saved = await p.load();
-      if (saved && saved.session && (!saved.session.stopped || saved.session.stopped.reason === 'paused' || saved.session.stopped.reason === 'aborted')) {
+      if (saved && saved.session && (!saved.session.stopped || ['paused', 'aborted', 'maxTurns', 'wallClock', 'tokenCap'].indexOf(saved.session.stopped.reason) !== -1)) {
         seed = { session: saved.session, observation: saved.observation, ledger: saved.ledger };
       }
     } catch (e) { /* storage unavailable — start fresh */ }
@@ -2090,7 +2130,10 @@ async function startResearchSession(seedOverride) {
       maxTurns: getSessionMaxTurns()
     },
     seed: seed,
-    onEvent: handleSessionEvent
+    onEvent: handleSessionEvent,
+    // C4 production wiring: engine stop/abort cancels pending user-parked
+    // bridges (io.confirm / annotate.request) so run() can never hang.
+    userBridges: [wizardIoBridge, wizardAnnotationBridge]
   });
   wizardToolsBag.bindEngine(wizardSession);
 
@@ -2224,7 +2267,7 @@ async function resumeResearchSession() {
   // stays non-resumable here: its continuation path is the phase-5 feedback
   // panel. llm:*/wallClock/tokenCap/protocol remain terminal.
   const stopReason = st.stopped && st.stopped.reason;
-  if (stopReason && stopReason !== 'paused' && stopReason !== 'aborted' && stopReason !== 'maxTurns') {
+  if (stopReason && ['paused', 'aborted', 'maxTurns', 'wallClock', 'tokenCap'].indexOf(stopReason) === -1) {
     showToast('That session already ended (' + stopReason + '). Starting fresh.', 'info');
     await wizardPersistence.clear();
     return;
