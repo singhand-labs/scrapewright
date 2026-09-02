@@ -1269,8 +1269,22 @@ async function runTestFromStep5() {
   wizardState.testInput = parsed.testInput;
   goToPhase(4);
   setSessionControls('idle');
-  document.getElementById('annotationRequestPanel').classList.add('hidden');
-  document.getElementById('ioConfirmPanel').classList.add('hidden');
+  // A5 follow-up: the resolve buttons live inside these panels — hiding a
+  // panel with a pending bridge request would orphan the awaiting session
+  // run() until Abort. Cancel the bridge (no-op when nothing is pending) so
+  // the engine sees a cancelled/declined reply and exits cleanly.
+  const annPanel = document.getElementById('annotationRequestPanel');
+  if (annPanel && !annPanel.classList.contains('hidden')) {
+    if (wizardAnnotationBridge) wizardAnnotationBridge.cancel();
+    appendLog('Annotation request closed — a manual test from Phase 5 parked the session panels.', 'warn');
+  }
+  if (annPanel) annPanel.classList.add('hidden');
+  const ioPanel = document.getElementById('ioConfirmPanel');
+  if (ioPanel && !ioPanel.classList.contains('hidden')) {
+    if (wizardIoBridge) wizardIoBridge.cancel();
+    appendLog('I/O confirmation closed — a manual test from Phase 5 parked the session panels.', 'warn');
+  }
+  if (ioPanel) ioPanel.classList.add('hidden');
   document.getElementById('executionLog').innerHTML = '';
   appendLog('Starting test...');
   await testScript();
@@ -2262,10 +2276,12 @@ async function resumeResearchSession() {
     wizardState.steps = JSON.parse(JSON.stringify(st.artifactVersions[st.artifactVersions.length - 1].steps || []));
     renderStepList();
   }
-  // Ninth-log L3: maxTurns is resumable — raise the phase-1 knob, hit Resume,
-  // and the session continues from the pause point (G5 promise). 'completed'
-  // stays non-resumable here: its continuation path is the phase-5 feedback
-  // panel. llm:*/wallClock/tokenCap/protocol remain terminal.
+  // Ninth-log L3 + A5 review: the budget stops — maxTurns, wallClock, tokenCap
+  // — are all resumable: raise the matching phase-1 knob, hit Resume, and the
+  // session continues from the pause point (G5 promise). 'paused'/'aborted'
+  // resume trivially. 'completed' stays non-resumable here: its continuation
+  // path is the phase-5 feedback panel. llm-error-class and protocol-class
+  // stops remain terminal.
   const stopReason = st.stopped && st.stopped.reason;
   if (stopReason && ['paused', 'aborted', 'maxTurns', 'wallClock', 'tokenCap'].indexOf(stopReason) === -1) {
     showToast('That session already ended (' + stopReason + '). Starting fresh.', 'info');

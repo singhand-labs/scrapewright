@@ -299,11 +299,11 @@ describe('audit plan1: wizard lifecycle state machine (A1/A2/A3/A5/A6/A17/A18 + 
   });
 
   it('A5: manual test from phase 4/5 parks the session controls and hides bridge panels', () => {
-    const m = SRC.match(/async function runTestFromStep5\(\) \{[\s\S]{0,900}?await testScript\(\);/);
+    const m = SRC.match(/async function runTestFromStep5\(\) \{[\s\S]{0,2000}?await testScript\(\);/);
     assert.ok(m);
     assert.match(m[0], /setSessionControls\('idle'\)/);
-    assert.match(m[0], /annotationRequestPanel[\s\S]{0,60}add\('hidden'\)/);
-    assert.match(m[0], /ioConfirmPanel[\s\S]{0,60}add\('hidden'\)/);
+    assert.match(m[0], /annPanel\) annPanel\.classList\.add\('hidden'\)/);
+    assert.match(m[0], /ioPanel\) ioPanel\.classList\.add\('hidden'\)/);
   });
 
   it('A6: the paused notice explains an open bridge request keeps waiting (clock parked)', () => {
@@ -329,6 +329,13 @@ describe('audit plan1: wizard lifecycle state machine (A1/A2/A3/A5/A6/A17/A18 + 
     assert.ok(m);
     assert.match(m[0], /maxTurns/);
     assert.match(m[0], /resumeResearchSession\(\)/);
+  });
+
+  it('A5 carry-over: parking the panels cancels a pending bridge instead of orphaning it', () => {
+    const body = fnBody('runTestFromStep5');
+    assert.ok(body.includes('annotationRequestPanel'), 'annotation panel touched');
+    assert.match(body, /wizardAnnotationBridge\) wizardAnnotationBridge\.cancel\(\)/, 'annotation bridge cancelled when panel visible');
+    assert.match(body, /wizardIoBridge\) wizardIoBridge\.cancel\(\)/, 'io bridge cancelled when panel visible');
   });
 
   it('seed whitelist + resume guard accept budget-class stop reasons', () => {
