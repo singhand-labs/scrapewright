@@ -429,26 +429,36 @@
   // text and asserts key parity. If you add a function to one, add it to the
   // other in the same commit — otherwise the inline fallback silently loses
   // capabilities (e.g. trusted-wheel resets) when the MV3 glitch fires it.
+  // Behavior is additionally pinned by test/inline-scroll-ops-behavior-drift.test.js
+  // (both implementations run over scripted roots; outputs must be deep-equal).
   function createInlineScrollOps() {
     var SCROLL_INCREMENT_RATIO = 0.85;
-    var DEFAULT_MAX_ATTEMPTS = 8;
+    var DEFAULT_MAX_ATTEMPTS = 15;        // RC21: was 8; bumped to give stallWindowMs room to fire
     var DEFAULT_NO_PROGRESS_LIMIT = 3;
     var DEFAULT_SETTLE_MS = 350;
+    var DEFAULT_STALL_WINDOW_MS = 3000;   // RC21: time-based stall signal
     var DEFAULT_MAX_TRUSTED_WHEEL_ATTEMPTS = 3;
 
     function defaultSleep(ms) {
       return new Promise(function (resolve) { setTimeout(resolve, ms); });
     }
 
-    // Inline copy of scrollToBottomIncremental from lib/scroll-ops.js.
-    // RC19 trusted-wheel handling preserved — without it the stall-recovery
-    // path silently breaks under the injection glitch.
+    function defaultNow() {
+      return (typeof Date !== 'undefined' && Date.now) ? Date.now() : 0;
+    }
+
+    // Inline copy of scrollToBottomIncremental from lib/scroll-ops.js,
+    // including the RC21 dual-signal stall detection. Behavior is pinned by
+    // test/inline-scroll-ops-behavior-drift.test.js (deep-equal against the
+    // lib over scripted roots) — keep this a verbatim port.
     function scrollToBottomIncremental(root, opts) {
       opts = opts || {};
       var sleep = opts.sleep || defaultSleep;
+      var now = opts.now || defaultNow;
       var maxAttempts = (typeof opts.maxAttempts === 'number') ? opts.maxAttempts : DEFAULT_MAX_ATTEMPTS;
       var noProgressLimit = (typeof opts.noProgressLimit === 'number') ? opts.noProgressLimit : DEFAULT_NO_PROGRESS_LIMIT;
       var settleMs = (typeof opts.settleMs === 'number') ? opts.settleMs : DEFAULT_SETTLE_MS;
+      var stallWindowMs = (typeof opts.stallWindowMs === 'number') ? opts.stallWindowMs : DEFAULT_STALL_WINDOW_MS;
       var scrollRootLabel = opts.scrollRootLabel || 'window';
       var trustedWheelFallback = (typeof opts.trustedWheelFallback === 'function') ? opts.trustedWheelFallback : null;
       var maxTrustedWheelAttempts = (typeof opts.maxTrustedWheelAttempts === 'number')
@@ -457,17 +467,16 @@
 
       var prevY = root.scrollTop || 0;
       var prevScrollHeight = root.scrollHeight || 0;
+      var lastScrollTop = prevY;
+      var lastScrollHeight = prevScrollHeight;
+      var lastGrowTime = now();
       var noProgress = 0;
       var attempts = 0;
       var trustedWheelAttempts = 0;
-      var lastScrollTop = prevY;
-      var lastScrollHeight = prevScrollHeight;
+      var stallReason = null;
 
-      // RC19 follow-up (console.log 2026-07-29): mirror lib/scroll-ops.js's
-      // no-overflow early-exit. If the chosen root has no scroll range, exit
-      // immediately so the caller's inner-container probe can find the real
-      // scroll root. Without this, we'd spin noProgressLimit times then call
-      // trustedWheelFallback, which for background tabs hangs ~60s.
+      // RC19 follow-up: no-overflow root — exit before the loop so the
+      // caller's inner-container probe can find the real scroll root.
       var rootClientHeight = root.clientHeight || (typeof window !== 'undefined' ? window.innerHeight : 800);
       if (prevScrollHeight <= rootClientHeight) {
         return {
@@ -478,7 +487,9 @@
           newScrollHeight: prevScrollHeight,
           scrollRoot: scrollRootLabel,
           stalled: true,
+          stallReason: 'no_overflow',
           attempts: 0,
+          stallWindowMs: stallWindowMs,
           noOverflow: true
         };
       }
@@ -501,41 +512,58 @@
           lastScrollTop = curTop;
           lastScrollHeight = curHeight;
 
+          // RC21: height growth resets BOTH signals; position change alone
+          // resets only the count (legacy semantics).
+          if (heightGrew) {
+            lastGrowTime = now();
+            noProgress = 0;
+          } else if (posChanged) {
+            noProgress = 0;
+          } else {
+            noProgress += 1;
+          }
+
+          var timeSinceGrowMs = now() - lastGrowTime;
+          var countStalled = noProgress >= noProgressLimit;
+          var timeStalled = timeSinceGrowMs >= stallWindowMs;
+
           try {
             onIter({
               root: scrollRootLabel, iter: i, delta: delta,
               curTop: curTop, curHeight: curHeight,
               heightGrew: heightGrew, posChanged: posChanged,
-              noProgress: noProgress + (heightGrew || posChanged ? 0 : 1),
-              settleMs: settleMs
+              noProgress: noProgress,
+              timeSinceGrowMs: timeSinceGrowMs,
+              settleMs: settleMs,
+              stallWindowMs: stallWindowMs
             });
           } catch (e) { /* diagnostic must not break the loop */ }
 
-          if (heightGrew || posChanged) {
-            noProgress = 0;
-          } else {
-            noProgress += 1;
-            if (noProgress >= noProgressLimit) {
-              if (trustedWheelFallback && trustedWheelAttempts < maxTrustedWheelAttempts) {
-                var wheelResult = null;
-                try {
-                  wheelResult = await trustedWheelFallback({
-                    deltaY: delta,
-                    attempt: trustedWheelAttempts + 1,
-                    scrollRoot: scrollRootLabel
-                  });
-                } catch (e) {
-                  wheelResult = { dispatched: false, reason: 'fallback threw: ' + (e && e.message || String(e)) };
-                }
-                trustedWheelAttempts += 1;
-                if (wheelResult && wheelResult.dispatched) {
-                  if (settleMs > 0) await sleep(settleMs);
-                  noProgress = 0;
-                  continue;
-                }
+          if (countStalled || timeStalled) {
+            if (trustedWheelFallback && trustedWheelAttempts < maxTrustedWheelAttempts) {
+              var wheelResult = null;
+              try {
+                wheelResult = await trustedWheelFallback({
+                  deltaY: delta,
+                  attempt: trustedWheelAttempts + 1,
+                  scrollRoot: scrollRootLabel
+                });
+              } catch (e) {
+                wheelResult = { dispatched: false, reason: 'fallback threw: ' + (e && e.message || String(e)) };
               }
+              trustedWheelAttempts += 1;
+              if (wheelResult && wheelResult.dispatched) {
+                if (settleMs > 0) await sleep(settleMs);
+                lastGrowTime = now();
+                noProgress = 0;
+                continue;
+              }
+              stallReason = timeStalled ? 'stall_window_elapsed' : 'no_progress_count_elapsed';
+              if (wheelResult && wheelResult.reason) stallReason += ': ' + wheelResult.reason;
               break;
             }
+            stallReason = timeStalled ? 'stall_window_elapsed' : 'no_progress_count_elapsed';
+            break;
           }
         }
 
@@ -548,8 +576,10 @@
           prevScrollHeight: prevScrollHeight,
           newScrollHeight: newScrollHeight,
           scrollRoot: scrollRootLabel,
-          stalled: noProgress >= noProgressLimit,
-          attempts: attempts
+          stalled: stallReason !== null,
+          stallReason: stallReason,
+          attempts: attempts,
+          stallWindowMs: stallWindowMs
         };
         if (trustedWheelFallback) result.trustedWheelAttempts = trustedWheelAttempts;
         return result;
@@ -591,6 +621,7 @@
       DEFAULT_MAX_ATTEMPTS: DEFAULT_MAX_ATTEMPTS,
       DEFAULT_NO_PROGRESS_LIMIT: DEFAULT_NO_PROGRESS_LIMIT,
       DEFAULT_SETTLE_MS: DEFAULT_SETTLE_MS,
+      DEFAULT_STALL_WINDOW_MS: DEFAULT_STALL_WINDOW_MS,
       DEFAULT_MAX_TRUSTED_WHEEL_ATTEMPTS: DEFAULT_MAX_TRUSTED_WHEEL_ATTEMPTS,
       SCROLL_INCREMENT_RATIO: SCROLL_INCREMENT_RATIO
     };
