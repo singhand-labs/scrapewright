@@ -212,6 +212,103 @@ describe('probe.attrStats', () => {
   });
 });
 
+describe('probe.scroll', () => {
+  it('runs $scrollToBottom / $scrollBy over the rail and returns {scrolled,prevY,newY}', async () => {
+    const snippets = [];
+    const { tools } = makeTools(async (snippet) => {
+      snippets.push(snippet);
+      return { scrolled: true, prevY: 0, newY: 1200 };
+    });
+    const r = await tools.scroll({});
+    assert.deepEqual(r, { scrolled: true, prevY: 0, newY: 1200 });
+    assert.ok(snippets[0].includes('return $scrollToBottom();'), 'default is a window scroll-to-bottom: ' + snippets[0]);
+    await tools.scroll({ mode: 'by', by: 600, sel: "div[role='feed']" });
+    assert.ok(snippets[1].includes("return $scrollBy(600, \"div[role='feed']\")"), 'by-mode scrolls N px inside the container: ' + snippets[1]);
+    await tools.scroll({ sel: "div[role='feed']" });
+    assert.ok(snippets[2].includes("return $scrollToBottom(\"div[role='feed']\")"), 'container selector composes: ' + snippets[2]);
+  });
+
+  it('records the container selector as an observation receipt (grounds later $scrollToBottom(sel) step claims)', async () => {
+    const { tools, observationLog } = makeTools(async () => ({ scrolled: true, prevY: 0, newY: 10 }));
+    await tools.scroll({ sel: "div[role='feed']" });
+    assert.ok(observationLog.covers("div[role='feed']"),
+      'the scroll container selector must be grounded — step scripts claim it via $scrollToBottom(sel)');
+  });
+
+  it('validates mode/by args and forwards executor errors', async () => {
+    const { tools, observationLog } = makeTools(async () => { throw new Error('SYNTAX_ERR'); });
+    assert.equal((await tools.scroll({ mode: 'by' })).error, 'by (positive pixel count) required for mode:"by"');
+    assert.equal((await tools.scroll({})).error, 'SYNTAX_ERR');
+    assert.equal(observationLog.size(), 0, 'a failed scroll is not an observation');
+  });
+});
+
+describe('probe.scroll receipt entry', () => {
+  it('window scroll records an empty-selector receipt (trajectory, no claim)', async () => {
+    const { tools, observationLog } = makeTools(async () => ({ scrolled: false, prevY: 5, newY: 5 }));
+    const r = await tools.scroll({});
+    assert.deepEqual(r, { scrolled: false, prevY: 5, newY: 5 });
+    assert.equal(observationLog.size(), 1);
+    assert.deepEqual(observationLog.serialize().entries[0].selectors, []);
+  });
+});
+
+describe('probe.hover canonical popover receipt (sixth-live-log turns 17-24 deadlock)', () => {
+  it('derives the canonical selector from the htmlSnippet opening tag, returns it, and records the receipt', async () => {
+    const { tools, observationLog } = makeTools(async () => ({
+      hovered: true,
+      autoDiscovered: true,
+      hoverDispatched: true,
+      popoverSelector: '[auto-discovered popover]',
+      htmlSnippet: '<div aria-label="Link preview" aria-modal="true" dir="ltr"><h2>x</h2></div>'
+    }));
+    const r = await tools.hover({ anchorSel: "div[role='feed'] h2 a" });
+    assert.equal(r.popoverSelector, "div[aria-label='Link preview']",
+      'canonical popoverSelector replaces the useless placeholder');
+    assert.ok(/VERBATIM/.test(r.popoverSelectorNote || ''), 'note teaches verbatim reuse');
+    assert.ok(observationLog.covers("div[aria-label='Link preview']"),
+      'the canonical string is recorded as an observation receipt — popoverSel rewritten to it passes the gate');
+    assert.ok(observationLog.covers("div[role='feed'] h2 a"), 'anchor receipt unchanged');
+  });
+
+  it('derives from observedPopover identity when htmlSnippet is absent (failed-capture mismatch path)', async () => {
+    const { tools, observationLog } = makeTools(async () => ({
+      hovered: false,
+      reason: 'popover_timeout',
+      observedPopover: { tag: 'DIV', role: 'dialog', ariaLabel: 'Link preview', id: '' }
+    }));
+    const r = await tools.hover({ anchorSel: 'a.author' });
+    assert.equal(r.popoverSelector, "div[aria-label='Link preview'][role='dialog']");
+    assert.ok(observationLog.covers("div[aria-label='Link preview'][role='dialog']"));
+  });
+
+  it('keeps the placeholder when nothing distinguishing is derivable (no weak receipts)', async () => {
+    const { tools, observationLog } = makeTools(async () => ({
+      hovered: true,
+      autoDiscovered: true,
+      popoverSelector: '[auto-discovered popover]',
+      htmlSnippet: '<div class="x9f619"><span>y</span></div>'
+    }));
+    const r = await tools.hover({ anchorSel: 'a.q' });
+    assert.equal(r.popoverSelector, '[auto-discovered popover]');
+    assert.equal(r.popoverSelectorNote, undefined, 'no canonical → no verbatim note');
+    assert.equal(observationLog.covers('div'), false, 'a bare tag is never a receipt');
+    assert.ok(observationLog.covers('a.q'), 'anchor receipt still recorded');
+  });
+
+  it('a long aria-label is skipped rather than emitting a truncated (unmatchable) selector', async () => {
+    const longLabel = 'L'.repeat(70);
+    const { tools } = makeTools(async () => ({
+      hovered: true,
+      autoDiscovered: true,
+      popoverSelector: '[auto-discovered popover]',
+      htmlSnippet: '<section role="dialog" aria-label="' + longLabel + '">z</section>'
+    }));
+    const r = await tools.hover({ anchorSel: 'a.r' });
+    assert.equal(r.popoverSelector, "section[role='dialog']", 'role token survives; over-long aria-label dropped');
+  });
+});
+
 describe('probe.hover', () => {
   it('composes $hover over the rail, records the receipt, and diets the result', async () => {
     const { tools, observationLog } = makeTools(async (snippet) => {

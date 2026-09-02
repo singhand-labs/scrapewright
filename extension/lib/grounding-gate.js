@@ -210,7 +210,7 @@
               selector: claim.selector,
               stepIds: claim.stepIds,
               missing: 'dynamic-evidence',
-              suggestion: 'This selector matches an interaction-mounted element — a static count is always 0. Ground it with diag.read (observedPopover / hover diagnostics) or annotate.request, or obtain a user override.'
+              suggestion: 'This selector matches an interaction-mounted element — a static count is always 0. Ground it by running probe.hover (its result carries a canonical popoverSelector recorded as an observation receipt — copy that string VERBATIM into your popoverSel), or annotate.request, or resend service.update with overrides: ["<this selector>"] to waive the receipt explicitly.'
             }
           : {
               selector: claim.selector,

@@ -27,7 +27,7 @@
   const INTERNAL_TOOL_SPECS = [
     { name: 'ledger.add', args: '{finding, evidence?, confidence?, selectors?}', returns: '{added:true, id}' },
     { name: 'knowledge.query', args: '{ids:["unitId"]}', returns: '{units:[{id,title,body}]}' },
-    { name: 'service.update', args: '{steps, inputSchema?, outputSchema?, testInput?, name?, overrides?} — REPLACES the whole artifact (send the complete steps array every time); overrides only waives grounding receipts and never carries steps; testInput (sample input values) is REQUIRED when the target URL has {{param}} placeholders, or verify.run fails with MISSING_URL_PARAM; inputSchema/outputSchema, when sent, MUST be JSON Schema objects like {"type":"object","required":["posts"],"properties":{"posts":{"type":"array","items":{"type":"object"}}}} — natural-language maps ({"posts":"array of post objects"}) are rejected: verify scoring reads "required"/"properties" and cannot see through descriptions', returns: '{version} | {grounding:"rejected", rejections}' }
+    { name: 'service.update', args: '{steps, inputSchema?, outputSchema?, testInput?, name?, overrides?} — REPLACES the whole artifact (send the complete steps array every time); overrides waives grounding receipts (an array of selector strings, or {"selectors":[...]}) and never carries steps; testInput (sample input values) is REQUIRED when the target URL has {{param}} placeholders, or verify.run fails with MISSING_URL_PARAM; inputSchema/outputSchema, when sent, MUST be JSON Schema objects like {"type":"object","required":["posts"],"properties":{"posts":{"type":"array","items":{"type":"object"}}}} — natural-language maps ({"posts":"array of post objects"}) are rejected: verify scoring reads "required"/"properties" and cannot see through descriptions', returns: '{version} | {grounding:"rejected", rejections}' }
   ];
 
   const DEFAULTS = {
@@ -235,6 +235,13 @@
       return { added: true, id: added.id };
     }
 
+    function normalizeOverrides(raw) {
+      const list = Array.isArray(raw)
+        ? raw
+        : (raw && typeof raw === 'object' && Array.isArray(raw.selectors) ? raw.selectors : []);
+      return list.filter(s => typeof s === 'string' && s);
+    }
+
     async function handleServiceUpdate(args) {
       const a = args || {};
       const steps = Array.isArray(a.steps) ? a.steps : [];
@@ -250,7 +257,10 @@
         observationLog: observationLog,
         ledger: ledger,
         autoVerify: autoVerify,
-        overrides: Array.isArray(a.overrides) ? a.overrides : []
+        // Sixth-live-log I2a: the model sent {"selectors":[...]} and the
+        // bare Array.isArray check silently dropped it — an explicit waiver
+        // must never be lost to a shape mismatch. Accept both shapes.
+        overrides: normalizeOverrides(a.overrides)
       });
       if (!v.ok) return { grounding: 'rejected', rejections: v.rejections };
       const handler = tools['service.update'];

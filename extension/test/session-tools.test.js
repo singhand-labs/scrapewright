@@ -35,18 +35,31 @@ describe('createSessionTools', () => {
   it('exposes the full tool bag + toolSpecs + DSL-contract system prompt', () => {
     const { deps } = makeDeps();
     const t = createSessionTools(deps);
-    for (const name of ['page.open', 'page.state', 'probe.count', 'probe.text', 'probe.attrStats', 'probe.sample', 'probe.hover', 'diag.read', 'verify.run', 'annotate.request', 'service.update']) {
+    for (const name of ['page.open', 'page.state', 'probe.count', 'probe.text', 'probe.attrStats', 'probe.sample', 'probe.hover', 'probe.scroll', 'diag.read', 'verify.run', 'annotate.request', 'service.update']) {
       assert.equal(typeof t.tools[name], 'function', name + ' wired');
     }
     assert.ok(t.toolSpecs.every(s => s.name && typeof s.returns === 'string'));
     assert.ok(t.toolSpecs.some(s => s.name === 'verify.run'));
     assert.ok(t.toolSpecs.some(s => s.name === 'probe.hover'), 'first-live-log P-A: hover probe in the spec list');
+    assert.ok(t.toolSpecs.some(s => s.name === 'probe.scroll'), 'sixth-live-log I1: scroll probe in the spec list');
     const p = t.systemPromptBase;
     assert.ok(p.includes('$extractList'), 'DSL contract covers core APIs');
     assert.ok(p.includes('STANDARD CSS'), 'selector constraint present');
     assert.ok(p.includes('probe.hover'), 'methodology teaches the hover probe (do NOT call $hover as a tool)');
+    assert.ok(/probe\.scroll/.test(p), 'methodology teaches the scroll probe (scroll during research, not just in steps)');
+    assert.ok(/VERBATIM/.test(p), 'sixth-live-log I2b: canonical popoverSelector verbatim-copy rule taught');
     assert.ok(p.includes('STEP_NO_RETURN'), 'second-live-log D1a: return-value contract taught with its detector name');
     assert.ok(!/facebook|twitter|linkedin|tiktok|reddit|\bfb\b/i.test(p), 'no site tokens');
+  });
+
+  it('probe.scroll flows through rail.executeDsl with its receipt recorded', async () => {
+    const snippets = [];
+    const base = makeDeps();
+    const { deps } = makeDeps({ rail: Object.assign(base.deps.rail, { executeDsl: async (s) => { snippets.push(s); return { scrolled: true, prevY: 0, newY: 9 }; } }) });
+    const t = createSessionTools(deps);
+    const r = await t.tools['probe.scroll']({ sel: "div[role='feed']" });
+    assert.deepEqual(r, { scrolled: true, prevY: 0, newY: 9 });
+    assert.ok(snippets[0].includes("return $scrollToBottom(\"div[role='feed']\")"), 'composed over the rail: ' + snippets[0]);
   });
 
   it('probe.count flows through rail.executeDsl', async () => {

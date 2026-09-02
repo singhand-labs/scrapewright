@@ -738,6 +738,35 @@ describe('service.update grounding chokepoint (spec §8)', () => {
     assert.equal(session.state().session.artifactVersions[0].steps[0].id, '1');
   });
 
+  it('accepts overrides as {"selectors":[...]} — the shape the model actually sent (sixth-live-log turn 22)', async () => {
+    const bag = {};
+    const handlerCalls = [];
+    const UNGROUNDED = 'div.sneaky';
+    const session = createResearchSession({
+      requirement: 'collect cards',
+      llm: scriptedLlm([
+        reply(envelope('service.update', {
+          steps: updateStep(UNGROUNDED),
+          overrides: { selectors: [UNGROUNDED] }
+        })),
+        reply(finishEnvelope())
+      ], []),
+      tools: bag,
+      budgets: { maxTurns: 10 }
+    });
+    // makeRail(0): auto-verify count 0 — WITHOUT the override this must reject.
+    const probe = createProbeTools({ executeDsl: makeRail(0), observationLog: session.observationLog });
+    bag['probe.count'] = probe.count;
+    bag['service.update'] = async () => { handlerCalls.push(1); return { version: 1 }; };
+
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    assert.equal(handlerCalls.length, 1, 'the object-shaped override waives the receipt — handler runs');
+    assert.equal(report.artifactVersions, 1);
+    const entry = session.state().session.transcript.find(e => e.kind === 'tool' && e.name === 'service.update');
+    assert.ok(!entry.result.grounding, 'admitted via override: ' + JSON.stringify(entry.result));
+  });
+
   it('a failed write handler creates NO version and emits NO artifact_version event (fourth-live-log G2)', async () => {
     const bag = {};
     const events = [];
@@ -1022,5 +1051,19 @@ describe('service.update artifact contract mentions testInput (first-live-log P-
     const sys = calls[0].messages[0].content;
     assert.match(sys, /outputSchema[^\n]*JSON Schema/i, 'schema shape requirement stated on the service.update line');
     assert.match(sys, /"required"/, 'the example shows the required array that unlocks verify scoring');
+  });
+
+  it('the spec documents BOTH overrides shapes (sixth-live-log I2a)', async () => {
+    const calls = [];
+    const session = createResearchSession({
+      requirement: 'collect cards',
+      llm: scriptedLlm([reply(finishEnvelope())], calls),
+      tools: {},
+      budgets: { maxTurns: 3 }
+    });
+    await session.run();
+    const sys = calls[0].messages[0].content;
+    assert.match(sys, /overrides[^\n]*\{"selectors":\[/, 'service.update line teaches the object shape the model tends to send');
+    assert.match(sys, /overrides[^\n]*array of selector strings/, 'and the plain string-array shape');
   });
 });

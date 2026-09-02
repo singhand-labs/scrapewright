@@ -368,11 +368,30 @@
         return tags;
       }
 
+      // Sixth-live-log I4: an all-zero breakdown over real data is almost
+      // always a result-vs-schema top-level KEY mismatch — invisible in the
+      // bare numbers. Name both key sets so the model renames instead of
+      // re-probing the page.
+      function scoreMismatchNote(score, data, schema) {
+        if (!score || score.score !== 0 || !score.isData) return null;
+        if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+        const dataKeys = Object.keys(data);
+        if (!dataKeys.length) return null;
+        const props = (schema && schema.properties && typeof schema.properties === 'object' && !Array.isArray(schema.properties)) ? Object.keys(schema.properties) : [];
+        const req = (schema && Array.isArray(schema.required)) ? schema.required.filter(k => typeof k === 'string') : [];
+        const want = req.length ? req : props;
+        if (!want.length) return null;
+        const which = req.length ? 'required' : 'properties';
+        return 'score is 0 although extraction produced data. Scoring reads the schema\'s ' + which + ' keys against the RESULT\'s top-level keys — result keys [' + dataKeys.join(', ') + '] vs schema ' + which + ' [' + want.join(', ') + ']. Align them: rename the step\'s output field(s) or the schema so the same key appears on both sides; a key-name mismatch scores 0 no matter how complete the data is.';
+      }
+
+      const score = WU.scoreAttemptResult(finalData, outputSchema);
       const report = {
         ok: !error,
         error: error ? { message: error.message, stepId: error.stepId || null } : null,
         aborted: !!(error && /TEST_ABORTED/.test(error.message)),
-        score: WU.scoreAttemptResult(finalData, outputSchema),
+        score: score,
+        scoreNote: scoreMismatchNote(score, finalData, outputSchema),
         schemaOk: !!oc.ok,
         schemaMissing: oc.missing || [],
         detectors: detectors,

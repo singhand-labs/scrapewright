@@ -250,7 +250,38 @@ describe('createVerifyRunner', () => {
   });
 });
 
-describe('verify-runner STEP_NO_RETURN detector (second-live-log D1)', () => {
+describe('verify-runner score-0 key-mismatch note (sixth-live-log I4)', () => {
+  it('score 0 with real data names the result keys vs the schema keys', async () => {
+    const orch = async (svc, input, d, opts) => {
+      await d.createTab(svc.targetUrl);
+      opts.onEvent({ type: 'EXECUTION_START' });
+      return { finalResult: { items: [{ a: 1 }, { a: 2 }] }, steps: [{ stepId: 's1', stepName: 'one', result: { done: true }, snapshot: null }], pages: [], pagesTruncated: false };
+    };
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array' } } } });
+    assert.equal(out.report.ok, true);
+    assert.equal(out.report.score.score, 0, 'schema wants posts, result carries items → all-zero breakdown');
+    assert.ok(out.report.score.isData, 'data DID arrive');
+    assert.ok(out.report.scoreNote, 'the zero score is explained');
+    assert.match(out.report.scoreNote, /items/);
+    assert.match(out.report.scoreNote, /posts/);
+    assert.match(out.report.scoreNote, /top-level/i, 'teaches that scoring reads result top-level keys');
+  });
+
+  it('a matching score carries no note', async () => {
+    const orch = async (svc, input, d, opts) => {
+      await d.createTab(svc.targetUrl);
+      opts.onEvent({ type: 'EXECUTION_START' });
+      return { finalResult: { posts: [{ a: 1 }] }, steps: [{ stepId: 's1', stepName: 'one', result: { done: true }, snapshot: null }], pages: [], pagesTruncated: false };
+    };
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array' } } } });
+    assert.ok(out.report.score.score > 0);
+    assert.equal(out.report.scoreNote, null);
+  });
+});
+
+describe('createVerifyRunner STEP_NO_RETURN detector (second-live-log D1)', () => {
   it('all steps yielded undefined + empty finalResult → loud error, ok:false, tag present', async () => {
     const orch = async (svc, input, d, opts) => {
       opts.onEvent({ type: 'EXECUTION_START' });

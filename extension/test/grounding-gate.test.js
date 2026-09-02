@@ -157,7 +157,7 @@ describe('validateGrounding — receipt sources', () => {
     assert.ok(r.rejections.some(x => x.selector === 'a.p' && x.missing === 'observation'));
   });
 
-  it('dynamic selectors never auto-verify: rejection points at diag/annotation', async () => {
+  it('dynamic selectors never auto-verify: rejection teaches the receipt-creating paths', async () => {
     const s = session([{ sel: 'div.card' }, { sel: 'a.p' }]);
     const r = await validateGrounding({
       steps, observationLog: s.observationLog, ledger: s.ledger,
@@ -167,7 +167,10 @@ describe('validateGrounding — receipt sources', () => {
     const rej = r.rejections.find(x => x.selector === 'div[role="tooltip"]');
     assert.ok(rej);
     assert.equal(rej.missing, 'dynamic-evidence');
-    assert.ok(/diag|annotat/i.test(rej.suggestion), 'rejection teaches the right next probe');
+    assert.ok(/probe\.hover/i.test(rej.suggestion), 'rejection points at the receipt-creating probe');
+    assert.ok(/VERBATIM/i.test(rej.suggestion), 'teaches verbatim copy of the canonical popoverSelector');
+    assert.ok(/overrides/i.test(rej.suggestion), 'teaches the overrides escape hatch');
+    assert.ok(!/diag\.read/i.test(rej.suggestion), 'diag.read never creates a receipt — must not be suggested (sixth-live-log turns 20-21)');
   });
 
   it('a throwing autoVerify probe rejects the selector instead of crashing the gate', async () => {

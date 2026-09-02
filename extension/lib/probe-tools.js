@@ -168,6 +168,87 @@
       return out;
     }
 
+    // Sixth-live-log I1: the session bag had no scroll probe, so the model
+    // spent turns 5-13 repeating "I can't scroll via research tools" and
+    // authored scroll steps blind. The DSL already scrolls — expose it. The
+    // container selector IS recorded as a receipt: step scripts claim it
+    // through $scrollToBottom(sel)/$scrollBy(n, sel), so a scroll the model
+    // performed during research also grounds the step that repeats it.
+    async function scroll(args0) {
+      const a = args0 && typeof args0 === 'object' ? args0 : {};
+      const sel = (typeof a.sel === 'string' && a.sel.trim()) ? a.sel.trim() : null;
+      const mode = a.mode === 'by' ? 'by' : 'bottom';
+      const by = (typeof a.by === 'number' && a.by > 0) ? Math.floor(a.by) : null;
+      if (mode === 'by' && !by) return { error: 'by (positive pixel count) required for mode:"by"' };
+      const snippet = mode === 'by'
+        ? 'return $scrollBy(' + by + (sel ? ', ' + JSON.stringify(sel) : '') + ');'
+        : 'return $scrollToBottom(' + (sel ? JSON.stringify(sel) : '') + ');';
+      const r = await runSnippet(snippet);
+      if (r && typeof r.error === 'string') return r;
+      if (!r || typeof r !== 'object') return { error: 'unexpected scroll result shape' };
+      if (observationLog) {
+        observationLog.record({
+          tool: 'probe.scroll',
+          selectors: sel ? [sel] : [],
+          summary: 'scroll ' + mode + (sel ? ' @' + sel : '') + ' scrolled=' + !!r.scrolled
+        });
+      }
+      return { scrolled: !!r.scrolled, prevY: r.prevY, newY: r.newY };
+    }
+
+    // Sixth-live-log I2b: auto-discovery SEES the real popover but the
+    // observation receipt carried only the anchor selector — a popoverSel the
+    // model rewrites from the evidence could never match a receipt, so the
+    // grounding gate deadlocked the session (turns 19-24). Derive a canonical
+    // selector from the observed structural identity (or the htmlSnippet
+    // opening tag), record THAT exact string as the receipt, and hand it back
+    // as popoverSelector so the model copies it verbatim (RC51 anchorHref
+    // pattern: the framework supplies the field instead of letting the LLM
+    // invent a variant like adding [aria-modal='true']).
+    function popoverIdentityFromHtml(html) {
+      if (typeof html !== 'string' || !html) return null;
+      const t = html.replace(/^\s+/, '');
+      const m = /^<([a-zA-Z][\w-]*)/.exec(t);
+      if (!m) return null;
+      // Quote-aware opening-tag end (attr values may contain '>').
+      let i = m[0].length, quote = null, end = -1;
+      while (i < t.length) {
+        const ch = t[i];
+        if (quote) {
+          if (ch === '\\') { i += 2; continue; }
+          if (ch === quote) quote = null;
+        } else if (ch === '"' || ch === "'") quote = ch;
+        else if (ch === '>') { end = i; break; }
+        i += 1;
+      }
+      if (end < 0) return null;
+      const attrs = t.slice(m[0].length, end);
+      const get = (name) => {
+        const am = new RegExp('(?:^|\\s)' + name + '\\s*=\\s*(["\'])(.*?)\\1', 'i').exec(attrs);
+        return am ? am[2].trim() : '';
+      };
+      return { tag: m[1], id: get('id'), role: get('role'), ariaLabel: get('aria-label') };
+    }
+
+    function canonicalPopoverSelector(op) {
+      if (!op || typeof op !== 'object') return null;
+      const tag = typeof op.tag === 'string' ? op.tag.toLowerCase() : '';
+      if (!/^[a-z][\w-]*$/.test(tag)) return null;
+      // Only STABLE, semantic tokens — id / aria-label / role. Hashed classes
+      // churn between sessions and a bare tag is too broad to be a receipt.
+      // Values are capped (observedPopover slices at 80): a possibly-
+      // truncated value would make an unmatchable selector, so skip it.
+      let s = tag;
+      if (op.id && /^-?[_a-zA-Z][_a-zA-Z0-9-]*$/.test(op.id)) s += '#' + op.id;
+      if (typeof op.ariaLabel === 'string' && op.ariaLabel && op.ariaLabel.length <= 60) {
+        s += "[aria-label='" + op.ariaLabel.replace(/'/g, "\\'") + "']";
+      }
+      if (typeof op.role === 'string' && op.role && op.role.length <= 60) {
+        s += "[role='" + op.role.replace(/'/g, "\\'") + "']";
+      }
+      return s === tag ? null : s;
+    }
+
     // First-live-log P-A: the session bag had no way to OBSERVE a hover
     // popover, so the LLM invoked the DSL primitive "$hover" as a tool name
     // (unknown tool) and fell back to attrStats. This probe runs the SAME
@@ -192,17 +273,24 @@
       }
       const r = await runSnippet('return $hover(' + parts.join(', ') + ');');
       if (r && typeof r.error === 'string') return r;
+      if (!r || typeof r !== 'object') return { error: 'unexpected $hover result shape' };
+      const op = (r.observedPopover && typeof r.observedPopover === 'object')
+        ? r.observedPopover
+        : popoverIdentityFromHtml(typeof r.htmlSnippet === 'string' ? r.htmlSnippet : '');
+      const canonical = canonicalPopoverSelector(op);
       if (observationLog) {
+        const receiptSels = popoverSel ? [anchorSel, popoverSel] : [anchorSel];
+        if (canonical && receiptSels.indexOf(canonical) === -1) receiptSels.push(canonical);
         observationLog.record({
           tool: 'probe.hover',
-          selectors: popoverSel ? [anchorSel, popoverSel] : [anchorSel],
+          selectors: receiptSels,
           summary: 'hover probe' + (typeof opts.index === 'number' ? ' index=' + opts.index : '')
+            + (canonical ? ' popover=' + canonical : '')
         });
       }
-      if (!r || typeof r !== 'object') return { error: 'unexpected $hover result shape' };
       const out = {
         hovered: !!r.hovered,
-        popoverSelector: (typeof r.popoverSelector === 'string' && r.popoverSelector) || null,
+        popoverSelector: canonical || ((typeof r.popoverSelector === 'string' && r.popoverSelector) || null),
         autoDiscovered: !!r.autoDiscovered,
         hoverDispatched: !!r.hoverDispatched,
         reason: (typeof r.reason === 'string' && r.reason) || null,
@@ -211,10 +299,13 @@
         // rewrites popoverSel from); matches the record-HTML 8000 precedent.
         htmlSnippet: typeof r.htmlSnippet === 'string' && r.htmlSnippet ? r.htmlSnippet.slice(0, 8000) : null
       };
+      if (canonical) {
+        out.popoverSelectorNote = 'canonical popoverSelector derived from the observed popover — an observation receipt was recorded for THIS EXACT STRING. If you configure popoverSel in a step, copy it VERBATIM; an embellished variant (e.g. adding [aria-modal=\'true\']) is a new string the grounding gate must reject.';
+      }
       return out;
     }
 
-    return { count, text, attrStats, sample, hover };
+    return { count, text, attrStats, sample, hover, scroll };
   }
 
   const api = { createProbeTools };
