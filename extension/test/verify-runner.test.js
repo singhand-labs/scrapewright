@@ -538,3 +538,22 @@ describe('audit batch: junk/depth/hints/degradation (C7/C9/C11/C19/C20/C26)', ()
     assert.equal(out.raw.breaker, null);
   });
 });
+
+describe('audit C2 (pin): abort signal reaches mid-run script execution', () => {
+  it('getSignal().aborted flips the next executeScript into TEST_ABORTED', async () => {
+    let signal = { aborted: false };
+    const orch = async (svc, input, d, opts) => {
+      opts.onEvent({ type: 'EXECUTION_START' });
+      const step = svc.steps[0];
+      await d.executeScript(11, step.script, {}, 1000); // first pass ok
+      signal.aborted = true; // user hits Abort here
+      await d.executeScript(11, step.script, {}, 1000); // must abort
+      return { finalResult: {}, steps: [], pages: [] };
+    };
+    const { runner } = makeRunner(orch, { getSignal: () => signal });
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object' } });
+    assert.equal(out.report.ok, false);
+    assert.match(out.report.error.message, /TEST_ABORTED/);
+    assert.equal(out.report.aborted, true);
+  });
+});

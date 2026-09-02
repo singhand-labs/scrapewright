@@ -346,3 +346,9 @@ describe('audit plan1: wizard lifecycle state machine (A1/A2/A3/A5/A6/A17/A18 + 
     assert.match(SRC, /'tokenCap'/);
   });
 });
+
+describe('audit C2 (pin): the runner signal includes the session abort flag', () => {
+  it('getWizardRunner getSignal reads sessionAbortRequested', () => {
+    assert.match(SRC, /getSignal: \(\) => \(\{[\s\S]{0,220}sessionAbortRequested/);
+  });
+});

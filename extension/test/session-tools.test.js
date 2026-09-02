@@ -458,3 +458,18 @@ describe('audit prompt universality + diag (C15/C17/C18/C21)', () => {
     assert.equal(r.popover, undefined, 'empty bucket skipped');
   });
 });
+
+describe('audit C14 (pin): artifact version is read AFTER apply, one source of truth', () => {
+  it('service.update returns the next version derived from session artifactVersions', async () => {
+    const { deps, state } = makeDeps();
+    const t = createSessionTools(deps);
+    const mk = (n) => ({ ledger: null, session: { state: () => ({ session: { artifactVersions: new Array(n) } }) } });
+    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object' } });
+    const r1 = await t.tools['service.update']({ steps: GOOD_STEPS, inputSchema: { type: 'object' }, outputSchema: { type: 'object' } }, mk(0));
+    assert.equal(r1.updated, true);
+    assert.equal(r1.version, 1);
+    const r3 = await t.tools['service.update']({ steps: GOOD_STEPS }, mk(2));
+    assert.equal(r3.version, 3);
+    assert.ok(state.applied.length >= 1);
+  });
+});
