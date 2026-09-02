@@ -98,15 +98,33 @@ describe('probe.sample', () => {
     assert.ok(r.element.textContent.length <= 300);
   });
 
-  it('attaches outerHTML only for index 0 via the $extract attr path, when asked', async () => {
+  it('attaches outerHTML for ANY index via the $extractList self-read path, when asked', async () => {
+    const list = [
+      { tagName: 'DIV', id: 'c0', className: '', textContent: '' },
+      { tagName: 'DIV', id: 'c1', className: '', textContent: '' }
+    ];
     const { tools } = makeTools(async (snippet) => {
-      if (/\$extract\(/.test(snippet)) return '<div class="cap">html</div>';
-      return [{ tagName: 'DIV', id: 'c0', className: '', textContent: '' }];
+      if (/return \$extractList\(/.test(snippet)) {
+        // Empty-selector fieldMap → one record per match, h = that match's own outerHTML.
+        assert.ok(snippet.includes('"attr":"outerHTML"') || snippet.includes("'attr'"), 'fieldMap reads outerHTML');
+        return [{ h: '<div id="c0">a</div>' }, { h: '<div id="c1">b</div>' }];
+      }
+      assert.ok(/return \$list\(/.test(snippet));
+      return list;
     });
     const r0 = await tools.sample('div.card', { wantHtml: true });
-    assert.equal(r0.html, '<div class="cap">html</div>');
+    assert.equal(r0.html, '<div id="c0">a</div>');
     const r1 = await tools.sample('div.card', { index: 1, wantHtml: true });
-    assert.equal(r1.html, undefined, 'nth-match HTML needs the live executor op (Plan 3)');
+    assert.equal(r1.html, '<div id="c1">b</div>', 'nth-match HTML is addressable');
+  });
+
+  it('caps the attached HTML at 30000 chars', async () => {
+    const { tools } = makeTools(async (snippet) => {
+      if (/return \$extractList\(/.test(snippet)) return [{ h: 'x'.repeat(50000) }];
+      return [{ tagName: 'DIV', id: 'c0', className: '', textContent: '' }];
+    });
+    const r = await tools.sample('div.card', { wantHtml: true });
+    assert.equal(r.html.length, 30000);
   });
 
   it('out-of-range index reports notFound without throwing', async () => {
@@ -117,13 +135,27 @@ describe('probe.sample', () => {
 
   it('surfaces a failed optional HTML leg as htmlError, keeping element data', async () => {
     const { tools } = makeTools(async (snippet) => {
-      if (/\$extract\(/.test(snippet)) throw new Error('EXTRACT_FAILED');
+      if (/return \$extractList\(/.test(snippet)) throw new Error('EXTRACT_FAILED');
       return [{ tagName: 'DIV', id: 'c0', className: '', textContent: '' }];
     });
     const r = await tools.sample('div.card', { wantHtml: true });
     assert.equal(r.htmlError, 'EXTRACT_FAILED');
     assert.equal(r.html, undefined);
     assert.equal(r.element.id, 'c0', 'element data survives the failed HTML leg');
+  });
+
+  it('htmlError (not silence) when the addressed match yields no outerHTML', async () => {
+    const { tools } = makeTools(async (snippet) => {
+      if (/return \$extractList\(/.test(snippet)) return [{ h: '<div>a</div>' }, { h: '' }];
+      return [
+        { tagName: 'DIV', id: 'c0', className: '', textContent: '' },
+        { tagName: 'DIV', id: 'c1', className: '', textContent: '' }
+      ];
+    });
+    const r = await tools.sample('div.card', { index: 1, wantHtml: true });
+    assert.equal(r.html, undefined);
+    assert.ok(/no outerHTML for match 1/.test(r.htmlError), 'explicit htmlError names the match');
+    assert.equal(r.element.id, 'c1', 'element data still present');
   });
 });
 

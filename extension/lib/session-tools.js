@@ -255,7 +255,7 @@
       { name: 'probe.count', args: '{sel}', returns: '{count}' },
       { name: 'probe.text', args: '{sel}', returns: '{total,items[]}' },
       { name: 'probe.attrStats', args: '{containerSel, attr}', returns: '{totalCards,values[{value,cards,pct}],absentPct}' },
-      { name: 'probe.sample', args: '{sel, opts:{index,wantHtml}}', returns: '{match,total,element}' },
+      { name: 'probe.sample', args: '{sel, opts:{index,wantHtml}}', returns: '{match,total,element,html?}' },
       { name: 'diag.read', args: '{stepId?, kind?}', returns: '{selectorDiagnostics, failingStep?, popover, counters, lastError?}' },
       { name: 'verify.run', args: '{input?}', returns: '{ok,score,error,detectors,steps,finalResult,schemaOk}' },
       { name: 'annotate.request', args: '{why, fields?, containerSel?}', returns: '{annotations[{selector,purpose,outputField}]} | {cancelled}' }

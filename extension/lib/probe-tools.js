@@ -143,13 +143,22 @@
           src: String(el.src || '').slice(0, 300)
         }
       };
-      // outerHTML is only expressible for the FIRST match on the current rail
-      // ($extract(sel, 'outerHTML')). nth-match HTML arrives with the live
-      // executor op in Plan 3 — declared limitation, not a stub.
-      if (o.wantHtml && index === 0) {
-        const h = await runSnippet('return $extract(' + JSON.stringify(sel) + ", 'outerHTML');");
-        if (h && typeof h.error === 'string') out.htmlError = h.error;
-        else out.html = String(h || '').slice(0, 30000);
+      // Empty-selector fieldMap = "the container itself" (list-extract-ops
+      // readField), so one $extractList returns every match's OWN outerHTML
+      // and any index is addressable — $extract alone can only reach the
+      // first match. The relay carries all matches (the DSL has no indexed
+      // extract); the kept result is capped below.
+      if (o.wantHtml) {
+        const fieldMap = { h: { attr: 'outerHTML' } };
+        const r2 = await runSnippet('return $extractList(' + JSON.stringify(sel) + ', ' + JSON.stringify(fieldMap) + ');');
+        if (r2 && typeof r2.error === 'string') {
+          out.htmlError = r2.error;
+        } else {
+          const recs = Array.isArray(r2) ? r2 : (r2 && Array.isArray(r2.records) ? r2.records : []);
+          const rec = recs[index];
+          if (rec && typeof rec.h === 'string' && rec.h) out.html = rec.h.slice(0, 30000);
+          else out.htmlError = 'no outerHTML for match ' + index + ' (' + recs.length + ' match(es))';
+        }
       }
       return out;
     }
