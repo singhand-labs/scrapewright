@@ -118,6 +118,28 @@ describe('parseAssistantTurn', () => {
     assert.equal(Protocol.parseAssistantTurn('{"tool":"probe.count","args":[1]}').ok, false);
   });
 
+  it('classifies truncated replies as not-object WITH a detail naming the truncation and the reply tail (fifth live log turn 21)', () => {
+    // Exact visible prefixes of the two dying replies (300-char console
+    // previews; both finish_reason "stop", both cut before the closing
+    // braces). Before the fix these returned detail-less no-json because the
+    // balanced-brace scan never reached depth 0 — hiding the only evidence.
+    const truncMidString = '{"think":"Article 0 is a Groups recommendation carousel — role=article alone insufficient. Discriminator: real posts have a permalink (story.php//posts//videos//photo) inside the article. Count that.","goals":null,"hypotheses":{"add":"Real post articles contain a permalink link (story.php, /posts/, photo). Count ';
+    const truncBeforeBraces = '{"think":"Groups block","goals":null,"hypotheses":{"add":"Non-post recommendation articles contain a[href*=\'/groups/\'] links instead of permalinks"},"tool":"probe.count","args":{"sel":"div[role=\'feed\'] div[role=\'article\']:not(:has(a[href*=\'/groups/\']))"';
+    for (const t of [truncMidString, truncBeforeBraces]) {
+      const r = Protocol.parseAssistantTurn(t);
+      assert.equal(r.ok, false, 'truncated reply must fail');
+      assert.equal(r.violation, 'not-object', 'extraction fallback lets the parse stage rule: ' + JSON.stringify(r));
+      assert.ok(/cut-off|Unterminated|Unexpected end/i.test(r.detail || ''), 'detail names the truncation class');
+      assert.ok((r.detail || '').includes('tail:'), 'detail carries the reply tail so console logs alone can diagnose');
+    }
+  });
+
+  it('no-json still means "nothing object-like" and now carries a head excerpt', () => {
+    const r = Protocol.parseAssistantTurn('Sure! Let me count the cards for you.');
+    assert.equal(r.violation, 'no-json');
+    assert.ok((r.detail || '').includes('count the cards'), 'head excerpt present');
+  });
+
   it('normalizes goal/hypothesis updates leniently', () => {
     const r = Protocol.parseAssistantTurn(
       '{"goals":{"push":"find container"},"hypotheses":{"add":"feed is organic"},"tool":"probe.count","args":{}}');

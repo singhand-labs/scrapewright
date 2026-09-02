@@ -88,11 +88,35 @@
         if (depth === 0) return t.slice(start, i + 1);
       }
     }
-    return null;
+    // Unbalanced to EOF: the reply was cut off before the closing braces
+    // (glm tail degradation reports finish_reason "stop") or a stray quote
+    // swallowed them. Hand the tail-inclusive text to the PARSE stage
+    // instead of failing blind — its truncation discipline decides
+    // (recoverable quote shapes recover; true truncation fails loudly with
+    // a position error). Fifth-live-log turn 21: detail-less no-json here
+    // hid the only evidence for both dying replies.
+    return t.slice(start);
   }
 
-  function lenientParse(candidate) {
-    try { return JSON.parse(candidate); } catch (e) { /* fall through */ }
+  // Quote-aware balance check — the explicit truncation signal. V8's parse
+  // error text varies with WHERE the cut landed ("Unterminated string" vs
+  // "Unexpected end" vs "Expected ',' or '}'"), so the cut-off class is
+  // stated directly instead of inferred from message text.
+  function bracesBalanced(text) {
+    let depth = 0, quote = null;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (quote) {
+        if (ch === '\\') { i++; continue; }
+        if (ch === quote) quote = null;
+      } else if (ch === '"' || ch === "'") quote = ch;
+      else if (ch === '{') depth += 1;
+      else if (ch === '}') depth -= 1;
+    }
+    return depth === 0 && !quote;
+  }
+
+  function lenientParse(candidate) {    try { return JSON.parse(candidate); } catch (e) { /* fall through */ }
     // Reuse the corpus-hardened lenient parser (3 real incidents) when it is
     // reachable: node require, else the wizard page global set by wizard-utils.
     let parser = null;
@@ -138,7 +162,13 @@
 
   function parseAssistantTurn(text) {
     const candidate = extractJsonObject(text);
-    if (!candidate) return { ok: false, violation: 'no-json' };
+    if (!candidate) {
+      // Fifth-live-log: no-json carried detail:null, so a dying reply left
+      // NOTHING diagnosable in the console. Ship the head excerpt — the
+      // class ("no { at all" vs "empty") is visible at a glance.
+      const head = String(text || '').trim().slice(0, 120);
+      return { ok: false, violation: 'no-json', detail: head ? 'reply contains no { — first 120 chars: ' + head : 'empty reply' };
+    }
     let obj;
     let parseErr = null;
     try { obj = JSON.parse(candidate); } catch (e) {
@@ -146,7 +176,13 @@
       obj = lenientParse(candidate);
     }
     if (obj == null || typeof obj !== 'object' || Array.isArray(obj)) {
-      return { ok: false, violation: 'not-object', detail: parseErr.slice(0, 140) };
+      // The tail rides along because console previews cut at 300 chars —
+      // truncation kills the reply exactly where the preview cannot see
+      // (fifth-live-log turn 21: two replies, 554/470 chars, tail unknown).
+      const tail = JSON.stringify(candidate.slice(-100));
+      const cut = bracesBalanced(candidate) ? '' : ' | cut-off: braces never closed (reply truncated)';
+      const detail = ((parseErr ? String(parseErr).slice(0, 140) : 'parsed to null') + cut + ' | tail: ' + tail).slice(0, 300);
+      return { ok: false, violation: 'not-object', detail: detail };
     }
     if (obj.args !== undefined && (typeof obj.args !== 'object' || obj.args === null || Array.isArray(obj.args))) {
       return { ok: false, violation: 'bad-args' };

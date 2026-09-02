@@ -325,7 +325,7 @@ describe('protocol violations', () => {
     assert.ok(events.some(e => e.type === 'protocol_violation' && e.violation === 'no-json'));
     const nudges = session.state().session.transcript.filter(e => e.kind === 'system');
     assert.equal(nudges.length, 1);
-    assert.ok(nudges[0].text.includes('PROTOCOL VIOLATION (no-json)'));
+    assert.ok(/^PROTOCOL VIOLATION \(no-json/.test(nudges[0].text), 'violation named (detail may follow)');
   });
 
   it('the repair nudge carries the parse-error detail so the model can fix quoting (third live log F3)', async () => {
@@ -344,6 +344,30 @@ describe('protocol violations', () => {
     assert.ok(nudges[0].text.includes('PROTOCOL VIOLATION (not-object'), 'violation named');
     assert.ok(/position/i.test(nudges[0].text), 'parse position carried into the nudge');
     assert.ok(nudges[0].text.includes('unescaped'), 'nudge teaches the quoting fix');
+  });
+
+  it('a truncated reply gets a cut-off-specific nudge demanding a SHORTER resend (fifth live log turn 21)', async () => {
+    const events = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        // Fifth-log shape: reply cut before the closing braces (finish_reason
+        // stop) — the two replies that killed the real session.
+        reply('{"think":"Groups block","goals":null,"hypotheses":{"add":"Non-post recommendation articles contain a[href*=\'/groups/\'] links instead of permalinks"},"tool":"probe.count","args":{"sel":"div[role=\'feed\'] div[role=\'article\']:not(:has(a[href*=\'/groups/\']))"'),
+        reply(envelope('probe.count', { sel: 'div.card' })),
+        reply(finishEnvelope())
+      ], []),
+      tools: { 'probe.count': async () => ({ count: 4 }) },
+      onEvent: (e) => events.push(e)
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    assert.equal(report.turns, 2, 'repair round recovered the turn');
+    const nudges = session.state().session.transcript.filter(e => e.kind === 'system');
+    assert.ok(/CUT OFF/i.test(nudges[0].text), 'nudge names the truncation class');
+    assert.ok(/SHORTER/i.test(nudges[0].text), 'nudge demands a shorter resend (glm tail degradation grows with reply length)');
+    const ev = events.find(e => e.type === 'protocol_violation');
+    assert.ok(ev && ev.detail && /cut-off|Unterminated|Unexpected end/i.test(ev.detail), 'violation event carries the truncation evidence');
   });
 
   it('a second consecutive violation stops the session with reason protocol', async () => {

@@ -458,10 +458,15 @@
             // "missing-action" alone sent the model hunting for an action it
             // had already written while the true problem was unescaped quotes
             // (third live log).
-            state.transcript.push({
-              kind: 'system',
-              text: 'PROTOCOL VIOLATION (' + parsed.violation + (parsed.detail ? ' — ' + parsed.detail : '') + '): reply with ONE JSON object with exactly one of "tool" or "finish". No prose outside the JSON. A token/position error usually means unescaped double quotes inside a string value — escape them (\") or do not quote text with ".'
-            });
+            let nudgeText = 'PROTOCOL VIOLATION (' + parsed.violation + (parsed.detail ? ' — ' + parsed.detail : '') + '): reply with ONE JSON object with exactly one of "tool" or "finish". No prose outside the JSON. A token/position error usually means unescaped double quotes inside a string value — escape them (\") or do not quote text with ".';
+            // Fifth-live-log turn 21: BOTH the original and the repair reply
+            // were cut off before the closing braces (finish_reason "stop").
+            // Generic advice made the model resend at the same length and
+            // truncate again — name the class and demand a shorter resend.
+            if (parsed.detail && /cut-off|Unterminated string|Unexpected end/i.test(parsed.detail)) {
+              nudgeText += ' Your previous reply was CUT OFF before the JSON closed. Resend the SAME turn much SHORTER: a one-sentence think, then tool/args, then the closing braces — long replies are the ones that get truncated.';
+            }
+            state.transcript.push({ kind: 'system', text: nudgeText });
             let repaired = null;
             try {
               repaired = await callLlm(assembleMessages());
