@@ -38,7 +38,8 @@
 
   function cap(s, n) {
     const t = String(s == null ? '' : s);
-    return t.length > n ? t.slice(0, n - 1) + '…' : t;
+    if (t.length <= n) return t;
+    return Array.from(t).slice(0, Math.max(0, n - 1)).join('') + '…';
   }
 
   function previewJson(p) {
@@ -52,13 +53,13 @@
     for (const evt of events) {
       if (!evt || evt.type !== 'STEP_ITERATION') continue;
       const p = previewJson(evt.resultPreview);
+      if (p && typeof p.observedPopoverCount === 'number') observed += p.observedPopoverCount;
       const fr = p && typeof p === 'object' ? p.failureReasons : null;
       if (!fr) continue;
       for (const k of Object.keys(fr)) {
         reasons[k] = (reasons[k] || 0) + fr[k];
         total += fr[k];
       }
-      if (typeof p.observedPopoverCount === 'number') observed += p.observedPopoverCount;
     }
     if (!total) return { note: 'no hover failure reasons recorded in this verify run' };
     return {
@@ -99,11 +100,14 @@
       '- $extractList(containerSel, fieldMap, opts?) — one record per container; fieldMap {field:{selector,attr?}}; opts.allowEmpty keeps empty-string fields (return every record, never filter to [])',
       '- $extractListMulti(containerSel, fieldMap, opts?) — array-valued fields',
       '- $extractWithHover(containerSel, fieldMap, {hover:{anchorSel, popoverSel?}}) — hover-enriched extraction; anchorSel is evaluated INSIDE each container',
+      '- $hover(anchorSel, popoverSel?, opts?) — one-off trusted hover (opts.index picks the Nth anchor); for hover-enriched record extraction prefer $extractWithHover',
+      '- $waitForStable(sel, opts?) — resolves true once the element\'s sampled content stops changing (streaming content); prefer over setTimeout guessing',
       '- $click(sel), $type(sel, text), $wait(sel, ms?), $check(sel, prop)',
       '- $clickInList(containerSel, subSel) — click inside every matched container',
       '- $scrollBy(px), $scrollToBottom(), $scrollIntoView(sel)',
       '- $openTab(url, fn) — open a sub-tab, run fn in it, return its result',
       'Selectors are STANDARD CSS only (:has/:not/:is/:where are valid; :has-text/:contains/:text= are NOT and throw instantly).',
+      'Selectors may target iframes with the prefix <iframe-css>|<inner-css> (outer selects the iframe element, inner is evaluated inside its document) — works in every $ API.',
       '',
       '# Methodology meta-rules',
       '1. Ground every selector and attribute filter in an observation (probe or user annotation) BEFORE service.update — ungrounded writes are rejected with the missing receipt named.',
@@ -153,6 +157,9 @@
       const all = lastVerify.events || [];
       const events = a.stepId != null ? all.filter((e) => e && String(e.stepId) === String(a.stepId)) : all;
       const out = { at: lastVerify.at, eventCount: all.length };
+      if (lastVerify.staleArtifact) {
+        out.warning = 'this diagnostics snapshot predates the current artifact — run verify.run again before trusting it for the new version';
+      }
       if (lastVerify.report && lastVerify.report.error) out.lastError = lastVerify.report.error;
       if (kind === 'all' || kind === 'selectorDiagnostics') {
         out.selectorDiagnostics = cap(WU.summarizeAllStepDiagnostics(all, d.getSteps() || []), diagCap);
@@ -182,19 +189,21 @@
       }
       const picks = Array.isArray(res.annotations) ? res.annotations.filter((p) => p && typeof p === 'object') : [];
       const ledger = (ctx && ctx.ledger) || null;
-      for (const p of picks) {
-        if (typeof p.selector !== 'string' || !p.selector) continue;
-        if (ledger) {
-          ledger.add({
-            finding: 'user annotation: ' + (p.purpose || p.type || 'element') +
-              (typeof p.outputField === 'string' && p.outputField ? ' → ' + p.outputField : ''),
-            evidence: a.why || 'annotate.request',
-            confidence: 'high',
-            provenance: 'user',
-            selectors: [p.selector]
-          });
+      try {
+        for (const p of picks) {
+          if (typeof p.selector !== 'string' || !p.selector) continue;
+          if (ledger) {
+            ledger.add({
+              finding: 'user annotation: ' + (p.purpose || p.type || 'element') +
+                (typeof p.outputField === 'string' && p.outputField ? ' → ' + p.outputField : ''),
+              evidence: a.why || 'annotate.request',
+              confidence: 'high',
+              provenance: 'user',
+              selectors: [p.selector]
+            });
+          }
         }
-      }
+      } catch (e) { /* ledger failure is secondary — the user's picks still count */ }
       return {
         annotations: picks.map((p) => ({
           selector: String(p.selector || ''),
@@ -216,6 +225,7 @@
       }
       try {
         d.applyArtifact(a);
+        if (lastVerify) lastVerify.staleArtifact = true;
       } catch (e) {
         return { error: 'artifact apply failed: ' + String((e && e.message) || e) };
       }

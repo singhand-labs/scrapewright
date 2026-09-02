@@ -117,6 +117,44 @@ describe('createSessionTools', () => {
     assert.deepEqual(out, { updated: true, version: 2 });
   });
 
+  it('diag.read failingStep channel keys off report.error.stepId; service.update marks lastVerify stale', async () => {
+    const { deps, state } = makeDeps({
+      runVerify: async () => ({
+        report: { ok: false, error: { message: 'boom', stepId: 's1' }, events: [] },
+        events: [{ type: 'STEP_ITERATION', stepId: 's1', iteration: 1, resultPreview: '{"done":false}' }],
+        raw: { testResult: null, error: null, breaker: null }
+      })
+    });
+    const t = createSessionTools(deps);
+    state.draft = { targetUrl: 'x', steps: GOOD_STEPS };
+    await t.tools['verify.run']({});
+    const r = await t.tools['diag.read']({ kind: 'failingStep' });
+    assert.ok(typeof r.failingStep === 'string');
+    assert.ok(!('selectorDiagnostics' in r), 'kind narrowing');
+    const upd = await t.tools['service.update']({ steps: GOOD_STEPS }, { session: { state: () => ({ session: { artifactVersions: [] } }) } });
+    assert.equal(upd.updated, true);
+    const r2 = await t.tools['diag.read']({});
+    assert.match(r2.warning, /predates the current artifact/);
+    await t.tools['verify.run']({});
+    const r3 = await t.tools['diag.read']({});
+    assert.ok(!('warning' in r3), 'fresh verify clears staleness');
+  });
+
+  it('popover digest counts observed popovers even on iterations without failure reasons', async () => {
+    const { deps, state } = makeDeps({
+      runVerify: async () => ({
+        report: { ok: false, error: { message: 'x', stepId: 's1' }, events: [] },
+        events: [{ type: 'STEP_ITERATION', stepId: 's1', iteration: 1, resultPreview: '{"observedPopoverCount":6}' }],
+        raw: { testResult: null, error: null, breaker: null }
+      })
+    });
+    const t = createSessionTools(deps);
+    state.draft = { targetUrl: 'x', steps: GOOD_STEPS };
+    await t.tools['verify.run']({});
+    const r = await t.tools['diag.read']({ kind: 'popover' });
+    assert.equal(r.popover.note, 'no hover failure reasons recorded in this verify run');
+  });
+
   it('annotate.request without a bridge errors; picks enter the ledger as provenance user; cancel round-trips', async () => {
     const { deps } = makeDeps();
     const t = createSessionTools(deps);
