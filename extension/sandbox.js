@@ -85,6 +85,9 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
       if (e.data.error) {
         const err = new Error(e.data.error);
         if (e.data.subTabSnapshot) err.subTabSnapshot = e.data.subTabSnapshot;
+        // B2: keep diagnostics on the rejected Error too — script-level
+        // catch handlers can then read why the call failed.
+        if (e.data._diagnostics) err._diagnostics = e.data._diagnostics;
         pending.reject(err);
       } else {
         // Strip _diagnostics before resolving so the user-facing $ API value
@@ -175,7 +178,12 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
       parent.postMessage({ type: 'EXECUTE_RESULT', result, selectorDiagnostics }, '*');
     } catch (error) {
       sendDebugLog('error', 'sandbox', 'Script execution error', { error: error.message, stack: error.stack, scriptPreview: scriptCode?.slice(0, 2000), hasSubTabSnapshot: !!error.subTabSnapshot });
-      parent.postMessage({ type: 'EXECUTE_RESULT', error: error.message || String(error), subTabSnapshot: error.subTabSnapshot || undefined }, '*');
+      // B2: diagnostics ride the error path too — the failing call's own
+      // diagnostics (attached to the Error) plus any accumulated before it.
+      const errorDiags = __selectorDiagnostics__.slice();
+      if (error && error._diagnostics) errorDiags.push(error._diagnostics);
+      __selectorDiagnostics__ = [];
+      parent.postMessage({ type: 'EXECUTE_RESULT', error: error.message || String(error), subTabSnapshot: error.subTabSnapshot || undefined, selectorDiagnostics: errorDiags }, '*');
     }
   }
 

@@ -1092,6 +1092,10 @@
     } catch (e) {
       error = e.message || String(e);
       if (e.subTabSnapshot) subTabSnapshot = e.subTabSnapshot;
+      // B2: a dom* helper that diagnosed its failure before throwing must
+      // not lose that evidence — merge it into the error payload (the
+      // sandbox/orchestrator relay forwards it to autoFix).
+      if (e && e._diagnostics) _diagnostics = e._diagnostics;
     }
     return { result, error, subTabSnapshot, _diagnostics };
   }
