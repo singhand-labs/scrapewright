@@ -237,3 +237,41 @@ describe('ninth-log M1/M2/M5: feedback continuation budget + maxTurns presentati
     assert.ok(!/testScript (success|failed)/.test(body), 'the session path is not a testScript run — labels must not mislead');
   });
 });
+
+describe('ninth-log follow-up: early I/O contract confirmation (io.confirm)', () => {
+  it('phase-4 panel: schema pre blocks, revision textarea, confirm/revise buttons', () => {
+    for (const id of ['ioConfirmPanel', 'ioConfirmNote', 'ioConfirmInput', 'ioConfirmOutput', 'ioConfirmFeedback', 'btnIoConfirm', 'btnIoRevise']) {
+      assert.ok(HTML.includes('id="' + id + '"'), id + ' exists in HTML');
+    }
+    for (const id of ['btnIoConfirm', 'btnIoRevise']) {
+      assert.ok(SRC.includes("getElementById('" + id + "')"), id + ' wired');
+    }
+  });
+
+  it('createWizardIoBridge parks the engine turn on a promise; confirm/revise/cancel resolve it', () => {
+    const body = fnBody('createWizardIoBridge');
+    assert.match(body, /request\(req\)\s*\{\s*return new Promise/, 'request parks the engine turn on a pending promise');
+    assert.ok(body.includes('confirmed: true'), 'confirm resolves approved');
+    assert.ok(/confirmed:\s*false,\s*feedback/.test(body), 'revise returns the user text as feedback');
+    assert.ok(body.includes('cancel'), 'cancel path exists for session stop');
+    assert.ok(/JSON\.stringify\([^)]*,\s*null,\s*2\)/.test(body), 'schemas pretty-printed for human review');
+  });
+
+  it('the bridge is wired into the session tool bag and cancelled on stop', () => {
+    const srs = fnBody('startResearchSession');
+    assert.ok(/wizardIoBridge\s*=\s*createWizardIoBridge\(\)/.test(srs), 'bridge created at session start');
+    assert.ok(/ioConfirmBridge:\s*wizardIoBridge/.test(srs), 'passed to createSessionTools deps');
+    const hse = fnBody('handleSessionEvent');
+    assert.match(hse, /'stopped'[\s\S]*?wizardIoBridge && wizardIoBridge\.cancel\(\)/, "the 'stopped' event cancels a pending confirmation");
+  });
+
+  it('session-tools carries the gate: marker + runtime flag, drift teaching', () => {
+    const ST = fs.readFileSync(path.join(__dirname, '..', 'lib', 'session-tools.js'), 'utf8');
+    assert.ok(ST.includes("'io.confirm': ioConfirm"), 'tool registered');
+    assert.ok(ST.includes('I/O CONTRACT UNCONFIRMED'), 'gate error text');
+    assert.ok(ST.includes('I/O CONTRACT DRIFT'), 'material-drift gate error text');
+    assert.ok(ST.includes("const IO_LEDGER_MARKER = 'I/O CONTRACT CONFIRMED'"), 'ledger marker (survives seed resume + compaction)');
+    assert.ok(ST.includes('provenance: \'user\''), 'marker entry is user-provenance so compaction keeps it');
+    assert.match(ST, /EARLY contract confirmation/, 'methodology rule 9');
+  });
+});

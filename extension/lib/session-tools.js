@@ -47,6 +47,25 @@
         (s.properties && typeof s.properties === 'object' && !Array.isArray(s.properties)));
   }
 
+  // Reduce a JSON Schema to its load-bearing shape (field names, types,
+  // required, nesting). Cosmetic keys (description/title/examples) are
+  // ignored, so re-confirmation triggers only on MATERIAL drift: fields
+  // added/removed/renamed or types changed.
+  function schemaShape(s) {
+    const shape = (node) => {
+      if (!node || typeof node !== 'object' || Array.isArray(node)) return null;
+      if (node.type === 'array') return { t: 'array', i: node.items ? shape(node.items) : null };
+      const out = { t: typeof node.type === 'string' ? node.type : '?' };
+      if (Array.isArray(node.required)) out.req = node.required.map(String).sort();
+      if (node.properties && typeof node.properties === 'object' && !Array.isArray(node.properties)) {
+        out.props = {};
+        for (const k of Object.keys(node.properties).sort()) out.props[k] = shape(node.properties[k]);
+      }
+      return out;
+    };
+    return JSON.stringify(shape(s));
+  }
+
   function cap(s, n) {
     const t = String(s == null ? '' : s);
     if (t.length <= n) return t;
@@ -128,7 +147,8 @@
       '5. When verify.run fails, read diag.read BEFORE changing anything.',
       '6. To observe a hover popover during research call probe.hover (a session tool — do NOT call the $hover DSL primitive as a tool); it returns the popover evidence (observedPopover identity + htmlSnippet) and, when the popover is observed, a canonical popoverSelector whose EXACT string is recorded as an observation receipt — copy that string VERBATIM into popoverSel; an embellished variant (extra attributes) is a new string the gate must reject.',
       '7. Scrolling is available DURING research via probe.scroll (a session tool — do NOT call the $scroll DSL primitives as tools): use it to trigger lazy-load / viewport-gated content before counting, sampling, or writing scroll steps. The container selector you pass becomes an observation receipt, grounding a later $scrollToBottom(sel) in steps.',
-      '8. Iterate the fieldMap in the LIVE tab with probe.extract BEFORE writing steps: one probe turn per revision, warm DOM, empty-field census included. Reserve service.update + verify.run for the end-to-end check — verify opens a FRESH tab, so cold-load divergence (fewer/different items than the research tab) is expected; investigate counts with probes on the research tab, not by re-verifying.'
+      '8. Iterate the fieldMap in the LIVE tab with probe.extract BEFORE writing steps: one probe turn per revision, warm DOM, empty-field census included. Reserve service.update + verify.run for the end-to-end check — verify opens a FRESH tab, so cold-load divergence (fewer/different items than the research tab) is expected; investigate counts with probes on the research tab, not by re-verifying.',
+      '9. EARLY contract confirmation: right after the first page.open and a coarse look at the card structure, propose the input/output contract with io.confirm({inputSchema, outputSchema, note}) and WAIT for the user — service.update is REJECTED until the user confirms. Apply every revision the user returns and re-confirm. Adding/renaming/removing fields or changing types later is a MATERIAL change: call io.confirm again with the new schemas before service.update (description-only edits are exempt).'
     ].join('\n');
   }
 
@@ -151,6 +171,67 @@
     const probes = probeFactory({ executeDsl: d.rail.executeDsl, observationLog: lateBoundLog });
 
     let lastVerify = null;
+    // I/O contract confirmation state (ninth-log follow-up): runtime flag for
+    // the live bag + a provenance:'user' ledger marker that survives seed
+    // resume, reload recovery, and ledger compaction (compaction never drops
+    // user entries). service.update is gated on one of them.
+    let ioConfirmed = false;
+    let ioConfirmedShape = null;
+    const IO_LEDGER_MARKER = 'I/O CONTRACT CONFIRMED';
+
+    function ioContractConfirmed(ctx) {
+      if (ioConfirmed) return true;
+      try {
+        const ser = (ctx && ctx.ledger && typeof ctx.ledger.serialize === 'function')
+          ? ctx.ledger.serialize() : null;
+        const entries = (ser && Array.isArray(ser.entries)) ? ser.entries : [];
+        return entries.some((e) => e && typeof e.finding === 'string' && e.finding.indexOf(IO_LEDGER_MARKER) !== -1);
+      } catch (e) { return false; }
+    }
+
+    async function ioConfirm(args, ctx) {
+      const a = args && typeof args === 'object' ? args : {};
+      const bridge = d.ioConfirmBridge;
+      if (!bridge || typeof bridge.request !== 'function') {
+        return { error: 'io.confirm unavailable — no confirmation bridge wired (wiring bug, not a usage error)' };
+      }
+      const schemaBad = [];
+      if (!isJsonObjectSchema(a.inputSchema)) schemaBad.push('inputSchema');
+      if (!isJsonObjectSchema(a.outputSchema)) schemaBad.push('outputSchema');
+      if (schemaBad.length) {
+        return {
+          error: 'SCHEMA_NOT_JSON_SCHEMA: ' + schemaBad.join(' and ') + ' must be a JSON Schema object like {"type":"object","required":["keyword"],"properties":{"keyword":{"type":"string"}}}. Resend io.confirm with both schemas properly shaped.'
+        };
+      }
+      const res = await bridge.request({
+        inputSchema: a.inputSchema,
+        outputSchema: a.outputSchema,
+        note: typeof a.note === 'string' ? a.note : ''
+      });
+      if (res && res.confirmed) {
+        ioConfirmed = true;
+        ioConfirmedShape = { input: schemaShape(a.inputSchema), output: schemaShape(a.outputSchema) };
+        const ledger = (ctx && ctx.ledger) || null;
+        if (ledger) {
+          try {
+            ledger.add({
+              finding: IO_LEDGER_MARKER + ' — inputs: [' + Object.keys((a.inputSchema && a.inputSchema.properties) || {}).join(', ') +
+                '] outputs: [' + Object.keys((a.outputSchema && a.outputSchema.properties) || {}).join(', ') + ']',
+              evidence: 'io.confirm (user approved the proposed contract)',
+              confidence: 'high',
+              provenance: 'user',
+              selectors: []
+            });
+          } catch (e) { /* ledger secondary — the runtime flag already holds */ }
+        }
+        return { confirmed: true, note: 'contract approved — author the steps and call service.update with exactly these schemas' };
+      }
+      return {
+        confirmed: false,
+        feedback: String((res && res.feedback) || '(no revision note)'),
+        note: 'user requested changes — revise the schemas, then call io.confirm again'
+      };
+    }
 
     async function verifyRun(args) {
       const service = d.getDraftService();
@@ -233,6 +314,11 @@
     async function serviceUpdate(args, ctx) {
       const a = args && typeof args === 'object' ? args : {};
       const steps = Array.isArray(a.steps) ? a.steps : [];
+      if (!ioContractConfirmed(ctx)) {
+        return {
+          error: 'I/O CONTRACT UNCONFIRMED — service.update is rejected until the user confirms the input/output contract. Call io.confirm({inputSchema, outputSchema, note}) EARLY (right after the first page look), wait for the user, and apply any revision the user returns before authoring steps.'
+        };
+      }
       const schemaBad = [];
       if (a.inputSchema != null && !isJsonObjectSchema(a.inputSchema)) schemaBad.push('inputSchema');
       if (a.outputSchema != null && !isJsonObjectSchema(a.outputSchema)) schemaBad.push('outputSchema');
@@ -240,6 +326,20 @@
         return {
           error: 'SCHEMA_NOT_JSON_SCHEMA: ' + schemaBad.join(' and ') + ' must be a JSON Schema object like {"type":"object","required":["posts"],"properties":{"posts":{"type":"array","items":{"type":"object"}}}}, not a natural-language map like {"posts":"array of post objects"}. Verify scoring and every detector read "required"/"properties" — a natural-language map leaves them all blind, so verify.run reports score 0 even after a fully successful extraction. Resend with JSON-Schema-shaped schemas: list every output field under properties and put the must-have keys in required.'
         };
+      }
+      // Runtime-flag path: a materially different contract must be
+      // re-confirmed. The ledger-marker recovery path (session resume /
+      // reload) intentionally skips this — the user is already driving
+      // those continuations via feedback.
+      if (ioConfirmed && ioConfirmedShape && (a.inputSchema != null || a.outputSchema != null)) {
+        const drift = [];
+        if (a.inputSchema != null && schemaShape(a.inputSchema) !== ioConfirmedShape.input) drift.push('inputSchema');
+        if (a.outputSchema != null && schemaShape(a.outputSchema) !== ioConfirmedShape.output) drift.push('outputSchema');
+        if (drift.length) {
+          return {
+            error: 'I/O CONTRACT DRIFT — ' + drift.join(' and ') + ' differ materially from the contract the user confirmed (fields added/removed/renamed or types changed; cosmetic description edits are fine). Call io.confirm with the NEW schemas, wait for the user, then service.update.'
+          };
+        }
       }
       const chain = WU.validateChain(steps);
       if (!chain || chain.valid !== true) {
@@ -304,6 +404,7 @@
       'diag.read': diagRead,
       'verify.run': verifyRun,
       'annotate.request': annotateRequest,
+      'io.confirm': ioConfirm,
       'service.update': serviceUpdate
     };
 
@@ -319,7 +420,8 @@
       { name: 'probe.extract', args: '{containerSel, fieldMap, multi?, allowEmpty?}', returns: '{total,records[3],emptyFields{field:emptyCount}}' },
       { name: 'diag.read', args: '{stepId?, kind?}', returns: '{selectorDiagnostics, failingStep?, popover, counters, lastError?}' },
       { name: 'verify.run', args: '{input?}', returns: '{ok,score,scoreNote?,error,detectors,steps,finalResult,schemaOk}' },
-      { name: 'annotate.request', args: '{why, fields?, containerSel?}', returns: '{annotations[{selector,purpose,outputField}]} | {cancelled}' }
+      { name: 'annotate.request', args: '{why, fields?, containerSel?}', returns: '{annotations[{selector,purpose,outputField}]} | {cancelled}' },
+      { name: 'io.confirm', args: '{inputSchema, outputSchema, note?}', returns: '{confirmed:true} | {confirmed:false, feedback} — propose the contract EARLY and wait for the user; service.update is rejected until a confirmation lands' }
     ];
 
     return {

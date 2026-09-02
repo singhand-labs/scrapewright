@@ -321,6 +321,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   document.getElementById('btnAnnotationFinish').addEventListener('click', () => { wizardAnnotationBridge && wizardAnnotationBridge.finish(); });
   document.getElementById('btnAnnotationCancel').addEventListener('click', () => { wizardAnnotationBridge && wizardAnnotationBridge.cancel(); });
+  document.getElementById('btnIoConfirm').addEventListener('click', () => { wizardIoBridge && wizardIoBridge.confirm(); });
+  document.getElementById('btnIoRevise').addEventListener('click', () => {
+    const text = String(document.getElementById('ioConfirmFeedback').value || '').trim();
+    if (!text) {
+      showToast('Describe the changes first — or press Confirm to approve as-is.', 'warn', 4000);
+      return;
+    }
+    wizardIoBridge && wizardIoBridge.revise(text);
+  });
   document.getElementById('btnDeployAnyway').addEventListener('click', () => {
     goToPhase(5);
     confirmDeploy();
@@ -1772,6 +1781,60 @@ function createWizardAnnotationBridge(getRail) {
 }
 
 let wizardAnnotationBridge = null;
+let wizardIoBridge = null;
+
+// Ninth-log follow-up (user request): the session must confirm the I/O
+// contract with the user EARLY — before deep research and authoring — so the
+// model never builds a verified artifact against schemas the user never
+// signed off on. Mirrors the annotation bridge pattern: io.confirm parks the
+// engine's turn on a pending promise until the user answers the panel.
+function createWizardIoBridge() {
+  let pendingResolve = null;
+
+  function hidePanel() {
+    const panel = document.getElementById('ioConfirmPanel');
+    if (panel) panel.classList.add('hidden');
+  }
+
+  return {
+    request(req) {
+      return new Promise((resolve) => {
+        pendingResolve = resolve;
+        const r = req && typeof req === 'object' ? req : {};
+        const noteEl = document.getElementById('ioConfirmNote');
+        if (noteEl) noteEl.textContent = String(r.note || '');
+        const inEl = document.getElementById('ioConfirmInput');
+        if (inEl) inEl.textContent = JSON.stringify(r.inputSchema || {}, null, 2);
+        const outEl = document.getElementById('ioConfirmOutput');
+        if (outEl) outEl.textContent = JSON.stringify(r.outputSchema || {}, null, 2);
+        const fbEl = document.getElementById('ioConfirmFeedback');
+        if (fbEl) fbEl.value = '';
+        const panel = document.getElementById('ioConfirmPanel');
+        if (panel) panel.classList.remove('hidden');
+        appendLog('I/O contract proposed — confirm or revise it to let the session continue.', 'warn');
+        showToast('Confirm the input/output contract to continue the research session.', 'info', 6000);
+      });
+    },
+    confirm() {
+      const r = pendingResolve;
+      pendingResolve = null;
+      hidePanel();
+      if (r) { appendLog('I/O contract confirmed by the user.', 'success'); r({ confirmed: true }); }
+    },
+    revise(text) {
+      const r = pendingResolve;
+      pendingResolve = null;
+      hidePanel();
+      if (r) { appendLog('I/O contract revision requested: ' + String(text).slice(0, 200), 'warn'); r({ confirmed: false, feedback: String(text || '') }); }
+    },
+    cancel() {
+      const r = pendingResolve;
+      pendingResolve = null;
+      hidePanel();
+      if (r) r({ confirmed: false, feedback: '(cancelled — session stopped before confirmation)' });
+    }
+  };
+}
 
 // Sixth-log G5: the turn budget is a user knob (engine default 60). Read
 // live so raising it before Resume extends a session that stopped at the cap.
@@ -1874,6 +1937,7 @@ function handleSessionEvent(ev) {
       case 'stopped':
         setSessionControls('stopped');
         wizardAnnotationBridge && wizardAnnotationBridge.cancel();
+        wizardIoBridge && wizardIoBridge.cancel();
         if (wizardRail) wizardRail.releaseLock();
         appendLog('Session stopped: ' + ev.reason + (ev.detail ? ' — ' + String(ev.detail).slice(0, 300) : ''), ev.reason === 'completed' ? 'success' : 'warn');
         if (wizardPersistence) wizardPersistence.flush();
@@ -1979,6 +2043,7 @@ async function startResearchSession(seedOverride) {
   wizardRunner = null; // rebuilt so ensureLock binds to the new rail
   getWizardRunner();
   wizardAnnotationBridge = createWizardAnnotationBridge(() => wizardRail);
+  wizardIoBridge = createWizardIoBridge();
   wizardToolsBag = SessionTools.createSessionTools({
     rail: wizardRail,
     runVerify: getWizardRunner(),
@@ -1991,7 +2056,8 @@ async function startResearchSession(seedOverride) {
     getTestInput: () => wizardState.testInput || {},
     getOutputSchema: () => wizardState.outputSchema,
     getSteps: () => wizardState.steps,
-    annotationBridge: wizardAnnotationBridge
+    annotationBridge: wizardAnnotationBridge,
+    ioConfirmBridge: wizardIoBridge
   });
 
   wizardPersistence = SessionPersistence.createSessionPersistence(chrome.storage.local, 'wizardResearchSession');

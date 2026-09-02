@@ -797,6 +797,26 @@ pre {
   gap: 8px;
 }
 
+/* --- Phase 4: I/O contract confirmation ------------------------------------------- */
+#ioConfirmPanel pre {
+  max-height: 220px;
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-ctl);
+  padding: 8px 12px;
+  font-size: 12px;
+  margin: 4px 0 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+#ioConfirmPanel textarea {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 8px;
+}
+
 #ioSummary {
   background: var(--surface-2);
   border: 1px solid var(--border);

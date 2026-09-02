@@ -22,7 +22,8 @@ function makeDeps(overrides) {
     getTestInput: () => ({}),
     getOutputSchema: () => ({ type: 'object' }),
     getSteps: () => (state.draft ? state.draft.steps : []),
-    annotationBridge: null
+    annotationBridge: null,
+    ioConfirmBridge: { request: async () => ({ confirmed: true }) }
   }, overrides || {});
   return { deps: d, state };
 }
@@ -35,7 +36,7 @@ describe('createSessionTools', () => {
   it('exposes the full tool bag + toolSpecs + DSL-contract system prompt', () => {
     const { deps } = makeDeps();
     const t = createSessionTools(deps);
-    for (const name of ['page.open', 'page.state', 'probe.count', 'probe.text', 'probe.attrStats', 'probe.sample', 'probe.hover', 'probe.scroll', 'probe.extract', 'diag.read', 'verify.run', 'annotate.request', 'service.update']) {
+    for (const name of ['page.open', 'page.state', 'probe.count', 'probe.text', 'probe.attrStats', 'probe.sample', 'probe.hover', 'probe.scroll', 'probe.extract', 'diag.read', 'verify.run', 'annotate.request', 'io.confirm', 'service.update']) {
       assert.equal(typeof t.tools[name], 'function', name + ' wired');
     }
     assert.ok(t.toolSpecs.every(s => s.name && typeof s.returns === 'string'));
@@ -127,6 +128,7 @@ describe('createSessionTools', () => {
   it('service.update validates the chain, applies the artifact, echoes the engine version', async () => {
     const { deps } = makeDeps();
     const t = createSessionTools(deps);
+    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object' } });
     const bad = await t.tools['service.update']({ steps: [{ id: 's1', script: 'return 1', onSuccess: 'NOPE' }] }, { session: { state: () => ({ session: { artifactVersions: [] } }) } });
     assert.match(bad.error, /chain invalid/);
     const out = await t.tools['service.update'](
@@ -139,6 +141,10 @@ describe('createSessionTools', () => {
     const { deps, state } = makeDeps();
     const t = createSessionTools(deps);
     const ctx = { session: { state: () => ({ session: { artifactVersions: [] } }) } };
+    await t.tools['io.confirm']({
+      inputSchema: { type: 'object', required: ['keyword'], properties: { keyword: { type: 'string' } } },
+      outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } }
+    });
     // Exact fourth-live-log shapes: {"posts":"array of post objects"} /
     // {"keyword":"搜索关键词"} — maps of field→description, not JSON Schema.
     const badOut = await t.tools['service.update'](
@@ -167,6 +173,7 @@ describe('createSessionTools', () => {
       })
     });
     const t = createSessionTools(deps);
+    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object' } });
     state.draft = { targetUrl: 'x', steps: GOOD_STEPS };
     await t.tools['verify.run']({});
     const r = await t.tools['diag.read']({ kind: 'failingStep' });
@@ -276,5 +283,105 @@ describe('page.open template parameters (ninth-log M3: the literal {{keyword}} t
     assert.equal(opened, 0);
     assert.match(r.error, /\{\{city\}\}/);
     assert.ok(!/\{\{keyword\}\}/.test(r.error), 'the substituted token is not reported as missing');
+  });
+});
+
+describe('io.confirm — early I/O contract gate', () => {
+  const IN = { type: 'object', required: ['keyword'], properties: { keyword: { type: 'string', description: 'search term' } } };
+  const OUT = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } };
+
+  it('service.update is rejected with a teaching error before any confirmation', async () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    const r = await t.tools['service.update']({ steps: GOOD_STEPS }, { session: { state: () => ({ session: { artifactVersions: [] } }) } });
+    assert.match(r.error, /I\/O CONTRACT UNCONFIRMED/);
+    assert.match(r.error, /io\.confirm/);
+  });
+
+  it('confirmation flows through the bridge, marks the ledger provenance:user, unlocks update', async () => {
+    const added = [];
+    let lastReq = null;
+    const { deps } = makeDeps({
+      ioConfirmBridge: { request: async (p) => { lastReq = p; return { confirmed: true }; } }
+    });
+    const ledger = { add: (e) => added.push(e) };
+    const t = createSessionTools(deps);
+    const r = await t.tools['io.confirm']({ inputSchema: IN, outputSchema: OUT, note: 'coarse look done' }, { ledger });
+    assert.equal(r.confirmed, true);
+    assert.equal(lastReq && lastReq.note, 'coarse look done');
+    assert.equal(added.length, 1);
+    assert.match(added[0].finding, /I\/O CONTRACT CONFIRMED/);
+    assert.equal(added[0].provenance, 'user');
+    const upd = await t.tools['service.update'](
+      { steps: GOOD_STEPS, inputSchema: IN, outputSchema: OUT },
+      { ledger, session: { state: () => ({ session: { artifactVersions: [] } }) } });
+    assert.equal(upd.updated, true);
+  });
+
+  it('revision path returns the user feedback; update stays gated', async () => {
+    const { deps } = makeDeps({
+      ioConfirmBridge: { request: async () => ({ confirmed: false, feedback: 'add publishDate' }) }
+    });
+    const t = createSessionTools(deps);
+    const r = await t.tools['io.confirm']({ inputSchema: IN, outputSchema: OUT });
+    assert.equal(r.confirmed, false);
+    assert.match(r.feedback, /publishDate/);
+    const upd = await t.tools['service.update']({ steps: GOOD_STEPS }, { session: { state: () => ({ session: { artifactVersions: [] } }) } });
+    assert.match(upd.error, /I\/O CONTRACT UNCONFIRMED/);
+  });
+
+  it('malformed schemas get the teaching error without consulting the bridge', async () => {
+    let called = 0;
+    const { deps } = makeDeps({
+      ioConfirmBridge: { request: async () => { called += 1; return { confirmed: true }; } }
+    });
+    const t = createSessionTools(deps);
+    const r = await t.tools['io.confirm']({ inputSchema: { keyword: '搜索关键词' }, outputSchema: OUT });
+    assert.match(r.error, /SCHEMA_NOT_JSON_SCHEMA/);
+    assert.equal(called, 0, 'bridge NOT consulted for malformed schemas');
+  });
+
+  it('missing bridge is a wiring error, not a usage error', async () => {
+    const { deps } = makeDeps({ ioConfirmBridge: null });
+    const t = createSessionTools(deps);
+    const r = await t.tools['io.confirm']({ inputSchema: IN, outputSchema: OUT });
+    assert.match(r.error, /no confirmation bridge wired/);
+  });
+
+  it('material drift after confirmation is rejected until re-confirmation; description-only edits pass', async () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    await t.tools['io.confirm']({ inputSchema: IN, outputSchema: OUT });
+    const ctx = { session: { state: () => ({ session: { artifactVersions: [] } }) } };
+    const drifted = await t.tools['service.update'](
+      { steps: GOOD_STEPS, outputSchema: { type: 'object', required: ['posts', 'publishDate'], properties: { posts: { type: 'array', items: { type: 'object' } }, publishDate: { type: 'string' } } } },
+      ctx);
+    assert.match(drifted.error, /I\/O CONTRACT DRIFT/);
+    assert.match(drifted.error, /io\.confirm/);
+    const IN2 = { type: 'object', required: ['keyword'], properties: { keyword: { type: 'string', description: 'CHANGED WORDING' } } };
+    const cosmetic = await t.tools['service.update']({ steps: GOOD_STEPS, inputSchema: IN2, outputSchema: OUT }, ctx);
+    assert.equal(cosmetic.updated, true, 'description-only edits are exempt from re-confirmation');
+  });
+
+  it('a ledger marker from a prior session (seed resume) unlocks update without the runtime flag', async () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    const ctx = {
+      ledger: { serialize: () => ({ entries: [{ finding: 'I/O CONTRACT CONFIRMED — inputs: [keyword] outputs: [posts]', provenance: 'user' }] }) },
+      session: { state: () => ({ session: { artifactVersions: [] } }) }
+    };
+    const upd = await t.tools['service.update'](
+      { steps: GOOD_STEPS, outputSchema: { type: 'object', required: ['posts', 'extra'], properties: { posts: { type: 'array' }, extra: { type: 'string' } } } },
+      ctx);
+    assert.equal(upd.updated, true, 'recovery path skips drift comparison — the user drives those continuations');
+  });
+
+  it('system prompt teaches the EARLY rule and the tool spec lists io.confirm', () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    assert.match(t.systemPromptBase, /EARLY contract confirmation/);
+    assert.match(t.systemPromptBase, /io\.confirm\(\{inputSchema, outputSchema/);
+    assert.match(t.systemPromptBase, /MATERIAL change/);
+    assert.ok(t.toolSpecs.some((s) => s.name === 'io.confirm'), 'io.confirm in the spec list');
   });
 });

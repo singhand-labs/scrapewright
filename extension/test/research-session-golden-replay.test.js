@@ -85,7 +85,8 @@ describe('golden replay — seventh-log ad-polarity incident (spec §7/§8)', ()
       getTestInput: () => ({}),
       getOutputSchema: () => ({ type: 'object' }),
       getSteps: () => (draft ? draft.steps : []),
-      annotationBridge: null
+      annotationBridge: null,
+      ioConfirmBridge: { request: async () => ({ confirmed: true }) }
     });
 
     const script = [
@@ -93,15 +94,17 @@ describe('golden replay — seventh-log ad-polarity incident (spec §7/§8)', ()
       turnEnvelope({ think: 'open the feed', goals: { push: 'extract 10 organic posts, exclude ads' }, hypotheses: { add: 'div[data-kind="post"] holds all cards' }, tool: 'page.open', args: {} }),
       // 2. count the candidate container
       turnEnvelope({ think: 'count cards', tool: 'probe.count', args: { sel: 'div[data-kind="post"]' } }),
-      // 3. FIRST service.update attempt — the inverted include (the incident)
+      // 3. propose the I/O contract early — the user confirms (io.confirm gate)
+      turnEnvelope({ think: 'coarse look done; propose the contract before authoring', tool: 'io.confirm', args: { inputSchema: { type: 'object' }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } } }),
+      // 4. FIRST service.update attempt — the inverted include (the incident)
       turnEnvelope({ think: 'write artifact', tool: 'service.update', args: { steps: INVERTED_STEPS } }),
-      // 4. rejected → read the rejection, probe the distribution
+      // 5. rejected → read the rejection, probe the distribution
       turnEnvelope({ think: 'gate rejected the filter attribute; observe its distribution', tool: 'probe.attrStats', args: { containerSel: 'div[data-kind="post"]', attr: 'data-ad-rendering-role' } }),
-      // 5. corrected artifact — negative form
+      // 6. corrected artifact — negative form
       turnEnvelope({ think: 'attribute marks a 2/10 minority = promotion marker; use :not()', hypotheses: { resolve: { n: 1, verdict: 'confirmed — data-ad-rendering-role is a promotion marker (2/10)' } }, tool: 'service.update', args: { steps: CORRECTED_STEPS } }),
-      // 6. verify
+      // 7. verify
       turnEnvelope({ think: 'verify the corrected artifact', tool: 'verify.run', args: {} }),
-      // 7. finish
+      // 8. finish
       turnEnvelope({ finish: { summary: 'organic-only filter grounded in the attrStats distribution; verify green (8 organic posts).' } })
     ];
     let i = 0;
@@ -140,8 +143,12 @@ describe('golden replay — seventh-log ad-polarity incident (spec §7/§8)', ()
     // the observation log carries the receipts:
     assert.ok(session.observationLog.covers('div[data-kind="post"]'));
     assert.ok(session.observationLog.coversAttr('data-ad-rendering-role'));
-    // all 7 scripted turns were consumed as assistant entries:
+    // the io.confirm turn was consumed and confirmed (gate on service.update):
+    const ioResults = toolEntries.filter((e) => e.name === 'io.confirm').map((e) => e.result);
+    assert.equal(ioResults.length, 1);
+    assert.equal(ioResults[0].confirmed, true);
+    // all 8 scripted turns were consumed as assistant entries:
     const lastAssistant = st.session.transcript.filter((e) => e.kind === 'assistant').length;
-    assert.ok(lastAssistant >= 7);
+    assert.ok(lastAssistant >= 8);
   });
 });

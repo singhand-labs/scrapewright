@@ -93,6 +93,26 @@
           <button id="btnAnnotationCancel">Cancel</button>
         </div>
       </div>
+      <!-- Ninth-log follow-up: early I/O contract confirmation — the session
+           proposes inputSchema/outputSchema, the user confirms or revises
+           BEFORE deep research/authoring (service.update is gated on it). -->
+      <div id="ioConfirmPanel" class="exploration-panel hidden">
+        <h3>Confirm the input/output contract</h3>
+        <p id="ioConfirmNote" class="hint-label"></p>
+        <div class="io-schema-row">
+          <label>Input schema</label>
+          <pre id="ioConfirmInput"></pre>
+        </div>
+        <div class="io-schema-row">
+          <label>Output schema</label>
+          <pre id="ioConfirmOutput"></pre>
+        </div>
+        <textarea id="ioConfirmFeedback" rows="2" placeholder="Optional: describe changes (fields to add / rename / remove), then send revision notes"></textarea>
+        <div class="exploration-buttons">
+          <button id="btnIoConfirm" class="btn-primary">Confirm — continue research</button>
+          <button id="btnIoRevise">Send revision notes</button>
+        </div>
+      </div>
       <div id="executionProgress" class="hidden">
         <h4>Execution progress</h4>
         <table>
