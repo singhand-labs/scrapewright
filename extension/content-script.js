@@ -185,6 +185,9 @@
                 popoverSelector: (r && r.popoverSelector) || null,
                 autoDiscovered: !!(r && r.autoDiscovered),
                 reason: (r && r.reason) || null,
+                // Sixth-log followup: observed popover identity on failures
+                // (inline mirror of lib/list-extract-ops.js).
+                observedPopover: (r && !r.hovered && r.observedPopover) || null,
                 anchorIndex: j,
                 anchorHref: anchorHref,
                 anchorText: anchorText
@@ -1772,6 +1775,12 @@
   // anchor (so the LLM gets an autoFix-able error, not silent empty).
   async function domHover(selOrEl, popoverSel, opts) {
     if (!selOrEl) throw new Error('$hover requires an anchor selector or element');
+    // Sixth-log followup: per-anchor phase timings. Run 1 of the 2026-09-01
+    // log burned ~7s/anchor BETWEEN logged events (dismiss-ok → next
+    // anchor's activation) with no way to attribute it from the log —
+    // scrollIntoView-triggered virtualized reflow and a deep popoverSel
+    // query over a huge DOM are indistinguishable without timestamps.
+    var hoverT0 = Date.now();
     opts = opts || {};
     var timeoutMs = (typeof opts.timeoutMs === 'number' && opts.timeoutMs > 0) ? opts.timeoutMs : 4500;
     var dismiss = (typeof opts.dismiss === 'boolean') ? opts.dismiss : true;
@@ -1846,6 +1855,7 @@
       // Layout settles within a frame; a 50ms wait covers the reflow.
       await new Promise(function (r) { setTimeout(r, 50); });
     }
+    var scrollDoneAt = Date.now();
 
     var rect = anchor.getBoundingClientRect();
     // Default to viewport center if rect is degenerate (display:none, etc.).
@@ -1886,6 +1896,7 @@
     var lastBestSample = null;
 
     var addedNodes = [];
+    var observedBest = null;
     var observer = null;
     try {
       if (typeof MutationObserver !== 'undefined') {
@@ -1968,6 +1979,7 @@
       hoverError = e && e.message || String(e);
       hoverResp = { dispatched: false, reason: 'sendMessage error: ' + hoverError };
     }
+    var preDispatchDoneAt = Date.now();
 
     notifyBackgroundDiagnostic('hover_request', {
       selector: selectorForLog,
@@ -1979,6 +1991,7 @@
       popoverBaselineSampled: !!popoverBaseline,
       baselineEfpCount: baselineEfpSnippets.size
     });
+    var dispatchDoneAt = Date.now();
 
     var dispatchedAt = Date.now();
     var deadline = dispatchedAt + timeoutMs;
@@ -2347,6 +2360,29 @@
           matchedSel = '[auto-discovered popover]';
           autoDiscovered = true;
         }
+        // Sixth-log followup (2026-09-01): remember the best candidate the
+        // cascade has seen even when it never stabilizes into a capture. A
+        // failed hover that SAW a popover-sized element mount is a
+        // popoverSelector MISMATCH — the summary of this observation rides
+        // the failure into the step result so the selector can be rewritten
+        // from evidence instead of guessed again. 'added' observations beat
+        // stale 'efp' ones (a fresh mount is the popover; a positioned
+        // overlay picked on an early tick is not).
+        if (observedBest && observedBest.node === bestCandidate.node) {
+          observedBest.wonTicks += 1;
+          observedBest.lastDwellMs = Math.round(dwellMs);
+        } else if (!observedBest || observedBest.source !== 'added' || bestCandidate.source === 'added') {
+          observedBest = {
+            node: bestCandidate.node,
+            source: bestCandidate.source,
+            posAbsolute: !!bestCandidate.posAbsolute,
+            z: bestCandidate.z,
+            dist: Math.round(bestCandidate.dist),
+            area: Math.round(bestCandidate.area),
+            wonTicks: 1,
+            lastDwellMs: Math.round(dwellMs)
+          };
+        }
         notifyBackgroundDiagnostic('hover_auto_discover', {
           selector: selectorForLog,
           dwellMs: Math.round(dwellMs),
@@ -2383,6 +2419,7 @@
     if (observer) {
       try { observer.disconnect(); } catch {}
     }
+    var dwellDoneAt = Date.now();
 
     // Dismiss: move the trusted cursor to (1,1) so hover handlers fire
     // mouseout/mouseleave and the popover closes. Best-effort — failure here
@@ -2428,6 +2465,41 @@
     } else if (!result.hovered) {
       result.reason = hoverResp && hoverResp.reason ? hoverResp.reason : 'hover_failed';
     }
+
+    // Sixth-log followup: a bare 'popover_timeout' gave autoFix nothing to
+    // act on while auto-discovery had SEEN the real popover mount — the
+    // observation above was discarded at return time and the same wrong
+    // popoverSelector survived two consecutive runs. Attach the observed
+    // element's structural identity so the selector can be rewritten from
+    // evidence (role/aria/id/class), never re-guessed.
+    if (!htmlSnippet && observedBest && observedBest.node && typeof observedBest.node.getAttribute === 'function') {
+      try {
+        var obClass = typeof observedBest.node.className === 'string'
+          ? observedBest.node.className.replace(/\s+/g, ' ').trim() : '';
+        result.observedPopover = {
+          tag: observedBest.node.tagName,
+          role: (observedBest.node.getAttribute('role') || '').slice(0, 80),
+          ariaLabel: (observedBest.node.getAttribute('aria-label') || '').slice(0, 80),
+          id: (observedBest.node.id || '').slice(0, 80),
+          classHead: obClass.slice(0, 120),
+          source: observedBest.source,
+          posAbsolute: observedBest.posAbsolute,
+          z: observedBest.z,
+          dist: observedBest.dist,
+          area: observedBest.area,
+          wonTicks: observedBest.wonTicks,
+          lastSeenDwellMs: observedBest.lastDwellMs
+        };
+      } catch (_) { /* evidence must never break the hover path */ }
+    }
+    notifyBackgroundDiagnostic('hover_anchor_timing', {
+      selector: selectorForLog,
+      scrollMs: scrollDoneAt - hoverT0,
+      preDispatchMs: preDispatchDoneAt - scrollDoneAt,
+      dispatchMs: dispatchDoneAt - preDispatchDoneAt,
+      dwellMs: dwellDoneAt - dispatchDoneAt,
+      dismissMs: Date.now() - dwellDoneAt
+    });
 
     sendDebugLog('info', 'content-script', 'domHover done', {
       selector: selectorForLog, popoverSelector: popoverSel || null,
@@ -2557,6 +2629,14 @@
     var anchorsFound = 0;
     var hovercardsCaptured = 0;
     var hoverFailures = 0;
+    // Seventh-log survey (2026-09-01): captured/failed COUNTS alone could not
+    // distinguish popover_timeout (selector mismatch — the observedPopover
+    // evidence path) from no_hover_signal (anchor without a popover), so the
+    // sixth-log selector-repair rule could not be validated from production
+    // logs. Tally the reasons and how many failures carried an observed
+    // popover onto the done event and the autoFix-facing hover summary.
+    var failureReasons = {};
+    var observedPopoverCount = 0;
     for (var i = 0; i < records.length; i++) {
       var cards = records[i].hovercards || [];
       anchorsFound += cards.length;
@@ -2565,13 +2645,18 @@
           hovercardsCaptured++;
         } else {
           hoverFailures++;
+          var _rsn = cards[j].reason || 'unknown';
+          failureReasons[_rsn] = (failureReasons[_rsn] || 0) + 1;
+          if (cards[j].observedPopover) observedPopoverCount++;
         }
       }
     }
     _diagnostics.hoverSummary = {
       anchorsFound: anchorsFound,
       hovercardsCaptured: hovercardsCaptured,
-      hoverFailures: hoverFailures
+      hoverFailures: hoverFailures,
+      failureReasons: failureReasons,
+      observedPopoverCount: observedPopoverCount
     };
     _diagnostics.anchorSel = hoverConfig.anchorSel;
     // Anchor fixes need the REAL container markup, not a generic snippet.
@@ -2600,7 +2685,9 @@
       processed: processed.length,
       anchorsFound: anchorsFound,
       hovercardsCaptured: hovercardsCaptured,
-      hoverFailures: hoverFailures
+      hoverFailures: hoverFailures,
+      failureReasons: failureReasons,
+      observedPopoverCount: observedPopoverCount
     });
     return { result: records, _diagnostics: _diagnostics };
   }

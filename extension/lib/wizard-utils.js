@@ -140,11 +140,12 @@ The framework's EMPTY_FIELDS detector will surface which fields are uniformly em
 If you MUST skip a record, do so conservatively — only skip when you have POSITIVE evidence from a SPECIFIC element (e.g. an explicit "Sponsored" label span that exists NOWHERE else on the page), never regex-test outerHTML.
 
 CARD-TYPE HETEROGENEITY (feeds mixing promoted and organic cards): when a required field comes back empty on every record, check WHAT KIND of cards your selectors kept before rewriting the field selector. Heterogeneous feeds mix promoted/sponsored cards with organic ones, and promoted cards often lack permalink/timestamp fields entirely — the field is not "hard to select", it does not exist on that card type. Corollaries:
-(a) a container filter or field selector built on promoted-card markup attributes implicitly keeps ONLY promoted cards, making user-facing fields (permalink, timestamp) structurally unreachable — select organic cards and exclude promoted ones by a specific, language-INDEPENDENT markup signal (a dedicated data-* rendering attribute), never by localized label text (a "Sponsored" text match silently misses localized pages);
+(a) a container filter or field selector built on promoted-card markup attributes implicitly keeps ONLY promoted cards, making user-facing fields (permalink, timestamp) structurally unreachable — select organic cards and exclude promoted ones by a specific, language-INDEPENDENT markup signal (a dedicated data-* rendering attribute — but READ THE ATTRIBUTE'S NAME FIRST: if the name itself carries a promotion token like ad/sponsored/promoted, that attribute MARKS promoted cards and belongs in an exclusion, never in your selector's :has(); see (f)), never by localized label text (a "Sponsored" text match silently misses localized pages);
 (b) do not write contradictory filters across steps — step N keeping only card type A while step M excludes card type A yields empty or mislabeled output. Decide ONE card policy per service and enforce it at exactly ONE place in the chain;
 (c) the scroll step's counter is a card filter too — an unfiltered counter counts recommendation/promoted cards toward the target, so the loop exits "successfully" carrying junk. Count with the SAME language-independent card signals the extraction step uses, and make the filtered counter safe against matching nothing (see ZERO-TRAP COUNTER);
 (d) a cursor over containers is not a count of records — when the extraction step walks containers with an index/cursor, gate its done on the number of records that PASS the card policy (what your filtering/output step would keep), never on the raw container cursor: recommendation/promoted cards consume cursor slots, so a cursor-gated step declares victory at the target having collected FEWER real records than requested;
 (e) exclude cards by positive structural evidence, not by label text alone — label regexes ("Sponsored", "Recommended for you") are locale- and markup-fragile and silently miss current markup; a card that lacks EVERY organic anchor (permalink href, timestamp link, author/profile hover anchor) is promoted/recommendation BY STRUCTURE, and its fields are empty precisely because they do not exist on that card type.
+(f) ATTRIBUTE-NAME POLARITY — when hunting a structural marker to select content cards, check the attribute's NAME before using it positively. An attribute whose name carries a promotion token (ad, sponsored, promoted, commercial) exists to MARK promoted cards: it is an EXCLUDE signal. Writing it as an include — \`div[card]:has(div[data-ad-...='message'])\` — inverts your card policy and keeps ONLY promoted cards, so count-like targets become unreachable (the page holds a handful of ads, not N of them) and the run "succeeds" returning ads whose permalink/timestamp fields are structurally empty. The correct uses are the negative form \`div[card]:not(:has([data-ad-...]))\` (or filtering \`data-*\` promotion attributes out in JS) — and when you need a positive organic marker, take it from evidence you verified exists on organic cards only (a permalink href, a timestamp link), never from an attribute that names itself as promotion markup.
 
 IMPORTANT: For waiting or polling scenarios (e.g., checking if AI has finished generating), do NOT use $() in a loop — it will throw after 30s if the element is not found. Instead:
 - Use 'await new Promise(r => setTimeout(r, ms))' for fixed delays
@@ -501,10 +502,11 @@ RULES:
 - popoverSelector is the popover container, NOT the field inside it. Inspect the page (DevTools Elements panel) while manually hovering the anchor to find the popover container selector. A weak popoverSelector (e.g. 'div') will match the wrong element; a too-specific one will time out.
 - After \$hover returns, the framework auto-dismisses (moves the trusted cursor to (1,1) so the popover closes). Pass { dismiss: false } ONLY if you want the popover to linger (rare — usually you want it gone before the next iteration).
 - AUTO-DISCOVERY: if your popoverSelector does not match within timeoutMs, the framework falls back to watching DOM mutations and picks up any new visible element of non-trivial size (>=50x50 px) added during the hover window. The result then carries \`autoDiscovered: true\` and \`popoverSelector: '[auto-discovered popover]'\`. This catches React Portal / Vue Teleport / Popper / Floating UI popovers when you don't know the exact container selector. It is still BETTER to provide the right popoverSelector (explicit beats heuristic) — use auto-discovery as a safety net, not a substitute for inspecting the popover DOM.
+- POPOVER SELECTOR FROM EVIDENCE — when hovers fail with reason 'popover_timeout' while anchors WERE found, your popoverSelector is the prime suspect: the popover mounted, but your selector describes a different container. The popover's role attribute varies by site and widget (dialog, tooltip, menu, region — no single role is typical), so a guessed role WILL miss on some sites. Do NOT re-guess blind: every FAILED hovercard entry carries \`observedPopover { tag, role, ariaLabel, id, classHead, source, wonTicks, ... }\` — the structural identity of the element auto-discovery actually observed mounting near the anchor. Rewrite popoverSelector from THAT element, e.g. \`div[role="<observedPopover.role>"]\`, tightened with its aria-label/id/class when the role alone is ambiguous. Two failure shapes, two responses: (1) observedPopover PRESENT with reason 'popover_timeout' ⇒ a popover-sized element mounted and your selector missed it — rewrite the selector from the observation. (2) observedPopover ABSENT with reason 'no_hover_signal_early_exit' ⇒ nothing mounted for that anchor at all — the anchor has no popover (skip it, or narrow anchorSel); re-guessing popoverSelector cannot help. And any SUCCESSFUL capture with \`autoDiscovered: true\` means your popoverSelector matched nothing even though the capture was rescued — fix the selector the same way before it starts timing out on slower renders.
 - For MULTIPLE records: pass \`{ index: i }\` per call. Do NOT batch-hovers — only one popover is on screen at a time, and most sites close the previous popover on the next hover.
 - PREFER \$hover over \$openTab for hovercard data. \$openTab opens a NEW TAB (full navigation lifecycle, network refetch, 5-15s per record). \$hover stays in-page (~250-500ms per record) because the popover content is already loaded or fetched via XHR the page already knows how to make.
-- If htmlSnippet is null after hover (popover never appeared), common causes: (a) popoverSelector wrong — inspect the actual popover DOM, (b) anchor offscreen — \$hover calls scrollIntoView first but some popovers only fire for fully-visible anchors, (c) hover handler gated on Enhanced Mode being enabled. Do NOT retry in a tight loop — surface the failure to the framework.
-- HOVERCARD vs LINK-PREVIEW vs TOOLTIP — when an anchor triggers MULTIPLE popover types on the same page (a link-preview card with OpenGraph image+title AND a hovercard with entity stats/member-count/bio AND a small URL tooltip), popoverSelector MUST specifically match the HOVERCARD container — not the link-preview and not the tooltip. The hovercard carries the entity-detail fields you want; the link-preview carries page-preview fields (OG title, OG image, page description) which look similar but are the WRONG card. How to disambiguate in DevTools: (1) manually hover the anchor until every popover has appeared, (2) inspect each popover's data-* attributes and ARIA role/label, (3) pick the one whose DOM contains the field you actually want to extract (member count, bio, follower count, etc.) and use its specific selector — usually a stable container with a distinct [role], [aria-label], or [data-*] attribute. A popoverSelector like 'div[role="dialog"]' or 'div[data-hovercard]' is usually correct; 'div[aria-label="...preview..."]' or any selector matching the link-preview card is the WRONG card. When unsure, prefer the popover whose [role] is "dialog" or "tooltip" with a non-preview [aria-label].
+- If htmlSnippet is null after hover (popover never appeared), common causes: (a) popoverSelector wrong — read \`observedPopover\` on the failed entry and rewrite from it (see POPOVER SELECTOR FROM EVIDENCE above) instead of inspecting blind, (b) anchor offscreen — \$hover calls scrollIntoView first but some popovers only fire for fully-visible anchors, (c) hover handler gated on Enhanced Mode being enabled. Do NOT retry in a tight loop — surface the failure to the framework.
+- HOVERCARD vs LINK-PREVIEW vs TOOLTIP — when an anchor triggers MULTIPLE popover types on the same page (a link-preview card with OpenGraph image+title AND a hovercard with entity stats/member-count/bio AND a small URL tooltip), popoverSelector MUST specifically match the HOVERCARD container — not the link-preview and not the tooltip. The hovercard carries the entity-detail fields you want; the link-preview carries page-preview fields (OG title, OG image, page description) which look similar but are the WRONG card. How to disambiguate in DevTools: (1) manually hover the anchor until every popover has appeared, (2) inspect each popover's data-* attributes and ARIA role/label, (3) pick the one whose DOM contains the field you actually want to extract (member count, bio, follower count, etc.) and use its specific selector — usually a stable container with a distinct [role], [aria-label], or [data-*] attribute. A popoverSelector like 'div[role="dialog"]' or 'div[data-hovercard]' fits SOME sites but the role varies by site and widget — verify against the page (or against observedPopover on a failed entry) rather than assuming; 'div[aria-label="...preview..."]' or any selector matching the link-preview card is the WRONG card. When unsure, prefer the popover whose [role] is "dialog" or "tooltip" with a non-preview [aria-label].
 - ANCHOR SELECTOR ROBUSTNESS — keep \$hover's anchorSelector SHORT and use DESCENDANT combinators (spaces), not CHILD (>). Component-library DOM commonly wraps the visible link in 5-10 anonymous intermediate wrappers (div > div > div > ... > a). A selector like \`section h3 a[role="link"]\` (descendant) tolerates wrapper-level refactors; a selector like \`section h3 > span > span > span > span > span > a[role="link"]\` (child chain) breaks the moment the page adds or removes one wrapper level. Prefer: \`<stable-container> <stable-leaf>\` (e.g. \`div[role="article"] a[role="link"]\`). The framework's selector generator already produces short descendant selectors for annotated elements — mirror that style.
 - POPOVER CONTAMINATION FROM PRIOR \$click (cross-step) — auto_discovery picks ANY visible popover-sized posAbsolute element when your popoverSelector doesn't match. Popovers do NOT auto-close between steps. If a PRIOR step's \$click or \$clickInList opened an unrelated popover (a 3-dot action menu, a share dialog, a notifications dropdown), that popover STAYS OPEN and will be picked INSTEAD OF the actual hovercard — returning the WRONG card's htmlSnippet. Two prevention rules:
   (a) BE SPECIFIC IN \$clickInList's BUTTON SELECTOR. Bare \`div[role="button"]\` matches EVERY button inside each list item — including 3-dot action menus, like/share buttons, dropdown triggers. Clicking these opens context menus that contaminate subsequent hover operations in the same flow. Always use a button selector targeting ONLY the intended buttons: \`div[role="button"][aria-label*="more" i]\` for "see more" expanders, \`div[role="button"][aria-label*="comment" i]\` for comment expanders, etc. A bare \`div[role="button"]\` is a STRONG CODE SMELL — it indicates you didn't disambiguate.
@@ -2183,6 +2185,67 @@ function detectDuplicateRecords(data, outputSchema, options) {
     });
   }
   return result;
+}
+
+// detectCountShortfall(data, inputValues, outputSchema, options) → null | {field, requested, extracted}
+//
+// Seventh-log survey (2026-09-01): a search-posts service declared input
+// count:10 and every "SUCCESS" run returned posts:[1 record] — an ad card
+// picked by an inverted container filter. EMPTY_EXTRACTION catches all-empty
+// arrays, chronic-empty detection catches empty FIELDS, but nothing compared
+// the extracted record count against the requested count, so neither the
+// result UI nor the autoFix loop ever saw the shortfall. This detector
+// reports it; it deliberately does NOT force retries — a selector that keeps
+// only a tiny card subset cannot be fixed by scrolling harder, and pushing
+// the scroll loop toward an unreachable count is the ZERO-TRAP deadlock.
+// Severe-only (extracted < half of requested) so a 9/10 run is not nagged.
+function detectCountShortfall(data, inputValues, outputSchema, options) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  if (!inputValues || typeof inputValues !== 'object') return null;
+  if (!outputSchema || typeof outputSchema !== 'object') return null;
+  const opts = options || {};
+  const severeRatio = typeof opts.severeRatio === 'number' ? opts.severeRatio : 0.5;
+  const minRequested = typeof opts.minRequested === 'number' ? opts.minRequested : 3;
+
+  // Requested-count inputs: exact forms first (count/limit/top/num), then
+  // compound forms that name a subject AND a quantity (maxPosts, numResults,
+  // resultCount). Keys like timeoutMs or pageNumber carry neither shape.
+  const EXACT_COUNT_KEYS = /^(count|limit|top|num|number|n)$/i;
+  const SUBJECT_TOKEN = /(item|record|result|post|row|entry|product|card|feed|listing)s?/i;
+  const QUANTITY_TOKEN = /(count|limit|num|number|max|total|top)/i;
+  let requested = null;
+  let requestedKey = null;
+  for (const key of Object.keys(inputValues)) {
+    const raw = inputValues[key];
+    const num = typeof raw === 'number' ? raw : (typeof raw === 'string' && /^\d+$/.test(raw.trim()) ? Number(raw.trim()) : NaN);
+    if (!Number.isFinite(num) || num < minRequested) continue;
+    const k = String(key);
+    const isExact = EXACT_COUNT_KEYS.test(k);
+    const isCompound = SUBJECT_TOKEN.test(k) && QUANTITY_TOKEN.test(k);
+    if (!isExact && !isCompound) continue;
+    // Prefer the exact form; among equals keep the largest ask.
+    if (requested === null || (isExact && !EXACT_COUNT_KEYS.test(requestedKey)) || (isExact === EXACT_COUNT_KEYS.test(requestedKey) && num > requested)) {
+      requested = num;
+      requestedKey = k;
+    }
+  }
+  if (requested === null) return null;
+
+  const props = outputSchema.properties && typeof outputSchema.properties === 'object'
+    ? outputSchema.properties
+    : {};
+  let worst = null;
+  for (const key of Object.keys(props)) {
+    const prop = props[key];
+    if (!prop || prop.type !== 'array' || !prop.items || prop.items.type !== 'object') continue;
+    const arr = data[key];
+    const extracted = Array.isArray(arr) ? arr.length : 0;
+    if (extracted >= requested * severeRatio) continue;
+    if (!worst || extracted > worst.extracted) {
+      worst = { field: key, requested: requested, extracted: extracted };
+    }
+  }
+  return worst;
 }
 
 // formatDuplicateRecordsSignal(dupes) → string
@@ -4093,7 +4156,7 @@ function formatElementsForPrompt(elements, opts) {
 
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectCountShortfall, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.hoverAwareTimeoutMs = hoverAwareTimeoutMs;

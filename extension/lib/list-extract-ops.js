@@ -289,6 +289,12 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
           popoverSelector: (r && r.popoverSelector) || null,
           autoDiscovered: !!(r && r.autoDiscovered),
           reason: (r && r.reason) || null,
+          // Sixth-log followup (2026-09-01): failed hovers carry the
+          // structural identity of the popover auto-discovery observed
+          // (role/aria/id/class), so a popoverSelector mismatch can be
+          // repaired from evidence instead of re-guessed. Attached ONLY on
+          // failure — a success already has htmlSnippet.
+          observedPopover: (r && !r.hovered && r.observedPopover) || null,
           anchorIndex: j,
           anchorHref: anchorHref,
           anchorText: anchorText

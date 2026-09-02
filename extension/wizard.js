@@ -2215,6 +2215,27 @@ async function testScript() {
       debugLogger.log('warn', 'wizard', 'Duplicate records detected — treating as failure', { duplicateFields, extractionStepId, nominalStepId });
       throw err;
     }
+    // Count-shortfall check (console.log 2026-09-01, seventh survey): the
+    // run asked for count:10 and every "SUCCESS" returned posts:[1 record]
+    // — an ad card kept by an inverted container filter. EMPTY_EXTRACTION
+    // (above) catches all-empty arrays and chronic-empty catches empty
+    // FIELDS, but neither compares the extracted count against the requested
+    // count, so the shortfall was invisible to the user and the autoFix
+    // loop. Report-only: a severe shortfall usually means the selector keeps
+    // a tiny card subset — forcing retries toward an unreachable count is
+    // the ZERO-TRAP deadlock, so surface it and let the human/LLM judge.
+    const countShortfall = (typeof detectCountShortfall === 'function')
+      ? detectCountShortfall(finalData, wizardState.testInput, wizardState.outputSchema)
+      : null;
+    wizardState.countShortfall = countShortfall || null;
+    if (countShortfall) {
+      debugLogger.log('warn', 'wizard', 'Count shortfall detected', countShortfall);
+      const csMsg = 'Only ' + countShortfall.extracted + ' of ' + countShortfall.requested +
+        ' requested records were extracted into "' + countShortfall.field +
+        '". Either the container selector keeps a small card subset (check ATTRIBUTE-NAME POLARITY — promotion-named attributes used as :has() includes keep only ads/promoted cards) or the page genuinely holds fewer matching cards.';
+      appendLog(csMsg, 'warn');
+      showToast(csMsg, 'warn', 12000);
+    }
     const oc = validateOutputAgainstSchema(finalData, wizardState.outputSchema);
     if (!oc.ok) {
       updatePhaseUI('empty-result');
@@ -3195,6 +3216,7 @@ Rules (READ ALL):
   // (failure-fix path doesn't emit these specific signals).
   let noOpEscalation = '';
   let emptyFieldsSignal = '';
+  let countShortfallSignal = '';
   let shapeDistributionSignal = '';
   let fieldCandidatesSignal = '';
 
@@ -3364,6 +3386,21 @@ ${RETURN_FORMAT}`;
       detectEmptyOutputFieldsByRatio(wafeFallbackFinalResult(wizardState), wizardState.outputSchema)
     );
 
+    // Count shortfall (console.log 2026-09-01, seventh survey): when the
+    // input names a requested count and the extraction returned far fewer
+    // records, tell the LLM — field-level signals above are blind to it.
+    // Diagnostic only: the fix is usually the CONTAINER's card policy (an
+    // inverted ad-attribute filter keeps a handful of promoted cards), not
+    // more scrolling.
+    if (typeof detectCountShortfall === 'function') {
+      const cs = detectCountShortfall(wafeFallbackFinalResult(wizardState), wizardState.testInput, wizardState.outputSchema);
+      if (cs) {
+        countShortfallSignal = 'COUNT_SHORTFALL — the input requested ' + cs.requested +
+          ' records but the output extracted only ' + cs.extracted + ' into "' + cs.field +
+          '". Diagnose the CARD POLICY first, not the scroll: a container selector built on a promotion-named attribute (ad/sponsored/promoted tokens in the attribute NAME used as a :has() include) keeps ONLY promoted cards, so the page can never supply the requested count of real records — rewrite the container filter (see ATTRIBUTE-NAME POLARITY). Only if the container policy is already correct should you treat this as "the page holds fewer matching cards" and let the run finish short.';
+      }
+    }
+
     // Empirical shape distribution (2026-08-05 architectural pivot):
     // surface ACTUAL shape variance observed in the extracted records, so the
     // LLM can write genuine shape-switching logic instead of conflating
@@ -3467,7 +3504,7 @@ CONTEXT — read carefully:
 
 User's observation feedback:
 ${userFeedback}
-${noOpEscalation}${emptyFieldsSignal ? '\n' + emptyFieldsSignal + '\n' : ''}${shapeDistributionSignal ? '\n' + shapeDistributionSignal + '\n' : ''}${fieldCandidatesSignal ? '\n' + fieldCandidatesSignal + '\n' : ''}
+${noOpEscalation}${emptyFieldsSignal ? '\n' + emptyFieldsSignal + '\n' : ''}${countShortfallSignal ? '\n' + countShortfallSignal + '\n' : ''}${shapeDistributionSignal ? '\n' + shapeDistributionSignal + '\n' : ''}${fieldCandidatesSignal ? '\n' + fieldCandidatesSignal + '\n' : ''}
 Identify EVERY step in the workflow below whose script contains a root cause for the reported problems, and return a fix for each. Do NOT anchor on any particular step — the bug may be in any of them. Typical patterns:
 - "field X is missing/wrong" → FIRST check whether the step has User-annotated selectors (listed under each step below as "User-annotated selectors"). Those were empirically verified by the user at author time and are the source of truth — copy them VERBATIM. If no annotation exists for field X, fall back to deriving from RECORD HTML in RUNTIME DIAGNOSTICS below. The most common cause of repeated extraction failure is the LLM inventing its own selector when a working annotation was available but ignored.
 - "only N items extracted" → the scroll/paginate step (under-loaded) OR the extract step (container selector too narrow).
@@ -3534,6 +3571,7 @@ ${RETURN_FORMAT_FEEDBACK}`;
     const signalsIncluded = [];
     if (noOpEscalation) signalsIncluded.push('NO_OP_ESCALATION');
     if (emptyFieldsSignal) signalsIncluded.push('EMPTY_FIELDS');
+    if (countShortfallSignal) signalsIncluded.push('COUNT_SHORTFALL');
     if (shapeDistributionSignal) signalsIncluded.push('RECORD_SHAPE_DISTRIBUTION');
     if (fieldCandidatesSignal) signalsIncluded.push('FIELD_CANDIDATES');
     if (typeof buildAnnotationsText === 'function' && wizardState.annotations && wizardState.annotations.length > 0) signalsIncluded.push('ANNOTATIONS');
