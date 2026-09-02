@@ -222,3 +222,44 @@ describe('createVerifyRunner', () => {
     assert.equal(out.report.ok, true);
   });
 });
+
+describe('verify-runner shapeDistribution detector (record-shape-distribution consumer)', () => {
+  const SCHEMA_ARR_OBJ = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } };
+
+  it('heterogeneous record shapes → report-only detector block + CARD_POLICY tag (no error)', async () => {
+    const orch = async () => ({
+      finalResult: { posts: [
+        { permalink: '/p1', title: 'a' }, { permalink: '/p2', title: 'b' },
+        { adLabel: 'sponsored' }, { adLabel: 'sponsored' }
+      ] },
+      steps: [{ stepId: 's1', stepName: 'one', result: { done: true }, snapshot: null }], pages: [], pagesTruncated: false
+    });
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: SCHEMA_ARR_OBJ });
+    assert.equal(out.report.ok, true, 'shape heterogeneity is a signal, not an error');
+    assert.ok(out.report.detectors.shapeDistribution, 'detector block present');
+    assert.ok(out.report.detectors.shapeDistribution.indexOf('SHAPE A') !== -1);
+    assert.ok(out.report.detectors.shapeDistribution.indexOf('SHAPE B') !== -1);
+    assert.ok(out.report.detectors.shapeDistribution.indexOf('Record collection: posts') !== -1);
+    assert.ok(out.report.events.indexOf('CARD_POLICY') !== -1, 'CARD_POLICY tag rides report.events for knowledge auto-attach');
+  });
+
+  it('homogeneous records → no block, no tag (quiet when there is nothing to say)', async () => {
+    const orch = async () => ({
+      finalResult: { posts: [{ permalink: '/p1', title: 'a' }, { permalink: '/p2', title: 'b' }, { permalink: '/p3', title: 'c' }] },
+      steps: [{ stepId: 's1', stepName: 'one', result: { done: true }, snapshot: null }], pages: [], pagesTruncated: false
+    });
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: SCHEMA_ARR_OBJ });
+    assert.equal(out.report.ok, true);
+    assert.equal(out.report.detectors.shapeDistribution, null);
+    assert.equal(out.report.events.indexOf('CARD_POLICY'), -1);
+  });
+
+  it('non-array or too-small outputs stay null (no false heterogeneity)', async () => {
+    const orch = async () => ({ finalResult: { posts: [{ a: 1 }] }, steps: [], pages: [] });
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: SCHEMA_ARR_OBJ });
+    assert.equal(out.report.detectors.shapeDistribution, null);
+  });
+});

@@ -1277,6 +1277,7 @@ async function testScript() {
 
   wizardState.lastExecutionEvents = out.events;
   wizardState.countShortfall = out.report.detectors.countShortfall || null;
+  wizardState.shapeDistribution = out.report.detectors.shapeDistribution || null;
   wizardState.testResult = out.report.ok ? out.raw.testResult : (out.raw.error && out.raw.error.steps ? { steps: out.raw.error.steps, finalResult: null } : out.raw.testResult);
 
   if (out.report.ok) {
@@ -1284,6 +1285,9 @@ async function testScript() {
     renderResultSummary(out.raw.testResult);
     renderPagesViewer(out.raw.testResult);
     appendLog('All steps completed.', 'success');
+    if (out.report.detectors.shapeDistribution) {
+      appendLog(out.report.detectors.shapeDistribution, 'warn');
+    }
     (out.raw.testResult.steps || []).forEach((step, i) => {
       appendLog('Step ' + (i + 1) + ' "' + step.stepName + '": ' + (step.skipped ? 'skipped (' + step.skipReason + ')' : 'completed'), step.skipped ? 'info' : 'success');
     });

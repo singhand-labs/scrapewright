@@ -61,6 +61,7 @@
     const d = deps || {};
     if (typeof d.orchestrate !== 'function') throw new Error('createVerifyRunner requires an orchestrate(service, input, orchDeps, options) function');
     const WU = resolveWU();
+    const RSD = resolveLib('./record-shape-distribution', 'RecordShapeDistribution');
     const log = typeof d.log === 'function' ? d.log : function () {};
     const onEventCb = typeof d.onEvent === 'function' ? d.onEvent : function () {};
     const ensureLock = typeof d.ensureLock === 'function' ? d.ensureLock : async function () {};
@@ -198,7 +199,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], countShortfall: null };
+      const detectors = { emptyFields: [], duplicateFields: [], countShortfall: null, shapeDistribution: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -295,6 +296,13 @@
           // ZERO-TRAP deadlock; surface it and let the human/LLM judge.
           detectors.countShortfall = WU.detectCountShortfall(finalData, input, outputSchema) || null;
         }
+        if (!error && RSD && typeof RSD.formatShapeDistributionFromData === 'function') {
+          // Report-only: 2+ field-population signatures across the extracted
+          // records mean the selector kept mixed card types — a card-policy
+          // signal, not an error. The CARD_POLICY tag auto-attaches the
+          // card-type-heterogeneity / card-polarity knowledge units.
+          detectors.shapeDistribution = RSD.formatShapeDistributionFromData(finalData, outputSchema) || null;
+        }
       }
 
       const oc = result ? WU.validateOutputAgainstSchema(finalData, outputSchema) : { ok: true, missing: [] };
@@ -323,6 +331,7 @@
         if (/HOVER_ANCHORS_BLIND/.test(msg)) add('HOVER_NO_SIGNAL');
         if (detectors.emptyFields.length) add('EMPTY_FIELDS');
         if (detectors.countShortfall) add('COUNT_SHORTFALL');
+        if (detectors.shapeDistribution) add('CARD_POLICY');
         for (const evt of events) {
           if (!evt || evt.type !== 'STEP_ITERATION') continue;
           const p = previewJson(evt.resultPreview);
