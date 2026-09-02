@@ -37,7 +37,8 @@
               .map(a => ({ selector: typeof a.selector === 'string' ? a.selector : '', attr: a.attr }))
           : [],
         summary: typeof e.summary === 'string' ? e.summary : '',
-        at: typeof e.at === 'number' ? e.at : 0
+        at: typeof e.at === 'number' ? e.at : 0,
+        epoch: (typeof e.epoch === 'number') ? e.epoch : null
       };
     }
 
@@ -48,6 +49,7 @@
         selectors: obs && obs.selectors,
         attrs: obs && obs.attrs,
         summary: obs && obs.summary,
+        epoch: obs && obs.epoch,
         at: Date.now()
       });
       seq += 1;
@@ -55,17 +57,24 @@
       return sanitizeEntry(e);
     }
 
-    function covers(selector) {
+    // C3: when `epoch` is a number, only receipts recorded in exactly that
+    // page epoch count — a reload of the research tab must invalidate every
+    // earlier DOM observation. Non-number epoch (legacy callers) filters
+    // nothing.
+    function covers(selector, epoch) {
       if (typeof selector !== 'string' || !selector) return false;
       for (const e of entries) {
-        if (e.selectors.indexOf(selector) !== -1) return true;
+        if (e.selectors.indexOf(selector) === -1) continue;
+        if (typeof epoch === 'number' && e.epoch !== epoch) continue;
+        return true;
       }
       return false;
     }
 
-    function coversAttr(attr) {
+    function coversAttr(attr, epoch) {
       if (typeof attr !== 'string' || !attr) return false;
       for (const e of entries) {
+        if (typeof epoch === 'number' && e.epoch !== epoch) continue;
         for (const a of e.attrs) {
           if (a.attr === attr) return true;
         }

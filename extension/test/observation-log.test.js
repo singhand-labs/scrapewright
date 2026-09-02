@@ -61,4 +61,29 @@ describe('ObservationLog', () => {
     assert.deepEqual(e.selectors, ['ok.sel']);
     assert.deepEqual(e.attrs, [{ selector: '', attr: 'data-v' }]);
   });
+
+  it('C3: entries carry an epoch; covers/coversAttr honor the current epoch only', () => {
+    const log = createObservationLog();
+    log.record({ tool: 'probe.count', selectors: ['div.a'], attrs: [{ selector: 'div.a', attr: 'data-k' }], summary: 'count=3', epoch: 1 });
+    assert.equal(log.covers('div.a'), true, 'legacy call (no epoch) filters nothing');
+    assert.equal(log.covers('div.a', 1), true);
+    assert.equal(log.covers('div.a', 2), false, 'page reloaded — the epoch-1 receipt is stale');
+    assert.equal(log.coversAttr('data-k'), true);
+    assert.equal(log.coversAttr('data-k', 2), false);
+    log.record({ tool: 'probe.count', selectors: ['div.a'], summary: 'count=5', epoch: 2 });
+    assert.equal(log.covers('div.a', 2), true, 're-probed in the new epoch');
+    const ser = log.serialize();
+    assert.equal(ser.entries[0].epoch, 1);
+    assert.equal(ser.entries[1].epoch, 2);
+    const revived = createObservationLog(ser);
+    assert.equal(revived.covers('div.a', 2), true, 'epoch survives the serialize round-trip');
+  });
+
+  it('C3: epoch-less entries (legacy/unknown) never match an epoch-filtered query', () => {
+    const log = createObservationLog();
+    log.record({ tool: 'probe.count', selectors: ['div.b'], summary: 'count=1' });
+    assert.equal(log.covers('div.b'), true);
+    assert.equal(log.covers('div.b', 1), false);
+    assert.equal(log.coversAttr('anything', 1), false);
+  });
 });
