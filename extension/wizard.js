@@ -1408,7 +1408,9 @@ async function presentTestOutcome(out) {
     if (out.report.aborted) wizardState.testAborted = true;
     document.getElementById('testResults').textContent = 'Error: ' + out.report.error.message + (out.report.error.stepId ? ' (in step: ' + out.report.error.stepId + ')' : '');
     document.getElementById('resultSummary').innerHTML = '';
-    renderPagesViewer(wizardState.testResult);
+    // A12: a failed run has no trustworthy pages list — hide the viewer
+    // rather than render pages from a partial/previous state.
+    renderPagesViewer(null);
     const raw = document.getElementById('rawOutputDetails');
     if (raw) raw.classList.remove('hidden');
     appendLog(out.report.aborted ? 'Test aborted.' : 'Execution failed: ' + out.report.error.message, out.report.aborted ? 'info' : 'error');
@@ -2232,9 +2234,9 @@ function friendlyStopReason(reason) {
   switch (reason) {
     case 'user':
     case 'aborted': return 'you stopped it';
-    case 'maxTurns': return 'the turn budget ran out';
-    case 'wallClock': return 'the time budget ran out';
-    case 'tokenCap': return 'the token budget ran out';
+    case 'maxTurns': return 'the turn budget exhausted';
+    case 'wallClock': return 'the time budget exhausted';
+    case 'tokenCap': return 'the token budget exhausted';
     case 'error': return 'it hit an error';
     default: return 'it stopped early (' + reason + ')';
   }
