@@ -964,7 +964,7 @@
         }
         case 'click': {
           const __t0 = Date.now();
-          result = await domClick(data.selector);
+          result = await domClick(data.selector, data.args && data.args[0]);
           recordDomActivity('$click', data.selector, result ? 1 : 0, Date.now() - __t0);
           break;
         }
@@ -1222,8 +1222,11 @@
     };
   }
 
-  async function domClick(sel) {
-    await domQuerySelector(sel);
+  async function domClick(sel, timeoutMs) {
+    // B3: extraction fail-fasts at 5s because a missing element there means
+    // a wrong selector; clicks/types have the same failure shape — default
+    // them to 10s (not the 30s read-primitive budget) unless overridden.
+    await domQuerySelector(sel, (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs : 10000);
     const found = querySelectorDeep(sel);
     if (!found) throw new Error('ELEMENT_NOT_FOUND: ' + sel);
     const el = found.element;
@@ -1232,8 +1235,8 @@
     return true;
   }
 
-  async function domType(sel, text) {
-    await domQuerySelector(sel);
+  async function domType(sel, text, timeoutMs) {
+    await domQuerySelector(sel, (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs : 10000);
     const found = querySelectorDeep(sel);
     if (!found) throw new Error('ELEMENT_NOT_FOUND: ' + sel);
     let el = found.element;
@@ -1319,16 +1322,21 @@
   }
 
   async function domExists(sel, timeoutMs) {
-    const deadline = Date.now() + (timeoutMs || 5000);
-    while (Date.now() < deadline) {
+    // B11: an explicitly numeric timeoutMs of 0 (or negative) means "one
+    // immediate query" — `timeoutMs || 5000` used to read 0 as unset and
+    // burn the full 5s poll.
+    const budget = (typeof timeoutMs === 'number') ? Math.max(0, timeoutMs) : 5000;
+    const deadline = Date.now() + budget;
+    while (true) {
       const found = querySelectorDeep(sel);
       if (found && isElementVisible(found.element)) {
         sendDebugLog('info', 'content-script', 'domExists found', { selector: sel });
         return true;
       }
-      await new Promise(r => setTimeout(r, 500));
+      if (Date.now() >= deadline) break;
+      await new Promise(r => setTimeout(r, Math.min(500, Math.max(1, deadline - Date.now()))));
     }
-    sendDebugLog('info', 'content-script', 'domExists not found', { selector: sel, timeoutMs: timeoutMs || 5000 });
+    sendDebugLog('info', 'content-script', 'domExists not found', { selector: sel, timeoutMs: budget });
     return false;
   }
 

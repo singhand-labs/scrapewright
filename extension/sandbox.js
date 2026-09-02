@@ -35,8 +35,8 @@
   }
 
   window.$ = (sel) => sendDomRequest('querySelector', sel);
-  window.$click = (sel) => sendDomRequest('click', sel);
-  window.$type = (sel, text) => sendDomRequest('type', sel, [text]);
+  window.$click = (sel, timeoutMs) => sendDomRequest('click', sel, timeoutMs !== undefined ? [timeoutMs] : []);
+  window.$type = (sel, text, timeoutMs) => sendDomRequest('type', sel, [text, timeoutMs]);
   window.$extract = (sel, attr, timeoutMs) => sendDomRequest('extract', sel, [attr, timeoutMs]);
   window.$wait = (sel, ms) => sendDomRequest('wait', sel, [ms]);
   window.$check = (sel, prop) => sendDomRequest('check', sel, [prop]);
