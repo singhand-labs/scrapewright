@@ -8,7 +8,7 @@ const _dom = new JSDOM('<!DOCTYPE html><html><body></body></html>', { url: 'http
 global.DOMParser = _dom.window.DOMParser;
 global.NodeFilter = _dom.window.NodeFilter;
 global.Node = _dom.window.Node;
-const { parseSchemaFields, buildIORenderString, validateTestInput, cleanLLMResponse, validateSteps, validateForExecution, validateChain, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, buildRequirementsBlock, suggestServiceName, SCRIPT_DSL_GUIDE, truncateSnapshotForLLM, summarizeFixIteration, formatDomActivitySummary, summarizeExecutionDiagnostics, scoreAnnotationBrittleness, scoreAnnotationChain, checkSelectorFidelity } = require('../lib/wizard-utils');
+const { parseSchemaFields, buildIORenderString, validateTestInput, cleanLLMResponse, validateSteps, validateForExecution, validateChain, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, buildRequirementsBlock, suggestServiceName, SCRIPT_DSL_GUIDE, truncateSnapshotForLLM, formatDomActivitySummary, summarizeExecutionDiagnostics, scoreAnnotationBrittleness, scoreAnnotationChain, checkSelectorFidelity } = require('../lib/wizard-utils');
 
 describe('parseSchemaFields', () => {
   it('returns field names with types', () => {
@@ -1384,81 +1384,9 @@ describe('truncateSnapshotForLLM', () => {
   });
 });
 
-describe('summarizeFixIteration', () => {
-  it('includes the script in full', () => {
-    const out = summarizeFixIteration({
-      stepId: 's1', stepName: 'Extract posts',
-      script: 'const items = await $list(".post");\nreturn { posts: items.map(i => ({ title: i.textContent })) };'
-    });
-    assert.match(out, /Script tried:/);
-    assert.match(out, /const items = await \$list\("\.post"\);/);
-    assert.match(out, /return \{ posts: items\.map/);
-  });
-
-  it('includes the error message in full', () => {
-    const out = summarizeFixIteration({
-      stepId: 's1', stepName: 'X',
-      script: 'return 1;',
-      error: 'POLL_EXHAUSTED: Step "s1" exhausted after 3 attempts'
-    });
-    assert.match(out, /Error: POLL_EXHAUSTED: Step "s1" exhausted after 3 attempts/);
-  });
-
-  it('renders annotations one-per-line with intent', () => {
-    const out = summarizeFixIteration({
-      stepId: 's1', stepName: 'X',
-      script: 'return 1;',
-      annotations: [
-        { type: 'extract', selector: '.post .title', outputField: 'posts.title', purpose: 'extract into the title field of each post' },
-        { type: 'extract', selector: '.post .author', outputField: 'posts.author', purpose: 'extract into the author field of each post' }
-      ]
-    });
-    assert.match(out, /\.post \.title/);
-    assert.match(out, /\.post \.author/);
-    assert.match(out, /posts\.title/);
-    assert.match(out, /posts\.author/);
-  });
-
-  it('renders (none) for missing error/result/feedback', () => {
-    const out = summarizeFixIteration({
-      stepId: 's1', stepName: 'X',
-      script: 'return 1;'
-    });
-    assert.match(out, /User feedback:\s*\(none\)/);
-    assert.match(out, /Error:\s*\(none\)/);
-    assert.match(out, /Result:\s*\(none\)/);
-  });
-
-  it('includes userFeedback only when provided', () => {
-    const withFeedback = summarizeFixIteration({
-      stepId: 's1', stepName: 'X',
-      script: 'return 1;',
-      userFeedback: 'the page uses lazy load, wait longer'
-    });
-    assert.match(withFeedback, /the page uses lazy load, wait longer/);
-
-    const withoutFeedback = summarizeFixIteration({
-      stepId: 's1', stepName: 'X',
-      script: 'return 1;'
-    });
-    assert.doesNotMatch(withoutFeedback, /User feedback: [^(]/);
-  });
-
-  it('stays under 3KB for a typical iteration', () => {
-    const typicalScript = 'const items = await $list(".post");\n' +
-      'return { posts: items.map(item => ({ title: item.textContent, author: item.textContent })) };';
-    const out = summarizeFixIteration({
-      stepId: 'extract-posts', stepName: 'Extract posts',
-      script: typicalScript,
-      annotations: [
-        { type: 'extract', selector: '.post', outputField: 'posts.title', purpose: 'extract title' }
-      ],
-      error: 'EMPTY_EXTRACTION: required field(s) [posts.title] not found',
-      result: { done: false }
-    });
-    assert.ok(out.length < 3000, 'expected summary under 3KB, got ' + out.length);
-  });
-});
+// summarizeFixIteration was removed with the wizard-time autoFix flow
+// (ResearchSession migration); the summary channel is now the verify-runner
+// report + session observation log.
 
 describe('formatDomActivitySummary', () => {
   it('returns (no DOM calls) for empty or non-array input', () => {
@@ -1766,17 +1694,9 @@ describe('RECORD SHAPE DISTRIBUTION prompt-text audit', () => {
     assert.ok(distSrc.includes('SOME shapes'), 'SOME shapes label missing');
   });
 
-  it('wizard.js autoFix prompt consumes the shape-distribution signal', () => {
-    assert.ok(wizardSrc.includes('formatShapeDistributionFromData'),
-      'wizard.js must call formatShapeDistributionFromData to surface empirical shape variance');
-    assert.ok(wizardSrc.includes('shapeDistributionSignal'),
-      'wizard.js must bind the shape-distribution output to a prompt variable');
-  });
-
-  it('wizard.js teaches the LLM how to use the signal (SHAPE-SWITCHING pattern)', () => {
-    assert.ok(/SHAPE-SWITCHING/.test(wizardSrc),
-      'wizard.js must include a SHAPE-SWITCHING instruction in the autoFix patterns list');
-  });
+  // The wizard.js autoFix prompt-consumption subtests were removed with the
+  // autoFix flow; no session-layer consumer of the shape-distribution signal
+  // exists yet. The library primitive + its unit/audit coverage above stay.
 
   it('record-shape-distribution source contains NO site-specific terms', () => {
     const forbidden = ['facebook', 'twitter', 'linkedin', 'tiktok', 'reddit', 'fb'];
@@ -1858,17 +1778,9 @@ describe('RECORD SHAPE DISTRIBUTION prompt-text audit', () => {
     assert.ok(distSrc.includes('SOME shapes'), 'SOME shapes label missing');
   });
 
-  it('wizard.js autoFix prompt consumes the shape-distribution signal', () => {
-    assert.ok(wizardSrc.includes('formatShapeDistributionFromData'),
-      'wizard.js must call formatShapeDistributionFromData to surface empirical shape variance');
-    assert.ok(wizardSrc.includes('shapeDistributionSignal'),
-      'wizard.js must bind the shape-distribution output to a prompt variable');
-  });
-
-  it('wizard.js teaches the LLM how to use the signal (SHAPE-SWITCHING pattern)', () => {
-    assert.ok(/SHAPE-SWITCHING/.test(wizardSrc),
-      'wizard.js must include a SHAPE-SWITCHING instruction in the autoFix patterns list');
-  });
+  // The wizard.js autoFix prompt-consumption subtests were removed with the
+  // autoFix flow; no session-layer consumer of the shape-distribution signal
+  // exists yet. The library primitive + its unit/audit coverage above stay.
 
   it('record-shape-distribution source contains NO site-specific terms', () => {
     const forbidden = ['facebook', 'twitter', 'linkedin', 'tiktok', 'reddit', 'fb'];

@@ -37,7 +37,7 @@ const path = require('node:path');
 const { FROZEN_ZERO_MIN_ELAPSED_MS } = require('../lib/wizard-utils');
 
 const WIZARD_UTILS_SRC = fs.readFileSync(path.join(__dirname, '..', 'lib', 'wizard-utils.js'), 'utf8');
-const WIZARD_SRC = fs.readFileSync(path.join(__dirname, '..', 'wizard.js'), 'utf8');
+const RUNNER_SRC = fs.readFileSync(path.join(__dirname, '..', 'lib', 'verify-runner.js'), 'utf8');
 
 describe('CARD-TYPE HETEROGENEITY: cursor + positive-evidence corollaries', () => {
   const idx = WIZARD_UTILS_SRC.indexOf('CARD-TYPE HETEROGENEITY');
@@ -80,20 +80,20 @@ describe('breaker elapsed-time floor (P4)', () => {
       'the floor must span a genuinely slow render; got ' + FROZEN_ZERO_MIN_ELAPSED_MS);
   });
 
-  it('wizard breaker requires streak AND elapsed (source wiring)', () => {
-    assert.ok(/FROZEN_ZERO_MIN_ELAPSED_MS/.test(WIZARD_SRC),
-      'wizard.js breaker must consult the elapsed floor');
-    const i = WIZARD_SRC.indexOf('FROZEN_ZERO_STREAK_THRESHOLD &&');
+  it('verify-runner breaker requires streak AND elapsed (source wiring)', () => {
+    assert.ok(/FROZEN_ZERO_MIN_ELAPSED_MS/.test(RUNNER_SRC),
+      'the verify-runner breaker must consult the elapsed floor');
+    const i = RUNNER_SRC.indexOf('FROZEN_ZERO_STREAK_THRESHOLD &&');
     assert.ok(i > 0);
-    const cond = WIZARD_SRC.slice(i, i + 300);
+    const cond = RUNNER_SRC.slice(i, i + 300);
     assert.ok(/Date\.now\(\)/.test(cond),
       'the fire condition must include an elapsed check, not iteration count alone: ' + cond);
   });
 
   it('streak state carries a since timestamp (per-streak start)', () => {
-    assert.ok(/since/.test(WIZARD_SRC.slice(
-      WIZARD_SRC.indexOf('zeroCounterStreaks.get'),
-      WIZARD_SRC.indexOf('zeroCounterStreaks.get') + 600)),
+    assert.ok(/since/.test(RUNNER_SRC.slice(
+      RUNNER_SRC.indexOf('zeroCounterStreaks.get'),
+      RUNNER_SRC.indexOf('zeroCounterStreaks.get') + 600)),
       'the streak entry must record when it started');
   });
 });

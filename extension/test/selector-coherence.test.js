@@ -24,50 +24,35 @@ const path = require('path');
 const wizardSrc = fs.readFileSync(path.join(__dirname, '..', 'wizard.js'), 'utf8');
 const utilsSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'wizard-utils.js'), 'utf8');
 
-describe('SELECTOR COHERENCE prompt rule (console.log 2026-08-23 second session)', () => {
-  it('failure-path autoFix prompt teaches SELECTOR COHERENCE with multi-step propagation', () => {
-    assert.ok(/SELECTOR COHERITY|SELECTOR COHERENCE/.test(wizardSrc), 'SELECTOR COHERENCE rule missing');
-    // The rule must instruct propagating the same fixed selector to every
-    // step that references the broken one — not just name the concept.
-    assert.ok(/every OTHER step|every other step/.test(wizardSrc), 'propagation instruction missing');
-  });
-
-  it('RETURN_FORMAT offers a multi-step patches option on the failure path', () => {
-    // Option (C): {"patches":[{stepId, script}...]} for selector propagation.
-    const m = wizardSrc.match(/RETURN FORMAT — choose ONE:[\s\S]{0,2500}/);
-    assert.ok(m, 'RETURN FORMAT block not found');
-    assert.ok(/"patches"/.test(m[0]), 'patches array option missing from RETURN FORMAT');
-  });
-
-  it('the old "only edit this step" constraint carves out the selector exception', () => {
-    const m = wizardSrc.match(/Do NOT add or remove steps[^]*?\n\n/);
-    assert.ok(m, 'step-edit constraint not found');
-    const constraint = wizardSrc.match(/only edit this step's own fields[^.]*\./);
-    assert.ok(constraint, 'constraint sentence not found');
-    // Near the constraint there must be an EXCEPTION/SELECTOR COHERENCE mention.
-    const idx = wizardSrc.indexOf("only edit this step's own fields");
-    const window = wizardSrc.slice(idx, idx + 1200);
-    assert.ok(/SELECTOR COHERENCE/.test(window), 'constraint lacks the selector-propagation exception nearby');
+describe('SELECTOR COHERENCE rule (console.log 2026-08-23 second session)', () => {
+  it('knowledge-units carry the selector-coherence rule with multi-step propagation', () => {
+    const kuSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'knowledge-units.js'), 'utf8');
+    const i = kuSrc.indexOf("id: 'selector-coherence'");
+    assert.ok(i !== -1, 'selector-coherence unit missing');
+    const body = kuSrc.slice(i, kuSrc.indexOf('id:', i + 10));
+    assert.ok(/SAME selector string/.test(body), 'propagation instruction missing');
+    assert.ok(/FULL step workflow/.test(body), 'full-workflow scan missing');
   });
 });
 
-describe('COUNT_SELECTOR_BLIND + invalid-selector augmentation in testScript catch', () => {
-  it('catch path runs detectCountSelectorBlind on POLL_EXHAUSTED', () => {
-    assert.ok(/detectCountSelectorBlind\(/.test(wizardSrc), 'detectCountSelectorBlind not called in wizard.js');
-    assert.ok(/COUNT_SELECTOR_BLIND/.test(wizardSrc), 'COUNT_SELECTOR_BLIND marker missing');
+describe('COUNT_SELECTOR_BLIND + invalid-selector augmentation in verify-runner (was testScript catch)', () => {
+  const runnerSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'verify-runner.js'), 'utf8');
+  it('failure path runs detectCountSelectorBlind on POLL_EXHAUSTED', () => {
+    assert.ok(/detectCountSelectorBlind\(/.test(runnerSrc), 'detectCountSelectorBlind not called in verify-runner');
+    assert.ok(/COUNT_SELECTOR_BLIND/.test(runnerSrc), 'COUNT_SELECTOR_BLIND marker missing');
   });
 
-  it('catch path appends a standard-CSS hint on "is not a valid selector" errors', () => {
-    assert.ok(/is not a valid selector/i.test(wizardSrc), 'invalid-selector branch missing');
+  it('failure path appends a standard-CSS hint on "is not a valid selector" errors', () => {
+    assert.ok(/is not a valid selector/i.test(runnerSrc), 'invalid-selector branch missing');
     // The hint must name the Playwright pseudo-classes so the LLM recognizes
     // its own mistake.
-    assert.ok(/:has-text/.test(wizardSrc), 'hint does not name :has-text(');
-    assert.ok(/textContent/.test(wizardSrc), 'hint does not offer the textContent filter pattern');
+    assert.ok(/:has-text/.test(runnerSrc), 'hint does not name :has-text(');
+    assert.ok(/textContent/.test(runnerSrc), 'hint does not offer the textContent filter pattern');
   });
 
   it('success path checks detectClickInListEmptyContainers and throws CLICK_CONTAINERS_EMPTY', () => {
-    assert.ok(/detectClickInListEmptyContainers\(/.test(wizardSrc), 'detectClickInListEmptyContainers not called');
-    assert.ok(/CLICK_CONTAINERS_EMPTY/.test(wizardSrc), 'CLICK_CONTAINERS_EMPTY marker missing');
+    assert.ok(/detectClickInListEmptyContainers\(/.test(runnerSrc), 'detectClickInListEmptyContainers not called');
+    assert.ok(/CLICK_CONTAINERS_EMPTY/.test(runnerSrc), 'CLICK_CONTAINERS_EMPTY marker missing');
   });
 });
 

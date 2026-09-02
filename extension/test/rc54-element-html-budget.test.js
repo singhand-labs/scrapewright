@@ -104,31 +104,12 @@ describe('RC54: formatElementsForPrompt total budget', () => {
   });
 });
 
-describe('RC54: wizard.js wires the capped formatter', () => {
-  it('confirmSelectorsWithFullHtml builds the Elements section via formatElementsForPrompt', () => {
-    const src = readSrc('wizard.js');
-    const start = src.indexOf('async function confirmSelectorsWithFullHtml(');
-    assert.ok(start > -1, 'confirmSelectorsWithFullHtml must exist');
-    const end = src.indexOf('\nasync function ', start + 1);
-    const body = src.slice(start, end > start ? end : start + 8000);
-    assert.ok(body.includes('formatElementsForPrompt(response.elements)'),
-      'the Elements section must be built through the capped formatter — raw ' +
-      'outerHTML embedding produced a 756,464-token prompt (RC54 incident)');
-    assert.ok(!/e\.outerHTML\s*\}/.test(body),
-      'no raw outerHTML interpolation may remain in the prompt template');
-  });
-
-  it('comment documents the RC54 incident at the Elements build site', () => {
-    const src = readSrc('wizard.js');
-    const idx = src.indexOf('formatElementsForPrompt(response.elements)');
-    assert.ok(idx > -1, 'wiring must exist');
-    const before = src.slice(Math.max(0, idx - 900), idx);
-    assert.ok(/RC54|756,?464|budget/i.test(before),
-      'a comment near the Elements build must document WHY the cap exists ' +
-      '(756K-token Round 2 prompt, 120s timeout coin-flip on attempt 2).');
-  });
-
-  it('formatElementsForPrompt is exported from wizard-utils for wizard.html global sharing', () => {
+describe('RC54: capped formatter contract', () => {
+  // The wizard.js confirmSelectorsWithFullHtml call site was removed with
+  // the wizard-time flow (ResearchSession migration). The formatter itself
+  // survives in wizard-utils with its caps pinned by the unit suites above;
+  // any future consumer must go through it.
+  it('formatElementsForPrompt is exported from wizard-utils for consumers', () => {
     const src = readSrc('lib/wizard-utils.js');
     assert.ok(/function formatElementsForPrompt\(/.test(src),
       'formatter must be defined in wizard-utils.js');

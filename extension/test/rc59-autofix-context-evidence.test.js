@@ -35,7 +35,6 @@ const path = require('path');
 
 const {
   stripSnapshotsFromTestResult,
-  summarizeFixIteration,
   elideDuplicateFinalResults
 } = require('../lib/wizard-utils');
 
@@ -82,47 +81,6 @@ describe('RC59: stripSnapshotsFromTestResult head+tail truncation', () => {
     assert.ok(out.includes('H'), 'head region kept');
     assert.ok(out.includes('T'), 'tail region kept at small caps too');
     assert.ok(!out.includes('MMM'), 'middle cut');
-  });
-});
-
-describe('RC59: summarizeFixIteration history digest', () => {
-  it('caps result field values at a digest budget — history stops carrying output dumps', () => {
-    // Incident: each history entry embedded ~300K chars of capped-but-still-
-    // huge output JSON. The current prompt re-sends the fresh output anyway;
-    // history only needs structure + scalar values.
-    const result = {
-      finalResult: {
-        posts: Array.from({ length: 10 }, (_, i) => ({
-          index: i + 1,
-          content: '正文' + i,
-          likes: '8',
-          comments: '',
-          html: '<div>' + 'x'.repeat(50000) + '</div>',
-          hoverInfos: [{ htmlSnippet: '<span>' + 'y'.repeat(30000) + '</span>' }]
-        }))
-      }
-    };
-    const summary = summarizeFixIteration({
-      stepId: '4', stepName: 'extract', script: 'return {}',
-      annotations: [], userFeedback: 'comments 抽不出来', error: null, result
-    });
-    assert.ok(summary.length < 30000,
-      'history entry must be a digest, got ' + summary.length + ' chars');
-    assert.ok(!/x{300,}/.test(summary), 'no huge html runs in history');
-    assert.ok(!/y{300,}/.test(summary), 'no huge hovercard runs in history');
-    assert.ok(summary.includes('posts'), 'result structure visible');
-    assert.ok(summary.includes('likes'), 'scalar field names visible');
-  });
-
-  it('still records user feedback, error, and the tried script verbatim', () => {
-    const summary = summarizeFixIteration({
-      stepId: '5', stepName: 'classify', script: 'return 1;',
-      annotations: [], userFeedback: '第二篇帖子分类错了',
-      error: 'ELEMENT_NOT_FOUND', result: { finalResult: { a: 1 } }
-    });
-    assert.ok(summary.includes('第二篇帖子分类错了'));
-    assert.ok(summary.includes('ELEMENT_NOT_FOUND'));
-    assert.ok(summary.includes('return 1;'));
   });
 });
 
@@ -267,21 +225,13 @@ describe('RC59: DSL guide teaches aria-label metric extraction', () => {
   });
 });
 
-describe('RC59: wizard.js wiring (source-text)', () => {
+describe('RC59: serialization helper exports (post-research-session)', () => {
   const readSrc = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
 
-  it('currentOutput and testResultSection serialize through the same chain', () => {
-    const src = readSrc('wizard.js');
-    const count = (src.match(/stripPagesFromLLMContext\(stripSnapshotsFromTestResult\(/g) || []).length;
-    assert.ok(count >= 2,
-      'both serialization sites (testResultSection + currentOutput) must strip; found ' + count);
-  });
-
-  it('both serialization sites elide steps[].result duplicating finalResult', () => {
-    const src = readSrc('wizard.js');
-    const count = (src.match(/elideDuplicateFinalResults\(stripPagesFromLLMContext\(/g) || []).length;
-    assert.ok(count >= 2,
-      'both sites must wrap the chain with elideDuplicateFinalResults; found ' + count);
+  it('stripSnapshotsFromTestResult is exported from wizard-utils (verify-runner deps surface)', () => {
+    const src = readSrc('lib/wizard-utils.js');
+    assert.match(src, /function stripSnapshotsFromTestResult\(/);
+    assert.match(src, /module\.exports[^\n]*stripSnapshotsFromTestResult/);
   });
 
   it('elideDuplicateFinalResults is exported from wizard-utils', () => {
@@ -289,4 +239,5 @@ describe('RC59: wizard.js wiring (source-text)', () => {
     assert.match(src, /function elideDuplicateFinalResults\(/);
     assert.match(src, /module\.exports[^\n]*elideDuplicateFinalResults/);
   });
+
 });

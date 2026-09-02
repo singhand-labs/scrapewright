@@ -30,7 +30,7 @@ const {
 } = require('../lib/wizard-utils');
 
 const WIZARD_UTILS_SRC = fs.readFileSync(path.join(__dirname, '..', 'lib', 'wizard-utils.js'), 'utf8');
-const WIZARD_SRC = fs.readFileSync(path.join(__dirname, '..', 'wizard.js'), 'utf8');
+const RUNNER_SRC = fs.readFileSync(path.join(__dirname, '..', 'lib', 'verify-runner.js'), 'utf8');
 const CONTENT_SCRIPT_SRC = fs.readFileSync(path.join(__dirname, '..', 'content-script.js'), 'utf8');
 const LIST_OPS_SRC = fs.readFileSync(path.join(__dirname, '..', 'lib', 'list-extract-ops.js'), 'utf8');
 
@@ -210,41 +210,50 @@ describe('DSL guide: zero-counter deadlock removed from taught examples', () => 
   });
 });
 
-describe('wizard.js wiring: circuit breaker + failure-path relabel', () => {
-  it('onEvent tracks frozen streaks and aborts via the test abort controller', () => {
-    assert.ok(/zeroCounterStreaks/.test(WIZARD_SRC), 'streak map tracked');
-    assert.ok(/zeroCounterBreaker/.test(WIZARD_SRC), 'breaker state recorded');
-    assert.ok(/testAbortController\?\.abort\(\)/.test(WIZARD_SRC));
+describe('verify-runner wiring: circuit breaker + failure-path relabel (was wizard.js testScript)', () => {
+  const runnerSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'verify-runner.js'), 'utf8');
+  it('the run loop tracks frozen streaks and aborts via the internal abort flag', () => {
+    assert.ok(/zeroCounterStreaks/.test(runnerSrc), 'streak map tracked');
+    assert.ok(/zeroCounterBreaker/.test(runnerSrc), 'breaker state recorded');
+    assert.ok(/internalAbort\.aborted = true/.test(runnerSrc), 'breaker aborts the run');
     // The breaker must reuse the shared parsing helpers, not re-implement.
-    assert.ok(/parseCounterFields\(evt\.resultPreview\)/.test(WIZARD_SRC));
-    assert.ok(/isFrozenZeroNotReady\(evt\.resultPreview\)/.test(WIZARD_SRC));
-    assert.ok(/FROZEN_ZERO_STREAK_THRESHOLD/.test(WIZARD_SRC));
+    assert.ok(/parseCounterFields\(evt\.resultPreview\)/.test(runnerSrc));
+    assert.ok(/isFrozenZeroNotReady\(evt\.resultPreview\)/.test(runnerSrc));
+    assert.ok(/FROZEN_ZERO_STREAK_THRESHOLD/.test(runnerSrc));
   });
 
-  it('testScript resets breaker state at run start', () => {
-    assert.ok(/zeroCounterStreaks = new Map\(\)/.test(WIZARD_SRC));
-    assert.ok(/zeroCounterBreaker = null/.test(WIZARD_SRC));
+  it('breaker state is created fresh per runner (per run)', () => {
+    assert.ok(/const zeroCounterStreaks = new Map\(\)/.test(runnerSrc));
+    assert.ok(/let zeroCounterBreaker = null/.test(runnerSrc));
   });
 
   it('failure path relabels the breaker abort as ZERO_COUNTER_FROZEN', () => {
-    const i = WIZARD_SRC.indexOf('ZERO_COUNTER_FROZEN');
+    const i = runnerSrc.indexOf('ZERO_COUNTER_FROZEN: step');
     assert.ok(i > 0, 'relabel message exists');
     // The relabel is keyed off the breaker abort (TEST_ABORTED), not other errors.
-    const cond = WIZARD_SRC.slice(0, i).lastIndexOf('breaker &&');
-    assert.ok(cond > 0 && WIZARD_SRC.slice(cond, cond + 80).includes('TEST_ABORTED'),
+    const cond = runnerSrc.slice(0, i).lastIndexOf('zeroCounterBreaker &&');
+    assert.ok(cond > 0 && runnerSrc.slice(cond, cond + 100).includes('TEST_ABORTED'),
       'relabel fires only when the breaker aborted the run');
-    const chunk = WIZARD_SRC.slice(i, i + 2500);
-    assert.ok(/ZERO-TRAP COUNTER/.test(chunk), 'points at the guide rule');
+    const chunk = runnerSrc.slice(i, i + 2500);
     assert.ok(/count > 0/.test(chunk), 'names the guard to remove');
     assert.ok(/RAW fallback counter/.test(chunk), 'teaches the fallback counter');
   });
 
   it('POLL_EXHAUSTED augmentation also runs the post-hoc detector', () => {
-    const i = WIZARD_SRC.indexOf('POLL_EXHAUSTED — root cause: COUNT_SELECTOR_BLIND');
-    const chunk = WIZARD_SRC.slice(i, i + 6000);
+    const i = runnerSrc.indexOf('POLL_EXHAUSTED — root cause: COUNT_SELECTOR_BLIND');
+    const chunk = runnerSrc.slice(i, i + 6000);
     assert.ok(/detectFrozenZeroCounter/.test(chunk),
       'post-hoc frozen-zero detection rides the POLL_EXHAUSTED branch');
     assert.ok(/POLL_EXHAUSTED — root cause: ZERO_COUNTER_FROZEN/.test(chunk));
+  });
+
+  it('knowledge-units carry the zero-trap-counter rule (session LLM surface)', () => {
+    const kuSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'knowledge-units.js'), 'utf8');
+    const i = kuSrc.indexOf("id: 'zero-trap-counter'");
+    assert.ok(i !== -1, 'zero-trap-counter unit missing');
+    const body = kuSrc.slice(i, kuSrc.indexOf('id:', i + 10));
+    assert.ok(/frozen counter/i.test(body), 'frozen-counter defense missing');
+    assert.ok(/never keep scrolling/.test(body), 'never-keep-scrolling defense missing');
   });
 });
 
@@ -359,9 +368,9 @@ describe('universality: zero-trap additions carry no site tokens', () => {
   it('wizard-utils.js guide + detector text', () => {
     assert.ok(!FORBIDDEN.test(WIZARD_UTILS_SRC), 'no site tokens in wizard-utils.js');
   });
-  it('new wizard.js messages', () => {
-    const i = WIZARD_SRC.indexOf('ZERO_COUNTER_FROZEN');
-    const chunk = WIZARD_SRC.slice(i, i + 3000);
+  it('new verify-runner relabel messages', () => {
+    const i = RUNNER_SRC.indexOf('ZERO_COUNTER_FROZEN');
+    const chunk = RUNNER_SRC.slice(i, i + 3000);
     assert.ok(!FORBIDDEN.test(chunk), 'no site tokens in the relabel message');
   });
 });

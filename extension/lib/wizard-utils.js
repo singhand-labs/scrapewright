@@ -1514,156 +1514,6 @@ function parseJsonLenient(text) {
   }
 }
 
-// Decide which step an autoFix patch should apply to. The marked targetStepId
-// is a heuristic (the last step on user-feedback path; the failing step on
-// error path) — the actual root cause often lives in a different step.
-//
-// Return contract:
-//   {step, redirected: false}                          — apply to targetStepId
-//   {step, redirected: true, redirectedFrom}           — apply to LLM-chosen step
-//   {step, redirected: false, fallbackReason}          — LLM picked invalid step; fell back
-//   {error}                                             — targetStepId itself invalid
-//
-// bugx.log 2026-07-24 04:47:12 showed the LLM understood user feedback
-// ("publishTime missing, only 3 posts") but couldn't act on it because
-// RETURN_FORMAT constrained the patch to the marked step (5, finalize)
-// while the root cause was in step 4 (extract_posts). Letting the LLM
-// redirect unblocks this without forcing a multi-step patch format.
-function resolveAutoFixTarget(obj, targetStepId, allSteps) {
-  if (!obj || typeof obj !== 'object') {
-    return { error: 'invalid LLM response (non-object)' };
-  }
-  const fallbackStep = allSteps.find(s => s.id === targetStepId);
-  if (!fallbackStep) {
-    return { error: 'target step not found: ' + targetStepId };
-  }
-  // Only honor string stepId. Defensive against LLMs that return numbers
-  // (e.g. stepId: 4) — those would silently coerce and might match by accident.
-  const requestedId = (typeof obj.stepId === 'string' && obj.stepId.trim())
-    ? obj.stepId.trim()
-    : null;
-  if (!requestedId || requestedId === targetStepId) {
-    return { step: fallbackStep, redirected: false };
-  }
-  const redirect = allSteps.find(s => s.id === requestedId);
-  if (!redirect) {
-    return {
-      step: fallbackStep,
-      redirected: false,
-      fallbackReason: `LLM requested unknown stepId "${requestedId}", falling back to targetStepId "${targetStepId}"`
-    };
-  }
-  return { step: redirect, redirected: true, redirectedFrom: targetStepId };
-}
-
-// Multi-step variant. bugx.log 2026-07-24 07:04:16 showed the single-target
-// design still failed user-feedback fixes: the LLM kept patching step 5
-// ("extract_images_per_post") instead of step 4 (where publishTime's broken
-// selector lived) — even with the redirect option, glm-5.1 chose to
-// re-extract inside step 5 rather than redirect. The architectural fix is to
-// let the LLM return MULTIPLE patches in one iteration so it can fix every
-// root-cause step at once.
-//
-// Input: `patches` is an array of {stepId, script, ...edgeFields}. Each patch
-// must reference a real step id. `targetStepId` is the heuristic fallback —
-// used when a patch omits stepId (legacy single-target shape) AND when the
-// whole `patches` array is empty (caller decides whether that's an error).
-//
-// `targetStepId` may be `null` (user-feedback path as of 2026-07-24 — the
-// previous "default to last step" heuristic was wrong because user-observed
-// extraction bugs usually live in an upstream step, not the finalizer). When
-// targetStepId is null:
-//   - Patches WITHOUT stepId are HARD errors (no implicit target).
-//   - Patches WITH a valid stepId resolve normally; `redirected` is `false`
-//     and `redirectedFrom` is `null` (there was nothing to redirect from).
-//
-// Returns: {resolved: [{step, patch, redirected}], errors: [string]}.
-// - resolved: patches ready to apply, in the order they should be applied
-//   (we apply by stepId, so order doesn't matter, but we preserve LLM order
-//   for log readability)
-// - errors: hard errors that should abort the whole iteration. Soft issues
-//   (unknown stepId → fall back to targetStepId) are recorded per-resolved
-//   as `redirected: false, fallbackReason: '...'` and NOT promoted to errors.
-function resolveAutoFixTargets(patches, targetStepId, allSteps) {
-  if (!Array.isArray(patches)) {
-    return { errors: ['patches must be an array'] };
-  }
-  const fallbackStep = targetStepId ? allSteps.find(s => s.id === targetStepId) : null;
-  if (targetStepId && !fallbackStep) {
-    return { errors: ['target step not found: ' + targetStepId] };
-  }
-  const resolved = [];
-  const errors = [];
-  const seenStepIds = new Set();
-  const claim = (step) => {
-    if (seenStepIds.has(step.id)) {
-      errors.push(`duplicate patch for step "${step.id}"`);
-      return false;
-    }
-    seenStepIds.add(step.id);
-    return true;
-  };
-  for (let i = 0; i < patches.length; i++) {
-    const p = patches[i];
-    if (!p || typeof p !== 'object') {
-      errors.push(`patch[${i}] is not an object`);
-      continue;
-    }
-    if (typeof p.script !== 'string' || !p.script.trim()) {
-      errors.push(`patch[${i}].script is missing or empty`);
-      continue;
-    }
-    const requestedId = (typeof p.stepId === 'string' && p.stepId.trim())
-      ? p.stepId.trim()
-      : null;
-
-    // No stepId on this patch — needs a fallback target.
-    if (!requestedId) {
-      if (!fallbackStep) {
-        errors.push(`patch[${i}] is missing "stepId" — pick a step id from FULL STEP WORKFLOW`);
-        continue;
-      }
-      if (!claim(fallbackStep)) continue;
-      resolved.push({ step: fallbackStep, patch: p, redirected: false });
-      continue;
-    }
-
-    // LLM explicitly picked the heuristic target — no redirect.
-    if (targetStepId && requestedId === targetStepId) {
-      if (!claim(fallbackStep)) continue;
-      resolved.push({ step: fallbackStep, patch: p, redirected: false });
-      continue;
-    }
-
-    // LLM picked a different step — look it up.
-    const redirect = allSteps.find(s => s.id === requestedId);
-    if (!redirect) {
-      // Unknown stepId — soft-fallback when we have a heuristic target,
-      // hard-error when we don't (user-feedback path demands an explicit id).
-      if (fallbackStep) {
-        if (!claim(fallbackStep)) continue;
-        resolved.push({
-          step: fallbackStep,
-          patch: p,
-          redirected: false,
-          fallbackReason: `patch[${i}] requested unknown stepId "${requestedId}", falling back to targetStepId "${targetStepId}"`
-        });
-      } else {
-        errors.push(`patch[${i}] requested unknown stepId "${requestedId}"`);
-      }
-      continue;
-    }
-    if (!claim(redirect)) continue;
-    resolved.push({
-      step: redirect,
-      patch: p,
-      redirected: !!targetStepId,
-      redirectedFrom: targetStepId || null
-    });
-  }
-  return { resolved, errors };
-}
-
 // --- framework guardrails (WS3) ---------------------------------------------
 
 // Coarse static estimate of a script's single-iteration wall-clock delay from
@@ -2275,39 +2125,6 @@ function formatDuplicateRecordsSignal(dupes) {
   return lines.join('\n');
 }
 
-// Returns true when EVERY resolved autoFix patch leaves its step unchanged
-// (same script + same flow fields, modulo trailing whitespace). Used by
-// runFixIteration to detect the ACK-without-fixing antipattern where the LLM
-// says "I'll fix it" but returns char-for-char the same code (console.log
-// 2026-08-04 04:50-04:52 username-conflation loop: LLM ACK'd "I'll distinguish group
-// from user links", returned identical scriptLength:2640, testScript produced
-// identical wrong output, autoFix burned an attempt with zero progress).
-//
-// Whitespace-tolerant: LLMs routinely append trailing newlines. A real fix
-// changes more than whitespace, so trim-compare avoids false negatives (which
-// would cause the detector to miss real no-ops and waste a testScript run).
-//
-// Conservative: empty/malformed inputs return false (NOT a no-op) so the
-// caller falls through to normal patch handling rather than misclassifying.
-function isNoOpAutoFixPatch(resolved, patchedById) {
-  if (!Array.isArray(resolved) || resolved.length === 0) return false;
-  if (!patchedById || typeof patchedById.get !== 'function') return false;
-  for (const r of resolved) {
-    if (!r || !r.step || !r.step.id) return false;
-    const entry = patchedById.get(r.step.id);
-    if (!entry || !entry.proposed) return false;
-    const cur = r.step;
-    const next = entry.proposed;
-    const scriptSame = (cur.script || '') === (next.script || '')
-      || (cur.script || '').trim() === (next.script || '').trim();
-    if (!scriptSame) return false;
-    if ((cur.onSuccess || '') !== (next.onSuccess || '')) return false;
-    if ((cur.onFailure || '') !== (next.onFailure || '')) return false;
-    if ((cur.maxIterations || 1) !== (next.maxIterations || 1)) return false;
-  }
-  return true;
-}
-
 // Enumerate the output fields a user can map an annotated selector to.
 // Scalar outputs expose their top-level keys. Array-of-objects outputs
 // (e.g. posts: [{group, username, ...}]) descend into the array item's
@@ -2449,72 +2266,6 @@ function summarizeGeneratedSteps(rawResult) {
   }
   if (parsed.inputSchema) lines.push('inputSchema: ' + JSON.stringify(parsed.inputSchema).slice(0, 500));
   if (parsed.outputSchema) lines.push('outputSchema: ' + JSON.stringify(parsed.outputSchema).slice(0, 500));
-  return lines.join('\n');
-}
-
-function summarizeFixIteration({ stepId, stepName, script, annotations, userFeedback, error, result, htmlContext } = {}) {
-  const lines = [];
-  const safeStepId = stepId || '(unknown)';
-  const safeStepName = stepName || '(unknown)';
-  lines.push(`[Attempt — step "${safeStepId}" ("${safeStepName}")]`);
-
-  // htmlContext is the HTML section (full body OR fingerprint reference) from
-  // the round this entry describes. Optional — old callers without it still work.
-  if (htmlContext && typeof htmlContext === 'string' && htmlContext.trim()) {
-    lines.push('Page context:');
-    lines.push(htmlContext);
-  }
-
-  lines.push('Script tried:');
-  lines.push(typeof script === 'string' && script.length ? script : '(none)');
-
-  lines.push('Annotations:');
-  if (Array.isArray(annotations) && annotations.length > 0) {
-    for (const a of annotations) {
-      const sel = a && a.selector ? a.selector : '(no selector)';
-      const target = a && a.outputField ? a.outputField : (a && a.inputField ? a.inputField : '');
-      const purpose = a && a.purpose ? a.purpose : '';
-      const waitCondition = a && a.waitCondition ? a.waitCondition : '';
-      const tail = [target, purpose, waitCondition].filter(Boolean).join(' → ');
-      lines.push(tail ? `  - ${sel} → ${tail}` : `  - ${sel}`);
-    }
-  } else {
-    lines.push('  (none)');
-  }
-
-  lines.push('User feedback: ' + (userFeedback ? userFeedback : '(none)'));
-  lines.push('Error: ' + (error ? error : '(none)'));
-  if (result === undefined || result === null) {
-    lines.push('Result: (none)');
-  } else {
-    try {
-      // Strip snapshots + strip pages[]/sourcePageId + cap field sizes — without
-      // this, a 5-step feed-style test result carries ~750K chars of per-step HTML and
-      // overflows the LLM context. The failing step's DOM is already supplied
-      // separately via the truncated `pageSnapshot` (30K budget). Also drop
-      // pages[] (~4MB) and sourcePageId (meaningless provenance). console.log
-      // 2026-07-26: testResultSection + summarizeFixIteration were the two bloat
-      // sources; the pages[] leak was caught in code review on T7.
-      //
-      // dedupeStepIterations (console.log 2026-08-05): collapse polling-step
-      // iteration entries to the LAST per stepId BEFORE strip/cap. A 9-iteration
-      // step-5 with growing updatedPosts bloated the history entry to ~290K
-      // even after the 5K-per-field cap; the accumulator arrays bypassed the
-      // cap because each individual field was small. The LLM timed out 4× then
-      // hit model_context_window_exceeded.
-      //
-      // RC59 HISTORY DIGEST (console.log 2026-08-18): history entries kept the
-      // full 5K-capped output JSON (~300K chars each); trimLlmHistory's
-      // `length > 4` floor left 4 such entries stuck at ~950K chars, and the
-      // same posts appeared 3-4× per round. History only needs structure +
-      // scalar values (what was tried, what came out) — the CURRENT prompt
-      // re-sends the fresh full output. Cap history fields at 200 chars.
-      lines.push('Result: ' + JSON.stringify(stripPagesFromLLMContext(stripSnapshotsFromTestResult(dedupeStepIterations(result), { fieldCharCap: TEST_RESULT_HISTORY_FIELD_CHAR_CAP }))));
-    } catch {
-      lines.push('Result: (unserializable)');
-    }
-  }
-
   return lines.join('\n');
 }
 
@@ -3201,358 +2952,6 @@ function scoreAttemptResult(result, outputSchema) {
   }
 }
 
-// Pure classifier: given autoFix state, decide if the loop should break with a
-// human-intervention message. Returns { type, severity, message, uiAction } or null.
-// Every type requires MULTIPLE signals (false-positive defense). Never throws.
-function classifyIntervention(ctx) {
-  try {
-    if (!ctx || typeof ctx !== 'object') return null;
-    const error = (typeof ctx.error === 'string' ? ctx.error : '') || '';
-    const lastError = (typeof ctx.lastError === 'string' ? ctx.lastError : '') || '';
-    const annotations = Array.isArray(ctx.annotations) ? ctx.annotations : [];
-    const attemptCount = Number.isFinite(ctx.attemptCount) ? ctx.attemptCount : 0;
-    const dismissed = ctx.dismissed instanceof Set ? ctx.dismissed : new Set();
-    const snapshotAgeMs = Number.isFinite(ctx.snapshotAgeMs) ? ctx.snapshotAgeMs : 0;
-    const outputSchema = ctx.outputSchema && typeof ctx.outputSchema === 'object' ? ctx.outputSchema : null;
-    const result = ctx.result && typeof ctx.result === 'object' ? ctx.result : null;
-
-    const scoreResult = outputSchema ? scoreAttemptResult(result, outputSchema) : { score: 0, isData: false };
-    const candidates = [];
-
-    // needs_annotation: extraction empty + step has no annotations
-    if (scoreResult.score === 0 && annotations.length === 0 && /EXTRACTION|EMPTY/i.test(error)) {
-      candidates.push({
-        type: 'needs_annotation',
-        severity: 'warn',
-        uiAction: 'annotate_step',
-        _priority: 20,
-        message: "Extraction returns empty. Click 'Start Annotating' on the failing step to manually select elements."
-      });
-    }
-
-    // needs_annotation_relax: annotations exist but selectors are brittle.
-    // Two triggers, different timing:
-    //  - hasPositional (:nth-of-type/:nth-child) is a static brittleness signal; fire immediately.
-    //  - listEmpty alone is weak (could be LLM's first attempt); defer until attempt 2.
-    if (scoreResult.score === 0 && annotations.length > 0) {
-      const hasPositional = annotations.some(a => typeof a?.selector === 'string' && /:nth-of-type|:nth-child/.test(a.selector));
-      const listEmpty = (scoreResult.breakdown?.listItemCount ?? 0) === 0;
-      if (hasPositional || (listEmpty && attemptCount >= 2)) {
-        candidates.push({
-          type: 'needs_annotation_relax',
-          severity: 'warn',
-          uiAction: 'annotate_step',
-          _priority: 30,
-          message: "Your annotation selectors don't match any element on the live page. Re-annotate or broaden the selector."
-        });
-      }
-    }
-
-    // needs_login: explicit LOGIN_REQUIRED marker
-    if (/LOGIN_REQUIRED/i.test(error) || /LOGIN_REQUIRED/i.test(lastError)) {
-      candidates.push({
-        type: 'needs_login',
-        severity: 'error',
-        uiAction: 'open_tab',
-        _priority: 100,
-        message: 'This page requires login. Log in manually in the target tab, then retry.'
-      });
-    }
-
-    // rate_limited: 429 in either error or lastError
-    if (/429/.test(error) || /429/.test(lastError)) {
-      candidates.push({
-        type: 'rate_limited',
-        severity: 'error',
-        uiAction: 'open_settings',
-        _priority: 90,
-        message: 'LLM provider rate-limited. Wait, switch API key, or try later.'
-      });
-    }
-
-    // page_state_stale: attempt>=2 + repeated same error + snapshot older than 60s
-    if (attemptCount >= 2 && error && error === lastError && snapshotAgeMs > 60000) {
-      candidates.push({
-        type: 'page_state_stale',
-        severity: 'warn',
-        uiAction: 'refresh_tab',
-        _priority: 50,
-        message: 'Page state may have changed since the test started. Refresh the target tab manually, then retry.'
-      });
-    }
-
-    // Filter dismissed, pick highest severity (error > warn > info), ties by priority rank
-    // (higher rank = more fundamental root cause; page_state_stale beats annotation issues).
-    const severityRank = { error: 3, warn: 2, info: 1 };
-    const surviving = candidates.filter(c => !dismissed.has(c.type));
-    if (surviving.length === 0) return null;
-    surviving.sort((a, b) => {
-      const sevDiff = (severityRank[b.severity] || 0) - (severityRank[a.severity] || 0);
-      if (sevDiff !== 0) return sevDiff;
-      return (b._priority ?? 0) - (a._priority ?? 0);
-    });
-    const winner = surviving[0];
-    delete winner._priority;
-    return winner;
-  } catch (e) {
-    try { (typeof debugLogger !== 'undefined' && debugLogger.log('warn', 'wizard-utils', 'classifyIntervention failed', { error: e.message })); } catch {}
-    return null;
-  }
-}
-
-// Build the Section 1 prompt block for user feedback. Empty when no feedback.
-// Includes ACK/NACK protocol requiring the LLM to acknowledge or refuse the hint
-// before writing script. When llmHistory shows 2+ prior NACKs of the same hint,
-// appends a "you may be wrong" note.
-function buildFeedbackSection(feedback, attemptNum, totalAttempts, llmHistory) {
-  if (typeof feedback !== 'string' || !feedback.trim()) return '';
-  const safe = (attemptNum && totalAttempts)
-    ? `(attempt ${attemptNum}/${totalAttempts} — ACK REQUIRED)`
-    : '(ACK REQUIRED)';
-  // Escape ${} and backticks so the verbatim hint doesn't break the surrounding template literal
-  const escaped = feedback.replace(/[`]/g, "'").replace(/\$\{/g, '\\${');
-  const lines = [
-    `=== USER FEEDBACK ${safe} ===`,
-    escaped,
-    '',
-    'Before writing the script, output ONE of these lines:',
-    '  // ACK: <paraphrase the hint in your own words>',
-    '  // NACK: <why you cannot apply it, with specifics>',
-    '',
-    'If you NACK a hint that the user explicitly gave, you are probably wrong.',
-    '=== END USER FEEDBACK ==='
-  ];
-
-  // Count prior NACKs of this same feedback in llmHistory
-  if (Array.isArray(llmHistory) && llmHistory.length >= 2) {
-    const feedbackHash = escaped.slice(0, 40);
-    let nackCount = 0;
-    for (let i = 1; i < llmHistory.length; i += 2) {
-      const prevAssistant = llmHistory[i] && typeof llmHistory[i].content === 'string' ? llmHistory[i].content : '';
-      const prevUser = llmHistory[i - 1] && typeof llmHistory[i - 1].content === 'string' ? llmHistory[i - 1].content : '';
-      if (prevUser.includes(feedbackHash) && /^\s*\/\/\s*NACK:/i.test(prevAssistant)) {
-        nackCount++;
-      }
-    }
-    if (nackCount >= 2) {
-      lines.push('');
-      lines.push(`Note: you have NACKed this hint ${nackCount} times. Consider that the hint may be correct and your model of the page may be wrong.`);
-    }
-  }
-  return lines.join('\n');
-}
-
-// ============================================================================
-// No-op escalation (console.log 2026-08-05 07:13–07:22)
-//
-// When the user submits the same feedback twice and autoFix rejects both
-// responses as no-ops, the LLM has shown it cannot produce a different fix
-// without an explicit signal. The [NO-OP DETECTED] message pushed into
-// llmHistory alone was insufficient — the LLM returned byte-identical
-// responses across iterations (3785 bytes × 3 iterations, identical ACK text),
-// proving it either ignored history or hit an upstream proxy cache.
-//
-// These helpers add a CURRENT-prompt warning with a unique iteration counter.
-// The counter both (a) tells the LLM this is a retry and (b) busts any
-// upstream cache that keys on identical request bodies.
-//
-// Universality: no site-specific terms. The strategies listed are generic
-// (record comparison, selector anchoring, NACK escape hatch).
-// ============================================================================
-
-// Returns the escalation block to inject into the current autoFix prompt when
-// the same user feedback has been rejected as a no-op one or more times.
-// Returns empty string when consecutiveNoOpCount is 0 (first-time feedback).
-function buildNoOpEscalationSection(consecutiveNoOpCount) {
-  if (!Number.isFinite(consecutiveNoOpCount) || consecutiveNoOpCount <= 0) return '';
-  const n = Math.floor(consecutiveNoOpCount);
-  return [
-    `=== PREVIOUS FIX REJECTED (NO-OP) — ITERATION ${n} ===`,
-    `Your previous response for this exact user feedback was rejected because the proposed script was byte-identical to the current script — no change was applied, and the user is submitting the same feedback again. This is iteration ${n} of the same complaint.`,
-    '',
-    'You MUST produce a DIFFERENT script this time. Strategies that may help break out of the anchor:',
-    '- Read the Current output block carefully. Find the specific record(s) the user is complaining about by matching their description (e.g. position, value, content snippet).',
-    '- Compare a WORKING record vs a BROKEN record in the same output — what field value differs, and what DOM difference would cause it?',
-    '- Try a different selector anchor: if your current selector uses one attribute (href, class, role, aria-label), try a different attribute or a different ancestor container.',
-    '- If the field name in the output is ambiguous (e.g. the same DOM element is being read for two different output fields), distinguish them by reading from DIFFERENT sub-elements rather than the same one.',
-    '- If you genuinely cannot fix this after reading the script + output + diagnostics, respond with "// NACK: <specific reason>" — DO NOT return the same script.',
-    '',
-    'DO NOT return the same script. The framework will detect it and reject again.',
-    '=== END PREVIOUS FIX REJECTED ===',
-    ''
-  ].join('\n');
-}
-
-// Mutates `state` (wizardState or test fixture) to register a no-op for the
-// given feedback. Increments consecutiveNoOpCount when the feedback matches
-// the prior registration; resets to 1 when it differs. Trims feedback before
-// comparison so whitespace-only differences don't reset the counter.
-function registerNoOpForFeedback(state, feedback) {
-  if (!state || typeof state !== 'object') return;
-  const safe = typeof feedback === 'string' ? feedback.trim() : '';
-  const prev = typeof state.lastNoOpFeedback === 'string' ? state.lastNoOpFeedback.trim() : '';
-  if (safe && safe === prev) {
-    state.consecutiveNoOpCount = (state.consecutiveNoOpCount || 0) + 1;
-  } else {
-    state.consecutiveNoOpCount = 1;
-    state.lastNoOpFeedback = safe;
-  }
-}
-
-// Mutates `state` to clear the no-op escalation signal. Called on successful
-// fix application (any patch that passes isNoOpAutoFixPatch).
-function resetNoOpEscalation(state) {
-  if (!state || typeof state !== 'object') return;
-  state.consecutiveNoOpCount = 0;
-  state.lastNoOpFeedback = null;
-}
-
-// Pure planning helper: decide what to patch + how to truncate llmHistory when
-// restoring the best attempt. Returns null if no patches apply.
-// wizard.js applies the returned plan (mutates wizardState + syncs DOM).
-//
-// Two shapes are accepted (bestAttempt is in-memory only — no persistence
-// migration, but tests + callers may construct either):
-//
-//   NEW (RC11) — multi-step snapshot, used after the lastErrorStepId gate was
-//   dropped from wizard.js scoring. The user-feedback path uses
-//   RETURN_FORMAT_FEEDBACK which patches MULTIPLE steps in one iteration; a
-//   single-step snapshot would only revert one of N patches and leave the
-//   workflow in a half-reverted state.
-//     { stepsSnapshot: [{id, script, onSuccess, onFailure, maxIterations}, ...],
-//       historyMarker: '[Attempt — step "4"',  // matches summarizeFixIteration
-//       score, attemptNum, breakdown }
-//
-//   LEGACY — single-step shape (pre-RC11). Still emitted by older call sites
-//   and tests; kept supported to avoid breaking anything that constructs
-//   bestAttempt manually.
-//     { stepId, script, onSuccess, onFailure, maxIterations, score, attemptNum }
-//
-// Returns { stepPatches: [{id, stepPatch}], truncatedHistory, logMessage }.
-// stepPatches has length >= 1 on success (null return otherwise).
-function planRestoreBestAttempt(bestAttempt, currentSteps, currentLlmHistory) {
-  try {
-    if (!bestAttempt || typeof bestAttempt !== 'object') return null;
-    if (!Array.isArray(currentSteps)) return null;
-
-    const snapshots = Array.isArray(bestAttempt.stepsSnapshot) ? bestAttempt.stepsSnapshot : null;
-    let stepPatches = [];
-    let markerStepId = bestAttempt.stepId || null;
-
-    if (snapshots) {
-      // Multi-step: match each snapshot to a current step by id. Skip
-      // snapshots whose step was removed (don't re-add — topology changes
-      // need explicit relink via removeStepWithRelink / appendStepWithChainLink).
-      for (const snap of snapshots) {
-        if (!snap || typeof snap !== 'object' || !snap.id) continue;
-        const cur = currentSteps.find(s => s && s.id === snap.id);
-        if (!cur) continue;
-        stepPatches.push({
-          id: snap.id,
-          stepPatch: {
-            script: snap.script,
-            onSuccess: snap.onSuccess,
-            onFailure: snap.onFailure,
-            maxIterations: snap.maxIterations
-          }
-        });
-      }
-      if (stepPatches.length === 0) return null;
-      // Prefer the first surviving snapshot's id as the marker source — but
-      // only when the caller didn't supply historyMarker explicitly (the
-      // user-feedback path emits `[Attempt — step "null"]` because
-      // summarizeFixIteration is called with stepId=null when targetStep is
-      // null, so we MUST honor bestAttempt.historyMarker when present).
-      if (bestAttempt.historyMarker) {
-        markerStepId = null; // signal to use historyMarker directly below
-      } else if (!markerStepId && snapshots[0]) {
-        markerStepId = snapshots[0].id;
-      }
-    } else if (bestAttempt.stepId) {
-      // Legacy single-step shape.
-      const step = currentSteps.find(s => s && s.id === bestAttempt.stepId);
-      if (!step) return null;
-      stepPatches.push({
-        id: bestAttempt.stepId,
-        stepPatch: {
-          script: bestAttempt.script,
-          onSuccess: bestAttempt.onSuccess,
-          onFailure: bestAttempt.onFailure,
-          maxIterations: bestAttempt.maxIterations
-        }
-      });
-    } else {
-      return null;
-    }
-
-    // Truncate llmHistory at the boundary of the best attempt's user-message
-    // marker. summarizeFixIteration emits "[Attempt — step \"<id>\" (\"<name>\")]".
-    // The user-feedback path emits `[Attempt — step "null"]` because stepId
-    // is null when no target step exists — bestAttempt.historyMarker captures
-    // the exact string to match.
-    const marker = bestAttempt.historyMarker
-      || `[Attempt — step "${markerStepId || 'null'}"`;
-    const history = Array.isArray(currentLlmHistory) ? currentLlmHistory : [];
-
-    // Find the attemptNum-th user message whose content includes the marker (1-indexed).
-    // We keep that user message + the assistant reply that follows it.
-    let seen = 0;
-    let boundaryIdx = -1;
-    for (let i = 0; i < history.length; i++) {
-      const m = history[i];
-      if (m && m.role === 'user' && typeof m.content === 'string' && m.content.includes(marker)) {
-        seen++;
-        if (seen === bestAttempt.attemptNum) {
-          boundaryIdx = i;
-          break;
-        }
-      }
-    }
-    let truncatedHistory = history;
-    if (boundaryIdx >= 0) {
-      // Keep user msg at boundaryIdx + the following assistant reply (if any)
-      truncatedHistory = history.slice(0, Math.min(boundaryIdx + 2, history.length));
-    }
-
-    return {
-      stepPatches,
-      truncatedHistory,
-      logMessage: `Restored attempt #${bestAttempt.attemptNum} (scored ${bestAttempt.score}) — higher than last attempt.`
-    };
-  } catch (e) {
-    try { (typeof debugLogger !== 'undefined' && debugLogger.log('warn', 'wizard-utils', 'planRestoreBestAttempt failed', { error: e.message })); } catch {}
-    return null;
-  }
-}
-
-// Pure: returns an HTML string for the intervention banner. Wizard.js injects it
-// into #phase5 and attaches event listeners via data-action attributes.
-function renderInterventionBanner(classification) {
-  if (!classification || typeof classification !== 'object') return '';
-  const severity = classification.severity === 'error' ? 'error'
-                 : classification.severity === 'warn' ? 'warn' : 'info';
-  const msg = String(classification.message || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const action = String(classification.uiAction || '');
-  const actionLabel = ({
-    annotate_step: 'Go to annotation',
-    open_tab: 'Open target tab',
-    open_settings: 'Open settings',
-    refresh_tab: 'Refresh tab'
-  })[action] || 'Take action';
-  const actionBtn = action
-    ? `<button class="intervention-action btn-primary" data-action="${action}">${actionLabel}</button>`
-    : '';
-  return `
-<div class="intervention-banner intervention-${severity}" role="alert">
-  <span class="intervention-icon">${severity === 'error' ? '✕' : '⚠'}</span>
-  <span class="intervention-message">${msg}</span>
-  <div class="intervention-buttons">
-    ${actionBtn}
-    <button class="intervention-dismiss btn-secondary" data-action="dismiss">Ignore and continue</button>
-  </div>
-</div>`.trim();
-}
-
 // Score how brittle a single CSS selector is. Higher score = more brittle.
 // Used by the wizard deploy hook to warn the user when an annotation is
 // unlikely to generalize across list items. Pure function, no exceptions.
@@ -4156,7 +3555,7 @@ function formatElementsForPrompt(elements, opts) {
 
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectCountShortfall, formatDuplicateRecordsSignal, isNoOpAutoFixPatch, getOutputFieldOptions, truncateSnapshotForLLM, summarizeFixIteration, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, classifyIntervention, buildFeedbackSection, buildNoOpEscalationSection, registerNoOpForFeedback, resetNoOpEscalation, planRestoreBestAttempt, renderInterventionBanner, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, resolveAutoFixTarget, resolveAutoFixTargets, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectCountShortfall, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.hoverAwareTimeoutMs = hoverAwareTimeoutMs;
@@ -4184,11 +3583,9 @@ if (typeof module !== 'undefined' && module.exports) {
   window.formatEmptyOutputFieldsSignal = formatEmptyOutputFieldsSignal;
   window.detectDuplicateRecords = detectDuplicateRecords;
   window.formatDuplicateRecordsSignal = formatDuplicateRecordsSignal;
-  window.isNoOpAutoFixPatch = isNoOpAutoFixPatch;
-  window.getOutputFieldOptions = getOutputFieldOptions;
+    window.getOutputFieldOptions = getOutputFieldOptions;
   window.truncateSnapshotForLLM = truncateSnapshotForLLM;
-  window.summarizeFixIteration = summarizeFixIteration;
-  window.summarizeStepsGeneration = summarizeStepsGeneration;
+    window.summarizeStepsGeneration = summarizeStepsGeneration;
   window.summarizeGeneratedSteps = summarizeGeneratedSteps;
   window.stripSnapshotsFromTestResult = stripSnapshotsFromTestResult;
   window.stripPagesFromLLMContext = stripPagesFromLLMContext;
@@ -4198,14 +3595,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.summarizeExecutionDiagnostics = summarizeExecutionDiagnostics;
   window.summarizeAllStepDiagnostics = summarizeAllStepDiagnostics;
   window.scoreAttemptResult = scoreAttemptResult;
-  window.classifyIntervention = classifyIntervention;
-  window.buildFeedbackSection = buildFeedbackSection;
-  window.buildNoOpEscalationSection = buildNoOpEscalationSection;
-  window.registerNoOpForFeedback = registerNoOpForFeedback;
-  window.resetNoOpEscalation = resetNoOpEscalation;
-  window.planRestoreBestAttempt = planRestoreBestAttempt;
-  window.renderInterventionBanner = renderInterventionBanner;
-  window.getStepTemplates = getStepTemplates;
+                window.getStepTemplates = getStepTemplates;
   window.applyTemplate = applyTemplate;
   window.STEP_TEMPLATES = STEP_TEMPLATES;
   window.SCRIPT_DSL_GUIDE = SCRIPT_DSL_GUIDE;
@@ -4248,11 +3638,9 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.formatEmptyOutputFieldsSignal = formatEmptyOutputFieldsSignal;
   self.detectDuplicateRecords = detectDuplicateRecords;
   self.formatDuplicateRecordsSignal = formatDuplicateRecordsSignal;
-  self.isNoOpAutoFixPatch = isNoOpAutoFixPatch;
-  self.getOutputFieldOptions = getOutputFieldOptions;
+    self.getOutputFieldOptions = getOutputFieldOptions;
   self.truncateSnapshotForLLM = truncateSnapshotForLLM;
-  self.summarizeFixIteration = summarizeFixIteration;
-  self.summarizeStepsGeneration = summarizeStepsGeneration;
+    self.summarizeStepsGeneration = summarizeStepsGeneration;
   self.summarizeGeneratedSteps = summarizeGeneratedSteps;
   self.stripSnapshotsFromTestResult = stripSnapshotsFromTestResult;
   self.stripPagesFromLLMContext = stripPagesFromLLMContext;
@@ -4264,14 +3652,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.summarizeExecutionDiagnostics = summarizeExecutionDiagnostics;
   self.summarizeAllStepDiagnostics = summarizeAllStepDiagnostics;
   self.scoreAttemptResult = scoreAttemptResult;
-  self.classifyIntervention = classifyIntervention;
-  self.buildFeedbackSection = buildFeedbackSection;
-  self.buildNoOpEscalationSection = buildNoOpEscalationSection;
-  self.registerNoOpForFeedback = registerNoOpForFeedback;
-  self.resetNoOpEscalation = resetNoOpEscalation;
-  self.planRestoreBestAttempt = planRestoreBestAttempt;
-  self.renderInterventionBanner = renderInterventionBanner;
-  self.appendStepWithChainLink = appendStepWithChainLink;
+                self.appendStepWithChainLink = appendStepWithChainLink;
   self.removeStepWithRelink = removeStepWithRelink;
   self.relinkChainToArray = relinkChainToArray;
   self.fillEntryUrlDefaults = fillEntryUrlDefaults;

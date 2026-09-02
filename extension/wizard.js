@@ -1923,7 +1923,7 @@ async function startResearchSession(seedOverride) {
     persistence: wizardPersistence,
     // RC53: the Settings-page maxOutputTokens knob is authoritative; fall
     // back to 16384 when blank/invalid (NaN || 16384).
-    budgets: { maxTokensPerCall: (config.config.maxOutputTokens ? Number(config.config.maxOutputTokens) || 16384 : 0) || 16384 },
+    budgets: { maxTokensPerCall: (config.config.maxOutputTokens && +config.config.maxOutputTokens) || 16384 },
     seed: seed,
     onEvent: handleSessionEvent
   });

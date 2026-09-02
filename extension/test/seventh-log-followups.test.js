@@ -138,23 +138,23 @@ describe('F2: detectCountShortfall (behavioral)', () => {
   });
 });
 
-describe('F2: wizard wires the shortfall signal (source audit)', () => {
-  it('success path detects + surfaces the shortfall to the user', () => {
-    const i = WIZARD_SRC.indexOf('detectCountShortfall');
-    assert.ok(i > -1, 'wizard.js must call detectCountShortfall');
-    const chunk = WIZARD_SRC.slice(i - 400, i + 1600);
-    assert.ok(/appendLog/.test(chunk), 'shortfall must be logged for the user');
-    assert.ok(/Count shortfall/i.test(chunk),
-      'a human-readable shortfall message must exist');
+describe('F2: verify-runner wires the shortfall signal (source audit, was wizard.js testScript)', () => {
+  const RUNNER_SRC = fs.readFileSync(path.join(__dirname, '..', 'lib', 'verify-runner.js'), 'utf8');
+  it('success path detects the shortfall and records it report-only', () => {
+    const i = RUNNER_SRC.indexOf('WU.detectCountShortfall(finalData');
+    const chunk = RUNNER_SRC.slice(i - 400, i + 800);
+    assert.ok(/detectors\.countShortfall/.test(chunk),
+      'the shortfall must land in the detectors record for the session/user');
+    assert.ok(/Report-only/.test(chunk),
+      'forcing retries toward an unreachable count is the ZERO-TRAP deadlock — must stay report-only');
   });
-
-  it('user-feedback autoFix prompt carries the shortfall as a signal', () => {
-    const i = WIZARD_SRC.indexOf('countShortfallSignal');
-    assert.ok(i > -1, 'the user-feedback branch must build a shortfall signal');
-    const inject = WIZARD_SRC.indexOf('countShortfallSignal ?');
-    assert.ok(inject > -1, 'the signal must be injected into the prompt');
-    const signals = WIZARD_SRC.indexOf("'COUNT_SHORTFALL'");
-    assert.ok(signals > -1, 'signalsIncluded must report COUNT_SHORTFALL');
+  it('the shortfall is published on the detectors record downstream', () => {
+    // The detectors record is how verify-runner evidence reaches the session
+    // LLM and the user; shortfall evidence rides the report channel.
+    const i = RUNNER_SRC.indexOf('detectors.countShortfall');
+    assert.ok(i > -1, 'detectors.countShortfall assignment missing');
+    const report = RUNNER_SRC.indexOf('detectors: detectors');
+    assert.ok(report > -1, 'detectors record must be published on the report');
   });
 });
 

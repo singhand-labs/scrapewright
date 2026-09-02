@@ -30,15 +30,6 @@ describe('trimLlmHistory by total chars (C4)', () => {
       'trimLlmHistory must not use slice(-6) (the old count-based pattern)');
   });
 
-  it('source audit: trimLlmHistory clears htmlFingerprintsInHistory when it trims', () => {
-    const src = fs.readFileSync(WIZARD_PATH, 'utf8');
-    const fnStart = src.indexOf('function trimLlmHistory');
-    const fnEnd = src.indexOf('\nfunction ', fnStart + 1);
-    const fnBody = src.slice(fnStart, fnEnd > fnStart ? fnEnd : undefined);
-    assert.match(fnBody, /htmlFingerprintsInHistory\.clear\(\)/,
-      'trimLlmHistory must clear htmlFingerprintsInHistory after trimming to prevent dangling references');
-  });
-
   it('unit: trims history when total chars exceed maxChars', () => {
     const history = [
       { role: 'user', content: 'A'.repeat(60000) },

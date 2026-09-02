@@ -1,6 +1,9 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { scoreAttemptResult, classifyIntervention, planRestoreBestAttempt } = require('../lib/wizard-utils');
+const { scoreAttemptResult } = require('../lib/wizard-utils');
+// classifyIntervention / planRestoreBestAttempt were removed with the
+// wizard-time autoFix flow (ResearchSession migration); only the scoring
+// fixture half of this regression survives.
 
 // Reproduces the bc1.log scenario: 3 autoFix iterations on a Facebook search
 // extraction, annotations present with :nth-of-type, scores regress across attempts.
@@ -40,48 +43,6 @@ describe('bc1.log regression fixture', () => {
     assert.ok(attempt3.score > attempt2.score);
   });
 
-  it('classifier fires needs_annotation_relax when annotations present but listCount=0', () => {
-    const intervention = classifyIntervention({
-      error: 'EMPTY_EXTRACTION',
-      result: { posts: [] },
-      outputSchema: schema,
-      annotations: bc1Annotations,
-      attemptCount: 1,
-      lastError: 'EMPTY_EXTRACTION'
-    });
-    assert.equal(intervention.type, 'needs_annotation_relax');
-    assert.equal(intervention.uiAction, 'annotate_step');
+  
+  
   });
-
-  it('planRestoreBestAttempt restores attempt 1 + truncates history to attempt 1 boundary', () => {
-    const best = {
-      stepId: '4', script: 'attempt1-script', onSuccess: 'TERMINATE', onFailure: 'TERMINATE',
-      maxIterations: 3, score: 100, attemptNum: 1
-    };
-    const steps = [{ id: '4', name: 'extract_posts', script: 'attempt3-script', onSuccess: 'TERMINATE', onFailure: 'TERMINATE', maxIterations: 3 }];
-    const history = [
-      { role: 'user', content: '[Attempt — step "4" ("extract_posts")]\nScript tried:\nattempt1' },
-      { role: 'assistant', content: '// ACK: use role=article\nattempt1-script' },
-      { role: 'user', content: '[Attempt — step "4" ("extract_posts")]\nScript tried:\nattempt2' },
-      { role: 'assistant', content: 'attempt2-script' },
-      { role: 'user', content: '[Attempt — step "4" ("extract_posts")]\nScript tried:\nattempt3' },
-      { role: 'assistant', content: 'attempt3-script' }
-    ];
-    const plan = planRestoreBestAttempt(best, steps, history);
-    assert.equal(plan.stepPatches[0].stepPatch.script, 'attempt1-script');
-    assert.equal(plan.truncatedHistory.length, 2);
-    assert.equal(plan.truncatedHistory[0].content, history[0].content);
-  });
-
-  it('classifier does NOT fire needs_annotation_relax when score > 0 (annotations working)', () => {
-    const intervention = classifyIntervention({
-      error: null,
-      result: { posts: [{ title: 'A', author: 'B', date: 'C' }] },
-      outputSchema: schema,
-      annotations: bc1Annotations,
-      attemptCount: 1,
-      lastError: null
-    });
-    assert.equal(intervention, null);
-  });
-});

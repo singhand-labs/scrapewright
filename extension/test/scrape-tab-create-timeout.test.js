@@ -147,27 +147,7 @@ describe('visibility-keepalive.js: verify probe runs immediately', () => {
   });
 });
 
-describe('wizard.js: timeout path closes a late-arriving tab', () => {
-  const src = fs.readFileSync(WIZARD_PATH, 'utf8');
-
-  function createTabDepChunk() {
-    const start = src.indexOf('createTab: async (url)');
-    assert.ok(start > 0, 'createTab dep found in testScript');
-    const end = src.indexOf('waitForTabLoad:', start);
-    return src.slice(start, end);
-  }
-
-  it('a late-resolving createScrapeTab is closed instead of leaked', () => {
-    const chunk = createTabDepChunk();
-    assert.ok(/createTimedOut/.test(chunk),
-      'the dep must track that the timeout fired');
-    assert.ok(/closeScrapeTab\s*\(/.test(chunk),
-      'a tab resolving after the timeout must be closed — both logged failures leaked an invisible background tab');
-  });
-
-  it('the create budget stays 10s and the wrapper is intact', () => {
-    const chunk = createTabDepChunk();
-    assert.ok(/withTimeout\(\s*\w+,\s*10000,\s*'Failed to create tab \(10s timeout\)'\s*\)/.test(chunk),
-      'the 10s budget must remain — with verify detached it only covers site-independent work');
-  });
-});
+// The wizard.js late-arriving-tab leak guard (timeout path closes a tab that
+// resolves after the create budget) moved to lib/live-rail.js dispose — see
+// live-rail.test.js "dispose during an in-flight open waits, then closes the
+// created tab".

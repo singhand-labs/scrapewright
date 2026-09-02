@@ -185,10 +185,10 @@ describe('RC20 source-text audit — scrape-path sites use createScrapeTab', () 
       `Use createScrapeTab() instead.`);
   });
 
-  it('wizard.js scrape-path sites use createScrapeTab (testScript + research + detail)', () => {
+  it('wizard.js scrape-path sites use createScrapeTab (rail + runner + detail)', () => {
     const src = fs.readFileSync(WIZARD_PATH, 'utf8');
     const count = (src.match(/\bcreateScrapeTab\s*\(/g) || []).length;
-    assert.ok(count >= 5, `wizard.js: expected ≥5 createScrapeTab call sites, found ${count}`);
+    assert.ok(count >= 3, `wizard.js: expected ≥3 createScrapeTab call sites (makeWizardRail dep, getWizardRunner dep, detail sub-tab), found ${count}`);
   });
 
   it('background.js scrape-path sites use createScrapeTab (production + $openTab)', () => {

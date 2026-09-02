@@ -7,18 +7,16 @@
 // ~899K chars (because compactMode only shrinks the pageSnapshot budget,
 // not the testResult dump).
 //
-// Two serialization paths must strip snapshots:
-//   1. testResultSection (wizard.js:~2441) — JSON.stringify of testResult
-//   2. summarizeFixIteration (lib/wizard-utils.js) — pushes to llmHistory
-// Both now route through stripSnapshotsFromTestResult.
+// Serialization paths that strip snapshots route through
+// stripSnapshotsFromTestResult (the wizard-time summarizeFixIteration caller
+// was removed with the autoFix flow; ResearchSession migration).
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   stripSnapshotsFromTestResult,
   stripPagesFromLLMContext,
-  dedupeStepIterations,
-  summarizeFixIteration
+  dedupeStepIterations
 } = require('../lib/wizard-utils');
 
 function hugeHtml(n) {
@@ -119,50 +117,6 @@ describe('stripSnapshotsFromTestResult', () => {
   });
 });
 
-describe('summarizeFixIteration uses stripSnapshotsFromTestResult', () => {
-  it('produces a summary well under 50K chars even with huge testResult', () => {
-    const summary = summarizeFixIteration({
-      stepId: '4',
-      stepName: 'extract_posts',
-      script: 'return {posts: []}',
-      annotations: [],
-      userFeedback: null,
-      error: 'EMPTY_EXTRACTION',
-      result: buildFbTestResult()
-    });
-    assert.ok(summary.length < 50000, `summary too big: ${summary.length} chars`);
-    // Sanity: summary still mentions the step and result.
-    assert.match(summary, /extract_posts/);
-    assert.match(summary, /Result:/);
-  });
-
-  it('no `snapshot.html` substring leaks into the summary', () => {
-    const summary = summarizeFixIteration({
-      stepId: '4',
-      stepName: 'extract_posts',
-      script: 'return {}',
-      annotations: [],
-      userFeedback: null,
-      error: null,
-      result: buildFbTestResult()
-    });
-    // The snapshot keys are stripped; the values never make it in.
-    assert.ok(!/snapshot/.test(summary), 'summary contained a snapshot reference');
-    // The hugeHtml marker `<div class="x">` should not appear at all.
-    assert.ok(!/<div class="x">/.test(summary), 'summary leaked snapshot HTML content');
-  });
-});
-
-// Regression tests for dedupeStepIterations. Without this helper, a polling
-// step that runs N iterations produces N entries in testResult.steps — and
-// each intermediate entry can carry a growing accumulator (updatedPosts,
-// seenSignatures, etc.) that bloats the autoFix prompt by 1MB+ even after
-// stripSnapshotsFromTestResult's 5K-per-field string cap.
-//
-// console.log 2026-08-05 04:32: step 5 ran 9 iterations on a 10-post page;
-// each iteration's result.updatedPosts grew by one post (rawHTML ~100K each,
-// capped to 5K). Stripped+capped testResult was 885K — autoFix prompt hit
-// 1.83MB, LLM timed out 4× then returned finish_reason:model_context_window_exceeded.
 //
 // The fix keeps only the LAST entry per stepId. Intermediate polling results
 // are diagnostic noise; the LLM only needs the final per-step state. The

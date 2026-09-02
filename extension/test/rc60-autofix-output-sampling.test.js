@@ -180,12 +180,14 @@ describe('RC60: elideDuplicateFinalResults predecessor elision', () => {
   });
 });
 
-describe('RC60: wizard.js wiring (source-text)', () => {
-  it('both serialization sites wrap the chain with sampleRecordsForLLMContext', () => {
-    const src = readSrc('wizard.js');
-    const count = (src.match(/sampleRecordsForLLMContext\(elideDuplicateFinalResults\(/g) || []).length;
-    assert.ok(count >= 2,
-      'testResultSection + currentOutput must both sample after elision; found ' + count);
+describe('RC60: context sampling wiring (post-research-session)', () => {
+  it('verify-runner samples finalResult before it reaches the session LLM context', () => {
+    // The wizard.js testResultSection/currentOutput serialization sites were
+    // removed with the wizard-time autoFix flow; the surviving LLM-context
+    // surface is the verify-runner report.
+    const src = readSrc('lib/verify-runner.js');
+    assert.match(src, /WU\.sampleRecordsForLLMContext\(result\.finalResult, \{ recordKeep: 3 \}\)/,
+      'the runner report must sample finalResult records before publishing');
   });
 
   it('trimLlmHistory floor is 2 (last user/assistant pair), not 4', () => {

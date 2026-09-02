@@ -670,57 +670,36 @@ describe('RC16 wizard-utils — stripPagesFromLLMContext', () => {
     assert.deepEqual(out.data.tags, ['a', 'b', 'c']);
   });
 
-  it('summarizeFixIteration output contains no pages[] or sourcePageId', () => {
-    // Code-review follow-up on T7 (commit 4c2aa6e): summarizeFixIteration in
-    // lib/wizard-utils.js was JSON.stringifying testResult into llmHistory
-    // without applying stripPagesFromLLMContext. This test guards against
-    // regression — pages[] and sourcePageId must never reach the LLM history.
-    const { summarizeFixIteration } = require('../lib/wizard-utils');
-    const result = {
-      steps: [
-        { stepId: 'extract', result: { posts: [{ author: 'a', sourcePageId: 'page_0001_aaa' }] } }
-      ],
-      finalResult: { posts: [{ author: 'a', sourcePageId: 'page_0001_aaa' }] },
-      pages: [{ id: 'page_0001_aaa', url: 'http://x', html: 'h'.repeat(100) }],
-      pagesTruncated: 0
-    };
-    const out = summarizeFixIteration({
-      stepId: 'extract',
-      stepName: 'Extract',
-      script: 'return 1',
-      result
-    });
-    assert.equal(typeof out, 'string');
-    assert.ok(out.indexOf('author') !== -1, 'non-provenance fields must survive');
-    assert.ok(out.indexOf('sourcePageId') === -1, 'sourcePageId must be stripped');
-    assert.ok(out.indexOf('pages') === -1, 'pages field must be stripped');
-    assert.ok(out.indexOf('pagesTruncated') === -1, 'pagesTruncated must be stripped');
+  it('verify-runner LLM report carries pages only as a count — pages[] and sourcePageId never reach session context', () => {
+    // The wizard-time summarizeFixIteration consumer was removed with the
+    // autoFix flow; the surviving LLM-context surface is the verify-runner
+    // report, which projects steps compactly, samples finalResult, and
+    // reports pages as a length string.
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const RUNNER_SRC = fs.readFileSync(path.join(__dirname, '..', 'lib', 'verify-runner.js'), 'utf8');
+    assert.ok(/result\.pagesTruncated \? result\.pages\.length \+' \+' : String\(result\.pages\.length\)/.test(RUNNER_SRC) ||
+      /String\(result\.pages\.length\)/.test(RUNNER_SRC), 'report.pages must be a count, not the pages array');
+    assert.ok(/WU\.sampleRecordsForLLMContext\(result\.finalResult/.test(RUNNER_SRC),
+      'finalResult must go through record sampling');
+    const compact = RUNNER_SRC.indexOf('compactSteps');
+    assert.ok(compact > -1 && /stepId: s\.stepId/.test(RUNNER_SRC),
+      'steps must be projected to compact shape (no snapshots/pages)');
   });
 });
 
-describe('RC16 wizard.js — apply stripPagesFromLLMContext at every LLM site (structural)', () => {
+describe('RC16 wizard.js — pages viewer wiring (structural, post-research-session)', () => {
   const fs = require('node:fs');
   const path = require('node:path');
   const SRC = fs.readFileSync(path.join(__dirname, '..', 'wizard.js'), 'utf8');
 
-  it('wizard.js imports stripPagesFromLLMContext', () => {
-    // Either via destructuring from wizard-utils, via window., or via a require.
+  it('wizard.js renders the pages viewer from the verify-runner raw testResult', () => {
+    // The wizard-time LLM sites are gone; the surviving pages consumer is
+    // the human-facing viewer, fed by the verify-runner's raw.testResult.
     assert.ok(
-      /stripPagesFromLLMContext/.test(SRC),
-      'wizard.js must reference stripPagesFromLLMContext'
+      /renderPagesViewer\(out\.raw\.testResult\)/.test(SRC),
+      'wizard.js must render the pages viewer from the runner result'
     );
-  });
-
-  it('every call to stripSnapshotsFromTestResult has a sibling call to stripPagesFromLLMContext', () => {
-    // Strip line comments and block comments so the count reflects real code only.
-    // (Earlier the test passed by coincidence: 2 real calls + 1 comment mention.)
-    const noComments = SRC
-      .replace(/\/\/[^\n]*/g, '')
-      .replace(/\/\*[\s\S]*?\*\//g, '');
-    const snapCalls = (noComments.match(/stripSnapshotsFromTestResult/g) || []).length;
-    const pagesCalls = (noComments.match(/stripPagesFromLLMContext/g) || []).length;
-    assert.ok(pagesCalls >= snapCalls && snapCalls >= 1,
-      `expected pages-strip calls (${pagesCalls}) to mirror snapshot-strip calls (${snapCalls}) in wizard.js`);
   });
 });
 

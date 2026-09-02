@@ -111,23 +111,14 @@ describe('detectHoverAnchorsBlind — unit', () => {
   });
 });
 
-describe('wizard.js testScript success-path wiring', () => {
-  it('success path runs detectHoverAnchorsBlind and throws HOVER_ANCHORS_BLIND', () => {
-    assert.ok(/detectHoverAnchorsBlind\(/.test(wizardSrc), 'detectHoverAnchorsBlind not called in wizard.js');
-    assert.ok(/HOVER_ANCHORS_BLIND/.test(wizardSrc), 'HOVER_ANCHORS_BLIND marker missing');
-    // Must sit in the success-path guard block (after CLICK_CONTAINERS_EMPTY),
-    // not only in a catch branch.
-    const idx = wizardSrc.indexOf('CLICK_CONTAINERS_EMPTY');
-    const idx2 = wizardSrc.indexOf('detectHoverAnchorsBlind');
-    assert.ok(idx > 0 && idx2 > idx, 'HOVER_ANCHORS_BLIND check not downstream of CLICK_CONTAINERS_EMPTY');
-  });
-
-  it('the thrown message teaches the container-scoped anchor contract', () => {
-    const m = wizardSrc.match(/HOVER_ANCHORS_BLIND[\s\S]{0,1200}/);
-    assert.ok(m, 'message block not found');
-    assert.ok(/INSIDE each container|inside each container/.test(m[0]), 'container-scope contract missing');
-    assert.ok(/hover never ran|hover NEVER ran|hover did not run/i.test(m[0]), 'hover-never-ran statement missing');
-    assert.ok(/wrapper|<object>|aria-hidden/i.test(m[0]), 'wrapper-nesting hint missing');
+describe('knowledge-units carry the anchor-scope rule (wizard-time autoFix wiring removed)', () => {
+  const kuSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'knowledge-units.js'), 'utf8');
+  it('the hover-anchor-scope unit exists and teaches the container-scoped anchor contract', () => {
+    const i = kuSrc.indexOf("id: 'hover-anchor-scope'");
+    assert.ok(i !== -1, 'hover-anchor-scope unit missing');
+    const body = kuSrc.slice(i, kuSrc.indexOf('id:', i + 10));
+    assert.ok(/INSIDE the card container/.test(body), 'container-scope contract missing');
+    assert.ok(/HOVER_ANCHORS_BLIND/.test(body), 'incident marker dropped');
   });
 });
 
