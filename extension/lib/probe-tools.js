@@ -132,11 +132,11 @@
         counts[v] = (counts[v] || 0) + 1;
       }
       const values = Object.keys(counts)
-        .map(v => ({ value: v.slice(0, 80), cards: counts[v], pct: total ? Math.round(counts[v] / total * 1000) / 10 : 0 }))
-        .sort((a, b) => b.cards - a.cards)
+        .map(v => ({ value: v.slice(0, 80), items: counts[v], pct: total ? Math.round(counts[v] / total * 1000) / 10 : 0 }))
+        .sort((a, b) => b.items - a.items)
         .slice(0, ATTR_VALUES_MAX);
       return {
-        totalCards: total,
+        totalItems: total,
         values: values,
         absentPct: total ? Math.round(absent / total * 1000) / 10 : 0
       };
@@ -317,7 +317,7 @@
         const am = new RegExp('(?:^|\\s)' + name + '\\s*=\\s*(["\'])(.*?)\\1', 'i').exec(attrs);
         return am ? am[2].trim() : '';
       };
-      return { tag: tag, id: get('id'), role: get('role'), ariaLabel: get('aria-label') };
+      return { tag: tag, id: get('id'), role: get('role'), ariaLabel: get('aria-label'), cls: get('class') };
     }
 
     function canonicalFromHtml(html) {
@@ -326,6 +326,21 @@
         if (c) return c;
       }
       return null;
+    }
+
+    // Audit C10: sites with semantic BEM classes (popover__content) and no
+    // id/aria/role derived NO canonical — the model hand-wrote selectors for
+    // extra turns. A SINGLE stable-looking class token is a legitimate
+    // canonical when it survives the churn filters below (pure structure, no
+    // site knowledge).
+    const CHURN_CLASS_RE = /^(mount_|react-aria[-_:]|headlessui-|r_[0-9]+_|css-|js-|m_-)/i;
+    function isStableClassToken(t) {
+      if (t.length < 3 || t.length > 60) return false;
+      if (!/^[A-Za-z][A-Za-z0-9]*(?:[-_]+[A-Za-z0-9]+)*$/.test(t)) return false;
+      if (CHURN_CLASS_RE.test(t)) return false;
+      if (/^[a-z][0-9]{2,}$/i.test(t)) return false; // hash-like short tokens (x9f619 class)
+      if (!/[A-Za-z]{3}/.test(t)) return false;
+      return true;
     }
 
     function canonicalPopoverSelector(op) {
@@ -343,6 +358,10 @@
       }
       if (typeof op.role === 'string' && op.role && op.role.length <= 60) {
         s += "[role='" + op.role.replace(/'/g, "\\'") + "']";
+      }
+      if (s === tag && typeof op.cls === 'string') {
+        const tokens = op.cls.trim().split(/\s+/).filter(Boolean);
+        if (tokens.length === 1 && isStableClassToken(tokens[0])) s += '.' + tokens[0];
       }
       return s === tag ? null : s;
     }

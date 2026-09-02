@@ -911,8 +911,8 @@ describe('service.update grounding chokepoint (spec §8)', () => {
     bag['probe.attrStats'] = probe.attrStats;
     await session.run();
     const entry = session.state().session.transcript.find(e => e.kind === 'tool');
-    assert.equal(entry.result.totalCards, 8);
-    assert.ok(entry.result.values.some(v => v.value === 'ad' && v.cards === 2));
+    assert.equal(entry.result.totalItems, 8);
+    assert.ok(entry.result.values.some(v => v.value === 'ad' && v.items === 2));
   });
 
   it('a cyclic handler return from service.update degrades to an error result, state() never throws', async () => {

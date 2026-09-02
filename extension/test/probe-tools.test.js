@@ -218,10 +218,10 @@ describe('probe.attrStats', () => {
       ];
     });
     const r = await tools.attrStats('div.card', 'data-ad-rendering-role');
-    assert.equal(r.totalCards, 10);
+    assert.equal(r.totalItems, 10);
     assert.equal(r.values.length, 2, 'absent bucket is reported as absentPct, not a value row');
     assert.equal(r.values[0].value, 'story_message');
-    assert.equal(r.values[0].cards, 1);
+    assert.equal(r.values[0].items, 1);
     assert.ok(Math.abs(r.values[0].pct - 10) < 0.01);
     assert.equal(r.absentPct, 80);
     assert.ok(observationLog.coversAttr('data-ad-rendering-role'),
@@ -246,9 +246,9 @@ describe('probe.attrStats', () => {
   it('tolerates a records-wrapped executor result (wrapper variation)', async () => {
     const { tools } = makeTools(async () => ({ records: [{ m: 'x' }, { m: 'x' }, {}] }));
     const r = await tools.attrStats('div.card', 'data-k');
-    assert.equal(r.totalCards, 3);
+    assert.equal(r.totalItems, 3);
     assert.equal(r.values[0].value, 'x');
-    assert.equal(r.values[0].cards, 2);
+    assert.equal(r.values[0].items, 2);
     assert.equal(r.absentPct, Math.round(1 / 3 * 1000) / 10);
   });
 
@@ -468,5 +468,29 @@ describe('probe.hover', () => {
     assert.equal((await tools.hover({})).error, 'anchorSel required');
     const r = await tools.hover({ anchorSel: 'a.z' });
     assert.equal(r.error, 'ELEMENT_NOT_FOUND: a.z');
+  });
+});
+
+describe('audit C10: canonical popover selector accepts a single stable class token', () => {
+  it('a BEM-style single class on the popover derives a canonical selector', async () => {
+    const { tools } = makeTools(async () => ({
+      hovered: true, autoDiscovered: true,
+      htmlSnippet: '<div class="tooltip__body"><span>name</span></div>',
+      popoverSelector: '[auto-discovered popover]'
+    }));
+    const r = await tools.hover({ anchorSel: 'a.author' });
+    assert.equal(r.popoverSelector, 'div.tooltip__body');
+    assert.match(r.popoverSelectorNote, /VERBATIM/);
+  });
+
+  it('hash-like and churn-prefixed classes derive nothing (teaching note instead)', async () => {
+    const { tools } = makeTools(async () => ({
+      hovered: true, autoDiscovered: true,
+      htmlSnippet: '<div class="x9f619"><span>x</span></div>',
+      popoverSelector: '[auto-discovered popover]'
+    }));
+    const r = await tools.hover({ anchorSel: 'a.author' });
+    assert.equal(r.popoverSelector, null);
+    assert.match(r.popoverSelectorNote, /no stable token/);
   });
 });

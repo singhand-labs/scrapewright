@@ -428,7 +428,7 @@
       { name: 'page.state', args: '{}', returns: '{open,tabId,url,title,status}' },
       { name: 'probe.count', args: '{sel}', returns: '{count}' },
       { name: 'probe.text', args: '{sel}', returns: '{total,items[]}' },
-      { name: 'probe.attrStats', args: '{containerSel, attr}', returns: '{totalCards,values[{value,cards,pct}],absentPct}' },
+      { name: 'probe.attrStats', args: '{containerSel, attr}', returns: '{totalItems,values[{value,items,pct}],absentPct}' },
       { name: 'probe.sample', args: '{sel, opts:{index,wantHtml,clean}}', returns: '{match,total,element,html?} — clean:true strips scripts/styles/noise from the HTML (prefer it when reading structure)' },
       { name: 'probe.hover', args: '{anchorSel, popoverSel?, opts:{index,timeoutMs}}', returns: '{hovered,htmlSnippet,popoverSelector,popoverSelectorNote?,reason,observedPopover?}' },
       { name: 'probe.scroll', args: "{mode?:'bottom'|'by', sel?, by?}", returns: '{scrolled,prevY,newY}' },
