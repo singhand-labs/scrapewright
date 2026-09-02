@@ -397,3 +397,14 @@ describe('tenth-log N1: rule 10 — never ship junk; renegotiate unextractable f
     assert.ok(!/facebook|twitter|linkedin|tiktok|reddit|\bfb\b/i.test(t.systemPromptBase), 'no site tokens');
   });
 });
+
+describe('eleventh-log O1: rule 6 — popover absence is anchor-specific', () => {
+  it('teaches varying the anchor before concluding popovers do not work', () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    assert.match(t.systemPromptBase, /ANCHOR-specific/);
+    assert.match(t.systemPromptBase, /author\/profile link is the usual hovercard carrier/);
+    assert.match(t.systemPromptBase, /before concluding popovers do not work/);
+    assert.ok(!/facebook|twitter|linkedin|tiktok|reddit|\bfb\b/i.test(t.systemPromptBase), 'no site tokens');
+  });
+});
