@@ -425,7 +425,7 @@
       if (canonical) {
         out.popoverSelectorNote = 'canonical popoverSelector derived from the observed popover — an observation receipt was recorded for THIS EXACT STRING. If you configure popoverSel in a step, copy it VERBATIM; an embellished variant (e.g. adding [aria-modal=\'true\']) is a new string the grounding gate must reject.';
       } else if (out.htmlSnippet) {
-        out.popoverSelectorNote = 'auto-discovery captured the popover HTML but no stable token (id, aria-label, or role with a value of 60 chars or less) could be derived from its opening tags. Read htmlSnippet, pick a specific selector you can SEE in it (e.g. div[aria-label=\'...\']), and pass it as popoverSel to probe.hover again — a run that observes the popover via that selector records the receipt.';
+        out.popoverSelectorNote = 'auto-discovery captured the popover HTML but no stable token (id, aria-label, role, or a single stable class token with a value of 60 chars or less) could be derived from its opening tags. Read htmlSnippet, pick a specific selector you can SEE in it (e.g. div[aria-label=\'...\']), and pass it as popoverSel to probe.hover again — a run that observes the popover via that selector records the receipt.';
       }
       return out;
     }

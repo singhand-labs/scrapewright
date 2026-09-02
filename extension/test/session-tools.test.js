@@ -200,7 +200,7 @@ describe('createSessionTools', () => {
     state.draft = { targetUrl: 'x', steps: GOOD_STEPS };
     await t.tools['verify.run']({});
     const r = await t.tools['diag.read']({ kind: 'popover' });
-    assert.equal(r.popover.note, 'no hover failure reasons recorded in this verify run');
+    assert.equal(r.popover, undefined, 'C21: zero-failure-reason run emits no popover bucket');
   });
 
   it('annotate.request without a bridge errors; picks enter the ledger as provenance user; cancel round-trips', async () => {
@@ -403,7 +403,7 @@ describe('eleventh-log O1: rule 6 — popover absence is anchor-specific', () =>
     const { deps } = makeDeps();
     const t = createSessionTools(deps);
     assert.match(t.systemPromptBase, /ANCHOR-specific/);
-    assert.match(t.systemPromptBase, /author\/profile link is the usual hovercard carrier/);
+    assert.match(t.systemPromptBase, /element that carries identity or author metadata is the usual hovercard carrier/);
     assert.match(t.systemPromptBase, /before concluding popovers do not work/);
     assert.ok(!/facebook|twitter|linkedin|tiktok|reddit|\bfb\b/i.test(t.systemPromptBase), 'no site tokens');
   });
@@ -430,5 +430,31 @@ describe('audit C1: bridge waits park the engine clock', () => {
     const r = await t.tools['annotate.request']({ why: 'w' }, ctx);
     assert.equal(r.cancelled, true);
     assert.deepEqual(parks, ['b', 'e']);
+  });
+});
+
+describe('audit prompt universality + diag (C15/C17/C18/C21)', () => {
+  it('systemPromptBase is shape-neutral and keeps the anchor-evidence balance', () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    const p = t.systemPromptBase;
+    assert.ok(!/card author|profile link/i.test(p), 'C18: no card/author vocabulary');
+    assert.ok(/repeating item/.test(p), 'C18: shape-neutral wording present');
+    assert.ok(/two different anchors show no popover, stop/.test(p), 'C15: bounded second-anchor rule');
+    assert.ok(/Scalar or single-value outputs skip the array filters/.test(p), 'C17: scalar-output clause');
+    assert.ok(!/facebook|twitter|linkedin|tiktok|reddit|\bfb\b/i.test(p), 'no site tokens');
+  });
+
+  it('C21: diag.read omits the popover bucket when there are no hover failure reasons', async () => {
+    const { deps } = makeDeps();
+    deps.runVerify = async () => ({
+      report: { ok: true, error: null, detectors: {}, events: [] },
+      events: [{ type: 'STEP_ITERATION', stepId: 's1', iteration: 1, resultPreview: '{"done":true}' }],
+      raw: { testResult: { finalResult: {} }, error: null, breaker: null }
+    });
+    const t = createSessionTools(deps);
+    await t.tools['verify.run']({});
+    const r = await t.tools['diag.read']({});
+    assert.equal(r.popover, undefined, 'empty bucket skipped');
   });
 });

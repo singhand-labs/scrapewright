@@ -62,11 +62,11 @@
     },
     {
       key: 'author', pct: 0.75,
-      text: (used, max) => 'BUDGET ADVISORY (75% of the turn budget spent: ' + used + ' of ' + max + '): move to authoring now — dry-run the fieldMap with probe.extract in the live tab, then service.update. Leave the remaining turns for verify.run and fixing its findings.'
+      text: (used, max) => 'BUDGET ADVISORY (75% of the turn budget spent: ' + used + ' of ' + max + '): move to authoring now — dry-run the fieldMap with probe.extract in the live tab, then service.update. If the I/O contract is not confirmed yet, complete io.confirm first. Leave the remaining turns for verify.run and fixing its findings.'
     },
     {
       key: 'finalize', pct: 0.9,
-      text: (used, max) => 'BUDGET ADVISORY (90% of the turn budget spent: ' + used + ' of ' + max + ' — only ' + (max - used) + ' left): FINALIZE — submit your best-grounded artifact via service.update immediately and run verify.run; spend what remains ONLY on defects verify reports.'
+      text: (used, max) => 'BUDGET ADVISORY (90% of the turn budget spent: ' + used + ' of ' + max + ' — only ' + (max - used) + ' left): FINALIZE — submit your best-grounded artifact via service.update immediately and run verify.run; spend what remains ONLY on defects verify reports. (If the contract is still unconfirmed, io.confirm comes first.)'
     }
   ];
 

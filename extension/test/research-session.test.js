@@ -1315,3 +1315,12 @@ describe('audit C6: digest keeps assistant think excerpts and is capped', () => 
     assert.match(st.digest, /hypothesis H1 looks wrong/, 'assistant think survives into the digest');
   });
 });
+
+describe('audit C13: budget advisories coordinate with the io.confirm gate', () => {
+  it('author/finalize advisories tell the model to confirm the contract first', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'research-session.js'), 'utf8');
+    assert.match(src, /If the I\/O contract is not confirmed yet, complete io\.confirm first/, 'author advisory');
+    assert.match(src, /io\.confirm comes first/, 'finalize advisory');
+    assert.ok(!/facebook|twitter|linkedin|tiktok|reddit|\bfb\b/i.test(src));
+  });
+});
