@@ -82,3 +82,58 @@ describe('UI polish: stage stepper', () => {
     assert.ok(/#stageStepper li\.is-done \{/.test(CSS), 'done state');
   });
 });
+
+describe('UI polish: live session badge', () => {
+  it('badge markup lives next to the phase-4 heading, outside the h2', () => {
+    assert.ok(HTML.includes('<div class="phase4-header">'), 'flex wrapper');
+    assert.ok(HTML.includes('<span id="sessionStatusBadge" class="status-badge hidden">'), 'badge span');
+    const wrap = HTML.indexOf('<div class="phase4-header">');
+    const h2 = HTML.indexOf('<h2 id="phase4Title">');
+    const badge = HTML.indexOf('id="sessionStatusBadge"');
+    assert.ok(wrap !== -1 && h2 > wrap && badge > h2, 'wrapper → h2 → badge order');
+  });
+
+  it('setSessionBadge implements the five states + tab-title sync', () => {
+    const start = SRC.indexOf('function setSessionBadge(');
+    assert.ok(start !== -1, 'setSessionBadge exists');
+    let i = SRC.indexOf('{', start), depth = 0, end = start;
+    for (; i < SRC.length; i++) {
+      if (SRC[i] === '{') depth += 1;
+      else if (SRC[i] === '}') { depth -= 1; if (depth === 0) { end = i + 1; break; } }
+    }
+    const body = SRC.slice(start, end);
+    for (const s of ['is-running', 'is-waiting', 'is-paused', 'is-done', 'is-crashed']) {
+      assert.ok(body.includes(s), 'state class ' + s);
+    }
+    assert.ok(body.includes("'is-' + state"), 'state class composition');
+    assert.ok(body.includes("'● researching… — ' + BASE_DOC_TITLE"), 'running tab title');
+    assert.ok(body.includes("'‖ paused — ' + BASE_DOC_TITLE"), 'paused tab title');
+    assert.ok(/const BASE_DOC_TITLE = /.test(SRC), 'base title captured at load');
+  });
+
+  it('session events drive the badge', () => {
+    assert.ok(SRC.includes("setSessionBadge('running', 'starting…')"), 'session_start');
+    assert.ok(SRC.includes("setSessionBadge('running', 'turn ' + ev.turn + ' — thinking…')"), 'turn_start');
+    assert.ok(SRC.includes("setSessionBadge('running', 'tool: ' + ev.tool)"), 'tool_call');
+    assert.ok(SRC.includes("if (!sessionPanelOpen()) setSessionBadge('running', 'thinking…')"), 'tool_result respects open panels');
+    assert.ok(SRC.includes("setSessionBadge('paused', 'paused — Resume when ready')"), 'paused');
+    assert.ok(SRC.includes("setSessionBadge('done', ev.reason === 'completed' ? 'done' : 'stopped — ' + friendlyStopReason(ev.reason))"), 'stopped reuses the A20 mapping');
+    assert.ok(SRC.includes("setSessionBadge('crashed', 'crashed')"), 'crash path');
+  });
+
+  it('annotation/io panels flip the badge to waiting and back', () => {
+    assert.ok(SRC.includes("setSessionBadge('waiting', 'waiting for your annotations')"));
+    assert.ok(SRC.includes("setSessionBadge('waiting', 'waiting for contract confirmation')"));
+    assert.ok(/function badgeAfterPanelClose\(\)/.test(SRC), 'panel-close restore helper');
+    assert.ok(/function sessionPanelOpen\(\)/.test(SRC), 'panel-open probe');
+  });
+
+  it('CSS renders the dot with per-state colors and pulse', () => {
+    assert.ok(/\.status-badge \.dot \{/.test(CSS), 'dot rule');
+    assert.ok(/\.status-badge\.is-running \.dot \{/.test(CSS), 'running color');
+    assert.ok(/\.status-badge\.is-crashed \.dot \{/.test(CSS), 'crashed color');
+    assert.ok(/@keyframes badge-pulse/.test(CSS), 'pulse animation');
+    assert.ok(/@keyframes badge-breathe/.test(CSS), 'breathe animation');
+    assert.ok(/\.phase4-header \{/.test(CSS), 'header flex row');
+  });
+});

@@ -14,6 +14,9 @@ const PHASE_LABELS = {
   3: { stage: 3, heading: 'Edit I/O Schema & Test Input' }
 };
 
+// Tab-title base, captured once at load — setSessionBadge restores to it.
+const BASE_DOC_TITLE = (typeof document !== 'undefined' && document.title) || 'Scrapewright Wizard';
+
 
 let wizardState = {
   phase: 1,
@@ -1839,8 +1842,9 @@ function createWizardAnnotationBridge(getRail) {
       (req.fields && req.fields.length ? 'Fields: ' + req.fields.join(', ') + '. ' : '') +
       'The page tab was brought to the front — click elements to mark them, then come back and press Submit Annotations.';
     panel().classList.remove('hidden');
+    setSessionBadge('waiting', 'waiting for your annotations');
   };
-  const hide = () => panel().classList.add('hidden');
+  const hide = () => { panel().classList.add('hidden'); badgeAfterPanelClose(); };
   return {
     async request(req) {
       const rail = getRail();
@@ -1908,6 +1912,7 @@ function createWizardIoBridge() {
   function hidePanel() {
     const panel = document.getElementById('ioConfirmPanel');
     if (panel) panel.classList.add('hidden');
+    badgeAfterPanelClose();
   }
 
   return {
@@ -1925,6 +1930,7 @@ function createWizardIoBridge() {
         if (fbEl) fbEl.value = '';
         const panel = document.getElementById('ioConfirmPanel');
         if (panel) panel.classList.remove('hidden');
+        setSessionBadge('waiting', 'waiting for contract confirmation');
         appendLog('I/O contract proposed — confirm or revise it to let the session continue.', 'warn');
         showToast('Confirm the input/output contract to continue the research session.', 'info', 6000);
       });
@@ -1984,6 +1990,43 @@ function getSessionMaxTurns() {
   return wizardMaxTurns;
 }
 
+// Live-session badge (phase-4 heading row) + tab-title sync. All state comes
+// from existing session events and panel show/hide hooks — no engine or
+// library changes. state ∈ running|waiting|paused|done|crashed; state=null
+// hides the badge and restores the tab title.
+function setSessionBadge(state, text) {
+  const badge = document.getElementById('sessionStatusBadge');
+  if (!badge) return;
+  badge.classList.remove('is-running', 'is-waiting', 'is-paused', 'is-done', 'is-crashed');
+  if (!state) {
+    badge.classList.add('hidden');
+    document.title = BASE_DOC_TITLE;
+    return;
+  }
+  badge.classList.remove('hidden');
+  badge.classList.add('is-' + state);
+  const label = document.getElementById('sessionStatusText');
+  if (label) label.textContent = String(text || '');
+  if (state === 'running' || state === 'waiting') document.title = '● researching… — ' + BASE_DOC_TITLE;
+  else if (state === 'paused') document.title = '‖ paused — ' + BASE_DOC_TITLE;
+  else document.title = BASE_DOC_TITLE;
+}
+
+function sessionPanelOpen() {
+  const ann = document.getElementById('annotationRequestPanel');
+  const io = document.getElementById('ioConfirmPanel');
+  return (ann && !ann.classList.contains('hidden')) || (io && !io.classList.contains('hidden'));
+}
+
+// A closed request panel returns the badge to the engine's actual status —
+// 'running' normally, 'paused' when the user parked the session first.
+function badgeAfterPanelClose() {
+  if (!wizardSession) return;
+  const status = wizardSession.state().session.status;
+  if (status === 'running') setSessionBadge('running', 'thinking…');
+  else if (status === 'paused') setSessionBadge('paused', 'paused — Resume when ready');
+}
+
 function setSessionControls(mode) {
   const bar = document.getElementById('sessionControls');
   if (!bar) return;
@@ -2023,9 +2066,11 @@ function handleSessionEvent(ev) {
     switch (ev.type) {
       case 'session_start':
         appendLog('Research session ' + ev.sessionId + (ev.resuming ? ' (resumed)' : '') + ' started.', 'success');
+        setSessionBadge('running', 'starting…');
         break;
       case 'turn_start':
         appendLog('— turn ' + ev.turn + ' —');
+        setSessionBadge('running', 'turn ' + ev.turn + ' — thinking…');
         updateSessionSpendLine(wizardSession && wizardSession.state());
         break;
       case 'llm_reply':
@@ -2033,9 +2078,11 @@ function handleSessionEvent(ev) {
         break;
       case 'tool_call':
         appendLog('TOOL ' + ev.tool + ' ' + JSON.stringify(ev.args || {}).slice(0, 200));
+        setSessionBadge('running', 'tool: ' + ev.tool);
         break;
       case 'tool_result':
         appendLog((ev.ok ? '✓ ' : '✗ ') + ev.summary, ev.ok ? 'info' : 'error');
+        if (!sessionPanelOpen()) setSessionBadge('running', 'thinking…');
         break;
       case 'knowledge_attached':
         appendLog('Knowledge attached: ' + ev.id + ' (trigger: ' + ev.trigger + ').');
@@ -2058,6 +2105,7 @@ function handleSessionEvent(ev) {
         break;
       case 'paused':
         setSessionControls('paused');
+        setSessionBadge('paused', 'paused — Resume when ready');
         if (wizardRail) wizardRail.releaseLock(); // API jobs may run while paused
         appendLog('Session paused. Resume when ready.' + (
           !document.getElementById('annotationRequestPanel').classList.contains('hidden') ||
@@ -2067,6 +2115,7 @@ function handleSessionEvent(ev) {
         break;
       case 'stopped':
         setSessionControls('stopped');
+        setSessionBadge('done', ev.reason === 'completed' ? 'done' : 'stopped — ' + friendlyStopReason(ev.reason));
         wizardAnnotationBridge && wizardAnnotationBridge.cancel();
         wizardIoBridge && wizardIoBridge.cancel();
         if (wizardRail) wizardRail.releaseLock();
@@ -2239,6 +2288,7 @@ async function startResearchSession(seedOverride) {
     appendLog('Session crashed: ' + String((e && e.message) || e), 'error');
     // A8: a crashed session leaves phase4 looking alive — surface it loudly.
     showToast('Session crashed: ' + String((e && e.message) || e), 'error');
+    setSessionBadge('crashed', 'crashed');
     setSessionControls('stopped');
     if (wizardPersistence) { try { await wizardPersistence.flush(); } catch (_) {} }
     return;
