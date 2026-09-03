@@ -148,7 +148,7 @@
       '6. To observe a hover popover during research call probe.hover (a session tool — do NOT call the $hover DSL primitive as a tool); it returns the popover evidence (observedPopover identity + htmlSnippet) and, when the popover is observed, a canonical popoverSelector whose EXACT string is recorded as an observation receipt — copy that string VERBATIM into popoverSel; an embellished variant (extra attributes) is a new string the gate must reject. Popover absence is ANCHOR-specific evidence: a link with no hovercard does not mean the page has none — hover at least one other anchor before concluding popovers do not work here — on a repeating item (list card, table row, or detail block) the element that carries identity or author metadata is the usual hovercard carrier. When two different anchors show no popover, stop: the page has none.',
       '7. Scrolling is available DURING research via probe.scroll (a session tool — do NOT call the $scroll DSL primitives as tools): use it to trigger lazy-load / viewport-gated content before counting, sampling, or writing scroll steps. The container selector you pass becomes an observation receipt, grounding a later $scrollToBottom(sel) in steps.',
       '8. Iterate the fieldMap in the LIVE tab with probe.extract BEFORE writing steps: one probe turn per revision, warm DOM, empty-field census included. Reserve service.update + verify.run for the end-to-end check — verify opens a FRESH tab, so cold-load divergence (fewer/different items than the research tab) is expected; investigate counts with probes on the research tab, not by re-verifying.',
-      '9. EARLY contract confirmation: right after the first page.open and a coarse look at the repeating item\'s structure (list card, table row, or detail block), propose the input/output contract with io.confirm({inputSchema, outputSchema, note}) and WAIT for the user — service.update is REJECTED until the user confirms. annotate.request is likewise rejected until the confirmation lands: user annotation picks elements for output FIELDS, so settle the contract first. Apply every revision the user returns and re-confirm. Adding/renaming/removing fields or changing types later is a MATERIAL change: call io.confirm again with the new schemas before service.update (description-only edits are exempt).',
+      '9. EARLY contract confirmation: right after the first page.open and a coarse look at the repeating item\'s structure (list card, table row, or detail block), propose the input/output contract with io.confirm({inputSchema, outputSchema, note}) and WAIT for the user — service.update is REJECTED until the user confirms. annotate.request is likewise rejected until the confirmation lands: user annotation picks elements for output FIELDS, so settle the contract first. Apply every revision the user returns and re-confirm. Once confirmed, do NOT re-propose the same contract — a re-proposal whose shape matches the confirmed one auto-confirms without prompting the user; propose again only when the user asks for a change or evidence forces a MATERIAL renegotiation. Adding/renaming/removing fields or changing types later is a MATERIAL change: call io.confirm again with the new schemas before service.update (description-only edits are exempt).',
       '10. Ship real values only. A green verify can still carry junk: bare query strings ("?a=b…") posing as ids, data: URIs polluting url/media arrays (inline UI icons — filter arrays to http(s) entries inside the step script), raw HTML dumps in data fields. Check detectors.junkValues in the verify report. If research proves a confirmed field is unextractable or only junk-reachable, renegotiate the contract with io.confirm (drop or redefine the field) instead of shipping it empty/junk. Scalar or single-value outputs skip the array filters but still go through detectors.junkValues.'
     ].join('\n');
   }
@@ -199,6 +199,26 @@
       } catch (e) { return false; }
     }
 
+    // Shape of the contract the ledger marker recorded, embedded as JSON so a
+    // resumed session (runtime flag gone) can dedupe same-shape re-proposals
+    // exactly. Legacy markers (field-name lists only) return null — the caller
+    // then consults the bridge, the safe default.
+    function ledgerConfirmedShape(ctx) {
+      try {
+        const ser = (ctx && ctx.ledger && typeof ctx.ledger.serialize === 'function')
+          ? ctx.ledger.serialize() : null;
+        const entries = (ser && Array.isArray(ser.entries)) ? ser.entries : [];
+        for (let i = entries.length - 1; i >= 0; i--) {
+          const f = entries[i] && typeof entries[i].finding === 'string' ? entries[i].finding : '';
+          if (f.indexOf(IO_LEDGER_MARKER) === -1) continue;
+          const at = f.indexOf(' shape: ');
+          if (at === -1) return null;
+          return JSON.parse(f.slice(at + ' shape: '.length));
+        }
+      } catch (e) { return null; }
+      return null;
+    }
+
     async function ioConfirm(args, ctx) {
       const a = args && typeof args === 'object' ? args : {};
       const bridge = d.ioConfirmBridge;
@@ -212,6 +232,17 @@
         return {
           error: 'SCHEMA_NOT_JSON_SCHEMA: ' + schemaBad.join(' and ') + ' must be a JSON Schema object like {"type":"object","required":["keyword"],"properties":{"keyword":{"type":"string"}}}. Resend io.confirm with both schemas properly shaped.'
         };
+      }
+      // Dedup: a contract the user already confirmed is NOT re-prompted while
+      // its shape is unchanged (rejections of revisions leave the original
+      // standing). Only a materially different proposal pops the panel again.
+      const incoming = { input: schemaShape(a.inputSchema), output: schemaShape(a.outputSchema) };
+      const priorShape = ioConfirmedShape || ledgerConfirmedShape(ctx);
+      if (ioContractConfirmed(ctx) && priorShape &&
+          priorShape.input === incoming.input && priorShape.output === incoming.output) {
+        ioConfirmed = true; // resume path: the runtime flag catches up
+        ioConfirmedShape = incoming;
+        return { confirmed: true, note: 'contract already confirmed — same contract, proceeding without re-prompting the user' };
       }
       const sess = (ctx && ctx.session) || null;
       let res;
@@ -233,7 +264,8 @@
           try {
             ledger.add({
               finding: IO_LEDGER_MARKER + ' — inputs: [' + Object.keys((a.inputSchema && a.inputSchema.properties) || {}).join(', ') +
-                '] outputs: [' + Object.keys((a.outputSchema && a.outputSchema.properties) || {}).join(', ') + ']',
+                '] outputs: [' + Object.keys((a.outputSchema && a.outputSchema.properties) || {}).join(', ') +
+                '] shape: ' + JSON.stringify({ input: incoming.input, output: incoming.output }),
               evidence: 'io.confirm (user approved the proposed contract)',
               confidence: 'high',
               provenance: 'user',
@@ -453,7 +485,7 @@
       { name: 'diag.read', args: '{stepId?, kind?}', returns: '{selectorDiagnostics, failingStep?, popover, counters, lastError?}' },
       { name: 'verify.run', args: '{input?}', returns: '{ok,score,scoreNote?,error,detectors,steps,finalResult,schemaOk}' },
       { name: 'annotate.request', args: '{why, fields?, containerSel?}', returns: '{annotations[{selector,purpose,outputField}]} | {cancelled} — REQUIRES a confirmed I/O contract (io.confirm first)' },
-      { name: 'io.confirm', args: '{inputSchema, outputSchema, note?}', returns: '{confirmed:true} | {confirmed:false, feedback} — propose the contract EARLY and wait for the user; service.update is rejected until a confirmation lands' }
+      { name: 'io.confirm', args: '{inputSchema, outputSchema, note?}', returns: '{confirmed:true} | {confirmed:false, feedback} — propose the contract EARLY and wait for the user; service.update is rejected until a confirmation lands; a SAME-shape re-proposal auto-confirms without prompting' }
     ];
 
     return {

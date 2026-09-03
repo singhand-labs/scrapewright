@@ -437,6 +437,99 @@ describe('annotation gate — user collaboration requires a confirmed I/O contra
   });
 });
 
+describe('io.confirm dedup — a confirmed contract is not re-prompted', () => {
+  const IN = { type: 'object', required: ['keyword'], properties: { keyword: { type: 'string' } } };
+  const OUT = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } };
+  const OUT2 = { type: 'object', required: ['posts', 'publishDate'], properties: { posts: { type: 'array', items: { type: 'object' } }, publishDate: { type: 'string' } } };
+
+  it('a same-shape re-proposal auto-confirms without consulting the bridge', async () => {
+    let called = 0;
+    const { deps } = makeDeps({ ioConfirmBridge: { request: async () => { called += 1; return { confirmed: true }; } } });
+    const t = createSessionTools(deps);
+    await t.tools['io.confirm']({ inputSchema: IN, outputSchema: OUT });
+    assert.equal(called, 1, 'first proposal pops');
+    const again = await t.tools['io.confirm']({ inputSchema: IN, outputSchema: OUT });
+    assert.equal(again.confirmed, true);
+    assert.match(again.note, /without re-prompting/i);
+    assert.equal(called, 1, 'the user is NOT asked again for the same contract');
+  });
+
+  it('a materially different re-proposal still consults the bridge exactly once', async () => {
+    let called = 0;
+    const { deps } = makeDeps({ ioConfirmBridge: { request: async () => { called += 1; return { confirmed: true }; } } });
+    const t = createSessionTools(deps);
+    await t.tools['io.confirm']({ inputSchema: IN, outputSchema: OUT });
+    const revised = await t.tools['io.confirm']({ inputSchema: IN, outputSchema: OUT2 });
+    assert.equal(revised.confirmed, true);
+    assert.equal(called, 2, 'the changed contract pops once');
+    // The revised shape is now the confirmed one — a repeat is silent.
+    const repeat = await t.tools['io.confirm']({ inputSchema: IN, outputSchema: OUT2 });
+    assert.equal(repeat.confirmed, true);
+    assert.match(repeat.note, /without re-prompting/i);
+    assert.equal(called, 2);
+  });
+
+  it('rejecting a material re-proposal leaves the ORIGINAL confirmation standing', async () => {
+    const { deps } = makeDeps({ ioConfirmBridge: { request: async () => ({ confirmed: false, feedback: 'no, keep it simple' }) } });
+    const t = createSessionTools(deps);
+    await t.tools['io.confirm']({ inputSchema: IN, outputSchema: OUT, note: 'first' });
+    // First proposal was rejected by the harness → contract NOT confirmed.
+    const rejected = await t.tools['io.confirm']({ inputSchema: IN, outputSchema: OUT2 });
+    assert.equal(rejected.confirmed, false);
+    assert.match(rejected.feedback, /keep it simple/);
+    const upd = await t.tools['service.update']({ steps: GOOD_STEPS }, { session: { state: () => ({ session: { artifactVersions: [] } }) } });
+    assert.match(upd.error, /I\/O CONTRACT UNCONFIRMED/, 'a rejected proposal confirms nothing');
+  });
+
+  it('rejecting a REVISION after an established confirmation keeps the original contract usable', async () => {
+    let n = 0;
+    const { deps } = makeDeps({ ioConfirmBridge: { request: async () => { n += 1; return n === 1 ? { confirmed: true } : { confirmed: false, feedback: 'keep the original' }; } } });
+    const t = createSessionTools(deps);
+    await t.tools['io.confirm']({ inputSchema: IN, outputSchema: OUT });
+    const revised = await t.tools['io.confirm']({ inputSchema: IN, outputSchema: OUT2 });
+    assert.equal(revised.confirmed, false);
+    const upd = await t.tools['service.update'](
+      { steps: GOOD_STEPS, inputSchema: IN, outputSchema: OUT },
+      { session: { state: () => ({ session: { artifactVersions: [] } }) } });
+    assert.equal(upd.updated, true, 'the original confirmed contract still ships without re-prompting');
+  });
+
+  it('the ledger marker embeds the contract shape; a resumed session auto-confirms same-shape proposals', async () => {
+    const added = [];
+    let called = 0;
+    const { deps } = makeDeps({ ioConfirmBridge: { request: async () => { called += 1; return { confirmed: true }; } } });
+    const t = createSessionTools(deps);
+    await t.tools['io.confirm']({ inputSchema: IN, outputSchema: OUT }, { ledger: { add: (e) => added.push(e) } });
+    assert.match(added[0].finding, / shape: \{"input"/, 'shape JSON embedded in the marker');
+    // Fresh instance = runtime flag gone (reload / seed resume). The marker carries the shape.
+    const t2 = createSessionTools(makeDeps({ ioConfirmBridge: { request: async () => { called += 1; return { confirmed: true }; } } }).deps);
+    const resumed = await t2.tools['io.confirm']({ inputSchema: IN, outputSchema: OUT }, { ledger: { serialize: () => ({ entries: added }), add: () => {} } });
+    assert.equal(resumed.confirmed, true);
+    assert.match(resumed.note, /without re-prompting/i);
+    assert.equal(called, 1, 'no pop on resume for the same contract');
+  });
+
+  it('a legacy marker without the embedded shape falls back to prompting (safe default)', async () => {
+    let called = 0;
+    const { deps } = makeDeps({ ioConfirmBridge: { request: async () => { called += 1; return { confirmed: true }; } } });
+    const t = createSessionTools(deps);
+    const ctx = {
+      ledger: { serialize: () => ({ entries: [{ finding: 'I/O CONTRACT CONFIRMED — inputs: [keyword] outputs: [posts]', provenance: 'user' }] }), add: () => {} }
+    };
+    const r = await t.tools['io.confirm']({ inputSchema: IN, outputSchema: OUT }, ctx);
+    assert.equal(called, 1, 'cannot compare shapes → the bridge is consulted');
+    assert.equal(r.confirmed, true);
+  });
+
+  it('system prompt teaches: do not re-propose a confirmed contract', () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    assert.match(t.systemPromptBase, /auto-confirms without prompting/);
+    const spec = t.toolSpecs.find((s) => s.name === 'io.confirm');
+    assert.match(spec.returns, /auto-confirms without prompting/);
+  });
+});
+
 describe('tenth-log N1: rule 10 — never ship junk; renegotiate unextractable fields', () => {
   it('system prompt teaches the junk-value rule and its detector', () => {
     const { deps } = makeDeps();
