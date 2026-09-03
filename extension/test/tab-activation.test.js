@@ -190,18 +190,35 @@ describe('lib/tab-activation.js — requestActivation', () => {
     assert.equal(ctx.tabsById.get(100).active, false);
   });
 
-  it('returns ok:false (crossWindow:true) when scrape window is not focused', async () => {
+  it('cross-window scrape tab activates WITHIN its window (no window focus steal) — thirteenth log Mode A: refusal starved the verify tab of frames forever', async () => {
     const ctx = loadModule();
     // Scrape tab in window 2, user's focus is on window 1
     ctx.setFocusedWindow(1);
     ctx.tabsById.set(101, { id: 101, windowId: 2, active: false });
     ctx.tabsById.set(200, { id: 200, windowId: 1, active: true });
     const result = await ctx.api.requestActivation(101);
-    assert.equal(result.ok, false);
-    assert.equal(result.crossWindow, true);
-    assert.match(result.reason, /cross-window/);
-    // No activation attempt
-    assert.equal(ctx.calls.tabsUpdate.length, 0);
+    assert.equal(result.ok, true, 'activation proceeds — refusal guaranteed a 169px unrendered shell');
+    assert.equal(result.activated, true);
+    assert.equal(result.crossWindow, true, 'marker explains a possibly still-starved page in diagnostics');
+    // The tab WAS activated inside its own window
+    assert.equal(ctx.calls.tabsUpdate.length, 1);
+    assert.equal(ctx.calls.tabsUpdate[0].tabId, 101);
+    assert.equal(ctx.tabsById.get(101).active, true);
+    // The window is NOT raised/focused — the user's OS focus is untouched
+    assert.equal(ctx.calls.windowsUpdate.length, 0);
+    // The other window's active tab is untouched
+    assert.equal(ctx.tabsById.get(200).active, true);
+  });
+
+  it('same-window activation does not set the crossWindow marker', async () => {
+    const ctx = loadModule();
+    ctx.setFocusedWindow(1);
+    ctx.tabsById.set(100, { id: 100, windowId: 1, active: true });
+    ctx.tabsById.set(101, { id: 101, windowId: 1, active: false });
+    const result = await ctx.api.requestActivation(101);
+    assert.equal(result.ok, true);
+    assert.equal(result.activated, true);
+    assert.equal(result.crossWindow, undefined);
   });
 
   it('returns ok:false for invalid tabId', async () => {

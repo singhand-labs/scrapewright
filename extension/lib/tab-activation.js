@@ -126,13 +126,21 @@
 
     if (scrapeTab.active) return { ok: true, activated: false, reason: 'already active' };
 
+    let crossWindow = false;
     if (hasWindowsApi()) {
       let lastFocused;
       try { lastFocused = await chrome.windows.getLastFocused(); } catch (e) {}
       if (lastFocused && scrapeTab.windowId !== lastFocused.id) {
-        return { ok: false, crossWindow: true,
-          reason: 'cross-window: scrape window ' + scrapeTab.windowId +
-                  ' is not focused (focused=' + lastFocused.id + ')' };
+        // Thirteenth log Mode A (2026-09-03): a fresh verify tab whose scrape
+        // window lost focus could NEVER render — the old refusal returned
+        // before activating, so the tab got zero compositor frames (page
+        // stayed a 169px shell) and every downstream op failed empty.
+        // Instead activate the tab WITHIN its own window: tabs.update does
+        // NOT raise or focus the window, so the user's OS focus stays where
+        // it is. Frame production then depends on window visibility (and the
+        // layer-3 launch flags) instead of on guaranteed starvation. The
+        // crossWindow marker lets diagnostics explain a still-starved page.
+        crossWindow = true;
       }
     }
 
@@ -151,7 +159,7 @@
       if (t) { clearTimeout(t); suppressTimers.delete(tabId); }
       return { ok: false, reason: 'tabs.update failed: ' + (e && e.message || String(e)) };
     }
-    return { ok: true, activated: true }; // sticky: no restore
+    return { ok: true, activated: true, crossWindow: crossWindow || undefined }; // sticky: no restore
   }
 
   const api = {
