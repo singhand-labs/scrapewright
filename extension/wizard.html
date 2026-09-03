@@ -185,6 +185,17 @@
           <button id="btnPhase5EditIo" class="btn-secondary">Edit I/O & Test Input</button>
         </div>
       </div>
+      <!-- Custom test parameters (review-stage completeness): run more tests
+           with hand-edited input values — e.g. a more common keyword when the
+           original value returned nothing. Values apply to THIS run only;
+           use Edit I/O & Test Input to change the default. -->
+      <details id="customTestPanel" class="custom-test">
+        <summary>Test with custom input values</summary>
+        <div id="customTestFields"></div>
+        <div class="exploration-buttons">
+          <button id="btnCustomTestRun" class="btn-secondary">Run Test With These Values</button>
+        </div>
+      </details>
       <div id="phase5Actions">
         <button id="btnRetryTest" class="hidden">Retry Test</button>
         <button id="btnDeployAnyway" class="hidden">Deploy Anyway</button>

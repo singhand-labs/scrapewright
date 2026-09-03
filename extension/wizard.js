@@ -360,6 +360,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       hideLoading();
     }
   });
+  document.getElementById('btnCustomTestRun').addEventListener('click', () => { runCustomTest(); });
   document.getElementById('btnSessionPause').addEventListener('click', () => { wizardSession && wizardSession.pause(); });
   document.getElementById('btnSessionResume').addEventListener('click', async () => {
     const btn = document.getElementById('btnSessionResume');
@@ -710,6 +711,9 @@ function goToPhase(n) {
     document.getElementById('outputSchemaEditor').value = JSON.stringify(wizardState.outputSchema, null, 2);
     document.getElementById('testInputEditor').value = JSON.stringify(wizardState.sampleInput || {}, null, 2);
   }
+  // Review-stage completeness testing: re-render the custom-input fields on
+  // every phase-5 entry so the prefill tracks the current test input.
+  if (n === 5) renderCustomTestFields();
   showPhase(n);
 }
 
@@ -1416,6 +1420,100 @@ function withTimeout(promise, ms, message) {
     promise,
     new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms))
   ]);
+}
+
+// Review-stage completeness testing: one input per inputSchema property,
+// prefilled with the current test input so the user can hand-edit values and
+// re-run. Re-rendered on every phase-5 entry (goToPhase) so the prefill
+// tracks the current default. No properties → JSON textarea fallback.
+function renderCustomTestFields() {
+  const host = document.getElementById('customTestFields');
+  if (!host) return;
+  host.textContent = '';
+  const props = (wizardState.inputSchema && wizardState.inputSchema.properties && typeof wizardState.inputSchema.properties === 'object')
+    ? wizardState.inputSchema.properties : null;
+  if (props && Object.keys(props).length) {
+    Object.keys(props).forEach((key) => {
+      const row = document.createElement('div');
+      row.className = 'custom-test-field';
+      const label = document.createElement('label');
+      label.textContent = key;
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.dataset.testKey = key;
+      const cur = wizardState.testInput ? wizardState.testInput[key] : undefined;
+      input.value = (cur === undefined || cur === null) ? '' : String(cur);
+      const hint = document.createElement('span');
+      hint.className = 'hint-label';
+      hint.textContent = (props[key] && props[key].type) || 'string';
+      row.appendChild(label);
+      row.appendChild(input);
+      row.appendChild(hint);
+      host.appendChild(row);
+    });
+    return;
+  }
+  const ta = document.createElement('textarea');
+  ta.id = 'customTestJson';
+  ta.rows = 4;
+  ta.placeholder = '{"param": "value"}';
+  ta.value = JSON.stringify(wizardState.testInput || {}, null, 2);
+  host.appendChild(ta);
+}
+
+// Collect the hand-edited values; number/boolean schema types are coerced.
+// Returns null when the fallback textarea holds invalid JSON.
+function collectCustomTestInput() {
+  const inputs = document.querySelectorAll('#customTestFields input[data-test-key]');
+  if (inputs.length) {
+    const out = {};
+    const props = (wizardState.inputSchema && wizardState.inputSchema.properties) || {};
+    inputs.forEach((el) => {
+      if (el.value === '') return;
+      const key = el.getAttribute('data-test-key');
+      const type = props[key] && props[key].type;
+      if (type === 'number') {
+        const n = Number(el.value);
+        out[key] = isNaN(n) ? el.value : n;
+      } else if (type === 'boolean') {
+        out[key] = el.value === 'true';
+      } else {
+        out[key] = el.value;
+      }
+    });
+    return out;
+  }
+  const ta = document.getElementById('customTestJson');
+  if (!ta || !ta.value.trim()) return {};
+  try {
+    const parsed = JSON.parse(ta.value);
+    return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Temporary override: run the full test with the custom values, then restore
+// the default test input. Adopting a NEW default stays on the Edit I/O &
+// Test Input path (phase 3) — this entry is for extra verification runs only.
+async function runCustomTest() {
+  const btn = document.getElementById('btnCustomTestRun');
+  const custom = collectCustomTestInput();
+  if (custom === null) {
+    appendLog('Custom test input is not valid JSON — fix the values and retry.', 'error');
+    return;
+  }
+  const saved = wizardState.testInput;
+  btn.disabled = true;
+  showLoading('Running test with custom input…');
+  try {
+    wizardState.testInput = custom;
+    await testScript();
+  } finally {
+    wizardState.testInput = saved;
+    hideLoading();
+    btn.disabled = false;
+  }
 }
 
 async function testScript() {
