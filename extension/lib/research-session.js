@@ -633,11 +633,21 @@
           state.transcript.push({ kind: 'assistant', text: content });
           await persist();
           if (turn.finish) {
-            report = await stop('completed', turn.finish.summary || null);
+            // Thirteenth log: five consecutive RED verifies still finished as a
+            // plain 'completed' — an honest ship note must not read as green.
+            let detail = turn.finish.summary || null;
+            if (state.lastVerifyOk === false) {
+              detail = (detail ? detail + ' ' : '') +
+                '[LAST VERIFY FAILED — shipped best-effort; the review panel shows the failing run]';
+            }
+            report = await stop('completed', detail);
             break;
           }
           emit('tool_call', { tool: turn.tool, args: turn.args });
           const result = await dispatchTool(turn.tool, turn.args);
+          if (turn.tool === 'verify.run') {
+            state.lastVerifyOk = !!(result && typeof result === 'object' && result.ok === true);
+          }
           // Replay/persistence must carry WHAT was probed (the args), not just
           // the result — a resumed context still shows the selector used.
           const callLabel = turn.tool + ' ' + JSON.stringify(turn.args || {});

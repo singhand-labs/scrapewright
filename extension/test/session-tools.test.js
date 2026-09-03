@@ -386,6 +386,15 @@ describe('io.confirm — early I/O contract gate', () => {
     assert.match(t.systemPromptBase, /MATERIAL change/);
     assert.ok(t.toolSpecs.some((s) => s.name === 'io.confirm'), 'io.confirm in the spec list');
   });
+
+  it('rule 8 teaches verify-input consistency (thirteenth log: research q=news, verify keyword=cat — 0 /posts/ permalinks on the cat population)', () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    assert.match(t.systemPromptBase, /FIRST verify with the SAME input values that drove the research page/);
+    assert.match(t.systemPromptBase, /change the result-card population ENTIRELY/);
+    assert.match(t.systemPromptBase, /population divergence, not a rendering failure/);
+    assert.match(t.systemPromptBase, /FIELD_MATCH_ZERO/);
+  });
 });
 
 describe('annotation gate — user collaboration requires a confirmed I/O contract first', () => {

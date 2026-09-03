@@ -47,6 +47,42 @@ describe('engine happy path', () => {
     assert.ok(events.some(e => e.type === 'stopped'));
   });
 
+  it('finish with a RED last verify annotates the completion detail (thirteenth log: five red verifies shipped as plain completed)', async () => {
+    const calls = [];
+    const session = createResearchSession({
+      requirement: 'collect posts',
+      llm: scriptedLlm([
+        reply(envelope('verify.run', { input: { keyword: 'cat' } })),
+        reply(finishEnvelope('shipped v5'))
+      ], calls),
+      tools: { 'verify.run': async () => ({ ok: false, error: { message: 'FIELD_MATCH_ZERO: ...' } }) }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    assert.match(report.stopped.detail, /shipped v5/);
+    assert.match(report.stopped.detail, /LAST VERIFY FAILED/);
+  });
+
+  it('finish after a GREEN verify (or none at all) keeps the completion detail clean', async () => {
+    const gCalls = [];
+    const green = await createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('verify.run', {})),
+        reply(finishEnvelope('shipped'))
+      ], gCalls),
+      tools: { 'verify.run': async () => ({ ok: true }) }
+    }).run();
+    assert.equal(green.stopped.detail, 'shipped');
+    const nCalls = [];
+    const none = await createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([reply(finishEnvelope('done'))], nCalls),
+      tools: {}
+    }).run();
+    assert.equal(none.stopped.detail, 'done');
+  });
+
   it('sends an explicit maxTokens on EVERY llm call (RC52 class guard)', async () => {
     const calls = [];
     const session = createResearchSession({

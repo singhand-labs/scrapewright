@@ -145,6 +145,37 @@ describe('createVerifyRunner', () => {
     assert.ok(out.report.events.indexOf('EMPTY_FIELDS') !== -1);
   });
 
+  it('FIELD_MATCH_ZERO: empty output + a field that matched 0 of N containers on every call re-labels EMPTY_EXTRACTION with the census (thirteenth log: q=cat cards had no /posts/ permalinks; the step JS filter dropped all 19 records)', async () => {
+    const orch = async (svc, input, d, opts) => {
+      opts.onEvent({
+        type: 'STEP_ITERATION', stepId: 'collect', iteration: 1,
+        selectorDiagnostics: [{
+          api: 'extractList',
+          containerSelector: 'div[role="feed"] > div:has(h3)',
+          containerMatches: 19,
+          perField: [
+            { field: 'author', subSelector: 'h3', attr: null, matchCount: 19, sampleTexts: [], sampleHrefs: [], sampleValues: [] },
+            { field: 'postId', subSelector: 'a[href*="/posts/"]', attr: 'href', matchCount: 0, sampleTexts: [], sampleHrefs: [], sampleValues: [] }
+          ]
+        }]
+      });
+      return { finalResult: { posts: [] }, steps: [{ stepId: 'collect', stepName: 'scroll and collect posts', result: { done: true, posts: [] }, snapshot: null }], pages: [], pagesTruncated: false };
+    };
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object', properties: { postId: { type: 'string' } }, required: ['postId'] } } } } });
+    assert.equal(out.report.ok, false);
+    assert.match(out.report.error.message, /FIELD_MATCH_ZERO/);
+    assert.match(out.report.error.message, /postId/);
+    assert.match(out.report.error.message, /0 of 19/);
+    assert.match(out.report.error.message, /containers themselves DID match/);
+    assert.match(out.report.error.message, /filter/, 'names the own-JS record-dropping mechanism');
+    assert.match(out.report.error.message, /SAME input values/i, 'names the verify-input-divergence mechanism');
+    assert.ok(out.report.detectors.zeroMatchFields && out.report.detectors.zeroMatchFields.length === 1);
+    assert.equal(out.report.detectors.zeroMatchFields[0].field, 'postId');
+    assert.ok(out.report.events.indexOf('FIELD_MATCH_ZERO') !== -1);
+    assert.ok(out.report.events.indexOf('EMPTY_EXTRACTION') !== -1, 'keeps the EMPTY_EXTRACTION tag for knowledge attach');
+  });
+
   it('duplicate records detection fires with DUPLICATE_RECORDS tag', async () => {
     const rec = { title: 'same' };
     const orch = async () => ({

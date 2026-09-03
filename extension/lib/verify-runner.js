@@ -333,7 +333,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], countShortfall: null, shapeDistribution: null, stepNoReturn: null, junkValues: null };
+      const detectors = { emptyFields: [], duplicateFields: [], countShortfall: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, zeroMatchFields: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -428,9 +428,32 @@
           if (emptyFields.length > 0) {
             const nominalStepId = lastStepEntry && lastStepEntry.stepId;
             detectors.emptyFields = emptyFields;
+            // Thirteenth-log P1: the per-field match census exists in
+            // selectorDiagnostics; an empty output on top of a field that
+            // matched 0 of N containers is a SPECIFIC failure (population
+            // divergence between the researched page and the verify input,
+            // or the step's own JS filter dropping every record) — name it
+            // instead of the generic "field selectors are wrong".
+            let census = null;
+            if (typeof WU.detectFieldMatchZero === 'function') {
+              census = WU.detectFieldMatchZero(events) || null;
+              if (census) detectors.zeroMatchFields = census;
+            }
+            let msg;
+            if (census && census.length) {
+              const lines = census.map((c) => {
+                const stepDefC = stepsDefs.find((s) => String(s.id) === String(c.stepId));
+                return 'step "' + (stepDefC ? stepDefC.name : c.stepId) + '" (' + c.api + '): field "' + c.field + '" (sub-selector ' + JSON.stringify(c.subSelector) + ') matched 0 of ' + c.containerMatches + ' container(s) on every call';
+              });
+              msg = 'FIELD_MATCH_ZERO / EMPTY_EXTRACTION: required field(s) [' + emptyFields.join(', ') + '] are present but every extracted item has only empty values, or no items were extracted at all. Field census from SELECTOR DIAGNOSTICS — ' + lines.join('; ') + '. The containers themselves DID match, so the page has the repeating items but this field\'s sub-selector found nothing on them. Two likely mechanisms: ' +
+                '(a) POPULATION DIVERGENCE — your selectors were grounded on the research page, and a different verify INPUT (different query values) can change the result-card population entirely; first re-verify with the SAME input values that drove the research page before touching selectors; ' +
+                '(b) your own step JS filters records on this field (e.g. .filter(p => p.' + census[0].field + ' && ...)) and silently dropped every extracted record — a filtered-to-0 result with containers present is NOT extraction success: keep a RAW fallback count (records.length before filtering / $count(containerSel)) and treat filtered-to-0 as not-ready or an error, never as {done:true}.';
+            } else {
+              msg = 'EMPTY_EXTRACTION: required field(s) [' + emptyFields.join(', ') + '] are present but every extracted item has only empty values, or no items were extracted at all. The script found list items but the field selectors are wrong.';
+            }
             error = toError(
-              'EMPTY_EXTRACTION: required field(s) [' + emptyFields.join(', ') + '] are present but every extracted item has only empty values, or no items were extracted at all. The script found list items but the field selectors are wrong.',
-              walkBack(nominalStepId),
+              msg,
+              walkBack(census && census.length ? census[0].stepId : nominalStepId),
               { emptyFields: emptyFields, snapshot: (lastStepEntry && lastStepEntry.snapshot) || null });
           }
         }
@@ -486,6 +509,7 @@
         if (/COUNT_SELECTOR_BLIND/.test(msg)) add('SELECTOR_ZERO_MATCH');
         if (/POLL_EXHAUSTED/.test(msg) && !/COUNT_SELECTOR_BLIND/.test(msg) && !/ZERO_COUNTER_FROZEN/.test(msg)) add('SELECTOR_ZERO_MATCH');
         if (/EMPTY_EXTRACTION/.test(msg)) add('EMPTY_EXTRACTION');
+        if (detectors.zeroMatchFields) add('FIELD_MATCH_ZERO');
         if (/DUPLICATE_RECORDS/.test(msg)) add('DUPLICATE_RECORDS');
         if (/SCRIPT_TIMEOUT/.test(msg)) add('SCRIPT_TIMEOUT');
         if (/HOVER_ANCHORS_BLIND/.test(msg)) add('HOVER_NO_SIGNAL');
