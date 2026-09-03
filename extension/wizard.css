@@ -1131,3 +1131,6 @@ pre {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.55; }
 }
+
+/* Wizard UI polish: guiding empty state for the step list */
+.empty-state { color: var(--text-faint); font-style: italic; padding: 12px 4px; }

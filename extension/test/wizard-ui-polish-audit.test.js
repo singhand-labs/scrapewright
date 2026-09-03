@@ -137,3 +137,32 @@ describe('UI polish: live session badge', () => {
     assert.ok(/\.phase4-header \{/.test(CSS), 'header flex row');
   });
 });
+
+describe('UI polish: phase-1 guard + empty state', () => {
+  it('Research disables on a blank target URL, with a tooltip hint', () => {
+    assert.ok(/function updateResearchButtonState\(\)/.test(SRC), 'guard function exists');
+    assert.ok(SRC.includes("'Enter a target URL first'"), 'disabled tooltip copy');
+    assert.ok(/btn\.disabled = empty/.test(SRC), 'disabled assignment');
+    const input = SRC.indexOf("getElementById('targetUrl').addEventListener('input'");
+    assert.ok(input !== -1, 'targetUrl input listener exists');
+    const region = SRC.slice(input, SRC.indexOf('});', input) + 3);
+    assert.ok(region.includes('updateResearchButtonState()'), 'input listener refreshes the button');
+    const calls = SRC.split('updateResearchButtonState()').length - 1;
+    assert.ok(calls >= 5, 'wired at init, on input, in showPhase(1), and after programmatic restores (found ' + calls + ')');
+  });
+
+  it('renderStepList shows a guiding empty state instead of blank space', () => {
+    const start = SRC.indexOf('function renderStepList(');
+    assert.ok(start !== -1, 'renderStepList exists');
+    let i = SRC.indexOf('{', start), depth = 0, end = start;
+    for (; i < SRC.length; i++) {
+      if (SRC[i] === '{') depth += 1;
+      else if (SRC[i] === '}') { depth -= 1; if (depth === 0) { end = i + 1; break; } }
+    }
+    const body = SRC.slice(start, end);
+    assert.ok(/wizardState\.steps\.length/.test(body), 'length check');
+    assert.ok(body.includes('No steps yet — Research will generate them'), 'guiding copy');
+    assert.ok(body.includes('empty-state'), 'empty-state class');
+    assert.ok(/\.empty-state \{/.test(CSS), 'empty-state styled');
+  });
+});

@@ -313,6 +313,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('sessionMaxTurns').addEventListener('change', () => { getSessionMaxTurns(); });
   loadSessionMaxTurns();
   updateStageChrome(1);
+  updateResearchButtonState();
   document.getElementById('btnPhase2Next').addEventListener('click', () => goToPhase(3));
   document.getElementById('btnPhase2Back').addEventListener('click', () => goToPhase(1));
   document.getElementById('btnPhase3Test').addEventListener('click', runTestFromStep5);
@@ -405,6 +406,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('targetUrl').addEventListener('input', (e) => {
     wizardState.targetUrl = e.target.value;
     updateUrlTemplateHint(wizardState.sampleInput || null);
+    updateResearchButtonState();
   });
   document.getElementById('reqPageOps').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && e.ctrlKey) startResearchSession();
@@ -468,6 +470,7 @@ async function loadEditMode() {
   wizardState.phase = 2;
 
   document.getElementById('targetUrl').value = svc.targetUrl;
+  updateResearchButtonState();
   updateUrlTemplateHint(wizardState.sampleInput || null);
   document.getElementById('reqInputParams').value = wizardState.requirements.inputParams || '';
   document.getElementById('reqPageOps').value = wizardState.requirements.pageOps || '';
@@ -482,6 +485,7 @@ function showPhase(n) {
   document.querySelectorAll('.step').forEach(el => el.classList.add('hidden'));
   document.getElementById(`phase${n}`)?.classList.remove('hidden');
   updateStageChrome(n);
+  if (n === 1) updateResearchButtonState();
 }
 
 // Stage chrome (stepper + h1) tracks the phase via PHASE_LABELS. Edit
@@ -677,10 +681,32 @@ function goToPhase(n) {
   showPhase(n);
 }
 
+// Phase-1 guard: Research needs a target URL. The button greys out while the
+// box is blank; the tooltip says why. Re-run from input events, showPhase(1),
+// and every programmatic restore of the URL box.
+let researchBtnBaseTitle = null;
+function updateResearchButtonState() {
+  const btn = document.getElementById('btnPhase1Research');
+  const urlInput = document.getElementById('targetUrl');
+  if (!btn || !urlInput) return;
+  if (researchBtnBaseTitle === null) researchBtnBaseTitle = btn.title || '';
+  const empty = !String(urlInput.value || '').trim();
+  btn.disabled = empty;
+  btn.title = empty ? 'Enter a target URL first' : researchBtnBaseTitle;
+}
+
 function renderStepList() {
   const container = document.getElementById('stepList');
   if (!container) return;
   container.innerHTML = '';
+
+  if (!wizardState.steps.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = 'No steps yet — Research will generate them';
+    container.appendChild(empty);
+    return;
+  }
 
   wizardState.steps.forEach((step, index) => {
     const div = document.createElement('div');
@@ -2193,6 +2219,7 @@ async function startResearchSession(seedOverride) {
         if (t && t.kind === 'tool' && t.name === 'page.open' && t.ok && t.result && typeof t.result.url === 'string' && /^https?:\/\//i.test(t.result.url)) {
           wizardState.targetUrl = t.result.url;
           document.getElementById('targetUrl').value = t.result.url;
+          updateResearchButtonState();
           break;
         }
       }
