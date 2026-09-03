@@ -1129,6 +1129,37 @@ function detectFieldMatchZero(events) {
   return hits.length ? hits : null;
 }
 
+// Fourteenth-log follow-up (user request): the inverse fingerprint — every
+// list call for a step+container saw containerMatches 0. When the page shows
+// ZERO result items, the input VALUE itself is the prime suspect (an obscure
+// keyword the site has no content for, an over-specific filter) — NOT the
+// selectors. detectFieldMatchZero skips containers<=0 entries; this detector
+// consumes exactly those.
+function detectContainerMatchZero(events) {
+  if (!Array.isArray(events)) return null;
+  const agg = new Map(); // stepId + ' ' + containerSelector → stats
+  for (const evt of events) {
+    if (!evt || evt.type !== 'STEP_ITERATION') continue;
+    const diags = Array.isArray(evt.selectorDiagnostics) ? evt.selectorDiagnostics : [];
+    for (const d of diags) {
+      if (!d) continue;
+      const key = evt.stepId + ' ' + String(d.containerSelector || '');
+      let e = agg.get(key);
+      if (!e) {
+        e = { stepId: evt.stepId, api: d.api || 'extractList', containerSelector: d.containerSelector || '', calls: 0, zeroCalls: 0 };
+        agg.set(key, e);
+      }
+      e.calls += 1;
+      if ((d.containerMatches || 0) === 0) e.zeroCalls += 1;
+    }
+  }
+  const hits = [];
+  for (const e of agg.values()) {
+    if (e.calls > 0 && e.zeroCalls === e.calls) hits.push(e);
+  }
+  return hits.length ? hits : null;
+}
+
 function validateTestInput(inputStr, schemaStr, testInputStr) {
   try {
     return {
@@ -3795,7 +3826,7 @@ function formatElementsForPrompt(elements, opts) {
 
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectCountShortfall, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectCountShortfall, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.hoverAwareTimeoutMs = hoverAwareTimeoutMs;

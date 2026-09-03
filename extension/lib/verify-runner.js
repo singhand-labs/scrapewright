@@ -333,7 +333,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], countShortfall: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, zeroMatchFields: null };
+      const detectors = { emptyFields: [], duplicateFields: [], countShortfall: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, zeroMatchFields: null, containerZero: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -439,6 +439,15 @@
               census = WU.detectFieldMatchZero(events) || null;
               if (census) detectors.zeroMatchFields = census;
             }
+            // Fourteenth-log follow-up (user request): zero CONTAINERS on
+            // every list call is a different fingerprint — the page had no
+            // result items at all, which makes the input VALUE the prime
+            // suspect, not the selectors.
+            let containerZero = null;
+            if (typeof WU.detectContainerMatchZero === 'function') {
+              containerZero = WU.detectContainerMatchZero(events) || null;
+              if (containerZero) detectors.containerZero = containerZero;
+            }
             let msg;
             if (census && census.length) {
               const lines = census.map((c) => {
@@ -448,6 +457,12 @@
               msg = 'FIELD_MATCH_ZERO / EMPTY_EXTRACTION: required field(s) [' + emptyFields.join(', ') + '] are present but every extracted item has only empty values, or no items were extracted at all. Field census from SELECTOR DIAGNOSTICS — ' + lines.join('; ') + '. The containers themselves DID match, so the page has the repeating items but this field\'s sub-selector found nothing on them. Two likely mechanisms: ' +
                 '(a) POPULATION DIVERGENCE — your selectors were grounded on the research page, and a different verify INPUT (different query values) can change the result-card population entirely; first re-verify with the SAME input values that drove the research page before touching selectors; ' +
                 '(b) your own step JS filters records on this field (e.g. .filter(p => p.' + census[0].field + ' && ...)) and silently dropped every extracted record — a filtered-to-0 result with containers present is NOT extraction success: keep a RAW fallback count (records.length before filtering / $count(containerSel)) and treat filtered-to-0 as not-ready or an error, never as {done:true}.';
+            } else if (containerZero && containerZero.length) {
+              const zLines = containerZero.map((z) => {
+                const stepDefZ = stepsDefs.find((s) => String(s.id) === String(z.stepId));
+                return 'step "' + (stepDefZ ? stepDefZ.name : z.stepId) + '" (' + z.api + '): container ' + JSON.stringify(z.containerSelector) + ' matched 0 items on ' + z.calls + ' call(s)';
+              });
+              msg = 'EMPTY_EXTRACTION / INPUT_VALUE_SUSPECT: no list containers matched at all — ' + zLines.join('; ') + '. When the page shows ZERO result items, the input VALUE itself is the prime suspect: the site may simply have no content for it (an obscure keyword, an over-specific filter) — that is not a selector bug. Before touching selectors, re-run verify.run with {"input": {<param>: <a DIFFERENT, more common value>}} (e.g. a headword you saw populate the page during research). If the alternate value returns data, the step graph is fine: adopt it via service.update({testInput: {...}}) so the default input works, and note the input-value sensitivity. Only if a common value ALSO returns zero containers are the selectors/steps the suspects.';
             } else {
               msg = 'EMPTY_EXTRACTION: required field(s) [' + emptyFields.join(', ') + '] are present but every extracted item has only empty values, or no items were extracted at all. The script found list items but the field selectors are wrong.';
             }
@@ -510,6 +525,7 @@
         if (/POLL_EXHAUSTED/.test(msg) && !/COUNT_SELECTOR_BLIND/.test(msg) && !/ZERO_COUNTER_FROZEN/.test(msg)) add('SELECTOR_ZERO_MATCH');
         if (/EMPTY_EXTRACTION/.test(msg)) add('EMPTY_EXTRACTION');
         if (detectors.zeroMatchFields) add('FIELD_MATCH_ZERO');
+        if (detectors.containerZero) add('INPUT_VALUE_SUSPECT');
         if (/DUPLICATE_RECORDS/.test(msg)) add('DUPLICATE_RECORDS');
         if (/SCRIPT_TIMEOUT/.test(msg)) add('SCRIPT_TIMEOUT');
         if (/HOVER_ANCHORS_BLIND/.test(msg)) add('HOVER_NO_SIGNAL');

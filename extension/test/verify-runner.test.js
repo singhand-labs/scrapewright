@@ -176,6 +176,58 @@ describe('createVerifyRunner', () => {
     assert.ok(out.report.events.indexOf('EMPTY_EXTRACTION') !== -1, 'keeps the EMPTY_EXTRACTION tag for knowledge attach');
   });
 
+  // Fourteenth-log follow-up (user request): an input VALUE can leave the
+  // site with nothing to extract (obscure keyword, over-specific filter) —
+  // containers match 0. The generic message says "field selectors are
+  // wrong", steering the model into selector hardening. Name the input
+  // suspect and teach re-verifying with a different, more common value.
+  it('INPUT_VALUE_SUSPECT: empty output + zero containers on every list call teaches re-testing a DIFFERENT input value before touching selectors', async () => {
+    const orch = async (svc, input, d, opts) => {
+      opts.onEvent({
+        type: 'STEP_ITERATION', stepId: 'search', iteration: 1,
+        selectorDiagnostics: [{
+          api: 'extractList',
+          containerSelector: 'div[role="feed"] > div:has(h3)',
+          containerMatches: 0,
+          perField: [
+            { field: 'author', subSelector: 'h3', attr: null, matchCount: 0, sampleTexts: [], sampleHrefs: [], sampleValues: [] }
+          ]
+        }]
+      });
+      return { finalResult: { posts: [] }, steps: [{ stepId: 'search', stepName: 'search and collect', result: { done: true, posts: [] }, snapshot: null }], pages: [], pagesTruncated: false };
+    };
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object', properties: { author: { type: 'string' } }, required: ['author'] } } } } });
+    assert.equal(out.report.ok, false);
+    assert.match(out.report.error.message, /INPUT_VALUE_SUSPECT/);
+    assert.match(out.report.error.message, /no content for it|no content/i, 'names the no-content mechanism');
+    assert.match(out.report.error.message, /DIFFERENT, more common/i, 'teaches switching to a common input value');
+    assert.match(out.report.error.message, /"input"/, 'shows the verify.run input override');
+    assert.match(out.report.error.message, /testInput/, 'teaches adopting the working value');
+    assert.ok(!/selectors are wrong/.test(out.report.error.message), 'does NOT steer into selector hardening');
+    assert.ok(out.report.detectors.containerZero && out.report.detectors.containerZero.length === 1, 'detector attached');
+    assert.equal(out.report.detectors.containerZero[0].stepId, 'search');
+    assert.ok(out.report.events.indexOf('INPUT_VALUE_SUSPECT') !== -1);
+    assert.ok(out.report.events.indexOf('EMPTY_EXTRACTION') !== -1, 'keeps the EMPTY_EXTRACTION tag for knowledge attach');
+  });
+
+  it('populated containers keep the FIELD_MATCH_ZERO branch — INPUT_VALUE_SUSPECT does not fire when the page had items', async () => {
+    const orch = async (svc, input, d, opts) => {
+      opts.onEvent({
+        type: 'STEP_ITERATION', stepId: 'collect', iteration: 1,
+        selectorDiagnostics: [{
+          api: 'extractList', containerSelector: 'div.card', containerMatches: 9,
+          perField: [{ field: 'title', subSelector: 'h3', attr: null, matchCount: 0, sampleTexts: [], sampleHrefs: [], sampleValues: [] }]
+        }]
+      });
+      return { finalResult: { posts: [] }, steps: [{ stepId: 'collect', stepName: 'collect', result: { done: true, posts: [] }, snapshot: null }], pages: [], pagesTruncated: false };
+    };
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] } } } } });
+    assert.match(out.report.error.message, /FIELD_MATCH_ZERO/);
+    assert.ok(!out.report.events.includes('INPUT_VALUE_SUSPECT'), 'input-value suspect stays out when containers matched');
+  });
+
   it('duplicate records detection fires with DUPLICATE_RECORDS tag', async () => {
     const rec = { title: 'same' };
     const orch = async () => ({

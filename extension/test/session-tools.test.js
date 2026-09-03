@@ -395,6 +395,56 @@ describe('io.confirm — early I/O contract gate', () => {
     assert.match(t.systemPromptBase, /population divergence, not a rendering failure/);
     assert.match(t.systemPromptBase, /FIELD_MATCH_ZERO/);
   });
+
+  // Fourteenth-log follow-up (user request): input values can be
+  // unreasonable for the site — an obscure keyword leaves zero result items
+  // and that is NOT a selector bug. Rule 8 must teach the alternate-value
+  // re-test loop, and the verify.run spec must explain the input override.
+  it('rule 8 teaches the INPUT_VALUE_SUSPECT loop: alternate value first, adopt via service.update, only then suspect selectors', () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    assert.match(t.systemPromptBase, /INPUT_VALUE_SUSPECT/);
+    assert.match(t.systemPromptBase, /no content|nothing to extract/i);
+    assert.match(t.systemPromptBase, /not a selector bug/i);
+    const spec = t.toolSpecs.find((s) => s.name === 'verify.run');
+    assert.ok(spec, 'verify.run spec present');
+    assert.match(spec.returns + ' ' + (spec.args || ''), /input/, 'spec mentions the input override');
+  });
+
+  it('verify.run passes an explicit input override to the runner (mechanism for alternate-value re-tests)', async () => {
+    const seen = [];
+    const { deps } = makeDeps({ runVerify: async (o) => { seen.push(o.input); return { report: { ok: true, error: null, aborted: false, score: {}, schemaOk: true, schemaMissing: [], detectors: {}, steps: [], finalResult: {}, pages: '1', eventCount: 0, events: [] }, events: [], raw: {} }; } });
+    const t = createSessionTools(deps);
+    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object' } });
+    await t.tools['service.update']({ steps: GOOD_STEPS }, { session: { state: () => ({ session: { artifactVersions: [] } }) } });
+    await t.tools['verify.run']({});
+    await t.tools['verify.run']({ input: { keyword: 'news' } });
+    assert.deepEqual(seen[0], {}, 'no override falls back to the saved test input');
+    assert.deepEqual(seen[1], { keyword: 'news' }, 'override reaches the runner');
+  });
+
+  it('service.update adopts a steps-less testInput without re-sending the step graph (alternate-value adoption path)', async () => {
+    const { deps, state } = makeDeps();
+    const t = createSessionTools(deps);
+    const ctx = { session: { state: () => ({ session: { artifactVersions: [] } }) } };
+    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object' } });
+    await t.tools['service.update']({ steps: GOOD_STEPS }, ctx);
+    const before = state.applied.length;
+    const out = await t.tools['service.update']({ testInput: { keyword: 'news' } }, ctx);
+    assert.equal(out.updated, true);
+    assert.equal(out.testInputAdopted, true, 'names the adoption so the model knows to re-verify');
+    assert.match(out.note, /verify\.run/, 'note points at re-verifying with the default input');
+    assert.equal(state.applied.length, before + 1);
+    assert.deepEqual(state.applied[state.applied.length - 1].testInput, { keyword: 'news' }, 'testInput applied');
+    assert.deepEqual(state.applied[state.applied.length - 1].steps, GOOD_STEPS, 'current steps re-applied unchanged');
+    // With no artifact yet, a steps-less testInput is not a valid update.
+    const { deps: d2, state: s2 } = makeDeps();
+    const t2 = createSessionTools(d2);
+    await t2.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object' } });
+    const none = await t2.tools['service.update']({ testInput: { keyword: 'news' } }, ctx);
+    assert.match(String(none.error), /no artifact|steps/, 'rejected without an existing artifact');
+    assert.equal(s2.applied.length, 0);
+  });
 });
 
 describe('annotation gate — user collaboration requires a confirmed I/O contract first', () => {

@@ -15,7 +15,7 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { detectFieldMatchZero } = require('../lib/wizard-utils');
+const { detectFieldMatchZero, detectContainerMatchZero } = require('../lib/wizard-utils');
 
 function itEvt(stepId, iteration, diags) {
   return { type: 'STEP_ITERATION', stepId, iteration, selectorDiagnostics: diags };
@@ -89,5 +89,58 @@ describe('detectFieldMatchZero — unit', () => {
     const hits = detectFieldMatchZero(events);
     assert.equal(hits.length, 2);
     assert.deepEqual(hits.map((h) => h.stepId + ':' + h.field).sort(), ['collect:postId', 'popovers:authorHref']);
+  });
+});
+
+// Fourteenth-log follow-up (user request): an input VALUE can leave the site
+// with nothing to extract (an obscure keyword, an over-specific filter) — the
+// page then shows ZERO result items, containers match 0. That is not a
+// selector bug, yet the generic EMPTY_EXTRACTION message says "the field
+// selectors are wrong", steering the model into selector hardening. This
+// detector names the fingerprint so verify can teach re-testing with a
+// different, more common input value first.
+describe('detectContainerMatchZero — unit (inverse sibling of detectFieldMatchZero)', () => {
+  it('fires when every list call for a step+container saw containerMatches 0', () => {
+    const events = [
+      itEvt('search', 1, [elDiag({ containerMatches: 0 })]),
+      itEvt('search', 2, [elDiag({ containerMatches: 0, api: 'extractList' })])
+    ];
+    const hits = detectContainerMatchZero(events);
+    assert.ok(Array.isArray(hits) && hits.length === 1);
+    const hit = hits[0];
+    assert.equal(hit.stepId, 'search');
+    assert.equal(hit.api, 'extractList');
+    assert.equal(hit.containerSelector, elDiag().containerSelector);
+    assert.equal(hit.calls, 2);
+  });
+
+  it('stays silent when any call saw populated containers (transient cold-load zero is healthy)', () => {
+    const events = [
+      itEvt('search', 1, [elDiag({ containerMatches: 0 })]),
+      itEvt('search', 2, [elDiag({ containerMatches: 5 })])
+    ];
+    assert.equal(detectContainerMatchZero(events), null);
+  });
+
+  it('a step with populated containers does not silence a DIFFERENT zero-container step', () => {
+    const events = [
+      itEvt('feed', 1, [elDiag({ containerMatches: 12 })]),
+      itEvt('related', 1, [elDiag({ containerMatches: 0, containerSelector: 'div.related-list > div' })])
+    ];
+    const hits = detectContainerMatchZero(events);
+    assert.ok(hits && hits.length === 1);
+    assert.equal(hits[0].stepId, 'related');
+  });
+
+  it('tolerates empty perField (container census exists before field matching)', () => {
+    const events = [itEvt('search', 1, [{ api: 'extractList', containerSelector: 'div.card', containerMatches: 0, perField: [] }])];
+    const hits = detectContainerMatchZero(events);
+    assert.ok(hits && hits.length === 1);
+  });
+
+  it('returns null for null/empty events', () => {
+    assert.equal(detectContainerMatchZero(null), null);
+    assert.equal(detectContainerMatchZero([]), null);
+    assert.equal(detectContainerMatchZero([{ type: 'EXECUTION_START' }]), null);
   });
 });
