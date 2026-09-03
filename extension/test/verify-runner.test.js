@@ -560,6 +560,80 @@ describe('verify-runner junkValues detector (tenth-log N2: structurally green, j
   });
 });
 
+describe('verify-runner partialEmptyFields detector (sixteenth log: green verify, confirmed fields empty)', () => {
+  const SCHEMA = {
+    type: 'object', required: ['posts'],
+    properties: { posts: { type: 'array', items: { type: 'object', properties: {
+      content: { type: 'string' }, time: { type: 'string' }, location: { type: 'string' },
+      likeCount: { type: 'string' }, mediaUrls: { type: 'array', items: { type: 'string' } },
+      hoverCards: { type: 'array', items: { type: 'object' } }
+    } } } }
+  };
+
+  it('fields empty in EVERY record beside populated ones → report-only census + PARTIAL_EMPTY_FIELDS tag, ok stays true', async () => {
+    // Sixteenth log shape: score 133 green ship with time:"" and location:""
+    // hardcoded empty next to a populated content field —
+    // findEmptyExtractionFields is blind to it (only fires all-fields-empty).
+    const posts = [
+      { content: 'climate post one', time: '', location: '', likeCount: '173', mediaUrls: [], hoverCards: [] },
+      { content: 'climate post two', time: '', location: '', likeCount: '42', mediaUrls: [], hoverCards: [] },
+      { content: 'climate post three', time: '', location: '', likeCount: '7', mediaUrls: [], hoverCards: [] }
+    ];
+    const orch = async () => ({ finalResult: { posts }, steps: [{ stepId: 's1', stepName: 'one', result: { done: true }, snapshot: null }], pages: [], pagesTruncated: false });
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: SCHEMA });
+    assert.equal(out.report.ok, true, 'partial empties are surfaced, never blocking');
+    const pe = out.report.detectors.partialEmptyFields;
+    assert.ok(pe, 'detector block present');
+    const byPath = {};
+    for (const f of pe) byPath[f.path] = f;
+    assert.ok(byPath['posts.time'], 'time censused');
+    assert.equal(byPath['posts.time'].emptyCount, 3);
+    assert.equal(byPath['posts.time'].totalCount, 3);
+    assert.equal(byPath['posts.time'].emptyRatio, 1);
+    assert.ok(byPath['posts.location'], 'location censused');
+    assert.ok(byPath['posts.hoverCards'], 'empty array-of-objects field censused');
+    assert.ok(!('posts.content' in byPath), 'populated fields stay out of the census');
+    assert.ok(!('posts.likeCount' in byPath), 'populated scalar stays out of the census');
+    assert.ok(out.report.events.indexOf('PARTIAL_EMPTY_FIELDS') !== -1, 'tag rides report.events');
+  });
+
+  it('partially-empty fields (some records) carry their ratio; a one-off empty stays quiet', async () => {
+    const posts = [
+      { content: 'c1', time: '2h', location: '', likeCount: '1', mediaUrls: [], hoverCards: [] },
+      { content: 'c2', time: '5h', location: '', likeCount: '2', mediaUrls: ['https://cdn.example.com/x.jpg'], hoverCards: [] },
+      { content: 'c3', time: '', location: '', likeCount: '3', mediaUrls: [], hoverCards: [{ html: '<div>card</div>' }] }
+    ];
+    const orch = async () => ({ finalResult: { posts }, steps: [], pages: [] });
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: SCHEMA });
+    assert.equal(out.report.ok, true);
+    const pe = out.report.detectors.partialEmptyFields;
+    assert.ok(pe, 'detector block present');
+    const byPath = {};
+    for (const f of pe) byPath[f.path] = f;
+    assert.ok(byPath['posts.location'], 'location empty 3/3 flagged');
+    assert.equal(byPath['posts.location'].emptyRatio, 1);
+    assert.ok(byPath['posts.mediaUrls'], 'mediaUrls empty 2/3 crosses the 0.5 threshold');
+    assert.ok(Math.abs(byPath['posts.mediaUrls'].emptyRatio - 2 / 3) < 1e-9);
+    assert.ok(!('posts.time' in byPath), 'time empty 1/3 is below threshold — not a pattern');
+    assert.ok(byPath['posts.hoverCards'], 'hoverCards empty 2/3 crosses the threshold');
+  });
+
+  it('fully populated output keeps the detector null and the tag absent', async () => {
+    const posts = [
+      { content: 'c1', time: '2h', location: 'Berlin', likeCount: '1', mediaUrls: ['https://cdn.example.com/a.jpg'], hoverCards: [{ html: 'x' }] },
+      { content: 'c2', time: '5h', location: 'Oslo', likeCount: '2', mediaUrls: ['https://cdn.example.com/b.jpg'], hoverCards: [{ html: 'y' }] }
+    ];
+    const orch = async () => ({ finalResult: { posts }, steps: [], pages: [] });
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: SCHEMA });
+    assert.equal(out.report.ok, true);
+    assert.equal(out.report.detectors.partialEmptyFields, null);
+    assert.equal(out.report.events.indexOf('PARTIAL_EMPTY_FIELDS'), -1);
+  });
+});
+
 describe('audit batch: junk/depth/hints/degradation (C7/C9/C11/C19/C20/C26)', () => {
   const { detectJunkValues } = require('../lib/verify-runner');
 

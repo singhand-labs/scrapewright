@@ -639,21 +639,49 @@
             if (state.lastVerifyOk === false) {
               detail = (detail ? detail + ' ' : '') +
                 '[LAST VERIFY FAILED — shipped best-effort; the review panel shows the failing run]';
+            } else if (state.lastVerifyEmptyFields) {
+              // Sixteenth log: a GREEN verify carrying confirmed fields that
+              // are empty in every record (time:"", location:"") completed
+              // with no disclosure — the model had rationalized the empties
+              // as "virtualization timing". Green-with-holes must not read
+              // as fully green either.
+              detail = (detail ? detail + ' ' : '') +
+                '[VERIFY PARTIAL-EMPTY — confirmed field(s) empty in every record: ' + state.lastVerifyEmptyFields.join(', ') + ']';
             }
             report = await stop('completed', detail);
             break;
           }
           emit('tool_call', { tool: turn.tool, args: turn.args });
           const result = await dispatchTool(turn.tool, turn.args);
+          let verifyDigest = null;
           if (turn.tool === 'verify.run') {
             state.lastVerifyOk = !!(result && typeof result === 'object' && result.ok === true);
+            const pe = (result && result.detectors && Array.isArray(result.detectors.partialEmptyFields))
+              ? result.detectors.partialEmptyFields
+              : [];
+            state.lastVerifyEmptyFields = pe.length
+              ? pe.slice(0, 6).map((f) => String(f.path || f.field) + ' ' + (f.emptyCount || 0) + '/' + (f.totalCount || 0) + ' empty')
+              : null;
+            // The tool_result event's summary is capped at 200 chars — too
+            // short for the verify report's verdict. Attach a compact digest
+            // (sixteenth log: tags and detector findings were invisible in
+            // exported console logs, so green-with-empties was undiagnosable
+            // from the log alone).
+            verifyDigest = {
+              ok: state.lastVerifyOk,
+              score: (result && result.score && typeof result.score.score === 'number') ? Math.round(result.score.score) : null,
+              tags: Array.isArray(result.events) ? result.events.slice(0, 8) : [],
+              partialEmpty: state.lastVerifyEmptyFields || []
+            };
           }
           // Replay/persistence must carry WHAT was probed (the args), not just
           // the result — a resumed context still shows the selector used.
           const callLabel = turn.tool + ' ' + JSON.stringify(turn.args || {});
           const summary = Protocol.summarizeToolResult(callLabel, result, toolResultCapChars);
           state.transcript.push({ kind: 'tool', name: turn.tool, ok: !isErrorResult(result), result: result, summary: summary });
-          emit('tool_result', { tool: turn.tool, ok: !isErrorResult(result), summary: summary.slice(0, 200) });
+          const toolResultPayload = { tool: turn.tool, ok: !isErrorResult(result), summary: summary.slice(0, 200) };
+          if (verifyDigest) toolResultPayload.verify = verifyDigest;
+          emit('tool_result', toolResultPayload);
           attachKnowledge(result);
           maybeCompact();
           await persist();

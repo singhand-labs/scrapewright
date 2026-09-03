@@ -644,6 +644,47 @@ describe('fifteenth-log: $ API data-contract wording (repeated sandbox mistakes)
   });
 });
 
+describe('sixteenth-log: persistent empties are named, not rationalized', () => {
+  it('rule 10 teaches the partialEmptyFields census and the emptyRatio semantics', () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    assert.match(t.systemPromptBase, /detectors\.partialEmptyFields/);
+    assert.match(t.systemPromptBase, /emptyRatio 1/);
+    assert.match(t.systemPromptBase, /fix the binding \(attribute fallback\) or renegotiate with io\.confirm/i);
+    assert.match(t.systemPromptBase, /move it to optional in the contract/i);
+  });
+
+  it('bans rationalizing persistent empties and hardcoding empty-string placeholders', () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    assert.match(t.systemPromptBase, /Never rationalize a persistent empty as timing/i);
+    assert.match(t.systemPromptBase, /never hardcode an empty-string placeholder/i);
+    assert.match(t.systemPromptBase, /An empty string is not a value/i);
+    assert.ok(!/facebook|twitter|linkedin|tiktok|reddit|\bfb\b/i.test(t.systemPromptBase), 'no site tokens');
+  });
+
+  it('verify.run spec mentions the partialEmptyFields detector', () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    const specs = t.toolSpecs.map((s) => s.name + ' ' + String(s.returns || ''));
+    const vr = specs.find((s) => s.startsWith('verify.run'));
+    assert.ok(vr, 'verify.run spec present');
+    assert.match(vr, /partialEmptyFields/);
+    assert.match(vr, /emptyRatio/);
+  });
+});
+
+describe('sixteenth-log: the $ helper list is exhaustive ($json hallucination guard)', () => {
+  it('states there is no $json/$log/$fetch and points at plain JS builtins', () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    assert.match(t.systemPromptBase, /The \$ list above is exhaustive/i);
+    assert.match(t.systemPromptBase, /there is no \$json, \$log, \$fetch/i);
+    assert.match(t.systemPromptBase, /JSON\.stringify/);
+    assert.ok(!/facebook|twitter|linkedin|tiktok|reddit|\bfb\b/i.test(t.systemPromptBase), 'no site tokens');
+  });
+});
+
 
 describe('eleventh-log O1: rule 6 — popover absence is anchor-specific', () => {
   it('teaches varying the anchor before concluding popovers do not work', () => {

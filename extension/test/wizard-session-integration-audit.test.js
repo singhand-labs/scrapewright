@@ -65,6 +65,12 @@ describe('wizard research-session integration (source audit)', () => {
     }
   });
 
+  it('sixteenth log: verify.run tool_result events mirror a compact VERIFY digest', () => {
+    const body = fnBody('handleSessionEvent');
+    assert.ok(body.includes("'[session] VERIFY'"), 'dedicated VERIFY mirror line');
+    assert.ok(body.includes('ev.verify'), 'digest logged only when the engine attached one');
+  });
+
   it('the annotation bridge enters picks into the ledger with provenance user (spec §5/§8)', () => {
     const body = fnBody('createWizardAnnotationBridge');
     assert.ok(body.includes('START_ANNOTATION'));

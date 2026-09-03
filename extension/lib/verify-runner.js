@@ -333,7 +333,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], countShortfall: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, zeroMatchFields: null, containerZero: null };
+      const detectors = { emptyFields: [], duplicateFields: [], countShortfall: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, zeroMatchFields: null, containerZero: null, partialEmptyFields: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -501,6 +501,17 @@
           // contract that wants these values — surface, teach, never block.
           detectors.junkValues = detectJunkValues(finalData, outputSchema);
         }
+        if (!error && typeof WU.detectEmptyOutputFieldsByRatio === 'function') {
+          // Report-only (sixteenth log): findEmptyExtractionFields fires only
+          // when EVERY value of EVERY record is empty, so time:""/location:""
+          // beside a populated content field sailed through a green verify
+          // (score 133) and the session LLM rationalized the empties as
+          // "virtualization timing". The per-field ratio census names the
+          // pattern on-channel so the report — not the model's hindsight —
+          // carries the evidence.
+          const pe = WU.detectEmptyOutputFieldsByRatio(finalData, outputSchema) || [];
+          detectors.partialEmptyFields = pe.length ? pe : null;
+        }
       }
 
       const oc = (result ? WU.validateOutputAgainstSchema(finalData, outputSchema) : { ok: true, missing: [] }) || { ok: true, missing: [] };
@@ -534,6 +545,7 @@
         if (detectors.shapeDistribution) add('CARD_POLICY');
         if (detectors.stepNoReturn) add('STEP_NO_RETURN');
         if (detectors.junkValues) add('JUNK_VALUES');
+        if (detectors.partialEmptyFields) add('PARTIAL_EMPTY_FIELDS');
         for (const evt of events) {
           if (!evt || evt.type !== 'STEP_ITERATION') continue;
           const p = previewJson(evt.resultPreview);

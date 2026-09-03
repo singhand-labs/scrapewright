@@ -63,6 +63,59 @@ describe('engine happy path', () => {
     assert.match(report.stopped.detail, /LAST VERIFY FAILED/);
   });
 
+  it('finish with a GREEN verify carrying partial-empty confirmed fields discloses them (sixteenth log)', async () => {
+    const events = [];
+    const session = createResearchSession({
+      requirement: 'collect posts',
+      llm: scriptedLlm([
+        reply(envelope('verify.run', {})),
+        reply(finishEnvelope('v4 verified green'))
+      ], []),
+      tools: { 'verify.run': async () => ({
+        ok: true,
+        score: { score: 133.03, isData: true, breakdown: {} },
+        detectors: { partialEmptyFields: [
+          { field: 'time', path: 'posts.time', emptyCount: 3, totalCount: 3, emptyRatio: 1 },
+          { field: 'location', path: 'posts.location', emptyCount: 3, totalCount: 3, emptyRatio: 1 }
+        ] },
+        events: ['PARTIAL_EMPTY_FIELDS']
+      }) },
+      onEvent: (e) => events.push(e)
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    assert.match(report.stopped.detail, /v4 verified green/);
+    assert.match(report.stopped.detail, /VERIFY PARTIAL-EMPTY/);
+    assert.match(report.stopped.detail, /posts\.time 3\/3 empty/);
+    assert.match(report.stopped.detail, /posts\.location 3\/3 empty/);
+  });
+
+  it('verify.run tool_result events carry a compact verify digest (ok/score/tags/partialEmpty)', async () => {
+    const events = [];
+    const session = createResearchSession({
+      requirement: 'collect posts',
+      llm: scriptedLlm([
+        reply(envelope('verify.run', {})),
+        reply(finishEnvelope('done'))
+      ], []),
+      tools: { 'verify.run': async () => ({
+        ok: true,
+        score: { score: 132.88, isData: true, breakdown: {} },
+        detectors: { partialEmptyFields: [{ field: 'time', path: 'posts.time', emptyCount: 3, totalCount: 3, emptyRatio: 1 }] },
+        events: ['PARTIAL_EMPTY_FIELDS']
+      }) },
+      onEvent: (e) => events.push(e)
+    });
+    await session.run();
+    const vr = events.find((e) => e.type === 'tool_result' && e.tool === 'verify.run');
+    assert.ok(vr, 'verify.run tool_result captured');
+    assert.ok(vr.verify && typeof vr.verify === 'object', 'digest attached');
+    assert.equal(vr.verify.ok, true);
+    assert.equal(vr.verify.score, 133, 'score rounded for the mirror');
+    assert.deepEqual(vr.verify.tags, ['PARTIAL_EMPTY_FIELDS']);
+    assert.deepEqual(vr.verify.partialEmpty, ['posts.time 3/3 empty']);
+  });
+
   it('finish after a GREEN verify (or none at all) keeps the completion detail clean', async () => {
     const gCalls = [];
     const green = await createResearchSession({

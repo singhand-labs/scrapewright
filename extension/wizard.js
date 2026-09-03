@@ -2247,6 +2247,11 @@ function handleSessionEvent(ev) {
   try {
     if (ev && ev.type === 'tool_result') {
       console.log('[session] TOOL RESULT', ev.tool, ev.ok ? 'ok' : 'ERR', String(ev.summary || '').slice(0, 300));
+      // Sixteenth log: the engine caps the summary at 200 chars, so a green
+      // verify's tags/detectors never reached exported console logs
+      // (green-with-empty-fields was undiagnosable from the log alone). The
+      // engine attaches a compact digest for verify.run — mirror it.
+      if (ev.verify) console.log('[session] VERIFY', JSON.stringify(ev.verify));
     } else if (ev && ev.type === 'tool_call') {
       console.log('[session] TOOL', ev.tool, JSON.stringify(ev.args || {}).slice(0, 200));
     } else if (ev && ev.type) {
