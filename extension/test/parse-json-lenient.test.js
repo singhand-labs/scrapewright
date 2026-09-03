@@ -472,3 +472,27 @@ describe('unescaped double quotes inside string values (third-live-log incident 
     assert.equal(res.value.note, 'hypotheses null');
   });
 });
+
+describe('fifteenth-log finish double-colon ({"finish":"summary":"…"})', () => {
+  it('drops the "summary" label so the finish value becomes a plain string', () => {
+    const raw = '{"think":"Done.","finish":"summary":"Facebook keyword search posts extractor, version 9, verified green twice."}';
+    const res = parseJsonLenient(raw);
+    assert.equal(res.ok, true, res.error);
+    assert.equal(res.value.finish, 'Facebook keyword search posts extractor, version 9, verified green twice.');
+    assert.equal(res.value.think, 'Done.');
+    assert.ok(res.repairs.includes('repair-finish-double-colon'));
+  });
+
+  it('repairs the log-exact shape with think first', () => {
+    const raw = '{"think":"Verify green.","finish":"summary":"Extractor complete (v15, green verify, score 134.2). Pipeline: s1 waits; s2 scrolls."}';
+    const res = parseJsonLenient(raw);
+    assert.equal(res.ok, true, res.error);
+    assert.equal(res.value.finish, 'Extractor complete (v15, green verify, score 134.2). Pipeline: s1 waits; s2 scrolls.');
+  });
+
+  it('valid finish-object JSON is untouched (no repair claimed)', () => {
+    const res = parseJsonLenient('{"finish":{"summary":"all good"}}');
+    assert.equal(res.ok, true);
+    assert.deepEqual(res.repairs, []);
+  });
+});

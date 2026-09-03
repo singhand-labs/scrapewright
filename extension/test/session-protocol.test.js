@@ -95,6 +95,19 @@ describe('parseAssistantTurn', () => {
     assert.equal(r.turn.tool, null);
   });
 
+  it('tolerates a bare-string finish (fifteenth-log lenient repair output)', () => {
+    const r = Protocol.parseAssistantTurn('{"finish":"Extractor complete (v15, green verify)."}');
+    assert.ok(r.ok);
+    assert.equal(r.turn.finish.summary, 'Extractor complete (v15, green verify).');
+    assert.equal(r.turn.tool, null);
+  });
+
+  it('an empty-string finish stays no-action (missing-action violation)', () => {
+    const r = Protocol.parseAssistantTurn('{"finish":""}');
+    assert.ok(!r.ok);
+    assert.equal(r.violation, 'missing-action');
+  });
+
   it('extracts JSON from fenced code blocks and surrounding prose', () => {
     const fenced = 'Here is my plan:\n```json\n{"tool":"probe.count","args":{"sel":"a"}}\n```\nDone.';
     assert.ok(Protocol.parseAssistantTurn(fenced).ok);

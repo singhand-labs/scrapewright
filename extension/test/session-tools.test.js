@@ -601,6 +601,50 @@ describe('tenth-log N1: rule 10 — never ship junk; renegotiate unextractable f
   });
 });
 
+describe('fifteenth-log: obfuscated text is junk; attributes carry the clean value', () => {
+  it('rule 10 taxonomy includes anti-scrape obfuscated text with its markers', () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    assert.match(t.systemPromptBase, /OBFUSCATED text/i);
+    assert.match(t.systemPromptBase, /interleaved|scrambled/i);
+    assert.match(t.systemPromptBase, /zero-width/);
+  });
+
+  it('teaches the attribute fallback (aria-label/title/datetime) before declaring junk', () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    assert.match(t.systemPromptBase, /aria-label/);
+    assert.match(t.systemPromptBase, /datetime/);
+    assert.match(t.systemPromptBase, /bind the field to that attribute/i);
+  });
+
+  it('explicitly bans shipping obfuscated best-effort values in confirmed fields', () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    assert.match(t.systemPromptBase, /never ship an obfuscated "best-effort" value/i);
+    assert.ok(!/facebook|twitter|linkedin|tiktok|reddit|\bfb\b/i.test(t.systemPromptBase), 'no site tokens');
+  });
+});
+
+describe('fifteenth-log: $ API data-contract wording (repeated sandbox mistakes)', () => {
+  it('$list is documented as serializable data, NOT live DOM nodes', () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    assert.match(t.systemPromptBase, /NOT live DOM nodes/);
+    assert.match(t.systemPromptBase, /querySelectorAll/);
+    assert.ok(!/\$list\(sel\) → elements\b/.test(t.systemPromptBase), 'the misleading bare "→ elements" wording is gone');
+  });
+
+  it('teaches that DOM nodes and un-awaited Promises cannot cross the sandbox boundary', () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    assert.match(t.systemPromptBase, /cannot cross the sandbox boundary/i);
+    assert.match(t.systemPromptBase, /un-awaited Promises|unawaited Promises/i);
+    assert.ok(!/facebook|twitter|linkedin|tiktok|reddit|\bfb\b/i.test(t.systemPromptBase), 'no site tokens');
+  });
+});
+
+
 describe('eleventh-log O1: rule 6 — popover absence is anchor-specific', () => {
   it('teaches varying the anchor before concluding popovers do not work', () => {
     const { deps } = makeDeps();

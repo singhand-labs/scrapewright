@@ -1635,6 +1635,18 @@ function parseJsonLenient(text) {
     repairs.push('repair-missing-colon');
     s = colonFixed;
   }
+  // Fifteenth log (segment-2 finish): the LLM collapsed the taught finish
+  // shape {"finish": { "summary": "..." }} into {"finish":"summary":"..."} —
+  // a double colon after the label string, which is never valid JSON. Drop
+  // the "summary" label so the trailing text becomes the finish value; the
+  // protocol layer (parseAssistantTurn) tolerates the bare-string finish.
+  // Narrow by design: exact "finish"/"summary" literals only, and this whole
+  // block runs only after a parse failure.
+  const finishFixed = s.replace(/("finish"\s*:\s*)"summary"\s*:\s*/g, '$1');
+  if (finishFixed !== s) {
+    repairs.push('repair-finish-double-colon');
+    s = finishFixed;
+  }
   const commonFixed = repairCommonJsonMistakes(s);
   if (commonFixed !== s) {
     repairs.push('repair-common-mistakes');

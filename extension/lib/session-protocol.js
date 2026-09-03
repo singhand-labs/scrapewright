@@ -193,7 +193,11 @@
       hypothesisUpdates: normalizeHypothesisUpdates(obj.hypotheses),
       tool: typeof obj.tool === 'string' && obj.tool.trim() ? obj.tool.trim() : null,
       args: (obj.args && typeof obj.args === 'object' && !Array.isArray(obj.args)) ? obj.args : {},
-      finish: (obj.finish && typeof obj.finish === 'object' && !Array.isArray(obj.finish)) ? obj.finish : null
+      // Fifteenth log: tolerate a bare-string finish — the lenient parser's
+      // repair-finish-double-colon pass rewrites {"finish":"summary":"…"} (an
+      // invalid double colon) into the string form.
+      finish: (obj.finish && typeof obj.finish === 'object' && !Array.isArray(obj.finish)) ? obj.finish
+        : (typeof obj.finish === 'string' && obj.finish.trim() ? { summary: obj.finish } : null)
     };
     if (turn.tool && turn.finish) return { ok: false, violation: 'ambiguous-action' };
     if (!turn.tool && !turn.finish) {
