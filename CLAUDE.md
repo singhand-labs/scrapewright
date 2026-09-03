@@ -216,7 +216,7 @@ Snapshots are cleaned/sanitized for the LLM by `lib/dom-cleaner.js` (`cleanHtmlF
 
 ### LLM Integration
 
-`extension/lib/llm-client.js` uses OpenAI-compatible `/chat/completions`. Supported providers: OpenAI, Moonshot, Kimi (Moonshot Platform), Anthropic, GLM (Zhipu AI). Custom base URLs supported. Specific messages for 404 (check URL/model), 401/403 (check API key); request/response details logged to console. The wizard (`wizard.js`, ~80KB) drives the interactive 5-phase service creation flow and is paired with `wizard-utils.js` for chain validation/manipulation.
+`extension/lib/llm-client.js` uses OpenAI-compatible `/chat/completions`. Supported providers: OpenAI, Moonshot, Kimi (Moonshot Platform), Anthropic, GLM (Zhipu AI). Custom base URLs supported. Specific messages for 404 (check URL/model), 401/403 (check API key); request/response details logged to console. The wizard (`wizard.js`, ~80KB) drives the interactive research-first service creation flow (user-visible stages: Requirements → AI Research → Review & Deploy; internal phase ids 1-5 retained) and is paired with `wizard-utils.js` for chain validation/manipulation.
 
 ## Important Constraints
 
