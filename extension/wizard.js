@@ -348,7 +348,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!wizardSession) { await resumeResearchSession(); return; }
     const stopped = wizardSession.state().session.stopped;
     const budgetStop = stopped && ['maxTurns', 'wallClock', 'tokenCap'].indexOf(stopped.reason) !== -1;
-    if (budgetStop) {
+    // Fourteenth log: llm-class stops are terminal to the live engine (loop()
+    // refuses non-paused stops) — a fresh engine re-reads GET_LLM_CONFIG.
+    const llmStop = stopped && (stopped.reason === 'llm:error' || stopped.reason === 'llm:length');
+    if (budgetStop || llmStop) {
       // G5: a fresh engine honors raised budget knobs.
       btn.disabled = true;
       try { await resumeResearchSession(); } finally { btn.disabled = false; }
@@ -442,7 +445,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       const p = SessionPersistence.createSessionPersistence(chrome.storage.local, 'wizardResearchSession');
       const saved = await p.load();
-      if (saved && saved.session && (!saved.session.stopped || ['paused', 'aborted', 'maxTurns', 'wallClock', 'tokenCap'].indexOf(saved.session.stopped.reason) !== -1)) {
+      if (saved && saved.session && (!saved.session.stopped || ['paused', 'aborted', 'maxTurns', 'wallClock', 'tokenCap', 'llm:error', 'llm:length'].indexOf(saved.session.stopped.reason) !== -1)) {
         showToast('An interrupted research session was found. Press Ctrl+Enter on the requirement box or click Research to resume it.', 'info', 8000);
       }
     } catch (e) { /* storage unavailable */ }
@@ -2242,7 +2245,7 @@ async function startResearchSession(seedOverride) {
     try {
       const p = SessionPersistence.createSessionPersistence(chrome.storage.local, 'wizardResearchSession');
       const saved = await p.load();
-      if (saved && saved.session && (!saved.session.stopped || ['paused', 'aborted', 'maxTurns', 'wallClock', 'tokenCap'].indexOf(saved.session.stopped.reason) !== -1)) {
+      if (saved && saved.session && (!saved.session.stopped || ['paused', 'aborted', 'maxTurns', 'wallClock', 'tokenCap', 'llm:error', 'llm:length'].indexOf(saved.session.stopped.reason) !== -1)) {
         seed = { session: saved.session, observation: saved.observation, ledger: saved.ledger };
       }
     } catch (e) { /* storage unavailable — start fresh */ }
@@ -2395,6 +2398,8 @@ function friendlyStopReason(reason) {
     case 'maxTurns': return 'the turn budget exhausted';
     case 'wallClock': return 'the time budget exhausted';
     case 'tokenCap': return 'the token budget exhausted';
+    case 'llm:error': return 'the LLM service failed (rate limit, balance, or connection) — check Options, then Resume once the provider is back';
+    case 'llm:length': return 'the LLM ran out of completion budget before replying — raise maxOutputTokens in Options, then Resume';
     case 'error': return 'it hit an error';
     default: return 'it stopped early (' + reason + ')';
   }
@@ -2503,11 +2508,13 @@ async function resumeResearchSession() {
   // Ninth-log L3 + A5 review: the budget stops — maxTurns, wallClock, tokenCap
   // — are all resumable: raise the matching phase-1 knob, hit Resume, and the
   // session continues from the pause point (G5 promise). 'paused'/'aborted'
-  // resume trivially. 'completed' stays non-resumable here: its continuation
-  // path is the phase-5 feedback panel. llm-error-class and protocol-class
-  // stops remain terminal.
+  // resume trivially. llm-class stops (fourteenth log: provider 429/length)
+  // are resumable too — a fresh engine re-reads GET_LLM_CONFIG, so once the
+  // provider recovers (or the user fixes the key/balance) Resume continues.
+  // 'completed' stays non-resumable here: its continuation path is the
+  // phase-5 feedback panel. protocol-class stops remain terminal.
   const stopReason = st.stopped && st.stopped.reason;
-  if (stopReason && ['paused', 'aborted', 'maxTurns', 'wallClock', 'tokenCap'].indexOf(stopReason) === -1) {
+  if (stopReason && ['paused', 'aborted', 'maxTurns', 'wallClock', 'tokenCap', 'llm:error', 'llm:length'].indexOf(stopReason) === -1) {
     showToast('That session already ended (' + stopReason + '). Starting fresh.', 'info');
     await wizardPersistence.clear();
     return;

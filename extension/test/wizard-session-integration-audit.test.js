@@ -172,8 +172,10 @@ describe('ninth-log L1-L5: session completion hands back to the wizard flow', ()
     const body = fnBody('resumeResearchSession');
     assert.ok(/'maxTurns'/.test(body), 'maxTurns is in the resumable allowlist');
     // The allowlist must still block genuinely-ended sessions: 'completed'
-    // continues via the feedback panel; llm:*/wallClock/tokenCap/protocol are
-    // terminal engine states. (Comments stripped — the rationale mentions it.)
+    // continues via the feedback panel; protocol-class stops are terminal
+    // engine states. llm-class stops became resumable in the fourteenth-log
+    // fix (see the dedicated test below). (Comments stripped — the rationale
+    // mentions them.)
     const stripped = body.replace(/\/\/[^\n]*/g, '');
     const guard = stripped.match(/st\.stopped\.reason[^;]*;/g) || [];
     assert.ok(guard.length > 0, 'stop-reason guard present');
@@ -320,12 +322,12 @@ describe('audit plan1: wizard lifecycle state machine (A1/A2/A3/A5/A6/A17/A18 + 
   });
 
   it('A18/A19: Resume and annotation-finish buttons disable in flight', () => {
-    assert.match(SRC, /btnSessionResume'\)\.addEventListener\('click', async \(\) => \{[\s\S]{0,500}?disabled = true/);
+    assert.match(SRC, /btnSessionResume'\)\.addEventListener\('click', async \(\) => \{[\s\S]{0,700}?disabled = true/);
     assert.match(SRC, /btnAnnotationFinish'\)\.addEventListener\('click', async \(\) => \{[\s\S]{0,300}?disabled = true/);
   });
 
   it('budget-class stops route Resume through a fresh engine (G5 truthfulness)', () => {
-    const m = SRC.match(/btnSessionResume'\)\.addEventListener\('click', async \(\) => \{[\s\S]{0,800}?return;\n  \}\);/);
+    const m = SRC.match(/btnSessionResume'\)\.addEventListener\('click', async \(\) => \{[\s\S]{0,1200}?return;\n  \}\);/);
     assert.ok(m);
     assert.match(m[0], /maxTurns/);
     assert.match(m[0], /resumeResearchSession\(\)/);
@@ -344,6 +346,50 @@ describe('audit plan1: wizard lifecycle state machine (A1/A2/A3/A5/A6/A17/A18 + 
     assert.match(SRC, /'maxTurns'/);
     assert.match(SRC, /'wallClock'/);
     assert.match(SRC, /'tokenCap'/);
+  });
+
+  it('fourteenth log: llm-class stops (llm:error, llm:length) are resumable at EVERY whitelist site', () => {
+    // Live evidence (rs-1788436400901, turn 38): the provider went down
+    // (429 balance/rate-limit), the engine stopped llm:error, and the user's
+    // Resume was a silent no-op — three separate gates all refused:
+    //   resumeResearchSession (worse: wizardPersistence.clear() WIPED the
+    //   session), the parked-session fallback inside startResearchSession,
+    //   and the page-load resume-offer toast. All three must accept the
+    //   external-condition stops: the transcript is intact and a fresh
+    //   engine re-reads GET_LLM_CONFIG, so Resume after provider recovery
+    //   is the designed continuation.
+    const sites = SRC.match(/\['paused', 'aborted', 'maxTurns', 'wallClock', 'tokenCap'[^\]]*\]/g) || [];
+    assert.ok(sites.length >= 2, 'parked-fallback whitelist literals present (found ' + sites.length + ')');
+    for (const s of sites) {
+      assert.ok(/'llm:error'/.test(s), 'whitelist includes llm:error: ' + s);
+      assert.ok(/'llm:length'/.test(s), 'whitelist includes llm:length: ' + s);
+    }
+    const resumeBody = fnBody('resumeResearchSession');
+    assert.match(resumeBody, /'llm:error'/, 'resumeResearchSession gate accepts llm:error');
+    assert.match(resumeBody, /'llm:length'/, 'resumeResearchSession gate accepts llm:length');
+    assert.ok(!/'completed'/.test(resumeBody.replace(/\/\/[^\n]*/g, '')), "'completed' stays non-resumable (feedback panel path)");
+  });
+
+  it('fourteenth log: the live-page Resume button routes llm-class stops to a fresh engine', () => {
+    // With wizardSession still alive, wizardSession.run() no-ops on a
+    // stopped!=paused session (engine loop guard) AND leaves the controls
+    // stuck in 'running' chrome. An llm stop must take the same fresh-engine
+    // path as budget stops — a new engine also re-reads the LLM config.
+    const m = SRC.match(/btnSessionResume'\)\.addEventListener\('click',\s*async \(\) => \{([\s\S]*?)\n  \}\);/);
+    assert.ok(m, 'btnSessionResume handler found');
+    const body = m[1];
+    assert.match(body, /llm:error/, 'llm stop recognized in the handler');
+    assert.match(body, /resumeResearchSession\(\)/, 'routed to the fresh-engine resume path');
+  });
+
+  it('fourteenth log: friendlyStopReason explains llm-class stops actionably', () => {
+    const body = fnBody('friendlyStopReason');
+    assert.match(body, /case 'llm:error'/, 'llm:error mapped');
+    assert.match(body, /case 'llm:length'/, 'llm:length mapped');
+    const errIdx = body.indexOf("case 'llm:error'");
+    const seg = body.slice(errIdx, errIdx + 220);
+    assert.match(seg, /LLM|provider/i, 'copy names the LLM/provider');
+    assert.match(seg, /[Rr]esume/, 'copy tells the user Resume works after recovery');
   });
 });
 
