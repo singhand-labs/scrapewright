@@ -148,7 +148,7 @@
       '6. To observe a hover popover during research call probe.hover (a session tool — do NOT call the $hover DSL primitive as a tool); it returns the popover evidence (observedPopover identity + htmlSnippet) and, when the popover is observed, a canonical popoverSelector whose EXACT string is recorded as an observation receipt — copy that string VERBATIM into popoverSel; an embellished variant (extra attributes) is a new string the gate must reject. Popover absence is ANCHOR-specific evidence: a link with no hovercard does not mean the page has none — hover at least one other anchor before concluding popovers do not work here — on a repeating item (list card, table row, or detail block) the element that carries identity or author metadata is the usual hovercard carrier. When two different anchors show no popover, stop: the page has none.',
       '7. Scrolling is available DURING research via probe.scroll (a session tool — do NOT call the $scroll DSL primitives as tools): use it to trigger lazy-load / viewport-gated content before counting, sampling, or writing scroll steps. The container selector you pass becomes an observation receipt, grounding a later $scrollToBottom(sel) in steps.',
       '8. Iterate the fieldMap in the LIVE tab with probe.extract BEFORE writing steps: one probe turn per revision, warm DOM, empty-field census included. Reserve service.update + verify.run for the end-to-end check — verify opens a FRESH tab, so cold-load divergence (fewer/different items than the research tab) is expected; investigate counts with probes on the research tab, not by re-verifying.',
-      '9. EARLY contract confirmation: right after the first page.open and a coarse look at the repeating item\'s structure (list card, table row, or detail block), propose the input/output contract with io.confirm({inputSchema, outputSchema, note}) and WAIT for the user — service.update is REJECTED until the user confirms. Apply every revision the user returns and re-confirm. Adding/renaming/removing fields or changing types later is a MATERIAL change: call io.confirm again with the new schemas before service.update (description-only edits are exempt).',
+      '9. EARLY contract confirmation: right after the first page.open and a coarse look at the repeating item\'s structure (list card, table row, or detail block), propose the input/output contract with io.confirm({inputSchema, outputSchema, note}) and WAIT for the user — service.update is REJECTED until the user confirms. annotate.request is likewise rejected until the confirmation lands: user annotation picks elements for output FIELDS, so settle the contract first. Apply every revision the user returns and re-confirm. Adding/renaming/removing fields or changing types later is a MATERIAL change: call io.confirm again with the new schemas before service.update (description-only edits are exempt).',
       '10. Ship real values only. A green verify can still carry junk: bare query strings ("?a=b…") posing as ids, data: URIs polluting url/media arrays (inline UI icons — filter arrays to http(s) entries inside the step script), raw HTML dumps in data fields. Check detectors.junkValues in the verify report. If research proves a confirmed field is unextractable or only junk-reachable, renegotiate the contract with io.confirm (drop or redefine the field) instead of shipping it empty/junk. Scalar or single-value outputs skip the array filters but still go through detectors.junkValues.'
     ].join('\n');
   }
@@ -289,6 +289,11 @@
 
     async function annotateRequest(args, ctx) {
       const a = args && typeof args === 'object' ? args : {};
+      if (!ioContractConfirmed(ctx)) {
+        return {
+          error: 'I/O CONTRACT UNCONFIRMED — annotate.request is rejected until the user confirms the input/output contract. Annotation asks the user to pick elements for output fields, so the field list must be settled first: call io.confirm({inputSchema, outputSchema, note}) EARLY (right after the coarse page look), apply any revision the user returns, then annotate to ground selectors for the confirmed fields.'
+        };
+      }
       const bridge = d.annotationBridge;
       if (!bridge || typeof bridge.request !== 'function') {
         return { error: 'annotation bridge not wired in this host' };
@@ -447,7 +452,7 @@
       { name: 'probe.extract', args: '{containerSel, fieldMap, multi?, allowEmpty?}', returns: '{total,records[3],emptyFields{field:emptyCount}}' },
       { name: 'diag.read', args: '{stepId?, kind?}', returns: '{selectorDiagnostics, failingStep?, popover, counters, lastError?}' },
       { name: 'verify.run', args: '{input?}', returns: '{ok,score,scoreNote?,error,detectors,steps,finalResult,schemaOk}' },
-      { name: 'annotate.request', args: '{why, fields?, containerSel?}', returns: '{annotations[{selector,purpose,outputField}]} | {cancelled}' },
+      { name: 'annotate.request', args: '{why, fields?, containerSel?}', returns: '{annotations[{selector,purpose,outputField}]} | {cancelled} — REQUIRES a confirmed I/O contract (io.confirm first)' },
       { name: 'io.confirm', args: '{inputSchema, outputSchema, note?}', returns: '{confirmed:true} | {confirmed:false, feedback} — propose the contract EARLY and wait for the user; service.update is rejected until a confirmation lands' }
     ];
 

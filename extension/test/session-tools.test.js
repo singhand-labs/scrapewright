@@ -206,6 +206,7 @@ describe('createSessionTools', () => {
   it('annotate.request without a bridge errors; picks enter the ledger as provenance user; cancel round-trips', async () => {
     const { deps } = makeDeps();
     const t = createSessionTools(deps);
+    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object' } });
     assert.match((await t.tools['annotate.request']({ why: 'x' })).error, /bridge/);
     let resolveReq;
     const picks = [
@@ -214,6 +215,7 @@ describe('createSessionTools', () => {
     ];
     const deps2 = makeDeps({ annotationBridge: { request: (req) => new Promise((res) => { resolveReq = res; }) } });
     const t2 = createSessionTools(deps2.deps);
+    await t2.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object' } });
     const pending = t2.tools['annotate.request']({ why: 'which card is organic?', containerSel: 'div.feed' }, { ledger: { add: (e) => deps2.state.ledgerAdded = (deps2.state.ledgerAdded || []).concat(e) } });
     resolveReq({ annotations: picks, url: 'https://example.com' });
     const r = await pending;
@@ -386,6 +388,55 @@ describe('io.confirm — early I/O contract gate', () => {
   });
 });
 
+describe('annotation gate — user collaboration requires a confirmed I/O contract first', () => {
+  it('annotate.request before any confirmation is rejected without consulting the bridge', async () => {
+    let called = 0;
+    const { deps } = makeDeps({
+      annotationBridge: { request: async () => { called += 1; return { annotations: [] }; } }
+    });
+    const t = createSessionTools(deps);
+    const r = await t.tools['annotate.request']({ why: 'which card is organic?' });
+    assert.match(r.error, /I\/O CONTRACT UNCONFIRMED/);
+    assert.match(r.error, /io\.confirm/);
+    assert.equal(called, 0, 'the user is never asked to annotate before the contract is settled');
+  });
+
+  it('after a confirmed io.confirm the annotation bridge flows again', async () => {
+    let called = 0;
+    const { deps } = makeDeps({
+      annotationBridge: { request: async () => { called += 1; return { annotations: [{ selector: 'a.permalink', purpose: 'link', outputField: 'permalink' }], url: 'https://example.com' }; } }
+    });
+    const t = createSessionTools(deps);
+    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object' } });
+    const r = await t.tools['annotate.request']({ why: 'ground the permalink field' });
+    assert.equal(called, 1);
+    assert.equal(r.annotations[0].outputField, 'permalink');
+  });
+
+  it('a ledger marker from a prior session (seed resume) also unlocks annotation', async () => {
+    let called = 0;
+    const { deps } = makeDeps({
+      annotationBridge: { request: async () => { called += 1; return { annotations: [{ selector: 'div.card', purpose: 'container' }], url: 'https://example.com' }; } }
+    });
+    const t = createSessionTools(deps);
+    const ctx = {
+      ledger: { serialize: () => ({ entries: [{ finding: 'I/O CONTRACT CONFIRMED — inputs: [keyword] outputs: [posts]', provenance: 'user' }] }), add: () => {} }
+    };
+    const r = await t.tools['annotate.request']({ why: 'w' }, ctx);
+    assert.equal(called, 1);
+    assert.equal(r.annotations.length, 1);
+  });
+
+  it('system prompt teaches the ordering: contract confirmation precedes annotation collaboration', () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    assert.match(t.systemPromptBase, /annotate\.request is likewise rejected/);
+    assert.match(t.systemPromptBase, /settle the contract first/);
+    const spec = t.toolSpecs.find((s) => s.name === 'annotate.request');
+    assert.match(spec.returns, /io\.confirm first/, 'tool spec carries the precondition');
+  });
+});
+
 describe('tenth-log N1: rule 10 — never ship junk; renegotiate unextractable fields', () => {
   it('system prompt teaches the junk-value rule and its detector', () => {
     const { deps } = makeDeps();
@@ -426,6 +477,7 @@ describe('audit C1: bridge waits park the engine clock', () => {
       annotationBridge: { request: async () => ({ cancelled: true }) }
     });
     const t = createSessionTools(deps);
+    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object' } });
     const ctx = { ledger: null, session: { parkBegin: () => parks.push('b'), parkEnd: () => parks.push('e') } };
     const r = await t.tools['annotate.request']({ why: 'w' }, ctx);
     assert.equal(r.cancelled, true);
