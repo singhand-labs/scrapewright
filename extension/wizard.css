@@ -1071,3 +1071,32 @@ pre {
 
 /* A7: trimmed-lines disclosure at the top of #executionLog */
 .log-trimmed { color: var(--text-faint, #999); font-style: italic; font-size: 12px; padding: 2px 0; }
+
+/* Wizard UI polish: three-step stage stepper under the h1 */
+#stageStepper {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  padding: 0;
+  margin: 0 0 14px;
+  font-size: 13px;
+}
+#stageStepper li {
+  color: var(--text-faint);
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+}
+#stageStepper li.is-current {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+#stageStepper li.is-done {
+  color: var(--success);
+  border-color: var(--success-border);
+}
+#stageStepper li.is-done::after { content: ' ✓'; }

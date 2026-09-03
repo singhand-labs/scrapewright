@@ -309,6 +309,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('btnPhase1Research').addEventListener('click', startResearchSessionFromClick);
   document.getElementById('sessionMaxTurns').addEventListener('change', () => { getSessionMaxTurns(); });
   loadSessionMaxTurns();
+  updateStageChrome(1);
   document.getElementById('btnPhase2Next').addEventListener('click', () => goToPhase(3));
   document.getElementById('btnPhase2Back').addEventListener('click', () => goToPhase(1));
   document.getElementById('btnPhase3Test').addEventListener('click', runTestFromStep5);
@@ -477,6 +478,20 @@ function showPhase(n) {
   wizardState.phase = n;
   document.querySelectorAll('.step').forEach(el => el.classList.add('hidden'));
   document.getElementById(`phase${n}`)?.classList.remove('hidden');
+  updateStageChrome(n);
+}
+
+// Stage chrome (stepper + h1) tracks the phase via PHASE_LABELS. Edit
+// sub-screens (phase 2/3) sit under the Review & Deploy umbrella (stage 3).
+function updateStageChrome(n) {
+  const label = PHASE_LABELS[n];
+  const stage = label ? label.stage : null;
+  document.querySelectorAll('#stageStepper li').forEach((li, i) => {
+    li.classList.toggle('is-current', stage != null && i + 1 === stage);
+    li.classList.toggle('is-done', stage != null && i + 1 < stage);
+  });
+  const h1 = document.getElementById('pageTitle');
+  if (h1) h1.textContent = label ? label.heading : 'Create New Service';
 }
 
 function updatePhaseUI(state) {

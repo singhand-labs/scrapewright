@@ -46,3 +46,39 @@ describe('UI polish: stage renumbering', () => {
     assert.ok(!SRC.includes('from Phase 5 parked'));
   });
 });
+
+describe('UI polish: stage stepper', () => {
+  it('HTML has the three-step stage stepper under the h1', () => {
+    const h1 = HTML.indexOf('<h1 id="pageTitle">');
+    const stepper = HTML.indexOf('<ol id="stageStepper"');
+    assert.ok(h1 !== -1 && stepper !== -1 && stepper > h1, 'stepper sits under the h1');
+    assert.ok(/<li>Requirements<\/li>\s*<li>AI Research<\/li>\s*<li>Review & Deploy<\/li>/.test(HTML), 'three stages in order');
+  });
+
+  it('showPhase drives the stepper and h1 through PHASE_LABELS', () => {
+    const start = SRC.indexOf('function showPhase(');
+    assert.ok(start !== -1, 'showPhase exists');
+    let i = SRC.indexOf('{', start), depth = 0, end = start;
+    for (; i < SRC.length; i++) {
+      if (SRC[i] === '{') depth += 1;
+      else if (SRC[i] === '}') { depth -= 1; if (depth === 0) { end = i + 1; break; } }
+    }
+    const body = SRC.slice(start, end);
+    assert.ok(body.includes('updateStageChrome(n)'), 'showPhase updates stage chrome');
+    assert.ok(/function updateStageChrome\(n\)/.test(SRC), 'updateStageChrome exists');
+    assert.ok(SRC.includes("document.querySelectorAll('#stageStepper li')"), 'stepper items selected');
+    assert.ok(SRC.includes("li.classList.toggle('is-current'"), 'is-current toggled');
+    assert.ok(SRC.includes("li.classList.toggle('is-done'"), 'is-done toggled');
+    assert.ok(SRC.includes("h1.textContent = label ? label.heading : 'Create New Service'"), 'h1 mirrors the phase heading');
+  });
+
+  it('initial load highlights stage 1', () => {
+    assert.ok(/updateStageChrome\(1\);/.test(SRC), 'init call pins stage 1');
+  });
+
+  it('CSS styles the stepper pills and states', () => {
+    assert.ok(/#stageStepper \{/.test(CSS), 'stepper base rule');
+    assert.ok(/#stageStepper li\.is-current \{/.test(CSS), 'current state');
+    assert.ok(/#stageStepper li\.is-done \{/.test(CSS), 'done state');
+  });
+});
