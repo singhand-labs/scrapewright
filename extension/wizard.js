@@ -314,14 +314,32 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // Direct reference (not a click-event-capturing arrow) — a click Event
-  // would land in startResearchSession's seedOverride param.
-  const startResearchSessionFromClick = () => startResearchSession();
+  // Route through the restatement gate (arrow shields args — a click Event
+  // would land in startResearchSession's seedOverride param).
+  const startResearchSessionFromClick = () => maybeRestateThenStart();
   document.getElementById('btnPhase1Research').addEventListener('click', startResearchSessionFromClick);
   document.getElementById('sessionMaxTurns').addEventListener('change', () => { getSessionMaxTurns(); });
   loadSessionMaxTurns();
   updateStageChrome(1);
   updateResearchButtonState();
+  // Requirement restatement gate buttons. Confirm/Skip record the gate key so
+  // the confirmed text does not re-ask; Revise hands focus back to the
+  // requirement box (an edit changes the key → next Research re-gates).
+  document.getElementById('btnRestateConfirm').addEventListener('click', async () => {
+    restateConfirmedKey = requirementGateKey();
+    document.getElementById('requirementRestatePanel').classList.add('hidden');
+    await startResearchSession();
+  });
+  document.getElementById('btnRestateRevise').addEventListener('click', () => {
+    document.getElementById('requirementRestatePanel').classList.add('hidden');
+    document.getElementById('reqPageOps').focus();
+  });
+  document.getElementById('btnRestateSkip').addEventListener('click', async () => {
+    restateConfirmedKey = requirementGateKey();
+    document.getElementById('requirementRestatePanel').classList.add('hidden');
+    await startResearchSession();
+  });
+  document.getElementById('btnRestateRetry').addEventListener('click', () => { showRequirementRestatePanel(); });
   document.getElementById('btnPhase2Next').addEventListener('click', () => goToPhase(3));
   document.getElementById('btnPhase2Back').addEventListener('click', () => goToPhase(reviewFromPhase5 ? 5 : 1));
   document.getElementById('btnPhase3Test').addEventListener('click', runTestFromStep5);
@@ -421,7 +439,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateResearchButtonState();
   });
   document.getElementById('reqPageOps').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && e.ctrlKey) startResearchSession();
+    if (e.key === 'Enter' && e.ctrlKey) maybeRestateThenStart();
   });
 
   chrome.runtime.onMessage.addListener((message) => {
@@ -2208,6 +2226,93 @@ function buildRequirementText() {
   const pageOps = (document.getElementById('reqPageOps').value || '').trim();
   const outputStruct = (document.getElementById('reqOutputStruct').value || '').trim();
   return { inputParams, pageOps, outputStruct };
+}
+
+// --- Requirement restatement gate (user request after the fourteenth log) ---
+// Before a FRESH research start, ask the LLM to understand and restate the
+// requirement in the user's own language; the user confirms, revises, or
+// skips. Parked-session resumes (empty requirement box) and already-confirmed
+// text bypass the gate. An LLM failure never blocks research (Skip).
+let restateConfirmedKey = null;
+let restateInFlight = false;
+
+function requirementGateKey() {
+  const { inputParams, pageOps, outputStruct } = buildRequirementText();
+  return hashString([
+    (document.getElementById('targetUrl').value || '').trim(),
+    inputParams, pageOps, outputStruct
+  ].join('\u001f'));
+}
+
+async function maybeRestateThenStart() {
+  const pageOps = (document.getElementById('reqPageOps').value || '').trim();
+  // Empty box = parked-session resume (or the empty-requirement error toast)
+  // — startResearchSession owns those paths.
+  if (!pageOps) { await startResearchSession(); return; }
+  if (requirementGateKey() === restateConfirmedKey) { await startResearchSession(); return; }
+  await showRequirementRestatePanel();
+}
+
+async function showRequirementRestatePanel() {
+  if (restateInFlight) return;
+  restateInFlight = true;
+  const panel = document.getElementById('requirementRestatePanel');
+  const note = document.getElementById('restateNote');
+  const body = document.getElementById('restateBody');
+  const questions = document.getElementById('restateQuestions');
+  const btnConfirm = document.getElementById('btnRestateConfirm');
+  const btnRevise = document.getElementById('btnRestateRevise');
+  const btnSkip = document.getElementById('btnRestateSkip');
+  const btnRetry = document.getElementById('btnRestateRetry');
+  panel.classList.remove('hidden');
+  note.textContent = 'The AI is restating your requirement for confirmation…';
+  body.textContent = '';
+  questions.innerHTML = '';
+  btnConfirm.disabled = true;
+  btnRevise.disabled = true;
+  btnSkip.classList.add('hidden');
+  btnRetry.classList.add('hidden');
+  try {
+    const config = await chrome.runtime.sendMessage({ type: 'GET_LLM_CONFIG' });
+    if (!config || !config.config) throw new Error('LLM is not configured');
+    const { inputParams, pageOps, outputStruct } = buildRequirementText();
+    const reqText = [
+      'Target URL: ' + (document.getElementById('targetUrl').value || '').trim(),
+      inputParams ? 'Input parameters: ' + inputParams : '',
+      'Page operations & data to collect: ' + pageOps,
+      outputStruct ? 'Output structure: ' + outputStruct : ''
+    ].filter(Boolean).join('\n');
+    const prompt = buildRequirementRestatePrompt(reqText);
+    // RC53: no literal maxTokens — the config knob is authoritative.
+    const result = await new LLMClient(config.config).chat([
+      { role: 'system', content: prompt.system },
+      { role: 'user', content: prompt.user }
+    ], {});
+    const norm = normalizeRestatement(parseLLMJson(cleanLLMResponse(result), 'requirementRestatement', result));
+    if (!norm) throw new Error('the reply was not a usable restatement');
+    note.textContent = 'Please confirm this is what you want — restated in your own language:';
+    body.textContent = norm.restatement;
+    questions.innerHTML = '';
+    if (norm.openQuestions.length) {
+      const ul = document.createElement('ul');
+      for (const q of norm.openQuestions) {
+        const li = document.createElement('li');
+        li.textContent = q;
+        ul.appendChild(li);
+      }
+      questions.appendChild(ul);
+    }
+    btnConfirm.disabled = false;
+    btnRevise.disabled = false;
+  } catch (e) {
+    note.textContent = 'Could not restate the requirement (' + (e && e.message ? e.message : e) + '). Retry, or start research with the original text.';
+    body.textContent = '';
+    questions.innerHTML = '';
+    btnSkip.classList.remove('hidden');
+    btnRetry.classList.remove('hidden');
+  } finally {
+    restateInFlight = false;
+  }
 }
 
 let sessionBooting = false; // re-entrancy guard for the await-config window

@@ -809,7 +809,8 @@ pre {
 /* No background/color overrides here — the shared dark code treatment from the
    global `pre` rule applies. Overriding only the background (as an earlier
    version did) leaves the light code-text color on a white pane: unreadable. */
-#ioConfirmPanel pre {
+#ioConfirmPanel pre,
+#requirementRestatePanel pre {
   max-height: 220px;
   overflow: auto;
   padding: 8px 12px;

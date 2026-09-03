@@ -38,6 +38,23 @@
       <label for="sessionMaxTurns" title="Research session turn budget (engine default 60). Raise it before Resume to extend a session that stopped at the cap.">Max turns</label>
       <input type="number" id="sessionMaxTurns" min="10" max="500" step="5" value="60" />
 
+      <!-- Requirement restatement gate: before a fresh research start, the
+           LLM restates the requirement in the user's own language for
+           confirmation — underspecified requirements surface here, while
+           they are still cheap to fix, instead of mid-research. -->
+      <div id="requirementRestatePanel" class="exploration-panel hidden">
+        <h3>Confirm what the AI understood</h3>
+        <p id="restateNote" class="hint-label"></p>
+        <pre id="restateBody"></pre>
+        <div id="restateQuestions"></div>
+        <div class="exploration-buttons">
+          <button id="btnRestateConfirm" class="btn-primary">Confirm — start research</button>
+          <button id="btnRestateRevise">Let me revise the requirement</button>
+          <button id="btnRestateSkip" class="hidden">Start research anyway</button>
+          <button id="btnRestateRetry" class="hidden">Retry</button>
+        </div>
+      </div>
+
     </div>
 
     <div id="phase2" class="step hidden">

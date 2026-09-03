@@ -3694,6 +3694,41 @@ function hashString(s) {
   return h1.toString(36) + '-' + h2.toString(36);
 }
 
+// --- Requirement restatement gate (user request after the fourteenth log) ---
+// The user describes the requirement in their own words; before research
+// starts, the LLM restates it in the SAME language, organized and plain,
+// with open questions for the underspecified parts. The user confirms or
+// revises — users often believe they described it clearly until they read
+// the restatement.
+
+function buildRequirementRestatePrompt(requirementText) {
+  const system = [
+    'You are turning a rough web-scraping requirement into a clear restatement for the human who wrote it.',
+    'Reply ONLY with a JSON object of this exact shape: {"language": "<code of the language you wrote in, e.g. zh / en>", "restatement": "<your restatement>", "openQuestions": ["<question>", ...]}',
+    'Rules:',
+    '- Write EVERYTHING (the restatement AND every open question) in the SAME language the requirement is written in. Chinese in → Chinese out; English in → English out. The "language" field is just the code.',
+    '- The restatement must be easy for a non-programmer to read: plain words, short sentences, no code, no CSS selectors, no jargon.',
+    '- Organize it with a few labeled lines (labels in that same language) covering: the goal (what this service is for), the inputs it takes, what it will do on the page (step by step, in order), and the data it returns per record.',
+    '- Keep EVERY concrete detail the user gave (URLs, quantities, field names, limits, languages). Do NOT invent details they did not state.',
+    '- openQuestions: at most 5 short questions about anything ambiguous, missing, or contradictory that would change HOW the service should work. If the requirement is already fully clear, use an empty array.'
+  ].join('\n');
+  return { system: system, user: String(requirementText == null ? '' : requirementText) };
+}
+
+function normalizeRestatement(parsed) {
+  if (!parsed || typeof parsed !== 'object') return null;
+  const restatement = typeof parsed.restatement === 'string' ? parsed.restatement.trim().slice(0, 4000) : '';
+  if (!restatement) return null;
+  const rawQs = Array.isArray(parsed.openQuestions) ? parsed.openQuestions : [];
+  const openQuestions = rawQs
+    .filter(q => typeof q === 'string' && q.trim())
+    .map(q => q.trim().slice(0, 300))
+    .slice(0, 5);
+  const language = typeof parsed.language === 'string' ? parsed.language.trim().slice(0, 8) : '';
+  return { language: language, restatement: restatement, openQuestions: openQuestions };
+}
+
+
 // RC58 Fix A: poll an injected async key function until the page settles.
 // getKey returns a short stability key (hash of structure + text content —
 // see hashString) or null when the probe itself fails (tab navigating),
@@ -3760,7 +3795,7 @@ function formatElementsForPrompt(elements, opts) {
 
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectCountShortfall, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+  module.exports = { parseSchemaFields, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectCountShortfall, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.hoverAwareTimeoutMs = hoverAwareTimeoutMs;
@@ -3784,6 +3819,8 @@ if (typeof module !== 'undefined' && module.exports) {
   window.formatElementsForPrompt = formatElementsForPrompt;
   window.waitForPageSettle = waitForPageSettle;
   window.hashString = hashString;
+  window.buildRequirementRestatePrompt = buildRequirementRestatePrompt;
+  window.normalizeRestatement = normalizeRestatement;
   window.detectEmptyOutputFieldsByRatio = detectEmptyOutputFieldsByRatio;
   window.formatEmptyOutputFieldsSignal = formatEmptyOutputFieldsSignal;
   window.detectDuplicateRecords = detectDuplicateRecords;
