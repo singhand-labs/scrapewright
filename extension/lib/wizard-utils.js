@@ -1585,6 +1585,25 @@ function parseJsonLenient(text) {
     repairs.push('strip-comments');
     s = stripped;
   }
+  // Fourteenth-log turn 22: the LLM dropped the `":` after a key —
+  // ,"hypotheses null,"tool": … — the broken "string" `ident null,` absorbs
+  // the NEXT key's opening quote, so the repair must reattach it: match the
+  // full double-key signature and rewrite to "ident": null,"tool":. Run
+  // BEFORE repairCommonJsonMistakes (its char-walker mangles this shape into
+  // a junk single-key object = false success). Narrow by design:
+  // exact-content ident+null/true/false only, so prose never matches;
+  // numbers excluded (YAGNI). Loop to a fixpoint — chained malformations
+  // repair every OTHER occurrence per pass.
+  let colonFixed = s;
+  for (let i = 0; i < 5; i++) {
+    const next = colonFixed.replace(/"([A-Za-z_][\w-]*)\s+(null|true|false)\s*,?\s*"([A-Za-z_][\w-]*)"\s*:/g, '"$1": $2, "$3":');
+    if (next === colonFixed) break;
+    colonFixed = next;
+  }
+  if (colonFixed !== s) {
+    repairs.push('repair-missing-colon');
+    s = colonFixed;
+  }
   const commonFixed = repairCommonJsonMistakes(s);
   if (commonFixed !== s) {
     repairs.push('repair-common-mistakes');

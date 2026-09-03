@@ -434,4 +434,41 @@ describe('unescaped double quotes inside string values (third-live-log incident 
     assert.equal(res.value.think, 'He said "ok"');
     assert.deepEqual(res.repairs, []);
   });
+
+  // Fourteenth log turn 22: the LLM dropped the key-colon entirely —
+  // "hypotheses null,"tool": … — a quoted string whose ENTIRE content is
+  // ident + null/true/false. Narrow repair: exact-content match only.
+  it('repairs a missing key-colon where the whole string content is ident + null (log shape, comma inside the string)', () => {
+    const raw = '{"thinking":"plan the probes","hypotheses null,"tool":"probe.state","input":{}}';
+    const res = parseJsonLenient(raw);
+    assert.equal(res.ok, true, res.error);
+    assert.equal(res.value.hypotheses, null);
+    assert.equal(res.value.tool, 'probe.state');
+    assert.equal(res.value.thinking, 'plan the probes');
+    assert.ok(res.repairs.includes('repair-missing-colon'));
+  });
+
+  it('repairs ident + true and ident + false variants, multiple per document', () => {
+    const raw = '{"paused true,"flag false,"x":1}';
+    const res = parseJsonLenient(raw);
+    assert.equal(res.ok, true, res.error);
+    assert.equal(res.value.paused, true);
+    assert.equal(res.value.flag, false);
+    assert.equal(res.value.x, 1);
+  });
+
+  it('does NOT claim ident + number shapes (prose risk) — left to the pre-existing last-resort passes', () => {
+    const res = parseJsonLenient('{"count 5,"x":1}');
+    // Pre-existing behavior: the escape-content-quotes last resort swallows
+    // this into a junk single-key object (ok:true, garbage value). Out of
+    // scope here — this pass only asserts the narrow colon repair stayed out.
+    assert.ok(!res.repairs.includes('repair-missing-colon'));
+  });
+
+  it('valid JSON containing a legit ident+null-shaped STRING VALUE is untouched by the strict pass', () => {
+    const res = parseJsonLenient('{"note":"hypotheses null","x":1}');
+    assert.equal(res.ok, true);
+    assert.deepEqual(res.repairs, []);
+    assert.equal(res.value.note, 'hypotheses null');
+  });
 });
