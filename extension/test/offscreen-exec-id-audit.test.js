@@ -57,4 +57,19 @@ describe('B5: offscreen/sandbox execId routing (source audit)', () => {
     const e = (SANDBOX_SRC.match(/execId: execId/g) || []).length;
     assert.equal(n, e, 'every EXECUTE_RESULT post carries execId (' + n + ' sites)');
   });
+
+  it('offscreen SCRIPT_RESULT payload carries the execId back to the resolver', () => {
+    // Seam: OffscreenExecutor resolves ONLY messages whose execId matches the
+    // pending execution (lib/offscreen-executor.js listener gate). sandbox.js
+    // echoes execId in EXECUTE_RESULT, but if offscreen's outgoing
+    // SCRIPT_RESULT drops it the real message never matches and every
+    // execution dies at the 30s budget. The behavioral tests fake the
+    // producer side (deliver SCRIPT_RESULT with execId already present), so
+    // this seam must be pinned on the real producer's source.
+    const region = handlerRegion(OFFSCREEN_SRC, "e.data.type === 'EXECUTE_RESULT'");
+    const start = region.indexOf("type: 'SCRIPT_RESULT'");
+    assert.ok(start !== -1, 'SCRIPT_RESULT send inside EXECUTE_RESULT handler');
+    const payload = region.slice(start, region.indexOf('});', start));
+    assert.match(payload, /execId:\s*e\.data\.execId/, 'payload echoes execId');
+  });
 });

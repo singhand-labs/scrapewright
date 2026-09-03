@@ -141,6 +141,7 @@
       sendDebugLog('info', 'offscreen', 'EXECUTE_RESULT from sandbox', { error: e.data.error, resultType: typeof e.data.result, hasSubTabSnapshot: !!e.data.subTabSnapshot, selectorDiagnosticCount: (e.data.selectorDiagnostics || []).length });
       chrome.runtime.sendMessage({
         type: 'SCRIPT_RESULT',
+        execId: e.data.execId,
         result: e.data.result,
         error: e.data.error,
         subTabSnapshot: e.data.subTabSnapshot,
