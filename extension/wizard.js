@@ -14,6 +14,10 @@ const PHASE_LABELS = {
   3: { stage: 3, heading: 'Edit I/O Schema & Test Input' }
 };
 
+// Edit mode: 'Edit Service: <name> — ' prefixes every stage heading in the h1
+// (loadService sets it; create-new keeps it empty).
+let wizardTitlePrefix = '';
+
 // Tab-title base, captured once at load — setSessionBadge restores to it.
 const BASE_DOC_TITLE = (typeof document !== 'undefined' && document.title) || 'Scrapewright Wizard';
 
@@ -476,7 +480,8 @@ async function loadEditMode() {
   document.getElementById('reqPageOps').value = wizardState.requirements.pageOps || '';
   document.getElementById('reqOutputStruct').value = wizardState.requirements.outputStruct || '';
   document.getElementById('serviceName').value = svc.displayName || '';
-  document.getElementById('pageTitle').textContent = 'Edit Service: ' + svc.displayName;
+  wizardTitlePrefix = 'Edit Service: ' + svc.displayName + ' — ';
+  updateStageChrome(wizardState.phase || 1);
   renderStepList();
 }
 
@@ -498,7 +503,7 @@ function updateStageChrome(n) {
     li.classList.toggle('is-done', stage != null && i + 1 < stage);
   });
   const h1 = document.getElementById('pageTitle');
-  if (h1) h1.textContent = label ? label.heading : 'Create New Service';
+  if (h1) h1.textContent = wizardTitlePrefix + (label ? label.heading : 'Create New Service');
 }
 
 function updatePhaseUI(state) {

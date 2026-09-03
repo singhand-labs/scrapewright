@@ -69,7 +69,12 @@ describe('UI polish: stage stepper', () => {
     assert.ok(SRC.includes("document.querySelectorAll('#stageStepper li')"), 'stepper items selected');
     assert.ok(SRC.includes("li.classList.toggle('is-current'"), 'is-current toggled');
     assert.ok(SRC.includes("li.classList.toggle('is-done'"), 'is-done toggled');
-    assert.ok(SRC.includes("h1.textContent = label ? label.heading : 'Create New Service'"), 'h1 mirrors the phase heading');
+    assert.ok(SRC.includes("h1.textContent = wizardTitlePrefix + (label ? label.heading : 'Create New Service')"), 'h1 mirrors the phase heading (edit-mode prefix preserved)');
+  });
+
+  it('edit mode prefixes the h1 with the service name', () => {
+    assert.ok(/let wizardTitlePrefix = ''/.test(SRC), 'prefix var exists');
+    assert.ok(SRC.includes("wizardTitlePrefix = 'Edit Service: ' + svc.displayName + ' — '"), 'loadService sets the prefix');
   });
 
   it('initial load highlights stage 1', () => {
