@@ -21,6 +21,10 @@ let wizardTitlePrefix = '';
 // Tab-title base, captured once at load — setSessionBadge restores to it.
 const BASE_DOC_TITLE = (typeof document !== 'undefined' && document.title) || 'Scrapewright Wizard';
 
+// Review-stage manual refinement: entering the edit screens from phase 5 flips
+// this so their Back buttons return to the review instead of Requirements.
+let reviewFromPhase5 = false;
+
 
 let wizardState = {
   phase: 1,
@@ -319,13 +323,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   updateStageChrome(1);
   updateResearchButtonState();
   document.getElementById('btnPhase2Next').addEventListener('click', () => goToPhase(3));
-  document.getElementById('btnPhase2Back').addEventListener('click', () => goToPhase(1));
+  document.getElementById('btnPhase2Back').addEventListener('click', () => goToPhase(reviewFromPhase5 ? 5 : 1));
   document.getElementById('btnPhase3Test').addEventListener('click', runTestFromStep5);
   document.getElementById('btnPhase3Back').addEventListener('click', () => goToPhase(2));
   document.getElementById('btnPhase4Back').addEventListener('click', () => goToPhase(3));
   document.getElementById('btnPhase5Deploy').addEventListener('click', confirmDeploy);
   document.getElementById('btnPhase5Back').addEventListener('click', () => goToPhase(4));
-  document.getElementById('btnPhase5EditSteps').addEventListener('click', () => goToPhase(2));
+  document.getElementById('btnPhase5EditSteps').addEventListener('click', () => { reviewFromPhase5 = true; goToPhase(2); });
+  document.getElementById('btnPhase5EditIo').addEventListener('click', () => { reviewFromPhase5 = true; goToPhase(3); });
   document.getElementById('btnRetryTest').addEventListener('click', async () => {
     wizardState.testAborted = false;
     // A4: phase5 has no progress UI of its own (log/progress live on the
@@ -663,6 +668,7 @@ function goToPhase(n) {
     wizardState.testAborted = true;
     appendLog('Test aborted: you navigated away from the test.', 'info');
   }
+  if (n === 5) reviewFromPhase5 = false;
   if (n === 2) {
     renderStepList();
     if (!document.getElementById('serviceName').value && wizardState.serviceName) {
@@ -2058,6 +2064,41 @@ function badgeAfterPanelClose() {
   else if (status === 'paused') setSessionBadge('paused', 'paused — Resume when ready');
 }
 
+// Run-scope elapsed clock beside the badge. Wall-clock from the run start
+// (ticks through waiting/paused — the spend line discloses parked time at
+// the end), freezes on stop showing the total, resets on a fresh session.
+// Doubles as a liveness signal: while it ticks, the session is alive.
+let sessionElapsedStart = 0;
+let sessionElapsedTimer = null;
+
+function formatSessionElapsed(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return (h > 0 ? h + ':' : '') + (h > 0 ? String(m).padStart(2, '0') : String(m)) + ':' + String(sec).padStart(2, '0');
+}
+
+function updateSessionElapsed() {
+  const el = document.getElementById('sessionElapsed');
+  if (el && sessionElapsedStart) el.textContent = formatSessionElapsed(Date.now() - sessionElapsedStart);
+}
+
+function startSessionElapsedTimer(reset) {
+  if (reset || !sessionElapsedStart) sessionElapsedStart = Date.now();
+  const el = document.getElementById('sessionElapsed');
+  if (el) el.classList.remove('hidden');
+  if (!sessionElapsedTimer) {
+    sessionElapsedTimer = setInterval(updateSessionElapsed, 1000);
+    updateSessionElapsed();
+  }
+}
+
+function stopSessionElapsedTimer() {
+  if (sessionElapsedTimer) { clearInterval(sessionElapsedTimer); sessionElapsedTimer = null; }
+  updateSessionElapsed(); // freeze showing the final total
+}
+
 function setSessionControls(mode) {
   const bar = document.getElementById('sessionControls');
   if (!bar) return;
@@ -2098,6 +2139,7 @@ function handleSessionEvent(ev) {
       case 'session_start':
         appendLog('Research session ' + ev.sessionId + (ev.resuming ? ' (resumed)' : '') + ' started.', 'success');
         setSessionBadge('running', 'starting…');
+        startSessionElapsedTimer(!ev.resuming);
         break;
       case 'turn_start':
         appendLog('— turn ' + ev.turn + ' —');
@@ -2147,6 +2189,7 @@ function handleSessionEvent(ev) {
       case 'stopped':
         setSessionControls('stopped');
         setSessionBadge('done', ev.reason === 'completed' ? 'done' : 'stopped — ' + friendlyStopReason(ev.reason));
+        stopSessionElapsedTimer();
         wizardAnnotationBridge && wizardAnnotationBridge.cancel();
         wizardIoBridge && wizardIoBridge.cancel();
         if (wizardRail) wizardRail.releaseLock();
@@ -2321,6 +2364,7 @@ async function startResearchSession(seedOverride) {
     // A8: a crashed session leaves phase4 looking alive — surface it loudly.
     showToast('Session crashed: ' + String((e && e.message) || e), 'error');
     setSessionBadge('crashed', 'crashed');
+    stopSessionElapsedTimer();
     setSessionControls('stopped');
     if (wizardPersistence) { try { await wizardPersistence.flush(); } catch (_) {} }
     return;

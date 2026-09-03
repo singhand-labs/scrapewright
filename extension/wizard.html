@@ -85,6 +85,7 @@
       <div class="phase4-header">
         <h2 id="phase4Title">Phase 2 · AI Research</h2>
         <span id="sessionStatusBadge" class="status-badge hidden"><span class="dot"></span><span id="sessionStatusText"></span></span>
+        <span id="sessionElapsed" class="session-elapsed hidden"></span>
       </div>
       <div id="sessionControls" class="step-nav hidden">
         <button id="btnSessionPause">Pause</button>
@@ -157,11 +158,20 @@
           <div id="pages-list" class="pages-list"></div>
         </details>
       </div>
+      <!-- Manual refinement (advanced): the step editor stays available after
+           research — hand-edit scripts, annotate selectors, adjust schemas or
+           test input, then re-test from the edit screens. -->
+      <div id="manualRefinePanel" class="manual-refine">
+        <span class="manual-refine-hint">Advanced: hand-tune steps or schemas, then re-test.</span>
+        <div class="exploration-buttons">
+          <button id="btnPhase5EditSteps" class="btn-secondary">Edit Steps</button>
+          <button id="btnPhase5EditIo" class="btn-secondary">Edit I/O & Test Input</button>
+        </div>
+      </div>
       <div id="phase5Actions">
         <button id="btnRetryTest" class="hidden">Retry Test</button>
         <button id="btnDeployAnyway" class="hidden">Deploy Anyway</button>
         <button id="btnPhase5Deploy" class="hidden btn-primary">Looks Good - Deploy</button>
-        <button id="btnPhase5EditSteps">Edit Steps</button>
         <button id="btnPhase5Back">Back</button>
       </div>
       <!-- Ninth-log L4: completed-session continuation — user feedback restarts

@@ -171,3 +171,51 @@ describe('UI polish: phase-1 guard + empty state', () => {
     assert.ok(/\.empty-state \{/.test(CSS), 'empty-state styled');
   });
 });
+
+describe('UI polish round 2: io contrast, calmer badge, elapsed timer, review-stage editing', () => {
+  it('io confirm schema panes keep the dark code treatment (no white-surface override)', () => {
+    const start = CSS.indexOf('#ioConfirmPanel pre');
+    assert.ok(start !== -1, 'rule exists');
+    const rule = CSS.slice(start, CSS.indexOf('}', start) + 1);
+    assert.ok(!/background:\s*var\(--surface\)/.test(rule), 'no white background override');
+    assert.ok(!/color\s*:/.test(rule) || /var\(--code-text\)/.test(rule), 'any color declaration must be the light code text');
+  });
+
+  it('running badge pulse is slowed to 2.8s and gentled', () => {
+    assert.ok(/is-running \.dot \{[^}]*animation: badge-pulse 2\.8s/.test(CSS), '2.8s period');
+    const kfStart = CSS.indexOf('@keyframes badge-pulse');
+    const kf = CSS.slice(kfStart, CSS.indexOf('}', CSS.indexOf('50%', kfStart)) + 1);
+    assert.ok(/opacity: 0\.55/.test(kf), 'opacity floor 0.55');
+    assert.ok(!/opacity: 0\.35/.test(kf), 'old harsh floor gone');
+    assert.ok(!/scale\(1\.35\)/.test(kf), 'large scale jump gone');
+    assert.ok(/scale\(1\.15\)/.test(kf), 'gentle scale ceiling');
+  });
+
+  it('elapsed timer: element, formatter, tick/stop wiring at session lifecycle points', () => {
+    assert.ok(HTML.includes('id="sessionElapsed"'), 'element in the phase-4 header');
+    assert.ok(/\.session-elapsed\s*\{/.test(CSS), 'styled');
+    assert.ok(/tabular-nums/.test(CSS), 'stable digit width');
+    assert.ok(/function formatSessionElapsed\(/.test(SRC), 'formatter exists');
+    assert.ok(/function startSessionElapsedTimer\(/.test(SRC), 'starter exists');
+    assert.ok(/function stopSessionElapsedTimer\(/.test(SRC), 'stopper exists');
+    assert.ok(/startSessionElapsedTimer\(!ev\.resuming\)/.test(SRC), 'session_start starts it (reset unless resuming)');
+    const stoppedCase = SRC.slice(SRC.indexOf("case 'stopped':"), SRC.indexOf('}', SRC.indexOf("case 'stopped':")) + 400);
+    assert.ok(/stopSessionElapsedTimer\(\)/.test(stoppedCase), 'stopped freezes it');
+    const crashIdx = SRC.indexOf("setSessionBadge('crashed', 'crashed')");
+    assert.ok(crashIdx !== -1 && SRC.slice(crashIdx - 200, crashIdx + 200).includes('stopSessionElapsedTimer()'), 'crash path freezes it');
+  });
+
+  it('review stage offers a labeled manual-refinement entry to BOTH edit screens', () => {
+    assert.ok(HTML.includes('id="manualRefinePanel"'), 'labeled panel on phase 5');
+    assert.ok(HTML.includes('id="btnPhase5EditIo"'), 'I/O + test input entry exists');
+    assert.ok(/manual-refine-hint/.test(HTML), 'explanatory hint present');
+    assert.ok(/btnPhase5EditSteps'\)\.addEventListener\('click', \(\) => \{[^}]*goToPhase\(2\)/.test(SRC), 'Edit Steps still routes to phase 2');
+    assert.ok(/btnPhase5EditIo'\)\.addEventListener\('click', \(\) => \{[^}]*goToPhase\(3\)/.test(SRC), 'Edit I/O routes to phase 3');
+  });
+
+  it('Back from the edit screens is review-aware: returns to phase 5 when entered from review', () => {
+    assert.ok(/reviewFromPhase5 = true/.test(SRC), 'entry from review sets the flag');
+    assert.ok(/goToPhase\(reviewFromPhase5 \? 5 : 1\)/.test(SRC), 'phase-2 Back honors the flag');
+    assert.ok(/if \(n === 5\) reviewFromPhase5 = false/.test(SRC), 'flag clears on returning to review');
+  });
+});
