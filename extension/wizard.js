@@ -2,6 +2,19 @@
 // prompts, auto-fix prompts, the test harness, and deploy config so they all agree.
 const DEPLOY_TIMEOUT_MS = 60000;
 
+// User-facing stage numbering, decoupled from the stable internal phase ids
+// (DOM #phase1..#phase5, wizardState.phase, goToPhase(n)). The research-first
+// mainline is 1 → 4 → 5; phases 2/3 are post-hoc edit sub-screens under the
+// Review & Deploy umbrella. Display only — never branch logic on these.
+const PHASE_LABELS = {
+  1: { stage: 1, heading: 'Phase 1 · Requirements' },
+  4: { stage: 2, heading: 'Phase 2 · AI Research' },
+  5: { stage: 3, heading: 'Phase 3 · Review & Deploy' },
+  2: { stage: 3, heading: 'Edit Steps' },
+  3: { stage: 3, heading: 'Edit I/O Schema & Test Input' }
+};
+
+
 let wizardState = {
   phase: 1,
   targetUrl: '',
@@ -1308,13 +1321,13 @@ async function runTestFromStep5() {
   const annPanel = document.getElementById('annotationRequestPanel');
   if (annPanel && !annPanel.classList.contains('hidden')) {
     if (wizardAnnotationBridge) wizardAnnotationBridge.cancel();
-    appendLog('Annotation request closed — a manual test from Phase 5 parked the session panels.', 'warn');
+    appendLog('Annotation request closed — a manual test from the results screen parked the session panels.', 'warn');
   }
   if (annPanel) annPanel.classList.add('hidden');
   const ioPanel = document.getElementById('ioConfirmPanel');
   if (ioPanel && !ioPanel.classList.contains('hidden')) {
     if (wizardIoBridge) wizardIoBridge.cancel();
-    appendLog('I/O confirmation closed — a manual test from Phase 5 parked the session panels.', 'warn');
+    appendLog('I/O confirmation closed — a manual test from the results screen parked the session panels.', 'warn');
   }
   if (ioPanel) ioPanel.classList.add('hidden');
   document.getElementById('executionLog').innerHTML = '';
@@ -2140,7 +2153,7 @@ async function startResearchSession(seedOverride) {
 
   goToPhase(4);
   const title = document.getElementById('phase4Title');
-  if (title) title.textContent = 'Phase 4: Research Session';
+  if (title) title.textContent = PHASE_LABELS[4].heading;
   document.getElementById('executionLog').innerHTML = '';
   setSessionControls('running');
   sessionAbortRequested = false;
@@ -2226,7 +2239,7 @@ async function startResearchSession(seedOverride) {
       (report.openQuestions && report.openQuestions.length
         ? report.openQuestions.slice(0, 3).map((q) => (q.kind === 'hypothesis' ? 'H' + q.n : q.id) + ' ' + q.text).join(' | ')
         : '(none)') +
-      '. You can Resume from the pause point or refine manually in Phase 2.', 'warn');
+      '. You can Resume from the pause point or refine manually in Edit Steps.', 'warn');
   }
   } finally { releaseBoot(); }
 }
