@@ -533,7 +533,12 @@
         const msg = error ? String(error.message) : '';
         if (/ZERO_COUNTER_FROZEN/.test(msg)) add('COUNTER_FROZEN');
         if (/COUNT_SELECTOR_BLIND/.test(msg)) add('SELECTOR_ZERO_MATCH');
-        if (/POLL_EXHAUSTED/.test(msg) && !/COUNT_SELECTOR_BLIND/.test(msg) && !/ZERO_COUNTER_FROZEN/.test(msg)) add('SELECTOR_ZERO_MATCH');
+        // Seventeenth log: budget exhaustion with NON-zero intermediate counts
+        // (thin content below the step's target) was tagged SELECTOR_ZERO_MATCH —
+        // a factually wrong claim that sent the model hunting healthy
+        // selectors. POLL_EXHAUSTED now keeps its own tag; the
+        // poll-exhaustion-differential knowledge unit attaches to it.
+        if (/POLL_EXHAUSTED/.test(msg) && !/COUNT_SELECTOR_BLIND/.test(msg) && !/ZERO_COUNTER_FROZEN/.test(msg)) add('POLL_EXHAUSTED');
         if (/EMPTY_EXTRACTION/.test(msg)) add('EMPTY_EXTRACTION');
         if (detectors.zeroMatchFields) add('FIELD_MATCH_ZERO');
         if (detectors.containerZero) add('INPUT_VALUE_SUSPECT');
@@ -546,6 +551,7 @@
         if (detectors.stepNoReturn) add('STEP_NO_RETURN');
         if (detectors.junkValues) add('JUNK_VALUES');
         if (detectors.partialEmptyFields) add('PARTIAL_EMPTY_FIELDS');
+        if (schemaBlindNote(outputSchema)) add('SCHEMA_BLIND');
         for (const evt of events) {
           if (!evt || evt.type !== 'STEP_ITERATION') continue;
           const p = previewJson(evt.resultPreview);
@@ -564,6 +570,9 @@
       // always a result-vs-schema top-level KEY mismatch — invisible in the
       // bare numbers. Name both key sets so the model renames instead of
       // re-probing the page.
+      // Seventeenth log: the note fired even when the key sets MATCHED (the
+      // zeros came from empty values) — renaming advice then misdirects.
+      // Only emit when a schema key is actually absent from the result.
       function scoreMismatchNote(score, data, schema) {
         if (!score || score.score !== 0 || !score.isData) return null;
         if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
@@ -573,8 +582,24 @@
         const req = (schema && Array.isArray(schema.required)) ? schema.required.filter(k => typeof k === 'string') : [];
         const want = req.length ? req : props;
         if (!want.length) return null;
+        const missing = want.filter(k => dataKeys.indexOf(k) === -1);
+        if (!missing.length) return null; // keys align — empty VALUES own this zero, not naming
         const which = req.length ? 'required' : 'properties';
-        return 'score is 0 although extraction produced data. Scoring reads the schema\'s ' + which + ' keys against the RESULT\'s top-level keys — result keys [' + dataKeys.join(', ') + '] vs schema ' + which + ' [' + want.join(', ') + ']. Align them: rename the step\'s output field(s) or the schema so the same key appears on both sides; a key-name mismatch scores 0 no matter how complete the data is.';
+        return 'score is 0 although extraction produced data. Scoring reads the schema\'s ' + which + ' keys against the RESULT\'s top-level keys — result keys [' + dataKeys.join(', ') + '] vs schema ' + which + ' [' + want.join(', ') + ']; the schema keys [' + missing.join(', ') + '] appear NOWHERE in the result. Align them: rename the step\'s output field(s) or the schema so the same key appears on both sides; a key-name mismatch scores 0 no matter how complete the data is.';
+      }
+
+      // Seventeenth log: {"type":"object"} with neither required nor
+      // properties turned every schema-reading check blind — the report came
+      // back GREEN at score 0 over real data (one all-empty record). The
+      // io.confirm/service.update gates now reject fieldless schemas, but
+      // resumed legacy sessions and schema-less verify calls (the
+      // {type:'object'} default) still land here — disclose the blindness
+      // instead of certifying it.
+      function schemaBlindNote(schema) {
+        const req = (schema && Array.isArray(schema.required)) ? schema.required : [];
+        const props = (schema && schema.properties && typeof schema.properties === 'object' && !Array.isArray(schema.properties)) ? Object.keys(schema.properties) : [];
+        if (req.length || props.length) return null;
+        return 'outputSchema declares NO fields (no "required", no "properties") — scoring and every empty/junk detector are blind, so this green report is unverifiable. Run io.confirm with an outputSchema that lists the output fields under "properties" (and the must-haves in "required"), then service.update the artifact to match and re-verify.';
       }
 
       const score = WU.scoreAttemptResult(finalData, outputSchema);
@@ -583,7 +608,7 @@
         error: error ? { message: error.message, stepId: error.stepId || null } : null,
         aborted: !!(error && /TEST_ABORTED/.test(error.message)),
         score: score,
-        scoreNote: scoreMismatchNote(score, finalData, outputSchema),
+        scoreNote: scoreMismatchNote(score, finalData, outputSchema) || schemaBlindNote(outputSchema),
         schemaOk: !!oc.ok,
         schemaMissing: oc.missing || [],
         detectors: detectors,

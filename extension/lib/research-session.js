@@ -639,6 +639,13 @@
             if (state.lastVerifyOk === false) {
               detail = (detail ? detail + ' ' : '') +
                 '[LAST VERIFY FAILED — shipped best-effort; the review panel shows the failing run]';
+            } else if (state.lastVerifySchemaBlind) {
+              // Seventeenth log: a fieldless outputSchema made every
+              // schema-reading check blind — the last verify came back GREEN
+              // at score 0 over an all-empty record. Green-but-unverifiable
+              // must not read as a clean ship.
+              detail = (detail ? detail + ' ' : '') +
+                '[VERIFY SCHEMA-BLIND — outputSchema declares no fields, so this green is unverifiable. Renegotiate the contract with io.confirm (fielded properties + required), service.update the artifact to match, and re-verify]';
             } else if (state.lastVerifyEmptyFields) {
               // Sixteenth log: a GREEN verify carrying confirmed fields that
               // are empty in every record (time:"", location:"") completed
@@ -662,6 +669,7 @@
             state.lastVerifyEmptyFields = pe.length
               ? pe.slice(0, 6).map((f) => String(f.path || f.field) + ' ' + (f.emptyCount || 0) + '/' + (f.totalCount || 0) + ' empty')
               : null;
+            state.lastVerifySchemaBlind = !!(Array.isArray(result && result.events) && result.events.indexOf('SCHEMA_BLIND') !== -1);
             // The tool_result event's summary is capped at 200 chars — too
             // short for the verify report's verdict. Attach a compact digest
             // (sixteenth log: tags and detector findings were invisible in

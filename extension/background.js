@@ -1413,7 +1413,15 @@ async function handleOpenTabExecute(url, scriptStr, parentTabId, reqId) {
   executor.timeoutMs = 60000;
   try {
     // scriptStr is a function body (may contain function declarations + return statements)
-    const result = await executor.execute(`return await (async () => { ${scriptStr} })();`, {});
+    // OffscreenExecutor.execute resolves the envelope {result, selectorDiagnostics};
+    // the fn body's return value sits at envelope.result. Seventeenth log: the
+    // envelope was sent as TAB_RESULT.result verbatim (day-one), so $openTab
+    // callers got the wrapper object instead of their data — v4 `recs.slice is
+    // not a function`, v5's [recs] coercion wrapping the wrapper into one
+    // all-empty record. Unwrap before sending; the sub-tab's diagnostics stay
+    // with the envelope (the outer step's own selectorDiagnostics channel is
+    // unaffected).
+    const envelope = await executor.execute(`return await (async () => { ${scriptStr} })();`, {});
 
     // RC16: capture the sub-tab's HTML BEFORE destroying it, on BOTH success
     // and failure paths. The success-path capture is NEW — previously only
@@ -1435,7 +1443,7 @@ async function handleOpenTabExecute(url, scriptStr, parentTabId, reqId) {
       chrome.tabs.sendMessage(parentTabId, {
         type: 'TAB_RESULT',
         reqId,
-        result
+        result: envelope.result
       });
     }
   } catch (error) {

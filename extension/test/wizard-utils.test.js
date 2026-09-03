@@ -840,6 +840,28 @@ describe('findEmptyExtractionFields', () => {
     const empty = findEmptyExtractionFields({ tags: [] }, schemaScalarArray);
     assert.deepEqual(empty, []);
   });
+
+  it('flags records whose SCHEMA fields are all empty even when synthetic keys are non-empty (seventeenth log: serialNumber defeated Object.values)', () => {
+    const schemaWithItems = {
+      required: ['posts'],
+      properties: {
+        posts: { type: 'array', items: { type: 'object', properties: { postId: { type: 'string' }, content: { type: 'string' } } } }
+      }
+    };
+    const data = { posts: [{ serialNumber: 1, postId: '', content: '' }, { serialNumber: 2, postId: '', content: '' }] };
+    assert.deepEqual(findEmptyExtractionFields(data, schemaWithItems), ['posts']);
+  });
+
+  it('derives fields from properties when required is absent (fields-only schema)', () => {
+    const schema = { type: 'object', properties: { posts: { type: 'array', items: { type: 'object' } } } };
+    assert.deepEqual(findEmptyExtractionFields({ posts: [{ a: '' }, { a: '' }] }, schema), ['posts']);
+    assert.deepEqual(findEmptyExtractionFields({ posts: [{ a: 'x' }] }, schema), []);
+  });
+
+  it('flags an empty array-of-objects field declared via properties only', () => {
+    const schema = { type: 'object', properties: { posts: { type: 'array', items: { type: 'object' } } } };
+    assert.deepEqual(findEmptyExtractionFields({ posts: [] }, schema), ['posts']);
+  });
 });
 
 describe('findUpstreamExtractionStepId', () => {

@@ -126,7 +126,7 @@ External Program
 2. **Background** (`extension/background.js`): Service Worker. Owns the `ExecutionQueue` that serializes all service calls. Orchestrates scraping via `StepOrchestrator` (step graph), opens tabs, runs steps, retries on failure, AI auto-fix. Maintains the transport to the host.
 3. **Offscreen** (`extension/offscreen.js` + `lib/offscreen-executor.js`): The **primary** script execution surface. `OffscreenExecutor` ensures a single offscreen document exists (`chrome.offscreen`), which itself hosts the sandbox iframe and a `tabIdStack` so concurrent-looking DOM requests route back to the originating tab.
 4. **Sandbox** (`extension/sandbox.html` + `sandbox.js`): Declared sandbox page in `manifest.json`. The only place where `new Function()`/`eval()` is allowed (MV3 CSP). Scripts execute here; `$` API calls are forwarded up to the offscreen doc, then to background, then to the content script of the target tab.
-5. **Content Script** (`extension/content-script.js`): Injected into all pages (`document_idle`). Performs the actual DOM operations, element annotation, and DOM snapshot capture. Its script-execution path is now **legacy** — kept only for `$openTab` (see below).
+5. **Content Script** (`extension/content-script.js`): Injected into all pages (`document_idle`). Performs the actual DOM operations, element annotation, and DOM snapshot capture. Its own script-execution path (`ScriptExecutor` + per-tab sandbox iframe) has **no callers** — `$openTab` fn bodies execute via a fresh `OffscreenExecutor` bound to the sub-tab; the content script only relays the `openTab` request from the main tab and serves the sub-tab's `$` API calls.
 
 **HTTP-only transport.** `background.js: initCommunication()` probes `GET /api/v1/extension/poll` over HTTP; if the host is reachable, it uses **HTTP long-polling** (extension pulls requests via `poll`, replies via `POST /api/v1/extension/response`). There is no other transport. The host runs as an OS service (Linux systemd / macOS launchd / Windows scheduled task) installed by `./bin/scrapewright install`, so it's always available when the user is logged in.
 
@@ -165,7 +165,7 @@ The step chain topology is validated everywhere services are persisted (`Service
 6. Offscreen relays `DOM_REQUEST` to background → `chrome.tabs.sendMessage` to the target tab's content script → content script performs the DOM op → `DOM_RESPONSE` flows back (offscreen dedupes by request id; content-script replies reach it directly *and* via a background rebroadcast).
 7. On completion, sandbox posts `EXECUTE_RESULT`; offscreen pops the `tabId` and sends `SCRIPT_RESULT` (`_fromOffscreen`) to background. Timeouts send `EXECUTE_SCRIPT_TIMEOUT` so the stack is cleaned up.
 
-**Legacy path** (`ScriptExecutor` + content-script's own sandbox iframe): still used by `$openTab`, which executes a function in a *newly opened* tab via the content script injected there. Don't extend it for new features — route through `OffscreenExecutor`.
+**`$openTab` path**: `sandbox.js $openTab` → `DOM_REQUEST('openTab')` → background → main tab's content script (`domOpenTab`) relays `OPEN_TAB_EXECUTE` → background `handleOpenTabExecute` opens the sub-tab and runs the fn body through a **fresh `OffscreenExecutor` bound to the sub-tab** (activation before load, 60s local timeout, sub-tab snapshot captured pre-destroy on both paths). `TAB_RESULT.result` carries the fn body's return value — unwrapped from the executor's `{result, selectorDiagnostics}` envelope (seventeenth-log fix; the day-one leak made `$openTab` resolve the envelope, silently degrading every caller including the shipped examples). The legacy `ScriptExecutor` + content-script sandbox-iframe execution path has no callers.
 
 ### Script DSL ($ API)
 
@@ -181,7 +181,7 @@ User scripts (LLM-generated) run as `return <expr>` in the sandbox with these as
 
 **Hover** — `$hover(anchorSel, popoverSel?, opts?)` dispatches a trusted mouseMoved at the anchor and captures the popover (`{hovered, htmlSnippet, popoverSelector, reason?, observedPopover?}`; default timeout 4500ms with a 3000ms no-signal early exit; `opts.index` selects the Nth match). `$extractWithHover(containerSel, fieldMap, opts)` is the container-scoped atomic extract+hover primitive (per-record `hovercards[]` with `anchorHref`/`anchorText`; `containerIndex`/`containerRange`/`maxContainers` split large batches).
 
-**Tabs** — `$openTab(url, fn)` opens a new tab, runs `fn` in it (legacy content-script path; 60s local timeout; on failure the sub-tab's DOM is captured as `error.subTabSnapshot` before the tab is destroyed).
+**Tabs** — `$openTab(url, fn)` opens a new tab, runs `fn` in it via a fresh `OffscreenExecutor` bound to the sub-tab, and resolves to `fn`'s return value (60s local timeout; on failure the sub-tab's DOM is captured as `error.subTabSnapshot` before the tab is destroyed).
 
 Plus the injected context globals `__input__`, `__stepResults__`, `__lastResult__` (see Step Graph model).
 

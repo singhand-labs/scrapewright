@@ -47,6 +47,21 @@
         (s.properties && typeof s.properties === 'object' && !Array.isArray(s.properties)));
   }
 
+  // Seventeenth log: {"type":"object"} — no required, no properties — passed
+  // the JSON-shape gate at BOTH io.confirm and service.update. Every
+  // schema-reading check (scoring, empty/junk/partial-empty detectors) reads
+  // required/properties, so the session verified blind and shipped ONE
+  // all-empty record as green score-0 garbage. An output schema must declare
+  // at least one field somewhere. Input schemas may legitimately be fieldless
+  // ({} = a no-parameter service).
+  function schemaDeclaresFields(s) {
+    if (!s || typeof s !== 'object' || Array.isArray(s)) return false;
+    if (Array.isArray(s.required) && s.required.length > 0) return true;
+    if (s.properties && typeof s.properties === 'object' && !Array.isArray(s.properties) &&
+        Object.keys(s.properties).length > 0) return true;
+    return false;
+  }
+
   // Reduce a JSON Schema to its load-bearing shape (field names, types,
   // required, nesting). Cosmetic keys (description/title/examples) are
   // ignored, so re-confirmation triggers only on MATERIAL drift: fields
@@ -235,6 +250,11 @@
           error: 'SCHEMA_NOT_JSON_SCHEMA: ' + schemaBad.join(' and ') + ' must be a JSON Schema object like {"type":"object","required":["keyword"],"properties":{"keyword":{"type":"string"}}}. Resend io.confirm with both schemas properly shaped.'
         };
       }
+      if (!schemaDeclaresFields(a.outputSchema)) {
+        return {
+          error: 'SCHEMA_NO_FIELDS: outputSchema declares no fields — neither "required" nor "properties" names an output field. Scoring and every empty/junk detector read those keys, so a fieldless contract verifies BLIND: verify.run reports score 0 (green garbage) whether extraction succeeded or failed. Resend io.confirm with an outputSchema like {"type":"object","required":["posts"],"properties":{"posts":{"type":"array","items":{"type":"object"}}}} listing every output field under properties and the must-haves in required.'
+        };
+      }
       // Dedup: a contract the user already confirmed is NOT re-prompted while
       // its shape is unchanged (rejections of revisions leave the original
       // standing). Only a materially different proposal pops the panel again.
@@ -393,6 +413,14 @@
           error: 'SCHEMA_NOT_JSON_SCHEMA: ' + schemaBad.join(' and ') + ' must be a JSON Schema object like {"type":"object","required":["posts"],"properties":{"posts":{"type":"array","items":{"type":"object"}}}}, not a natural-language map like {"posts":"array of post objects"}. Verify scoring and every detector read "required"/"properties" — a natural-language map leaves them all blind, so verify.run reports score 0 even after a fully successful extraction. Resend with JSON-Schema-shaped schemas: list every output field under properties and put the must-have keys in required.'
         };
       }
+      // Seventeenth log: a fieldless outputSchema must not slip in here either
+      // (the io.confirm gate rejects it, but drift/renegotiation paths and
+      // legacy resumed sessions converge on service.update).
+      if (a.outputSchema != null && !schemaDeclaresFields(a.outputSchema)) {
+        return {
+          error: 'SCHEMA_NO_FIELDS: outputSchema declares no fields — neither "required" nor "properties" names an output field, so scoring and every empty/junk detector verify BLIND (score 0 green garbage). Resend with the fielded outputSchema the contract carries: fields under "properties", must-haves in "required" — renegotiate with io.confirm first if the field list itself is changing.'
+        };
+      }
       // Runtime-flag path: a materially different contract must be
       // re-confirmed. The ledger-marker recovery path (session resume /
       // reload) intentionally skips this — the user is already driving
@@ -500,7 +528,7 @@
       { name: 'diag.read', args: '{stepId?, kind?}', returns: '{selectorDiagnostics, failingStep?, popover, counters, lastError?}' },
       { name: 'verify.run', args: '{input?} — optional object overriding the test input for THIS run (the mechanism for alternate-value re-tests when INPUT_VALUE_SUSPECT says the site may have no content for the current value)', returns: '{ok,score,scoreNote?,error,detectors,steps,finalResult,schemaOk} — detectors.partialEmptyFields lists confirmed fields that came back empty with their emptyRatio (empty/total records): ratio 1 means fix the binding or renegotiate the contract, not ship it' },
       { name: 'annotate.request', args: '{why, fields?, containerSel?}', returns: '{annotations[{selector,purpose,outputField}]} | {cancelled} — REQUIRES a confirmed I/O contract (io.confirm first)' },
-      { name: 'io.confirm', args: '{inputSchema, outputSchema, note?}', returns: '{confirmed:true} | {confirmed:false, feedback} — propose the contract EARLY and wait for the user; service.update is rejected until a confirmation lands; a SAME-shape re-proposal auto-confirms without prompting' }
+      { name: 'io.confirm', args: '{inputSchema, outputSchema, note?}', returns: '{confirmed:true} | {confirmed:false, feedback} — propose the contract EARLY and wait for the user; service.update is rejected until a confirmation lands; a SAME-shape re-proposal auto-confirms without prompting. outputSchema MUST declare its fields (properties + required); a fieldless {"type":"object"} verifies blind and is rejected' }
     ];
 
     return {

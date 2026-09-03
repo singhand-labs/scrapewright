@@ -90,6 +90,27 @@ describe('engine happy path', () => {
     assert.match(report.stopped.detail, /posts\.location 3\/3 empty/);
   });
 
+  it('finish with a GREEN verify on a fieldless schema discloses SCHEMA-BLIND (seventeenth log: score-0 green garbage)', async () => {
+    const session = createResearchSession({
+      requirement: 'collect posts',
+      llm: scriptedLlm([
+        reply(envelope('verify.run', {})),
+        reply(finishEnvelope('done, verified green'))
+      ], []),
+      tools: { 'verify.run': async () => ({
+        ok: true,
+        score: { score: 0, isData: true, breakdown: {} },
+        detectors: {},
+        events: ['SCHEMA_BLIND']
+      }) }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    assert.match(report.stopped.detail, /done, verified green/);
+    assert.match(report.stopped.detail, /VERIFY SCHEMA-BLIND/);
+    assert.match(report.stopped.detail, /io\.confirm/);
+  });
+
   it('verify.run tool_result events carry a compact verify digest (ok/score/tags/partialEmpty)', async () => {
     const events = [];
     const session = createResearchSession({

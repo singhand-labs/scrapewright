@@ -9,7 +9,7 @@
 // matchEvents vocabulary (kept small and stable — the engine emits these
 // tags): COUNT_SHORTFALL, EMPTY_EXTRACTION, EMPTY_FIELDS, POPOVER_TIMEOUT,
 // HOVER_NO_SIGNAL, COUNTER_FROZEN, DUPLICATE_RECORDS, SELECTOR_ZERO_MATCH,
-// FIELD_COLLISION, SCRIPT_TIMEOUT, CARD_POLICY.
+// FIELD_COLLISION, SCRIPT_TIMEOUT, CARD_POLICY, POLL_EXHAUSTED, SCHEMA_BLIND.
 //
 // Write path: sessions PROPOSE units; the user approves; the universality
 // guard test runs on every change to this file.
@@ -60,6 +60,13 @@
       matchEvents: ['COUNTER_FROZEN', 'SCRIPT_TIMEOUT'],
       origin: '2026-08-31 fourth log survey; breaker + RAW-growth reset',
       body: 'A scroll loop that counts only cards matching a filter (e.g. permalink regex) can match 0 FOREVER if the filter is written from assumption — the count stays 0, the loop scrolls to maxIterations while the page fills with cards the script never counts. Defenses: sample and print what the filter actually matches before entering the loop; treat a counter that never once rose across consecutive not-ready iterations as a frozen counter and exit with a diagnostic (never keep scrolling); remember permalink shapes vary by locale and era — derive the regex from observed hrefs, not training data.'
+    },
+    {
+      id: 'poll-exhaustion-differential',
+      title: 'POLL_EXHAUSTED is a budget signal — read the iteration previews before touching selectors',
+      matchEvents: ['POLL_EXHAUSTED'],
+      origin: '2026-09-03 seventeenth log survey; SELECTOR_ZERO_MATCH mis-tag',
+      body: 'A poll step exhausting its iterations means its readiness condition never became true — NOT that a selector matched zero. Before rewriting anything, read that step\'s iteration previews (diag.read counters, or the resultPreview trail) and branch on the count trajectory: counts that ROSE to a small number and stalled mean the page genuinely holds fewer matching items than the step demands — thin content; lower the per-run target, relax the count gate, or accept the shortfall instead of re-probing. Counts that NEVER rose from 0 across every iteration are the selector-or-filter case. Counts rising while a different readiness signal (url change, visibility flag) stays false point at the condition, not the selectors. Misreading thin content as a selector fault burns the remaining budget re-probing healthy selectors.'
     },
     {
       id: 'selector-coherence',

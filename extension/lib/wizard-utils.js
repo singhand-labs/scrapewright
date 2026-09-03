@@ -1828,7 +1828,17 @@ function findUpstreamProducingStepId(steps, fallbackStepId) {
 
 function findEmptyExtractionFields(data, outputSchema) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return [];
-  if (!outputSchema || !Array.isArray(outputSchema.required) || outputSchema.required.length === 0) return [];
+  if (!outputSchema || typeof outputSchema !== 'object' || Array.isArray(outputSchema)) return [];
+
+  // Field source: required first, then declared properties. Seventeenth log:
+  // schemas declaring fields ONLY via properties (no required) were skipped
+  // entirely — the early return demanded a non-empty required list.
+  const props = (outputSchema.properties && typeof outputSchema.properties === 'object' && !Array.isArray(outputSchema.properties))
+    ? outputSchema.properties
+    : {};
+  const required = (Array.isArray(outputSchema.required) ? outputSchema.required : []).filter(k => typeof k === 'string');
+  const fieldKeys = required.length ? required : Object.keys(props);
+  if (!fieldKeys.length) return [];
 
   const isEmptyValue = (v) =>
     v === '' || v === null || v === undefined || (Array.isArray(v) && v.length === 0);
@@ -1840,21 +1850,44 @@ function findEmptyExtractionFields(data, outputSchema) {
   // array can legitimately mean "the page had no matching items", so we leave
   // those for validateOutputAgainstSchema to surface as a missing-field.
   const isArrayOfObjects = (key) => {
-    const prop = outputSchema.properties && outputSchema.properties[key];
+    const prop = props[key];
     return !!(prop && prop.type === 'array' && prop.items && prop.items.type === 'object');
   };
 
+  // Per-record emptiness is scoped to the SCHEMA's item fields when the
+  // schema declares them. Seventeenth log: Object.values(el) picked up
+  // synthetic keys the step's map added (serialNumber: 1, counts 0), so a
+  // record whose every DECLARED field was empty read as non-empty and the
+  // all-empty signal never fired.
+  const itemFieldKeys = (key) => {
+    const prop = props[key];
+    if (!prop || prop.type !== 'array' || !prop.items || typeof prop.items !== 'object') return [];
+    const ir = (Array.isArray(prop.items.required) ? prop.items.required : []).filter(k => typeof k === 'string');
+    if (ir.length) return ir;
+    const ip = (prop.items.properties && typeof prop.items.properties === 'object' && !Array.isArray(prop.items.properties))
+      ? prop.items.properties
+      : {};
+    return Object.keys(ip);
+  };
+
   const empty = [];
-  for (const key of outputSchema.required) {
+  for (const key of fieldKeys) {
     const v = data[key];
     if (isArrayOfObjects(key) && Array.isArray(v) && v.length === 0) {
       empty.push(key);
       continue;
     }
     if (!Array.isArray(v) || v.length === 0) continue; // scalar or empty scalar-array: leave to validateOutputAgainstSchema
-    // Array of objects where every object has only empty values
-    if (v.every(el => el && typeof el === 'object' && !Array.isArray(el) &&
-                     Object.values(el).every(isEmptyValue))) {
+    // Array of objects where every object has only empty values for the
+    // fields in scope (schema item fields; all own keys as fallback when
+    // the schema declares none — an empty {} record still counts as empty).
+    const scoped = itemFieldKeys(key);
+    const recordAllEmpty = (el) => {
+      if (!el || typeof el !== 'object' || Array.isArray(el)) return false;
+      const keys = scoped.length ? scoped : Object.keys(el);
+      return keys.every(k => isEmptyValue(el[k]));
+    };
+    if (v.every(recordAllEmpty)) {
       empty.push(key);
     }
   }

@@ -35,6 +35,14 @@ describe('knowledge units seed data', () => {
     assert.ok(u.matchEvents.includes('COUNT_SHORTFALL'));
     assert.ok(/:has\(/.test(u.body), 'must show the inverted include form');
   });
+
+  it('includes the seventeenth-log poll-exhaustion differential keyed to the honest POLL_EXHAUSTED tag', () => {
+    const u = KNOWLEDGE_UNITS.find(x => x.id === 'poll-exhaustion-differential');
+    assert.ok(u, 'poll-exhaustion-differential unit must exist');
+    assert.ok(u.matchEvents.includes('POLL_EXHAUSTED'));
+    assert.ok(/iteration preview|previews/i.test(u.body), 'must teach reading the iteration previews');
+    assert.ok(/thin/i.test(u.body), 'must name the thin-content branch');
+  });
 });
 
 // Part 2: knowledge base operations
@@ -104,7 +112,7 @@ describe('KnowledgeBase', () => {
   it('every seed unit matchEvents value is inside the documented vocabulary', () => {
     const VOCAB = new Set(['COUNT_SHORTFALL', 'EMPTY_EXTRACTION', 'EMPTY_FIELDS', 'POPOVER_TIMEOUT',
       'HOVER_NO_SIGNAL', 'COUNTER_FROZEN', 'DUPLICATE_RECORDS', 'SELECTOR_ZERO_MATCH',
-      'FIELD_COLLISION', 'SCRIPT_TIMEOUT', 'CARD_POLICY']);
+      'FIELD_COLLISION', 'SCRIPT_TIMEOUT', 'CARD_POLICY', 'POLL_EXHAUSTED', 'SCHEMA_BLIND']);
     for (const u of KNOWLEDGE_UNITS) {
       for (const ev of u.matchEvents) {
         assert.ok(VOCAB.has(ev), u.id + ' has out-of-vocabulary event: ' + ev);

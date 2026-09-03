@@ -74,7 +74,9 @@ describe('createVerifyRunner', () => {
     assert.equal(out.report.ok, false);
     assert.equal(out.report.error.stepId, 's1');
     assert.equal(out.report.aborted, false);
-    assert.ok(out.report.events.indexOf('SELECTOR_ZERO_MATCH') !== -1, 'POLL_EXHAUSTED maps to SELECTOR_ZERO_MATCH tag');
+    assert.ok(out.report.events.indexOf('POLL_EXHAUSTED') !== -1, 'POLL_EXHAUSTED keeps its own tag (seventeenth log)');
+    assert.equal(out.report.events.indexOf('SELECTOR_ZERO_MATCH'), -1,
+      'budget exhaustion with non-zero counts is NOT a zero-match claim — the mis-tag sent the model selector-hunting');
     assert.equal(out.raw.testResult && out.raw.testResult.steps ? out.raw.testResult.steps.length : 1, 1, 'partial steps preserved on raw');
   });
 
@@ -398,6 +400,51 @@ describe('verify-runner score-0 key-mismatch note (sixth-live-log I4)', () => {
     const { runner } = makeRunner(orch);
     const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array' } } } });
     assert.ok(out.report.score.score > 0);
+    assert.equal(out.report.scoreNote, null);
+  });
+
+  it('score 0 with MATCHING keys but empty values carries no key-mismatch note (seventeenth log E: renaming advice would misdirect)', async () => {
+    const orch = async () => ({
+      finalResult: { posts: [{ serialNumber: 1, postId: '', content: '' }] },
+      steps: [{ stepId: 's1', stepName: 'one', result: { done: true }, snapshot: null }],
+      pages: [], pagesTruncated: false
+    });
+    const { runner } = makeRunner(orch);
+    const out = await runner({
+      service: SERVICE, input: {},
+      outputSchema: {
+        type: 'object', required: ['posts'],
+        properties: { posts: { type: 'array', items: { type: 'object', properties: { postId: { type: 'string' }, content: { type: 'string' } } } } }
+      }
+    });
+    assert.equal(out.report.scoreNote, null, 'keys align — the zeros come from empty values, and the empty-fields detector owns that case');
+    assert.deepEqual(out.report.detectors.emptyFields, ['posts'],
+      'records whose SCHEMA fields are all empty are flagged even with a non-empty synthetic key (seventeenth log: serialNumber 1 defeated Object.values)');
+  });
+});
+
+describe('SCHEMA_BLIND defense (seventeenth log: fieldless outputSchema → green score-0 garbage)', () => {
+  it('green run under a fieldless schema carries the SCHEMA_BLIND tag and an io.confirm scoreNote', async () => {
+    const orch = async (svc, input, d, opts) => {
+      await d.createTab(svc.targetUrl);
+      opts.onEvent({ type: 'EXECUTION_START' });
+      return { finalResult: { posts: [{ postId: '', content: '', html: '' }] }, steps: [{ stepId: 's1', stepName: 'one', result: { done: true }, snapshot: null }], pages: [], pagesTruncated: false };
+    };
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object' } });
+    assert.equal(out.report.ok, true);
+    assert.equal(out.report.score.score, 0);
+    assert.ok(out.report.score.isData, 'data arrived — the zero is blindness, not absence');
+    assert.ok(out.report.events.indexOf('SCHEMA_BLIND') !== -1, 'tag rides report.events');
+    assert.match(out.report.scoreNote, /declares no fields/i);
+    assert.match(out.report.scoreNote, /io\.confirm/, 'names the renegotiation path');
+  });
+
+  it('fielded schema stays silent — no SCHEMA_BLIND tag', async () => {
+    const orch = async () => ({ finalResult: { posts: [{ a: 1 }] }, steps: [], pages: [] });
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array' } } } });
+    assert.equal(out.report.events.indexOf('SCHEMA_BLIND'), -1);
     assert.equal(out.report.scoreNote, null);
   });
 });

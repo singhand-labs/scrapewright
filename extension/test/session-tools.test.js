@@ -128,11 +128,11 @@ describe('createSessionTools', () => {
   it('service.update validates the chain, applies the artifact, echoes the engine version', async () => {
     const { deps } = makeDeps();
     const t = createSessionTools(deps);
-    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object' } });
+    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } });
     const bad = await t.tools['service.update']({ steps: [{ id: 's1', script: 'return 1', onSuccess: 'NOPE' }] }, { session: { state: () => ({ session: { artifactVersions: [] } }) } });
     assert.match(bad.error, /chain invalid/);
     const out = await t.tools['service.update'](
-      { steps: GOOD_STEPS, inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, testInput: {}, name: 'svc' },
+      { steps: GOOD_STEPS, inputSchema: { type: 'object' }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } }, testInput: {}, name: 'svc' },
       { session: { state: () => ({ session: { artifactVersions: [{ version: 1 }] } }) } });
     assert.deepEqual(out, { updated: true, version: 2 });
   });
@@ -173,7 +173,7 @@ describe('createSessionTools', () => {
       })
     });
     const t = createSessionTools(deps);
-    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object' } });
+    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } });
     state.draft = { targetUrl: 'x', steps: GOOD_STEPS };
     await t.tools['verify.run']({});
     const r = await t.tools['diag.read']({ kind: 'failingStep' });
@@ -206,7 +206,7 @@ describe('createSessionTools', () => {
   it('annotate.request without a bridge errors; picks enter the ledger as provenance user; cancel round-trips', async () => {
     const { deps } = makeDeps();
     const t = createSessionTools(deps);
-    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object' } });
+    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } });
     assert.match((await t.tools['annotate.request']({ why: 'x' })).error, /bridge/);
     let resolveReq;
     const picks = [
@@ -215,7 +215,7 @@ describe('createSessionTools', () => {
     ];
     const deps2 = makeDeps({ annotationBridge: { request: (req) => new Promise((res) => { resolveReq = res; }) } });
     const t2 = createSessionTools(deps2.deps);
-    await t2.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object' } });
+    await t2.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } });
     const pending = t2.tools['annotate.request']({ why: 'which card is organic?', containerSel: 'div.feed' }, { ledger: { add: (e) => deps2.state.ledgerAdded = (deps2.state.ledgerAdded || []).concat(e) } });
     resolveReq({ annotations: picks, url: 'https://example.com' });
     const r = await pending;
@@ -415,7 +415,7 @@ describe('io.confirm — early I/O contract gate', () => {
     const seen = [];
     const { deps } = makeDeps({ runVerify: async (o) => { seen.push(o.input); return { report: { ok: true, error: null, aborted: false, score: {}, schemaOk: true, schemaMissing: [], detectors: {}, steps: [], finalResult: {}, pages: '1', eventCount: 0, events: [] }, events: [], raw: {} }; } });
     const t = createSessionTools(deps);
-    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object' } });
+    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } });
     await t.tools['service.update']({ steps: GOOD_STEPS }, { session: { state: () => ({ session: { artifactVersions: [] } }) } });
     await t.tools['verify.run']({});
     await t.tools['verify.run']({ input: { keyword: 'news' } });
@@ -427,7 +427,7 @@ describe('io.confirm — early I/O contract gate', () => {
     const { deps, state } = makeDeps();
     const t = createSessionTools(deps);
     const ctx = { session: { state: () => ({ session: { artifactVersions: [] } }) } };
-    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object' } });
+    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } });
     await t.tools['service.update']({ steps: GOOD_STEPS }, ctx);
     const before = state.applied.length;
     const out = await t.tools['service.update']({ testInput: { keyword: 'news' } }, ctx);
@@ -440,7 +440,7 @@ describe('io.confirm — early I/O contract gate', () => {
     // With no artifact yet, a steps-less testInput is not a valid update.
     const { deps: d2, state: s2 } = makeDeps();
     const t2 = createSessionTools(d2);
-    await t2.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object' } });
+    await t2.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } });
     const none = await t2.tools['service.update']({ testInput: { keyword: 'news' } }, ctx);
     assert.match(String(none.error), /no artifact|steps/, 'rejected without an existing artifact');
     assert.equal(s2.applied.length, 0);
@@ -466,7 +466,7 @@ describe('annotation gate — user collaboration requires a confirmed I/O contra
       annotationBridge: { request: async () => { called += 1; return { annotations: [{ selector: 'a.permalink', purpose: 'link', outputField: 'permalink' }], url: 'https://example.com' }; } }
     });
     const t = createSessionTools(deps);
-    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object' } });
+    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } });
     const r = await t.tools['annotate.request']({ why: 'ground the permalink field' });
     assert.equal(called, 1);
     assert.equal(r.annotations[0].outputField, 'permalink');
@@ -703,7 +703,7 @@ describe('audit C1: bridge waits park the engine clock', () => {
     const { deps } = makeDeps({ ioConfirmBridge: { request: async () => ({ confirmed: true }) } });
     const t = createSessionTools(deps);
     const ctx = { ledger: null, session: { parkBegin: () => parks.push('b'), parkEnd: () => parks.push('e') } };
-    const r = await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object' } }, ctx);
+    const r = await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } }, ctx);
     assert.equal(r.confirmed, true);
     assert.deepEqual(parks, ['b', 'e']);
   });
@@ -714,7 +714,7 @@ describe('audit C1: bridge waits park the engine clock', () => {
       annotationBridge: { request: async () => ({ cancelled: true }) }
     });
     const t = createSessionTools(deps);
-    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object' } });
+    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } });
     const ctx = { ledger: null, session: { parkBegin: () => parks.push('b'), parkEnd: () => parks.push('e') } };
     const r = await t.tools['annotate.request']({ why: 'w' }, ctx);
     assert.equal(r.cancelled, true);
@@ -753,8 +753,8 @@ describe('audit C14 (pin): artifact version is read AFTER apply, one source of t
     const { deps, state } = makeDeps();
     const t = createSessionTools(deps);
     const mk = (n) => ({ ledger: null, session: { state: () => ({ session: { artifactVersions: new Array(n) } }) } });
-    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object' } });
-    const r1 = await t.tools['service.update']({ steps: GOOD_STEPS, inputSchema: { type: 'object' }, outputSchema: { type: 'object' } }, mk(0));
+    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } });
+    const r1 = await t.tools['service.update']({ steps: GOOD_STEPS, inputSchema: { type: 'object' }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } }, mk(0));
     assert.equal(r1.updated, true);
     assert.equal(r1.version, 1);
     const r3 = await t.tools['service.update']({ steps: GOOD_STEPS }, mk(2));
@@ -787,5 +787,45 @@ describe('audit C3: probe receipts stamped with the rail page epoch', () => {
     await t.tools['probe.count']({ sel: 'div.card' });
     assert.equal(recorded.length, 1);
     assert.equal(recorded[0].epoch, undefined);
+  });
+});
+
+describe('outputSchema field-shape gate (seventeenth log: fieldless schema shipped score-0 green garbage)', () => {
+  const FIELDED = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } };
+
+  it('io.confirm rejects an outputSchema with neither required nor properties — and never prompts the user', async () => {
+    let bridgeCalls = 0;
+    const { deps } = makeDeps({ ioConfirmBridge: { request: async () => { bridgeCalls += 1; return { confirmed: true }; } } });
+    const t = createSessionTools(deps);
+    // deliberately fieldless — the exact seventeenth-log shape
+    const r = await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object' } });
+    assert.match(r.error, /SCHEMA_NO_FIELDS/);
+    assert.match(r.error, /properties/, 'teaches where fields must be declared');
+    assert.equal(bridgeCalls, 0, 'the user is never prompted to confirm a blind contract');
+  });
+
+  it('io.confirm accepts fields declared via properties alone (required absent)', async () => {
+    const { deps } = makeDeps({ ioConfirmBridge: { request: async () => ({ confirmed: true }) } });
+    const t = createSessionTools(deps);
+    const r = await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object', properties: { posts: { type: 'array' } } } });
+    assert.equal(r.confirmed, true);
+  });
+
+  it('io.confirm accepts a fieldless inputSchema (no-parameter service) paired with a fielded outputSchema', async () => {
+    const { deps } = makeDeps({ ioConfirmBridge: { request: async () => ({ confirmed: true }) } });
+    const t = createSessionTools(deps);
+    const r = await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: FIELDED });
+    assert.equal(r.confirmed, true);
+  });
+
+  it('service.update rejects a fieldless outputSchema even after the contract was confirmed fielded', async () => {
+    const { deps, state } = makeDeps();
+    const t = createSessionTools(deps);
+    const ctx = { session: { state: () => ({ session: { artifactVersions: [] } }) } };
+    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: FIELDED });
+    // deliberately fieldless — must be rejected even with a confirmed contract
+    const bad = await t.tools['service.update']({ steps: GOOD_STEPS, outputSchema: { type: 'object' } }, ctx);
+    assert.match(bad.error, /SCHEMA_NO_FIELDS/);
+    assert.equal(state.applied.length, 0, 'artifact NOT applied on schema rejection');
   });
 });
