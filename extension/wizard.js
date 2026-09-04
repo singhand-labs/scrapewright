@@ -374,7 +374,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     // rounds) is in the same boat — the live loop is dead, and a fresh
     // engine retries the turn with the continuation-repair round available.
     const protocolStop = stopped && stopped.reason === 'protocol';
-    if (budgetStop || llmStop || protocolStop) {
+    // Nineteenth log (user directive): a completion that produced NO artifact
+    // is an external wall (site unreachable, provider outage) — fresh engine.
+    const emptyCompleted = stopped && stopped.reason === 'completed' &&
+      !(Array.isArray(wizardSession.state().session.artifactVersions) && wizardSession.state().session.artifactVersions.length);
+    if (budgetStop || llmStop || protocolStop || emptyCompleted) {
       // G5: a fresh engine honors raised budget knobs.
       btn.disabled = true;
       try { await resumeResearchSession(); } finally { btn.disabled = false; }
@@ -384,7 +388,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     setSessionControls('running');
     try {
       const report = await wizardSession.run();
-      if (report && report.stopped && sessionStopPresentsOutcome(report.stopped.reason)) await presentSessionCompletion();
+      if (report && report.stopped && sessionStopPresentsOutcome(report.stopped.reason, wizardSession.state().session)) await presentSessionCompletion();
     } finally { btn.disabled = false; }
     return;
   });
@@ -468,7 +472,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       const p = SessionPersistence.createSessionPersistence(chrome.storage.local, 'wizardResearchSession');
       const saved = await p.load();
-      if (saved && saved.session && (!saved.session.stopped || ['paused', 'aborted', 'maxTurns', 'wallClock', 'tokenCap', 'llm:error', 'llm:length', 'protocol'].indexOf(saved.session.stopped.reason) !== -1)) {
+      if (saved && saved.session && sessionStopResumable(saved.session)) {
         showToast('An interrupted research session was found. Press Ctrl+Enter on the requirement box or click Research to resume it.', 'info', 8000);
       }
     } catch (e) { /* storage unavailable */ }
@@ -1887,7 +1891,18 @@ let sessionAbortRequested = false;
 function makeLlmAdapter(client) {
   return async ({ messages, maxTokens }) => {
     try {
-      const content = await client.chat(messages, { maxTokens });
+      const content = await client.chat(messages, {
+        maxTokens,
+        // Nineteenth log (user directive): a rate-limited provider stalls the
+        // session for tens of seconds with zero UI feedback — surface every
+        // retry in the research log so the user sees attempt N/10 and the
+        // wait, and knows the session is alive.
+        onRetry: (info) => {
+          try {
+            appendLog('LLM call failed (' + info.error + ') — retry ' + info.attempt + '/' + info.maxRetries + ' in ' + (info.wait / 1000).toFixed(1) + 's', 'error');
+          } catch (_) { /* logging must never break the call */ }
+        }
+      });
       return { content: String(content || ''), finish_reason: '', usage: null };
     } catch (e) {
       if (e && e.retryable === false && /finish_reason[=:]length/.test(String(e.message || ''))) {
@@ -2250,14 +2265,20 @@ function handleSessionEvent(ev) {
   // its key fields; the mirror must never break the handler.
   try {
     if (ev && ev.type === 'tool_result') {
-      console.log('[session] TOOL RESULT', ev.tool, ev.ok ? 'ok' : 'ERR', String(ev.summary || '').slice(0, 300));
+      // Nineteenth log: 300 chars cut verify failure mid-teaching
+      // ("...Every" + ZERO_COUNTER_FROZEN tails). 600 keeps the diagnosis.
+      console.log('[session] TOOL RESULT', ev.tool, ev.ok ? 'ok' : 'ERR', String(ev.summary || '').slice(0, 600));
       // Sixteenth log: the engine caps the summary at 200 chars, so a green
       // verify's tags/detectors never reached exported console logs
       // (green-with-empty-fields was undiagnosable from the log alone). The
       // engine attaches a compact digest for verify.run — mirror it.
       if (ev.verify) console.log('[session] VERIFY', JSON.stringify(ev.verify));
     } else if (ev && ev.type === 'tool_call') {
-      console.log('[session] TOOL', ev.tool, JSON.stringify(ev.args || {}).slice(0, 200));
+      // Nineteenth log: 200 chars cut io.confirm/service.update payloads right
+      // at outputSchema — the actual schema the LLM authored was invisible in
+      // exported logs and the typeless-items diagnosis had to proceed by
+      // inference. Schemas ride these args; give them room.
+      console.log('[session] TOOL', ev.tool, JSON.stringify(ev.args || {}).slice(0, 1200));
     } else if (ev && ev.type) {
       console.log('[session]', ev.type, JSON.stringify(ev).slice(0, 200));
     }
@@ -2316,7 +2337,17 @@ function handleSessionEvent(ev) {
         break;
       case 'stopped':
         setSessionControls('stopped');
-        setSessionBadge('done', ev.reason === 'completed' ? 'done' : 'stopped — ' + friendlyStopReason(ev.reason));
+        // Nineteenth log: a completion with NO artifact is an external wall,
+        // not a done state — badge it as stopped so Resume reads as the next
+        // action instead of a finished session.
+        {
+          const sess = wizardSession && wizardSession.state().session;
+          const emptyCompleted = ev.reason === 'completed' &&
+            !(sess && Array.isArray(sess.artifactVersions) && sess.artifactVersions.length);
+          setSessionBadge('done', emptyCompleted
+            ? 'stopped — ' + friendlyStopReason('completed:empty')
+            : ev.reason === 'completed' ? 'done' : 'stopped — ' + friendlyStopReason(ev.reason));
+        }
         stopSessionElapsedTimer();
         wizardAnnotationBridge && wizardAnnotationBridge.cancel();
         wizardIoBridge && wizardIoBridge.cancel();
@@ -2394,7 +2425,13 @@ async function showRequirementRestatePanel() {
     const result = await new LLMClient(config.config).chat([
       { role: 'system', content: prompt.system },
       { role: 'user', content: prompt.user }
-    ], {});
+    ], {
+      // Nineteenth log: the panel sits silent while the provider rate-limits;
+      // the note itself reports the retry state.
+      onRetry: (info) => {
+        note.textContent = 'LLM call failed — retry ' + info.attempt + '/' + info.maxRetries + ' in ' + (info.wait / 1000).toFixed(1) + 's (' + info.error + ')';
+      }
+    });
     const norm = normalizeRestatement(parseLLMJson(cleanLLMResponse(result), 'requirementRestatement', result));
     if (!norm) throw new Error('the reply was not a usable restatement');
     note.textContent = 'Please confirm this is what you want — restated in your own language:';
@@ -2457,7 +2494,7 @@ async function startResearchSession(seedOverride) {
     try {
       const p = SessionPersistence.createSessionPersistence(chrome.storage.local, 'wizardResearchSession');
       const saved = await p.load();
-      if (saved && saved.session && (!saved.session.stopped || ['paused', 'aborted', 'maxTurns', 'wallClock', 'tokenCap', 'llm:error', 'llm:length', 'protocol'].indexOf(saved.session.stopped.reason) !== -1)) {
+      if (saved && saved.session && sessionStopResumable(saved.session)) {
         seed = { session: saved.session, observation: saved.observation, ledger: saved.ledger };
       }
     } catch (e) { /* storage unavailable — start fresh */ }
@@ -2585,13 +2622,17 @@ async function startResearchSession(seedOverride) {
     return;
   }
   updateSessionSpendLine(wizardSession.state(), report && report.spend && report.spend.parkedMs);
-  if (report && report.stopped && sessionStopPresentsOutcome(report.stopped.reason)) {
+  if (report && report.stopped && sessionStopPresentsOutcome(report.stopped.reason, wizardSession.state().session)) {
     if (report.stopped.reason === 'maxTurns') {
       appendLog('Turn budget exhausted. Presenting the latest artifact state — raise the max-turns knob (Phase 1) and press Resume to continue, or send feedback below for a fresh-budget continuation.', 'warn');
     }
     await presentSessionCompletion();
   } else if (report) {
-    appendLog('Session stopped early — ' + friendlyStopReason((report.stopped && report.stopped.reason) || report.status) + '. Open questions: ' +
+    const reason = (report.stopped && report.stopped.reason) || report.status;
+    const sess = wizardSession.state().session;
+    const emptyCompleted = reason === 'completed' &&
+      !(Array.isArray(sess.artifactVersions) && sess.artifactVersions.length);
+    appendLog('Session stopped early — ' + friendlyStopReason(emptyCompleted ? 'completed:empty' : reason) + '. Open questions: ' +
       (report.openQuestions && report.openQuestions.length
         ? report.openQuestions.slice(0, 3).map((q) => (q.kind === 'hypothesis' ? 'H' + q.n : q.id) + ' ' + q.text).join(' | ')
         : '(none)') +
@@ -2613,6 +2654,9 @@ function friendlyStopReason(reason) {
     case 'llm:error': return 'the LLM service failed (rate limit, balance, or connection) — check Options, then Resume once the provider is back';
     case 'llm:length': return 'the LLM ran out of completion budget before replying — raise maxOutputTokens in Options, then Resume';
     case 'protocol': return 'the model kept sending unparseable replies — Resume retries that turn';
+    // Only reached for completions that produced NO artifact (with an
+    // artifact the session presents phase 5 instead) — an external wall.
+    case 'completed:empty': return 'it finished without producing an artifact (target site or LLM provider unreachable?) — Resume retries';
     case 'error': return 'it hit an error';
     default: return 'it stopped early (' + reason + ')';
   }
@@ -2622,9 +2666,35 @@ function friendlyStopReason(reason) {
 // obviously; 'maxTurns' too — the ninth log's continuation fixed both fields,
 // verified ok:true on its final turn, and died at the budget ceiling BEFORE it
 // could finish, which must not hide the built artifact. Paused/aborted stay on
-// phase 4 so Resume is the natural next action.
-function sessionStopPresentsOutcome(reason) {
-  return reason === 'completed' || reason === 'maxTurns';
+// phase 4 so Resume is the natural next action. Nineteenth log: 'completed'
+// with NO artifact produced presents nothing — that completion means the run
+// hit an external wall (target site unreachable, provider outage) and the
+// user's next action is Resume, which lives on phase 4.
+function sessionStopPresentsOutcome(reason, sessionState) {
+  if (reason === 'maxTurns') return true;
+  if (reason !== 'completed') return false;
+  const av = sessionState && sessionState.artifactVersions;
+  if (!Array.isArray(av)) return true;   // legacy persisted shape — present
+  return av.length > 0;
+}
+
+// Nineteenth log (user directive): aborts caused by EXTERNAL failures must be
+// user-resumable. The LLM provider failing (llm:error/llm:length), replies
+// unparseable past the repair rounds (protocol), budget ceilings — and a
+// 'completed' session that produced NO artifact (the target site never opened,
+// or the provider died and the model honestly finished with nothing). In all
+// of them the transcript is intact and a fresh engine retries. 'completed'
+// WITH an artifact stays non-resumable here: its continuation path is the
+// phase-5 feedback panel.
+function sessionStopResumable(st) {
+  if (!st) return false;
+  const reason = st.stopped && st.stopped.reason;
+  if (!reason) return true;   // never stopped: interrupted mid-run (crash/close) — resume replays
+  if (['paused', 'aborted', 'maxTurns', 'wallClock', 'tokenCap', 'llm:error', 'llm:length', 'protocol'].indexOf(reason) !== -1) return true;
+  if (reason === 'completed') {
+    return !(Array.isArray(st.artifactVersions) && st.artifactVersions.length > 0);
+  }
+  return false;
 }
 
 // Ninth-log L2: a completed session must land on a PRESENTED phase 5 —
@@ -2728,12 +2798,14 @@ async function resumeResearchSession() {
   // rounds, e.g. the final artifact write cut off twice) are resumable for
   // the same reason — the transcript is intact and a fresh engine retries
   // the turn with the continuation-repair round available; wiping the
-  // session here destroyed 45 turns of research.
-  // 'completed' stays non-resumable here: its continuation path is the
-  // phase-5 feedback panel.
-  const stopReason = st.stopped && st.stopped.reason;
-  if (stopReason && ['paused', 'aborted', 'maxTurns', 'wallClock', 'tokenCap', 'llm:error', 'llm:length', 'protocol'].indexOf(stopReason) === -1) {
-    showToast('That session already ended (' + stopReason + '). Starting fresh.', 'info');
+  // session here destroyed 45 turns of research. Nineteenth log (user
+  // directive): 'completed' with NO artifact joins the resumable set — that
+  // completion means an external wall (target site unreachable, provider
+  // outage), and Resume re-attempts instead of forcing a from-scratch
+  // restart. 'completed' WITH an artifact stays non-resumable here: its
+  // continuation path is the phase-5 feedback panel.
+  if (!sessionStopResumable(st)) {
+    showToast('That session already ended (' + (st.stopped && st.stopped.reason) + '). Starting fresh.', 'info');
     await wizardPersistence.clear();
     return;
   }

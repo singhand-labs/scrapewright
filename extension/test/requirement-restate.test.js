@@ -118,7 +118,12 @@ describe('requirement restatement: wizard wiring (source audit)', () => {
   });
 
   it('wizard.html carries the panel and all four buttons', () => {
-    assert.match(HTML, /id="requirementRestatePanel"[^>]*class="exploration-panel hidden"/);
+    // Nineteenth-log UX fix: the panel moved from an inline exploration-panel
+    // appended under the phase-1 form (below the fold, easy to miss) to a
+    // centered modal overlay in the snapshot-modal language.
+    assert.match(HTML, /id="requirementRestatePanel" class="modal hidden"/);
+    assert.match(HTML, /id="requirementRestatePanel"[\s\S]{0,200}?class="modal-content restate-content"/, 'modal-content wrapper');
+    assert.ok(!/id="requirementRestatePanel"[^>]*exploration-panel/.test(HTML), 'no longer an inline exploration panel');
     for (const id of ['restateNote', 'restateBody', 'restateQuestions', 'btnRestateConfirm', 'btnRestateRevise', 'btnRestateSkip', 'btnRestateRetry']) {
       assert.ok(HTML.includes('id="' + id + '"'), id + ' present in wizard.html');
     }

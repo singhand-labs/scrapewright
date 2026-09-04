@@ -1063,6 +1063,25 @@ pre {
   font-size: 12px;
 }
 
+/* --- Requirement restate modal ------------------------------------------------------
+   Nineteenth-log UX fix: the confirmation used to be appended inline under
+   the phase-1 form — below the fold, users missed it. Narrower than the
+   snapshot modal (a restatement is prose, not a DOM dump); the shared
+   modal-content max-height:80vh + overflow keeps the action buttons
+   reachable for long restatements. */
+.restate-content {
+  max-width: 640px;
+}
+
+#restateQuestions ul {
+  margin: 4px 0 12px;
+  padding-left: 20px;
+}
+
+#restateQuestions li {
+  margin: 4px 0;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     transition-duration: 0.01ms !important;

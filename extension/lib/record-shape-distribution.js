@@ -135,7 +135,9 @@ function formatShapeDistributionFromData(data, outputSchema, options) {
     : {};
   for (const key of Object.keys(props)) {
     const prop = props[key];
-    if (!prop || prop.type !== 'array' || !prop.items || prop.items.type !== 'object') continue;
+    // Nineteenth log: items:{properties:{...}} without items.type:'object' is
+    // a fielded record collection too — the type tag may be omitted.
+    if (!prop || prop.type !== 'array' || !prop.items || typeof prop.items !== 'object') continue;
     const arr = data[key];
     if (!Array.isArray(arr) || arr.length < 2) continue;
     const block = formatShapeDistribution(arr, options);

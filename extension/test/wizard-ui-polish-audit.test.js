@@ -122,7 +122,10 @@ describe('UI polish: live session badge', () => {
     assert.ok(SRC.includes("setSessionBadge('running', 'tool: ' + ev.tool)"), 'tool_call');
     assert.ok(SRC.includes("if (!sessionPanelOpen()) setSessionBadge('running', 'thinking…')"), 'tool_result respects open panels');
     assert.ok(SRC.includes("setSessionBadge('paused', 'paused — Resume when ready')"), 'paused');
-    assert.ok(SRC.includes("setSessionBadge('done', ev.reason === 'completed' ? 'done' : 'stopped — ' + friendlyStopReason(ev.reason))"), 'stopped reuses the A20 mapping');
+    // Nineteenth log: an artifact-less completion is badged as STOPPED
+    // (completed:empty) so Resume reads as the next action; otherwise the
+    // original A20 mapping is unchanged.
+    assert.ok(/setSessionBadge\('done',\s*emptyCompleted\s*\?\s*'stopped — ' \+ friendlyStopReason\('completed:empty'\)/.test(SRC.replace(/\n/g, ' ')), 'stopped reuses the A20 mapping (empty completion → stopped)');
     assert.ok(SRC.includes("setSessionBadge('crashed', 'crashed')"), 'crash path');
   });
 

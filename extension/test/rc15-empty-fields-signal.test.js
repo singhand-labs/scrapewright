@@ -148,6 +148,49 @@ describe('RC15 — detectEmptyOutputFieldsByRatio finds partial-empty fields', (
       'with threshold 0.3, shares is flagged');
   });
 
+  it('reads fielded items WITHOUT items.type (nineteenth log: typeless items blinded the detector)', () => {
+    // 2026-09-04: the LLM wrote outputSchema with items:{properties:{...}}
+    // and NO items.type:'object'. scoreAttemptResult derived inner keys from
+    // items.properties alone (avgFieldsPerItem 1/11) but this detector
+    // demanded items.type==='object' and skipped the field entirely — 10 of
+    // 11 fields empty in every record verified GREEN with partialEmpty:[].
+    // Field discovery must match: required-first, then properties keys,
+    // regardless of whether items.type is spelled out.
+    const schema = {
+      type: 'object',
+      required: ['posts'],
+      properties: {
+        posts: {
+          type: 'array',
+          items: {
+            properties: {
+              index: { type: 'number' },
+              postId: { type: 'string' },
+              time: { type: 'string' },
+              content: { type: 'string' },
+              likes: { type: 'string' }
+            }
+          }
+        }
+      }
+    };
+    const data = {
+      posts: [
+        { index: 1, postId: '', time: '', content: '', likes: '' },
+        { index: 2, postId: '', time: '', content: '', likes: '' },
+        { index: 3, postId: '', time: '', content: '', likes: '' },
+        { index: 4, postId: '', time: '', content: '', likes: '' }
+      ]
+    };
+    const out = detectEmptyOutputFieldsByRatio(data, schema);
+    const paths = out.map(f => f.path).sort();
+    assert.deepEqual(paths, ['posts.content', 'posts.likes', 'posts.postId', 'posts.time'],
+      'every data field except the synthetic index must be flagged; got: ' + JSON.stringify(paths));
+    const postId = out.find(f => f.path === 'posts.postId');
+    assert.equal(postId.emptyRatio, 1);
+    assert.equal(postId.totalCount, 4);
+  });
+
   it('ignores arrays shorter than minRecords (default 2)', () => {
     // A single record can't establish a "pattern of emptiness".
     const data = { posts: [{ author: 'A', likes: '1', comments: '', shares: '' }] };

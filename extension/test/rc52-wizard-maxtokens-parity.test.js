@@ -25,7 +25,10 @@ function fnBody(name) {
 describe('RC52/RC53: wizard LLM budget parity', () => {
   it('the session adapter forwards maxTokens on every chat call', () => {
     const body = fnBody('makeLlmAdapter');
-    assert.ok(body.includes('client.chat(messages, { maxTokens })'), 'adapter passes maxTokens');
+    // Nineteenth log: the options bag also carries onRetry (retry visibility)
+    // — the maxTokens forwarding requirement is unchanged.
+    assert.match(body, /client\.chat\(messages,\s*\{\s*maxTokens,/s, 'adapter passes maxTokens');
+    assert.ok(!/maxTokens:\s*\d+/.test(body), 'adapter never hardcodes a budget');
   });
   it('the session budget takes the user maxOutputTokens knob, never a hardcoded cap', () => {
     assert.match(SRC, /maxTokensPerCall:\s*\(config\.config\.maxOutputTokens[^)]*\)\s*\|\|\s*16384/);

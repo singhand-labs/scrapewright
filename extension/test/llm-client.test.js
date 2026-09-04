@@ -369,6 +369,55 @@ describe('LLMClient.chat retry behavior', () => {
     assert.equal(calls, 4, 'should have attempted 1 + 3 retries');
   });
 
+  it('nineteenth log: DEFAULT_MAX_RETRIES is 10 (429 storms must not kill a session in 4 attempts)', async () => {
+    const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'lib', 'llm-client.js'), 'utf8');
+    assert.match(src, /const DEFAULT_MAX_RETRIES = 10;/,
+      'user directive: LLM call failures retry up to 10 times with intervals');
+  });
+
+  it('nineteenth log: onRetry fires before each backoff sleep with attempt/maxRetries/wait/error', async () => {
+    let calls = 0;
+    global.fetch = async () => {
+      calls++;
+      if (calls < 3) return mockResponse({ status: 429, body: { error: { message: 'Rate limit' } } });
+      return mockResponse({ body: successBody('ok') });
+    };
+
+    const seen = [];
+    const client = makeClient();
+    const content = await client.chat(
+      [{ role: 'user', content: 'hi' }],
+      {
+        maxRetries: 5, backoffMs: () => 777,
+        onRetry: (info) => seen.push(info)
+      }
+    );
+    assert.equal(content, 'ok');
+    assert.equal(calls, 3);
+    assert.equal(seen.length, 2, 'one notification per failed attempt that will be retried');
+    assert.equal(seen[0].attempt, 1);
+    assert.equal(seen[0].maxRetries, 5);
+    assert.equal(seen[0].wait, 777);
+    assert.match(seen[0].error, /Rate limit|429/);
+    assert.equal(seen[1].attempt, 2);
+  });
+
+  it('a throwing onRetry callback never breaks the call', async () => {
+    let calls = 0;
+    global.fetch = async () => {
+      calls++;
+      if (calls < 2) return mockResponse({ status: 429, body: { error: { message: 'Rate limit' } } });
+      return mockResponse({ body: successBody('ok') });
+    };
+
+    const client = makeClient();
+    const content = await client.chat(
+      [{ role: 'user', content: 'hi' }],
+      { maxRetries: 3, backoffMs: fastBackoff, onRetry: () => { throw new Error('UI exploded'); } }
+    );
+    assert.equal(content, 'ok', 'the call succeeds despite the observer throwing');
+  });
+
   it('respects custom maxRetries option', async () => {
     let calls = 0;
     global.fetch = async () => {

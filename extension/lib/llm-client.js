@@ -1,4 +1,8 @@
-const DEFAULT_MAX_RETRIES = 3;
+// Nineteenth log (user directive): provider rate limiting (429 storms — 41 in
+// one session) burned the old 3-retry budget. Ten retries with exponential
+// backoff rides out a sustained limit window (~63s worst case) instead of
+// killing the session. Callers can override via options.maxRetries.
+const DEFAULT_MAX_RETRIES = 10;
 const DEFAULT_TIMEOUT_MS = 300_000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 16_384;
 const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
@@ -78,6 +82,11 @@ class LLMClient {
         const wait = backoffMs(attempt);
         const shortErr = (e && e.message) ? e.message.split('\n')[0].slice(0, 200) : String(e);
         console.warn(`[LLMClient] Attempt ${attempt + 1} failed (${shortErr}); retrying in ${wait}ms`);
+        // Nineteenth log (user directive): retries must be VISIBLE — the UI
+        // shows "attempt N of M, waiting Xs" instead of an unexplained stall.
+        if (typeof options.onRetry === 'function') {
+          try { options.onRetry({ attempt: attempt + 1, maxRetries: maxRetries, wait: wait, error: shortErr }); } catch (_) {}
+        }
         await new Promise(r => setTimeout(r, wait));
       }
     }

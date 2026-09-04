@@ -303,6 +303,53 @@ describe('budgets and breakers', () => {
     assert.equal(report.status, 'stopped');
   });
 
+  it('maxTurns right after a GREEN-with-holes verify discloses it in the stop detail (nineteenth log)', async () => {
+    // Production shape 2026-09-04: artifact v3 verified ok:true at turn 60/60
+    // over 4 records whose every data field was empty — the generic budget
+    // text hid the empties at the exact moment the user reads the toast.
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('verify.run', {})),
+        reply(toolTurn),
+        reply(toolTurn)
+      ], []),
+      tools: {
+        'verify.run': async () => ({
+          ok: true,
+          score: { score: 140, isData: true, breakdown: {} },
+          detectors: { partialEmptyFields: [{ field: 'postId', path: 'posts.postId', emptyCount: 4, totalCount: 4, emptyRatio: 1 }] },
+          events: ['PARTIAL_EMPTY_FIELDS']
+        }),
+        'probe.count': async () => ({ count: 1 })
+      },
+      budgets: { maxTurns: 3 }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'maxTurns');
+    assert.match(report.stopped.detail, /budget exhausted at 3\/3 turns/);
+    assert.match(report.stopped.detail, /VERIFY PARTIAL-EMPTY/);
+    assert.match(report.stopped.detail, /posts\.postId 4\/4 empty/);
+  });
+
+  it('maxTurns after a RED verify carries [LAST VERIFY FAILED] in the stop detail', async () => {
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('verify.run', {})),
+        reply(toolTurn)
+      ], []),
+      tools: {
+        'verify.run': async () => ({ ok: false, error: { message: 'FIELD_MATCH_ZERO: ...' } }),
+        'probe.count': async () => ({ count: 1 })
+      },
+      budgets: { maxTurns: 2 }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'maxTurns');
+    assert.match(report.stopped.detail, /LAST VERIFY FAILED/);
+  });
+
   it('DEFAULT maxTurns is 60 (sixth-log G5: first two full sessions died at the 40 cap)', async () => {
     const session = createResearchSession({
       requirement: 'r',
@@ -381,9 +428,34 @@ describe('budgets and breakers', () => {
     assert.equal(advisories.length, 3, 'exactly one advisory per bucket');
     assert.match(advisories[0].text, /half the turn budget spent: 10 of 20/);
     assert.match(advisories[1].text, /75% of the turn budget spent: 15 of 20/);
+    assert.match(advisories[1].text, /NO ARTIFACT YET/,
+      'nineteenth log: artifact v1 landed at 55/60 — the no-artifact 75% advisory escalates to a direct order');
     assert.match(advisories[2].text, /90% of the turn budget spent: 18 of 20/);
     assert.match(advisories[2].text, /FINALIZE/);
     assert.deepEqual(st.budgetAdvisories.sort(), ['author', 'finalize', 'half']);
+  });
+
+  it('75% advisory reverts to pacing advice once an artifact exists (nineteenth log)', async () => {
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(JSON.stringify({ think: 't', tool: 'service.update', args: { steps: [{ id: 's1', name: 'one', script: 'return 1', onSuccess: 'TERMINATE' }] } })),
+        reply(toolTurn)
+      ], []),
+      tools: {
+        'service.update': async () => ({ version: 1 }),
+        'probe.count': async () => ({ count: 1 })
+      },
+      budgets: { maxTurns: 8 }   // buckets at turns 4 / 6 / 7; artifact lands turn 1
+    });
+    await session.run();
+    const st = session.state().session;
+    const advisories = st.transcript.filter(e => e.kind === 'system' && /BUDGET ADVISORY/.test(e.text));
+    const author = advisories.find(a => /75% of the turn budget/.test(a.text));
+    assert.ok(author, '75% advisory fired');
+    assert.ok(!/NO ARTIFACT YET/.test(author.text),
+      'with artifactVersions.length > 0 the advisory keeps the pacing wording');
+    assert.match(author.text, /dry-run the fieldMap/);
   });
 
   it('a resumed session past all buckets fires only the highest advisory once (seventh-log J1)', async () => {

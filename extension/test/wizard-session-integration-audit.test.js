@@ -71,6 +71,24 @@ describe('wizard research-session integration (source audit)', () => {
     assert.ok(body.includes('ev.verify'), 'digest logged only when the engine attached one');
   });
 
+  it('nineteenth log: console mirror caps leave room for schemas (tool args 1200, summaries 600)', () => {
+    const body = fnBody('handleSessionEvent');
+    assert.ok(body.includes('JSON.stringify(ev.args || {}).slice(0, 1200)'),
+      'io.confirm/service.update args carry outputSchema — 200 chars cut it off mid-schema, making typeless-items failures undiagnosable from exported logs');
+    assert.ok(body.includes("String(ev.summary || '').slice(0, 600)"),
+      'verify failure teachings were cut mid-sentence at 300 chars');
+  });
+
+  it('nineteenth log: LLM retries are visible in the research log (user directive)', () => {
+    const body = fnBody('makeLlmAdapter');
+    assert.ok(body.includes('onRetry'), 'adapter observes client retries');
+    assert.match(body, /appendLog\('LLM call failed/, 'each retry lands in the execution log');
+    assert.match(body, /' \+ info\.attempt \+ '\/' \+ info\.maxRetries/, 'log line shows attempt N/10');
+    assert.ok(/\/\* logging must never break the call \*\//.test(body), 'UI logging is best-effort');
+    const restateBody = fnBody('showRequirementRestatePanel');
+    assert.ok(restateBody.includes('onRetry'), 'the restatement panel reports retry state in its note');
+  });
+
   it('the annotation bridge enters picks into the ledger with provenance user (spec §5/§8)', () => {
     const body = fnBody('createWizardAnnotationBridge');
     assert.ok(body.includes('START_ANNOTATION'));
@@ -163,7 +181,10 @@ describe('ninth-log L1-L5: session completion hands back to the wizard flow', ()
     assert.ok(body.includes('presentTestOutcome('), 'fresh verify is presented through the shared path');
     assert.ok(body.includes('testScript()'), 'stale/missing verify falls back to a fresh end-to-end run');
     const srs = fnBody('startResearchSession');
-    assert.ok(/sessionStopPresentsOutcome\(report\.stopped\.reason\)\)\s*\{/.test(srs.replace(/\n/g, ' ')),
+    // Nineteenth log: the classifier grew a second arg (sessionState) so an
+    // artifact-less completion stays on phase 4 for Resume instead of
+    // presenting a blank outcome.
+    assert.ok(/sessionStopPresentsOutcome\(report\.stopped\.reason,\s*wizardSession\.state\(\)\.session\)/.test(srs.replace(/\n/g, ' ')),
       'the completed/maxTurns branch hands off to presentSessionCompletion (no bare goToPhase)');
   });
 
@@ -176,16 +197,15 @@ describe('ninth-log L1-L5: session completion hands back to the wizard flow', ()
 
   it('L3: resume allows a maxTurns-stopped session (G5 promise: raise the knob, then Resume)', () => {
     const body = fnBody('resumeResearchSession');
-    assert.ok(/'maxTurns'/.test(body), 'maxTurns is in the resumable allowlist');
-    // The allowlist must still block genuinely-ended sessions: 'completed'
-    // continues via the feedback panel; protocol-class stops are terminal
-    // engine states. llm-class stops became resumable in the fourteenth-log
-    // fix (see the dedicated test below). (Comments stripped — the rationale
-    // mentions them.)
-    const stripped = body.replace(/\/\/[^\n]*/g, '');
-    const guard = stripped.match(/st\.stopped\.reason[^;]*;/g) || [];
-    assert.ok(guard.length > 0, 'stop-reason guard present');
-    assert.ok(!/'completed'/.test(stripped), "'completed' must NOT be resumable here — the feedback panel is its continuation");
+    // Nineteenth log: the inline allowlist moved into the shared
+    // sessionStopResumable helper — resumeResearchSession must delegate.
+    assert.match(body, /sessionStopResumable\(st\)/, 'resume gate delegates to the shared resumability helper');
+    const helper = fnBody('sessionStopResumable');
+    assert.ok(/'maxTurns'/.test(helper), 'maxTurns is in the resumable allowlist');
+    // 'completed' WITH an artifact still continues via the feedback panel —
+    // the ONLY resumable completion is the artifact-less external wall
+    // (nineteenth log), which the helper gates on artifactVersions.
+    assert.match(helper, /reason === 'completed'[\s\S]{0,160}?artifactVersions/, 'completed resumability is gated on artifact production');
   });
 
   it('L4: the feedback panel continues a completed session with a USER FEEDBACK transcript entry', () => {
@@ -328,12 +348,14 @@ describe('audit plan1: wizard lifecycle state machine (A1/A2/A3/A5/A6/A17/A18 + 
   });
 
   it('A18/A19: Resume and annotation-finish buttons disable in flight', () => {
-    assert.match(SRC, /btnSessionResume'\)\.addEventListener\('click', async \(\) => \{[\s\S]{0,1100}?disabled = true/);
+    // Window widened (nineteenth log): the Resume handler grew an
+    // emptyCompleted branch before the first disable.
+    assert.match(SRC, /btnSessionResume'\)\.addEventListener\('click', async \(\) => \{[\s\S]{0,1600}?disabled = true/);
     assert.match(SRC, /btnAnnotationFinish'\)\.addEventListener\('click', async \(\) => \{[\s\S]{0,300}?disabled = true/);
   });
 
   it('budget-class stops route Resume through a fresh engine (G5 truthfulness)', () => {
-    const m = SRC.match(/btnSessionResume'\)\.addEventListener\('click', async \(\) => \{[\s\S]{0,1600}?return;\n  \}\);/);
+    const m = SRC.match(/btnSessionResume'\)\.addEventListener\('click', async \(\) => \{[\s\S]{0,2200}?return;\n  \}\);/);
     assert.ok(m);
     assert.match(m[0], /maxTurns/);
     assert.match(m[0], /resumeResearchSession\(\)/);
@@ -364,16 +386,20 @@ describe('audit plan1: wizard lifecycle state machine (A1/A2/A3/A5/A6/A17/A18 + 
     //   external-condition stops: the transcript is intact and a fresh
     //   engine re-reads GET_LLM_CONFIG, so Resume after provider recovery
     //   is the designed continuation.
-    const sites = SRC.match(/\['paused', 'aborted', 'maxTurns', 'wallClock', 'tokenCap'[^\]]*\]/g) || [];
-    assert.ok(sites.length >= 2, 'parked-fallback whitelist literals present (found ' + sites.length + ')');
-    for (const s of sites) {
-      assert.ok(/'llm:error'/.test(s), 'whitelist includes llm:error: ' + s);
-      assert.ok(/'llm:length'/.test(s), 'whitelist includes llm:length: ' + s);
-    }
+    // Nineteenth log: the inline whitelists that used to be duplicated at
+    // every site were consolidated into the shared sessionStopResumable
+    // helper — assert the helper carries the llm-class reasons AND that all
+    // three historical gate sites (parked fallback, reload toast,
+    // resumeResearchSession) delegate to it.
+    const helper = fnBody('sessionStopResumable');
+    assert.match(helper, /'llm:error'/, 'helper whitelist includes llm:error');
+    assert.match(helper, /'llm:length'/, 'helper whitelist includes llm:length');
+    const calls = SRC.match(/sessionStopResumable\(/g) || [];
+    assert.ok(calls.length >= 3, 'parked-fallback + reload-toast + resumeResearchSession all gate via the helper (found ' + calls.length + ')');
     const resumeBody = fnBody('resumeResearchSession');
-    assert.match(resumeBody, /'llm:error'/, 'resumeResearchSession gate accepts llm:error');
-    assert.match(resumeBody, /'llm:length'/, 'resumeResearchSession gate accepts llm:length');
-    assert.ok(!/'completed'/.test(resumeBody.replace(/\/\/[^\n]*/g, '')), "'completed' stays non-resumable (feedback panel path)");
+    assert.match(resumeBody, /sessionStopResumable\(st\)/, 'resumeResearchSession gate accepts llm:error via the helper');
+    // 'completed' WITH an artifact stays non-resumable (feedback panel path).
+    assert.match(helper, /reason === 'completed'[\s\S]{0,160}?artifactVersions/, 'completed resumability is gated on artifact production');
   });
 
   it('fourteenth log: the live-page Resume button routes llm-class stops to a fresh engine', () => {
@@ -395,13 +421,14 @@ describe('audit plan1: wizard lifecycle state machine (A1/A2/A3/A5/A6/A17/A18 + 
     // persisted session, destroying 45 turns of research. A protocol stop is
     // an LLM-output failure, not a dead end: the transcript is intact and a
     // fresh engine retries the turn (now with the continuation-repair round).
-    const sites = SRC.match(/\['paused', 'aborted', 'maxTurns', 'wallClock', 'tokenCap'[^\]]*\]/g) || [];
-    assert.ok(sites.length >= 2, 'parked-fallback whitelist literals present (found ' + sites.length + ')');
-    for (const s of sites) {
-      assert.ok(/'protocol'/.test(s), 'whitelist includes protocol: ' + s);
-    }
+    // Nineteenth log: whitelist sites consolidated into the shared
+    // sessionStopResumable helper — 'protocol' lives in its allowlist.
+    const helper = fnBody('sessionStopResumable');
+    assert.match(helper, /'protocol'/, 'helper whitelist includes protocol');
+    const calls = SRC.match(/sessionStopResumable\(/g) || [];
+    assert.ok(calls.length >= 3, 'parked-fallback + reload-toast + resumeResearchSession all gate via the helper (found ' + calls.length + ')');
     const resumeBody = fnBody('resumeResearchSession');
-    assert.match(resumeBody, /'protocol'/, 'resumeResearchSession gate accepts protocol');
+    assert.match(resumeBody, /sessionStopResumable\(st\)/, 'resumeResearchSession gate accepts protocol via the helper');
     // The live-page Resume button must route protocol stops to the fresh
     // engine too — wizardSession.run() would no-op on the stopped session.
     const m = SRC.match(/btnSessionResume'\)\.addEventListener\('click',\s*async \(\) => \{([\s\S]*?)\n  \}\);/);

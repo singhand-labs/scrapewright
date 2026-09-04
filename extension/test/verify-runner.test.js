@@ -714,6 +714,38 @@ describe('verify-runner partialEmptyFields detector (sixteenth log: green verify
     assert.ok(byPath['posts.hoverCards'], 'hoverCards empty 2/3 crosses the threshold');
   });
 
+  it('typeless items (items:{properties} with no type tag) still census empties — nineteenth log', async () => {
+    // 2026-09-04 production shape: outputSchema posts items declared
+    // properties WITHOUT items.type:'object'. scoreAttemptResult read the
+    // fields (avgFieldsPerItem 1/11) while the ratio detector gated on
+    // items.type and returned [] — verify went GREEN at score 140 over 4
+    // records whose every data field was empty (only a synthetic index
+    // populated). The census must see the same fields the scorer sees.
+    const schema = {
+      type: 'object', required: ['posts'],
+      properties: { posts: { type: 'array', items: { properties: {
+        index: { type: 'number' }, postId: { type: 'string' }, time: { type: 'string' },
+        content: { type: 'string' }, likes: { type: 'string' }
+      } } } }
+    };
+    const posts = [
+      { index: 1, postId: '', time: '', content: '', likes: '' },
+      { index: 2, postId: '', time: '', content: '', likes: '' },
+      { index: 3, postId: '', time: '', content: '', likes: '' },
+      { index: 4, postId: '', time: '', content: '', likes: '' }
+    ];
+    const orch = async () => ({ finalResult: { posts }, steps: [{ stepId: 's1', stepName: 'one', result: { done: true }, snapshot: null }], pages: [], pagesTruncated: false });
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: schema });
+    assert.equal(out.report.ok, true);
+    const pe = out.report.detectors.partialEmptyFields;
+    assert.ok(pe, 'detector block present for typeless items');
+    const paths = pe.map(f => f.path).sort();
+    assert.deepEqual(paths, ['posts.content', 'posts.likes', 'posts.postId', 'posts.time'],
+      'every data field except the synthetic index censused; got: ' + JSON.stringify(paths));
+    assert.ok(out.report.events.indexOf('PARTIAL_EMPTY_FIELDS') !== -1, 'tag rides report.events');
+  });
+
   it('fully populated output keeps the detector null and the tag absent', async () => {
     const posts = [
       { content: 'c1', time: '2h', location: 'Berlin', likeCount: '1', mediaUrls: ['https://cdn.example.com/a.jpg'], hoverCards: [{ html: 'x' }] },

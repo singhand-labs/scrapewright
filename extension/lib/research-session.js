@@ -89,7 +89,13 @@
     },
     {
       key: 'author', pct: 0.75,
-      text: (used, max) => 'BUDGET ADVISORY (75% of the turn budget spent: ' + used + ' of ' + max + '): move to authoring now — dry-run the fieldMap with probe.extract in the live tab, then service.update. If the I/O contract is not confirmed yet, complete io.confirm first. Leave the remaining turns for verify.run and fixing its findings.'
+      // Nineteenth log: artifact v1 landed at turn 55/60 — the static "move
+      // to authoring now" was not imperative enough, so verify feedback had
+      // zero runway. With NO artifact yet the text escalates to a direct
+      // order; once a draft exists it reverts to the pacing advice.
+      text: (used, max, hasArtifact) => 'BUDGET ADVISORY (75% of the turn budget spent: ' + used + ' of ' + max + '): ' + (hasArtifact
+        ? 'move to authoring now — dry-run the fieldMap with probe.extract in the live tab, then service.update. If the I/O contract is not confirmed yet, complete io.confirm first. Leave the remaining turns for verify.run and fixing its findings.'
+        : 'NO ARTIFACT YET — submit a complete draft via service.update in your NEXT turn. Verify-run feedback loops need runway; a perfect research phase with no artifact and no verify at the cap is a failed session. If the I/O contract is not confirmed yet, complete io.confirm first, then submit.')
     },
     {
       key: 'finalize', pct: 0.9,
@@ -212,6 +218,24 @@
         ledgerEntries: ledger.serialize().entries.length,
         observations: observationLog.size()
       };
+    }
+
+    // Nineteenth log: the session hit maxTurns IMMEDIATELY after a
+    // green-with-holes verify — the stop detail showed only the generic
+    // budget text and the empties stayed invisible at the exact moment the
+    // user looks at the toast. Budget stops carry the same honesty the
+    // finish path (thirteenth/sixteenth/seventeenth logs) already discloses.
+    function verifyStopSuffix() {
+      if (state.lastVerifyOk === false) {
+        return ' [LAST VERIFY FAILED — the budget ran out before the failing run could be fixed; Resume to continue]';
+      }
+      if (state.lastVerifySchemaBlind) {
+        return ' [VERIFY SCHEMA-BLIND — outputSchema declares no fields, so the last green is unverifiable. Renegotiate the contract with io.confirm (fielded properties + required), service.update the artifact to match, and re-verify]';
+      }
+      if (state.lastVerifyEmptyFields) {
+        return ' [VERIFY PARTIAL-EMPTY — confirmed field(s) empty in every record: ' + state.lastVerifyEmptyFields.join(', ') + ']';
+      }
+      return '';
     }
 
     function stateForPersist() {
@@ -466,7 +490,7 @@
           state.budgetAdvisories.push(adv.key);
         }
       }
-      state.transcript.push({ kind: 'system', text: due.text(state.spend.turns, budgets.maxTurns) });
+      state.transcript.push({ kind: 'system', text: due.text(state.spend.turns, budgets.maxTurns, state.artifactVersions.length > 0) });
       emit('budget_advisory', { key: due.key, turns: state.spend.turns, maxTurns: budgets.maxTurns });
     }
 
@@ -601,12 +625,12 @@
           }
           if (state.spend.turns >= budgets.maxTurns) {
             report = await stop('maxTurns', state.spend.turns > 0
-              ? 'budget exhausted at ' + state.spend.turns + '/' + budgets.maxTurns + ' turns — raise the budget (maxTurns) in the resume seed to continue'
+              ? 'budget exhausted at ' + state.spend.turns + '/' + budgets.maxTurns + ' turns — raise the budget (maxTurns) in the resume seed to continue' + verifyStopSuffix()
               : null);
             break;
           }
           if (state.elapsedMs + netSegmentMs() >= budgets.wallClockMs) {
-            report = await stop('wallClock', 'time budget exhausted after ~' + Math.round((state.elapsedMs + netSegmentMs()) / 1000) + 's (parked ' + Math.round(parkedTotal / 1000) + 's excluded) — raise the budget (wallClockMs) in the resume seed to continue');
+            report = await stop('wallClock', 'time budget exhausted after ~' + Math.round((state.elapsedMs + netSegmentMs()) / 1000) + 's (parked ' + Math.round(parkedTotal / 1000) + 's excluded) — raise the budget (wallClockMs) in the resume seed to continue' + verifyStopSuffix());
             break;
           }
           if (state.spend.promptTokens + state.spend.completionTokens >= budgets.tokenCap) { report = await stop('tokenCap'); break; }

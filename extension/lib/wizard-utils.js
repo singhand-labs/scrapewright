@@ -1826,6 +1826,29 @@ function findUpstreamProducingStepId(steps, fallbackStepId) {
   return fallbackStepId;
 }
 
+// schemaArrayItemFieldKeys(prop) → string[] | null
+//
+// Canonical field discovery for a schema property that declares an array of
+// records. Returns required-first item field keys, falling back to declared
+// item properties; null when the property is not a fielded array.
+//
+// Nineteenth log (2026-09-04): the LLM authored outputSchema with
+// items:{properties:{...}} and NO items.type:'object'. Consumers gating on
+// items.type went blind while scoreAttemptResult (properties-only) kept
+// reading the same schema — 10 of 11 fields empty in every record verified
+// GREEN with partialEmpty:[] and score 140. A fielded items node counts
+// regardless of whether the type tag is spelled out.
+function schemaArrayItemFieldKeys(prop) {
+  if (!prop || prop.type !== 'array' || !prop.items || typeof prop.items !== 'object') return null;
+  const ir = (Array.isArray(prop.items.required) ? prop.items.required : []).filter(k => typeof k === 'string');
+  if (ir.length) return ir;
+  const ip = (prop.items.properties && typeof prop.items.properties === 'object' && !Array.isArray(prop.items.properties))
+    ? prop.items.properties
+    : {};
+  const keys = Object.keys(ip).filter(k => typeof k === 'string');
+  return keys.length ? keys : null;
+}
+
 function findEmptyExtractionFields(data, outputSchema) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return [];
   if (!outputSchema || typeof outputSchema !== 'object' || Array.isArray(outputSchema)) return [];
@@ -1844,14 +1867,21 @@ function findEmptyExtractionFields(data, outputSchema) {
     v === '' || v === null || v === undefined || (Array.isArray(v) && v.length === 0);
 
   // A property is "array-of-objects" if the schema declares type:'array' with
-  // object items. For these fields, an empty array means the script ran but
-  // extracted zero records — a clear extraction failure (the page has items,
-  // the selectors missed them). For scalar-array fields (string[]), an empty
-  // array can legitimately mean "the page had no matching items", so we leave
-  // those for validateOutputAgainstSchema to surface as a missing-field.
+  // fielded items (items.type:'object' OR items:{properties} — nineteenth
+  // log: the type tag may be omitted). For these fields, an empty array means
+  // the script ran but extracted zero records — a clear extraction failure
+  // (the page has items, the selectors missed them). For scalar-array fields
+  // (string[]), an empty array can legitimately mean "the page had no matching
+  // items", so we leave those for validateOutputAgainstSchema to surface as a
+  // missing-field.
+  // Nineteenth log: schemaArrayItemFieldKeys returns null for a bare
+  // items:{type:'object'} (no declared fields) — that is still an explicit
+  // array-of-objects declaration, so it counts for the empty-array flag;
+  // only the per-record field scoping needs derivable keys.
   const isArrayOfObjects = (key) => {
-    const prop = props[key];
-    return !!(prop && prop.type === 'array' && prop.items && prop.items.type === 'object');
+    const p = props[key];
+    if (!p || p.type !== 'array' || !p.items || typeof p.items !== 'object') return false;
+    return schemaArrayItemFieldKeys(p) !== null || p.items.type === 'object';
   };
 
   // Per-record emptiness is scoped to the SCHEMA's item fields when the
@@ -1859,16 +1889,7 @@ function findEmptyExtractionFields(data, outputSchema) {
   // synthetic keys the step's map added (serialNumber: 1, counts 0), so a
   // record whose every DECLARED field was empty read as non-empty and the
   // all-empty signal never fired.
-  const itemFieldKeys = (key) => {
-    const prop = props[key];
-    if (!prop || prop.type !== 'array' || !prop.items || typeof prop.items !== 'object') return [];
-    const ir = (Array.isArray(prop.items.required) ? prop.items.required : []).filter(k => typeof k === 'string');
-    if (ir.length) return ir;
-    const ip = (prop.items.properties && typeof prop.items.properties === 'object' && !Array.isArray(prop.items.properties))
-      ? prop.items.properties
-      : {};
-    return Object.keys(ip);
-  };
+  const itemFieldKeys = (key) => schemaArrayItemFieldKeys(props[key]) || [];
 
   const empty = [];
   for (const key of fieldKeys) {
@@ -1948,17 +1969,10 @@ function detectEmptyOutputFieldsByRatio(data, outputSchema, options) {
   const result = [];
   for (const key of Object.keys(props)) {
     const prop = props[key];
-    if (!prop || prop.type !== 'array' || !prop.items || prop.items.type !== 'object') continue;
+    const fieldKeys = schemaArrayItemFieldKeys(prop);
+    if (!fieldKeys) continue;
     const arr = data[key];
     if (!Array.isArray(arr) || arr.length < minRecords) continue;
-    const itemSchema = prop.items.properties && typeof prop.items.properties === 'object'
-      ? prop.items.properties
-      : {};
-    const itemRequired = Array.isArray(prop.items.required) ? prop.items.required : null;
-    const fieldKeys = itemRequired && itemRequired.length > 0
-      ? itemRequired
-      : Object.keys(itemSchema);
-    if (fieldKeys.length === 0) continue;
     for (const fk of fieldKeys) {
       let emptyCount = 0;
       const samples = [];
@@ -2175,17 +2189,10 @@ function detectDuplicateRecords(data, outputSchema, options) {
   const result = [];
   for (const key of Object.keys(props)) {
     const prop = props[key];
-    if (!prop || prop.type !== 'array' || !prop.items || prop.items.type !== 'object') continue;
+    const fieldKeys = schemaArrayItemFieldKeys(prop);
+    if (!fieldKeys) continue;
     const arr = data[key];
     if (!Array.isArray(arr) || arr.length < minRecords) continue;
-    const itemSchema = prop.items.properties && typeof prop.items.properties === 'object'
-      ? prop.items.properties
-      : {};
-    const itemRequired = Array.isArray(prop.items.required) ? prop.items.required : null;
-    const fieldKeys = itemRequired && itemRequired.length > 0
-      ? itemRequired
-      : Object.keys(itemSchema);
-    if (fieldKeys.length === 0) continue;
 
     // Count signatures. We don't break early because the caller may want
     // partial-duplicate stats (lower threshold).
@@ -2283,7 +2290,9 @@ function detectCountShortfall(data, inputValues, outputSchema, options) {
   let worst = null;
   for (const key of Object.keys(props)) {
     const prop = props[key];
-    if (!prop || prop.type !== 'array' || !prop.items || prop.items.type !== 'object') continue;
+    // Count comparison only needs the array itself — a fielded items node is
+    // NOT required (nineteenth log: typeless items must not hide a shortfall).
+    if (!prop || prop.type !== 'array') continue;
     const arr = data[key];
     const extracted = Array.isArray(arr) ? arr.length : 0;
     if (extracted >= requested * severeRatio) continue;
@@ -3871,7 +3880,7 @@ function formatElementsForPrompt(elements, opts) {
 
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectCountShortfall, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+  module.exports = { parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectCountShortfall, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.hoverAwareTimeoutMs = hoverAwareTimeoutMs;
@@ -3897,6 +3906,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.hashString = hashString;
   window.buildRequirementRestatePrompt = buildRequirementRestatePrompt;
   window.normalizeRestatement = normalizeRestatement;
+  window.schemaArrayItemFieldKeys = schemaArrayItemFieldKeys;
   window.detectEmptyOutputFieldsByRatio = detectEmptyOutputFieldsByRatio;
   window.formatEmptyOutputFieldsSignal = formatEmptyOutputFieldsSignal;
   window.detectDuplicateRecords = detectDuplicateRecords;
@@ -3953,6 +3963,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.findUpstreamProducingStepId = findUpstreamProducingStepId;
   self.getFirstRecordHtmlFromExecution = getFirstRecordHtmlFromExecution;
   self.getFirstRecordHtmlFromAnyStep = getFirstRecordHtmlFromAnyStep;
+  self.schemaArrayItemFieldKeys = schemaArrayItemFieldKeys;
   self.detectEmptyOutputFieldsByRatio = detectEmptyOutputFieldsByRatio;
   self.formatEmptyOutputFieldsSignal = formatEmptyOutputFieldsSignal;
   self.detectDuplicateRecords = detectDuplicateRecords;

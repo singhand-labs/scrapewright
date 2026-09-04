@@ -308,6 +308,33 @@ describe('formatShapeDistributionFromData', () => {
     assert.match(out, /2 distinct shapes/);
   });
 
+  it('accepts fielded items WITHOUT items.type (nineteenth log: typeless items hid the records)', () => {
+    const data = {
+      posts: [
+        { group: 'A', time: '1h', content: 'x' },
+        { account: 'B', time: '2h', content: 'y' },
+      ],
+    };
+    const schema = {
+      properties: {
+        posts: {
+          type: 'array',
+          items: {
+            properties: {
+              group: { type: 'string' },
+              account: { type: 'string' },
+              time: { type: 'string' },
+              content: { type: 'string' },
+            },
+          },
+        },
+      },
+    };
+    const out = formatShapeDistributionFromData(data, schema);
+    assert.match(out, /Record collection: posts/,
+      'items:{properties} without a type tag is still the declared record collection');
+  });
+
   it('skips array fields with non-object items (e.g. string arrays)', () => {
     const data = { tags: ['a', 'b', 'c'], items: [{ a: 1 }, { b: 2 }] };
     const schema = {
