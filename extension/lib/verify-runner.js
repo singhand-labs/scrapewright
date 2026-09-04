@@ -639,6 +639,35 @@
         return 'step selector(s) reference ad/sponsored markers (' + lines + '). Check the POLARITY against the requirement: if it EXCLUDES ads/recommendations, a container or content selector built ON an ad marker selects exactly what was to be removed — the exclusion form (:not() / :has()-negation over the marker) is the correct one. And if ad-marked cards are the ONLY cards the page offers, that is thin content for this input value: say so in the finish summary and prefer a more common input value instead of relabeling ad units as the requested records.';
       }
 
+      // Twenty-fourth log: the model's own step-level instrumentation (small
+      // non-record keys of finalResult, e.g. {debugTime: {...}} riding beside
+      // {posts: [...]}) serialized AFTER the sampled record array, and the
+      // engine renders tool results through a ~4000-char summary — htmlSnippet
+      // strings filled the window and the model literally could not see its
+      // own debug output ("finalResult被截断看不到debugTime"). It burnt a
+      // whole turn on a debug-only step to learn a fact its payload already
+      // contained. resultDebug lifts those keys AHEAD of finalResult in the
+      // report key order so they survive the summary window. Record arrays
+      // (arrays of objects) stay in finalResult only.
+      function resultDebugDigest(finalResult) {
+        if (!finalResult || typeof finalResult !== 'object' || Array.isArray(finalResult)) return null;
+        const out = {};
+        let used = 0;
+        for (const entry of Object.entries(finalResult)) {
+          if (Object.keys(out).length >= 4 || used >= 1500) break;
+          const v = entry[1];
+          if (Array.isArray(v) && v.length && v[0] && typeof v[0] === 'object') continue;
+          let s;
+          try { s = JSON.stringify(v); } catch (e) { s = String(v); }
+          if (typeof s !== 'string') s = String(s);
+          if (s.length > 300) s = s.slice(0, 300) + '…[truncated]';
+          if (used + s.length > 1500) break;
+          out[entry[0]] = s;
+          used += s.length;
+        }
+        return Object.keys(out).length ? out : null;
+      }
+
       const score = WU.scoreAttemptResult(finalData, outputSchema);
       const report = {
         ok: !error,
@@ -650,6 +679,7 @@
         schemaMissing: oc.missing || [],
         detectors: detectors,
         steps: compactSteps,
+        resultDebug: result ? resultDebugDigest(result.finalResult) : null,
         finalResult: result ? WU.sampleRecordsForLLMContext(result.finalResult, { recordKeep: 3, stringCap: 2000 }) : null,
         pages: result && Array.isArray(result.pages)
           ? (result.pagesTruncated ? result.pages.length + '+' : String(result.pages.length))

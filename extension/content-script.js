@@ -1471,6 +1471,28 @@
     };
   }
 
+  // Twenty-fourth log: the hover popover picker is visual by design, but a
+  // tooltip's payload may mount as a HIDDEN or ZERO-HEIGHT wrapper (layout
+  // never materializes) while its text is fully readable — the same
+  // reads-are-not-visibility-gated asymmetry the twenty-third log fixed for
+  // $exists. Reads the textContent out of nodes the visual filter rejected.
+  function collectRejectedAddedTexts(nodes) {
+    const out = [];
+    if (!Array.isArray(nodes)) return out;
+    const seen = new Set();
+    for (const node of nodes) {
+      if (out.length >= 3) break;
+      if (!node || node.nodeType !== 1) continue;
+      let txt = '';
+      try { txt = String(node.textContent || ''); } catch (err) { txt = ''; }
+      txt = txt.replace(/\s+/g, ' ').trim();
+      if (!txt || seen.has(txt)) continue;
+      seen.add(txt);
+      out.push(txt.length > 120 ? txt.slice(0, 120) + '…' : txt);
+    }
+    return out;
+  }
+
   async function domExists(sel, timeoutMs) {
     // B11: an explicitly numeric timeoutMs of 0 (or negative) means "one
     // immediate query" — `timeoutMs || 5000` used to read 0 as unset and
@@ -2095,6 +2117,12 @@
 
     var addedNodes = [];
     var observedBest = null;
+    // Twenty-fourth log: ADDED-source nodes the visual filter rejected
+    // (too_small / invisible / viewport_sized / beyond the distance cap).
+    // Their textContent can still be READ (layout state is irrelevant to
+    // text) — the payload of a tooltip whose visual layer never
+    // materialized. Sampled before the dismiss unmounts the scaffolding.
+    var rejectedAddedNodes = [];
     var observer = null;
     try {
       if (typeof MutationObserver !== 'undefined') {
@@ -2329,6 +2357,17 @@
         candidatePool.push(el);
         candidateSource.set(el, source);
       }
+      // Twenty-fourth log: keep the node REFERENCE of every rejected
+      // ADDED candidate so the no-popover result can read its text.
+      // candidateSource is per-tick, so the check must run inside the
+      // tick that observed the mount.
+      function rememberRejectedAdded(node) {
+        if (!node || node.nodeType !== 1) return;
+        if (candidateSource.get(node) !== 'added') return;
+        if (rejectedAddedNodes.indexOf(node) !== -1) return;
+        if (rejectedAddedNodes.length >= 8) return;
+        rejectedAddedNodes.push(node);
+      }
       // RC49: portal-wrapper descent. Portal-based hovercard frameworks
       // (React Portals, modal-style popovers) mount in two phases: (1) create
       // an invisible wrapper DIV (display:none, visibility:hidden, opacity:0,
@@ -2411,6 +2450,7 @@
       for (var ci = 0; ci < candidatePool.length; ci++) {
         var node = candidatePool[ci];
         if (!isElementVisible(node)) {
+          rememberRejectedAdded(node);
           if (rejectedSummary.length < 5) rejectedSummary.push({
             tag: node.tagName, reason: 'invisible'
           });
@@ -2439,6 +2479,7 @@
         }
         var nr = node.getBoundingClientRect();
         if (nr.width < 50 || nr.height < 50) {
+          rememberRejectedAdded(node);
           if (rejectedSummary.length < 5) rejectedSummary.push({
             tag: node.tagName,
             size: Math.round(nr.width) + 'x' + Math.round(nr.height),
@@ -2448,6 +2489,7 @@
         }
         var narea = nr.width * nr.height;
         if (viewportArea > 0 && narea > viewportAreaThreshold) {
+          rememberRejectedAdded(node);
           if (rejectedSummary.length < 5) rejectedSummary.push({
             tag: node.tagName,
             size: Math.round(nr.width) + 'x' + Math.round(nr.height),
@@ -2461,6 +2503,7 @@
         try { nodeStyle = nodeWin.getComputedStyle(node); }
         catch (e) { nodeStyle = null; }
         if (!nodeStyle) {
+          rememberRejectedAdded(node);
           if (rejectedSummary.length < 5) rejectedSummary.push({
             tag: node.tagName, reason: 'no_computed_style'
           });
@@ -2491,6 +2534,7 @@
         // Rejecting farther candidates regardless of positioning is
         // universal — works for any site.
         if (ndist > 600) {
+          rememberRejectedAdded(node);
           if (rejectedSummary.length < 5) rejectedSummary.push({
             tag: node.tagName,
             pos: nodeStyle.position,
@@ -2619,6 +2663,11 @@
     }
     var dwellDoneAt = Date.now();
 
+    // Twenty-fourth log: read the text out of rejected ADDED mounts BEFORE
+    // the dismiss — mouseout can unmount the scaffolding, but the text is
+    // the payload the visual picker could not see (zero-height/hidden).
+    var rejectedAddedTexts = collectRejectedAddedTexts(rejectedAddedNodes);
+
     // Dismiss: move the trusted cursor to (1,1) so hover handlers fire
     // mouseout/mouseleave and the popover closes. Best-effort — failure here
     // doesn't affect the htmlSnippet already captured.
@@ -2689,6 +2738,14 @@
           lastSeenDwellMs: observedBest.lastDwellMs
         };
       } catch (_) { /* evidence must never break the hover path */ }
+    }
+    // Twenty-fourth log: no visible popover captured, but the hover DID mount
+    // nodes whose text was readable through the visual filter's rejects. A
+    // tooltip whose layout never materialized still carries its payload as
+    // textContent — hand it to the caller instead of a bare popover_timeout.
+    if (!htmlSnippet && rejectedAddedTexts.length) {
+      result.rejectedAddedTexts = rejectedAddedTexts;
+      result.rejectedAddedNote = "no visible popover was captured, but the hover mounted node(s) whose text was READ out of the visual filter's rejects (hidden or zero-height mounts). reads are not visibility-gated: if the value you need appears in rejectedAddedTexts, bind the field from it directly instead of waiting for a visible popover.";
     }
     notifyBackgroundDiagnostic('hover_anchor_timing', {
       selector: selectorForLog,
