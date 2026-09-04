@@ -1588,3 +1588,103 @@ describe('audit C3: service.update gate consults cfg.epochOf', () => {
     assert.match(JSON.stringify(entry.result.rejections), /stale/);
   });
 });
+
+describe('twentieth log: sticky waivers + steps-less service.update amendments', () => {
+  const WAIVED_SELECTOR = "div.card:not([data-kind='ad'])";
+
+  function makeRail(countResult) {
+    return async (snippet) => {
+      if (snippet.includes('$count')) return countResult;
+      return null;
+    };
+  }
+  function updateStep(selector) {
+    return [{
+      id: '1',
+      script: 'return $extractList(' + JSON.stringify(selector) + ', { postId: { selector: "a", attr: "href" } });'
+    }];
+  }
+
+  it('a steps-less waiver reaches the handler instead of "steps (non-empty array) required"', async () => {
+    const bag = {};
+    const handlerArgs = [];
+    const session = createResearchSession({
+      requirement: 'collect cards',
+      llm: scriptedLlm([
+        reply(envelope('service.update', { overrides: { selectors: [WAIVED_SELECTOR] } })),
+        reply(finishEnvelope())
+      ], []),
+      tools: bag,
+      budgets: { maxTurns: 10 }
+    });
+    const probe = createProbeTools({ executeDsl: makeRail(8), observationLog: session.observationLog });
+    bag['probe.count'] = probe.count;
+    bag['service.update'] = async (a) => { handlerArgs.push(a); return { updated: true, waiverRecorded: true }; };
+
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    assert.equal(handlerArgs.length, 1, 'the steps-less waiver reached the handler');
+    const entry = session.state().session.transcript.find(e => e.kind === 'tool' && e.name === 'service.update');
+    assert.equal(entry.result.error, undefined, 'no steps-required error: ' + JSON.stringify(entry.result));
+    assert.equal(entry.result.waiverRecorded, true);
+  });
+
+  it('a waiver recorded once keeps later updates admitted even when they omit it', async () => {
+    const bag = {};
+    const handlerCalls = [];
+    const session = createResearchSession({
+      requirement: 'collect cards',
+      llm: scriptedLlm([
+        // 1st: polarity filter with no receipt → grounding rejected
+        reply(envelope('service.update', { steps: updateStep(WAIVED_SELECTOR) })),
+        // 2nd: steps-less waiver (the shape the tool spec describes)
+        reply(envelope('service.update', { overrides: [WAIVED_SELECTOR] })),
+        // 3rd: resend the SAME steps WITHOUT the waiver — must pass now
+        reply(envelope('service.update', { steps: updateStep(WAIVED_SELECTOR) })),
+        reply(finishEnvelope())
+      ], []),
+      tools: bag,
+      budgets: { maxTurns: 10 }
+    });
+    const probe = createProbeTools({ executeDsl: makeRail(8), observationLog: session.observationLog });
+    bag['probe.count'] = probe.count;
+    // Mimics the real session-tools handler: full updates report a version,
+    // steps-less amendments report waiverRecorded.
+    bag['service.update'] = async (a) => {
+      handlerCalls.push(a);
+      if (!a.steps || !a.steps.length) return { updated: true, waiverRecorded: true };
+      return { updated: true, version: handlerCalls.filter((x) => x.steps && x.steps.length).length };
+    };
+
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    assert.equal(handlerCalls.length, 2, 'rejected first, admitted after the waiver, and the omission did not re-reject');
+    assert.equal(report.artifactVersions, 1, 'one versioned artifact (the amendment bumps none)');
+    const updates = session.state().session.transcript.filter(e => e.kind === 'tool' && e.name === 'service.update');
+    assert.equal(updates[0].result.grounding, 'rejected');
+    assert.equal(updates[1].result.waiverRecorded, true);
+    assert.equal(updates[2].result.updated, true);
+  });
+
+  it('a steps-less testInput adoption is reachable through the engine (fourteenth-log branch was dead code here)', async () => {
+    const bag = {};
+    const handlerArgs = [];
+    const session = createResearchSession({
+      requirement: 'collect cards',
+      llm: scriptedLlm([
+        reply(envelope('service.update', { testInput: { q: 'news' } })),
+        reply(finishEnvelope())
+      ], []),
+      tools: bag,
+      budgets: { maxTurns: 10 }
+    });
+    const probe = createProbeTools({ executeDsl: makeRail(8), observationLog: session.observationLog });
+    bag['probe.count'] = probe.count;
+    bag['service.update'] = async (a) => { handlerArgs.push(a); return { updated: true, testInputAdopted: true }; };
+
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    assert.equal(handlerArgs.length, 1, 'steps-less testInput reached the handler');
+    assert.equal(report.artifactVersions, 0, 'an amendment is not a new artifact version');
+  });
+});

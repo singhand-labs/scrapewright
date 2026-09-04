@@ -27,7 +27,7 @@
   const INTERNAL_TOOL_SPECS = [
     { name: 'ledger.add', args: '{finding, evidence?, confidence?, selectors?}', returns: '{added:true, id}' },
     { name: 'knowledge.query', args: '{ids:["unitId"]}', returns: '{units:[{id,title,body}]}' },
-    { name: 'service.update', args: '{steps, inputSchema?, outputSchema?, testInput?, name?, overrides?} — REPLACES the whole artifact (send the complete steps array every time); overrides waives grounding receipts (an array of selector strings, or {"selectors":[...]}) and never carries steps; testInput (sample input values) is REQUIRED when the target URL has {{param}} placeholders, or verify.run fails with MISSING_URL_PARAM; inputSchema/outputSchema, when sent, MUST be JSON Schema objects like {"type":"object","required":["posts"],"properties":{"posts":{"type":"array","items":{"type":"object"}}}} — natural-language maps ({"posts":"array of post objects"}) are rejected: verify scoring reads "required"/"properties" and cannot see through descriptions', returns: '{version} | {grounding:"rejected", rejections}' }
+    { name: 'service.update', args: '{steps, inputSchema?, outputSchema?, testInput?, name?, overrides?} — REPLACES the whole artifact (send the complete steps array every time); overrides waives grounding receipts (an array of selector strings, or {"selectors":[...]}) and never carries steps — a waiver stays in force for the rest of the session, you do NOT need to resend it with later updates; testInput (sample input values) is REQUIRED when the target URL has {{param}} placeholders, or verify.run fails with MISSING_URL_PARAM; inputSchema/outputSchema, when sent, MUST be JSON Schema objects like {"type":"object","required":["posts"],"properties":{"posts":{"type":"array","items":{"type":"object"}}}} — natural-language maps ({"posts":"array of post objects"}) are rejected: verify scoring reads "required"/"properties" and cannot see through descriptions', returns: '{version} | {updated, waiverRecorded} | {updated, testInputAdopted} | {grounding:"rejected", rejections}' }
   ];
 
   const DEFAULTS = {
@@ -143,12 +143,14 @@
       artifactVersions: [],
       elapsedMs: 0,
       stopped: null,
-      budgetAdvisories: []
+      budgetAdvisories: [],
+      waivedSelectors: []
     };
     if (cfg.seed && cfg.seed.session) {
       state = JSON.parse(JSON.stringify(cfg.seed.session));
       state.status = 'idle';
       state.stopped = null;
+      if (!Array.isArray(state.waivedSelectors)) state.waivedSelectors = []; // legacy seeds predate sticky waivers
     }
 
     let abortFlag = false, abortReason = 'user';
@@ -374,7 +376,29 @@
     async function handleServiceUpdate(args) {
       const a = args || {};
       const steps = Array.isArray(a.steps) ? a.steps : [];
-      if (!steps.length) return { error: 'steps (non-empty array) required' };
+      // Twentieth log (turns 53-54): a steps-less waiver was rejected here
+      // with "steps (non-empty array) required" even though the tool spec
+      // says overrides "never carry steps" — and the fourteenth-log
+      // testInput-adoption branch in the session-tools handler was
+      // unreachable through this wrapper for the same reason. Steps-less
+      // calls that amend the CURRENT artifact (testInput adoption, waiver
+      // recording) pass straight through: no new selectors to ground, no
+      // artifact version to bump.
+      const stepsLessAmendment = !steps.length && (a.testInput != null || a.overrides != null);
+      if (!steps.length && !stepsLessAmendment) return { error: 'steps (non-empty array) required' };
+      // Sticky waivers (twentieth log): a waiver recorded once applies to
+      // every later grounding check for the rest of the session. The model
+      // waived the popover selector with artifact v1, then had to remember
+      // to re-send the waiver with EVERY subsequent update — dropping it
+      // re-rejected an already-waived selector and burned turns.
+      for (const s of normalizeOverrides(a.overrides)) {
+        if (state.waivedSelectors.indexOf(s) === -1) state.waivedSelectors.push(s);
+      }
+      if (stepsLessAmendment) {
+        const amendHandler = tools['service.update'];
+        if (typeof amendHandler !== 'function') return { error: 'no service.update handler wired' };
+        return await amendHandler(a, { observationLog: observationLog, ledger: ledger, session: publicApi });
+      }
       const autoVerify = typeof tools['probe.count'] === 'function'
         ? async (sel) => {
             const r = await tools['probe.count'](sel);
@@ -391,8 +415,9 @@
         epoch: gateEpoch,
         // Sixth-live-log I2a: the model sent {"selectors":[...]} and the
         // bare Array.isArray check silently dropped it — an explicit waiver
-        // must never be lost to a shape mismatch. Accept both shapes.
-        overrides: normalizeOverrides(a.overrides)
+        // must never be lost to a shape mismatch. Accept both shapes, and
+        // include every waiver recorded earlier in the session.
+        overrides: state.waivedSelectors.slice()
       });
       if (!v.ok) return { grounding: 'rejected', rejections: v.rejections };
       const handler = tools['service.update'];

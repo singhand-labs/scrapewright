@@ -115,7 +115,7 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
           type: 'SYNTAX_CHECK_RESULT',
           reqId: e.data.reqId,
           ok: false,
-          error: error.message || String(error)
+          error: enrichSyntaxErrorMessage(error, e.data.script)
         }, '*');
       }
     }
@@ -148,6 +148,73 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
     return null;
   }
 
+  // Twentieth log: a SyntaxError thrown by the Function constructor carries
+  // NO position (V8 compiles the string without a source URL), so a one-char
+  // typo — html:{selector':'', attr:...}, a stray quote — surfaced to the
+  // model as a bare "Unexpected string" over a 2000-char script and it spent
+  // four turns guessing at wrappers. locateSyntaxFailure finds the offset by
+  // prefix-scanning: the smallest prefix whose compile error message EQUALS
+  // the full script's message. Prefixes ending mid-token or mid-string fail
+  // with different messages ("Invalid or unexpected token", "Unexpected end
+  // of input"), so the first message-equal prefix lands on the token that
+  // starts the fatal parse. Only runs on the compile-failure path.
+  const WRAP_PREFIX = '(async function(__input__) {';
+  const WRAP_SUFFIX = '})(__input__);';
+  const SYNTAX_LOCATOR_MAX_CHARS = 20000;
+
+  function unwrapForDiagnostics(scriptCode) {
+    // Production scripts arrive wrapped by OffscreenExecutor.wrapScript —
+    // report positions in the step script the model authored, not the
+    // wrapper. The prefix contains no newline, so line numbers are
+    // identical either way; this keeps column numbers honest too.
+    if (typeof scriptCode === 'string' &&
+        scriptCode.indexOf(WRAP_PREFIX) === 0 &&
+        scriptCode.slice(-WRAP_SUFFIX.length) === WRAP_SUFFIX) {
+      return scriptCode.slice(WRAP_PREFIX.length, scriptCode.length - WRAP_SUFFIX.length);
+    }
+    return scriptCode;
+  }
+
+  function compileProbe(code) {
+    // eslint-disable-next-line no-new
+    new Function('__input__', '__stepResults__', '__lastResult__', 'return (async function(__input__) {' + code + '})(__input__);');
+  }
+
+  function locateSyntaxFailure(script) {
+    if (typeof script !== 'string' || !script || script.length > SYNTAX_LOCATOR_MAX_CHARS) return null;
+    let target = null;
+    try { compileProbe(script); } catch (e) { target = e && e.message; }
+    if (!target) return null;
+    for (let i = 1; i <= script.length; i++) {
+      try { compileProbe(script.slice(0, i)); } catch (e) {
+        if (e && e.message === target) return { offset: i - 1, message: target };
+      }
+    }
+    return null;
+  }
+
+  function enrichSyntaxErrorMessage(error, scriptCode) {
+    const inner = unwrapForDiagnostics(scriptCode);
+    let msg = 'SYNTAX_ERROR: ' + ((error && error.message) || String(error));
+    const located = locateSyntaxFailure(inner);
+    if (!located) {
+      return msg + ' (no position located — check quote/brace/bracket balance across the whole script)';
+    }
+    const offset = located.offset;
+    let line = 1;
+    let lastNl = -1;
+    for (let i = 0; i < offset; i++) {
+      if (inner.charCodeAt(i) === 10) { line += 1; lastNl = i; }
+    }
+    const col = offset - lastNl;
+    const start = Math.max(0, offset - 70);
+    const end = Math.min(inner.length, offset + 70);
+    const snippet = inner.slice(start, offset) + '>>><<<' + inner.slice(offset, end);
+    return msg + ' at line ' + line + ', column ' + col + ' of the step script (char ' + offset + '/' + inner.length +
+      '). Near: ' + snippet +
+      " — the parser choked at the marked (>>><<<) position; check the quotes, braces, and brackets right there (a stray quote before a colon, e.g. selector':, or an unbalanced bracket, is the usual cause).";
+  }
+
   async function executeInSandbox(scriptCode, input, execId) {
     // Reset before each execution — covers residue from prior failed runs
     // (the catch path does not reset, so without this a later successful
@@ -168,7 +235,17 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
         parent.postMessage({ type: 'EXECUTE_RESULT', execId: execId, error: err.message }, '*');
         return;
       }
-      const fn = new Function('__input__', '__stepResults__', '__lastResult__', `return ${scriptCode};`);
+      let fn;
+      try {
+        fn = new Function('__input__', '__stepResults__', '__lastResult__', `return ${scriptCode};`);
+      } catch (error) {
+        // Twentieth log: compile failures carried no position — enrich with
+        // the located offset so the model (and diag.read) can see WHERE.
+        const msg = enrichSyntaxErrorMessage(error, scriptCode);
+        sendDebugLog('error', 'sandbox', 'Script failed to compile', { error: msg });
+        parent.postMessage({ type: 'EXECUTE_RESULT', execId: execId, error: msg }, '*');
+        return;
+      }
       const result = await fn(input, input._stepResults || {}, input._lastResult || null);
       // Snapshot + reset the per-execution diagnostics accumulator. Diagnostics
       // only ride on the success path — error responses stay unchanged.

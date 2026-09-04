@@ -184,7 +184,8 @@
     const claims = extractSelectorClaims(steps);
     for (const claim of claims) {
       let admitted = false;
-      if (overrides.has(claim.selector)) {
+      const waived = overrides.has(claim.selector);
+      if (waived) {
         overrideReceipts.push(claim.selector);
         admitted = true;
       } else if (observationLog && observationLog.covers(claim.selector, ep)) {
@@ -237,6 +238,13 @@
       // reject alongside (and independently of) the selector-level rejection.
       const filterAttrs = extractFilterAttributes(claim.selector);
       for (const attr of filterAttrs) {
+        // Exception (twentieth log turns 52-54): an EXPLICIT waiver also
+        // covers the selector's filter-attr demands. Without this, waiving
+        // a filter-attr selector alone could never admit it — the gate
+        // kept rejecting after the waiver and the model burned turns
+        // resending the same update. Observation/ledger admissions do NOT
+        // skip this: attr blindness is exactly what the receipt prevents.
+        if (waived) continue;
         const haveAttr = (observationLog && observationLog.coversAttr(attr, ep));
         if (!haveAttr) {
           rejections.push({

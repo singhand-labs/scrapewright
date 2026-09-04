@@ -250,15 +250,22 @@ describe('validateGrounding — filter attributes need distribution receipts', (
     assert.equal(userR.ok, false, 'v1: user receipt is SELECTOR-scoped, attribute distribution still required — the user must annotate through the attrStats-approved flow or an override');
   });
 
-  it('override admits the selector but NOT the filter-attr distribution demand', async () => {
+  it('override is a full escape hatch: it waives the selector AND its filter-attr demands (twentieth log)', async () => {
     const sel = 'div.card:has([title="Sponsored"])';
     const steps = [{ id: '4', script: 'return $extractList(' + JSON.stringify(sel) + ', { c: \'.t\' });' }];
     const s = session([{ sel: sel }]);
     const r = await validateGrounding({
       steps, observationLog: s.observationLog, ledger: s.ledger, overrides: [sel]
     });
-    assert.equal(r.ok, false, 'override covers the selector receipt; the attr still needs attrStats');
-    assert.equal(r.rejections.find(x => x.missing === 'attr-distribution').attr, 'title');
+    // Twentieth log turns 52-54: the waiver admitted the selector but the
+    // attr demand kept rejecting — a waiver alone could NEVER admit a
+    // filter-attr selector, so the model burned turns resending the same
+    // update. An explicit waiver now covers both. (User/observation
+    // receipts remain selector-scoped: attr blindness is exactly what the
+    // attrStats receipt prevents and those admissions never claimed to
+    // cover it.)
+    assert.equal(r.ok, true, 'explicit override waives selector + filter-attr demands');
+    assert.deepEqual(r.rejections.find(x => x.missing === 'attr-distribution'), undefined);
     assert.deepEqual(r.overrideReceipts, [sel]);
     assert.ok(Array.isArray(r.claims) && r.claims.length === 1, 'claims returned for callers');
   });

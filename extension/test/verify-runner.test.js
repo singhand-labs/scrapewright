@@ -840,3 +840,51 @@ describe('audit C2 (pin): abort signal reaches mid-run script execution', () => 
     assert.equal(out.report.aborted, true);
   });
 });
+
+// Twentieth log: the page-context resolveWU bag is a FIXED literal of
+// wizard-utils function names. Three detectors (detectFieldMatchZero 13th
+// log, detectContainerMatchZero 14th log, detectEmptyOutputFieldsByRatio
+// 16th log) were wired at their call sites and exported from
+// module.exports — so Node tests (which resolve via require) always saw
+// them — but nobody extended the bag, so in the BROWSER every production
+// verify silently skipped them (typeof guard) and PARTIAL_EMPTY_FIELDS /
+// FIELD_MATCH_ZERO / INPUT_VALUE_SUSPECT tags were unreachable. A green
+// v1 with time:"" in 100% of records verified with partialEmpty:[].
+describe('twentieth log: page-context bag parity (RC35/B5 drift family)', () => {
+  it('bag path resolves the three detectors — v1 scenario (time empty in every record) fires PARTIAL_EMPTY_FIELDS', async () => {
+    const WUmod = require('../lib/wizard-utils');
+    const pageWindow = {};
+    for (const k of Object.keys(WUmod)) pageWindow[k] = WUmod[k]; // mirrors the wizard-utils self-export block (window.<fn> per function)
+    const orch = async () => ({
+      finalResult: { posts: [
+        { index: 0, postId: 'a1', time: '', content: 'first post' },
+        { index: 1, postId: 'a2', time: '', content: 'second post' }
+      ] },
+      steps: [{ stepId: 's1', stepName: 'one', result: { done: true } }], pages: []
+    });
+    const { runner } = makeRunner(orch, { wizardUtils: pageWindow });
+    const out = await runner({
+      service: SERVICE, input: {},
+      outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object', required: ['postId', 'time', 'content'], properties: { index: { type: 'number' }, postId: { type: 'string' }, time: { type: 'string' }, content: { type: 'string' } } } } } }
+    });
+    assert.equal(out.report.ok, true);
+    assert.ok(out.report.detectors.partialEmptyFields, 'ratio detector ran via the page-context bag');
+    assert.deepEqual(out.report.detectors.partialEmptyFields.map((f) => f.path), ['posts.time']);
+    assert.ok(out.report.events.indexOf('PARTIAL_EMPTY_FIELDS') !== -1, 'tag reachable in browser context');
+  });
+
+  it('source-audit drift guard: every WU.<name> used in verify-runner is a key of the bag literal', () => {
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const src = fs.readFileSync(path.join(__dirname, '../lib/verify-runner.js'), 'utf8');
+    const bagMatch = src.match(/const bag = \{([\s\S]*?)\};/);
+    assert.ok(bagMatch, 'resolveWU bag literal found');
+    const bagKeys = new Set(Array.from(bagMatch[1].matchAll(/(?:^|\n)\s*([A-Za-z_][A-Za-z0-9_]*):/g), (m) => m[1]));
+    const mentions = new Set(Array.from(src.matchAll(/WU\.([A-Za-z_][A-Za-z0-9_]*)/g), (m) => m[1]));
+    assert.ok(mentions.size >= 15, 'found the WU call sites');
+    for (const name of mentions) {
+      if (name === '__missing') continue;
+      assert.ok(bagKeys.has(name), 'WU.' + name + ' is used by verify-runner but missing from the page-context bag literal — browser verifies silently skip it (twentieth log)');
+    }
+  });
+});

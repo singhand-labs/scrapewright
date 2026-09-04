@@ -43,6 +43,9 @@
       detectHoverAnchorsBlind: w.detectHoverAnchorsBlind,
       detectCountSelectorBlind: w.detectCountSelectorBlind,
       detectFrozenZeroCounter: w.detectFrozenZeroCounter,
+      detectFieldMatchZero: w.detectFieldMatchZero,
+      detectContainerMatchZero: w.detectContainerMatchZero,
+      detectEmptyOutputFieldsByRatio: w.detectEmptyOutputFieldsByRatio,
       findEmptyExtractionFields: w.findEmptyExtractionFields,
       findUpstreamExtractionStepId: w.findUpstreamExtractionStepId,
       detectDuplicateRecords: w.detectDuplicateRecords,
@@ -711,7 +714,7 @@
           // script had one missing ')'. A bare engine message gives the model
           // nothing structural to fix — teach the shape that produces it.
           if (/missing \) after argument list|missing \} after property list/i.test(e.message || '')) {
-            e.message += ' — NOTE: the step script has UNBALANCED brackets — it never compiled. The common authoring shape is an arrow function returning an object literal inside a call, e.g. .map((r) => ({ field: r.field })) — that needs BOTH closers })) (the object\'s } then the call\'s ). The script text is placed after `return`, so every ( { [ opened anywhere in it must be closed before the end. Re-send the step with balanced brackets.';
+            e.message += ' — NOTE: the step script has UNBALANCED brackets — it never compiled. The common authoring shape is an arrow function returning an object literal inside a call, e.g. .map((r) => ({ field: r.field })) — that needs BOTH closers })) (the object\'s } then the call\'s ). The script runs as the BODY of an async function, so every ( { [ opened anywhere in it must be closed before the end. Re-send the step with balanced brackets.';
           }
         } catch (_) { /* augmentation must never mask the original error */ }
         return e;

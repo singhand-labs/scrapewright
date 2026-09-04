@@ -829,3 +829,38 @@ describe('outputSchema field-shape gate (seventeenth log: fieldless schema shipp
     assert.equal(state.applied.length, 0, 'artifact NOT applied on schema rejection');
   });
 });
+
+describe('twentieth log: execution-model teaching', () => {
+  it('system prompt describes the real async-function-BODY wrapping, not the false "placed after return" model', () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    const p = t.systemPromptBase;
+    assert.ok(!p.includes('placed after `return`'), 'false execution-model sentence removed (it produced a wrong IIFE-wrapper repair at turn 59 of the twentieth log)');
+    assert.ok(p.includes('BODY of an async function'), 'accurate body-wrap description present');
+  });
+});
+
+describe('twentieth log: steps-less waiver amendment', () => {
+  const FIELDED = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } };
+  it('an overrides-only update against an existing artifact records the waiver', async () => {
+    const { deps, state } = makeDeps();
+    const t = createSessionTools(deps);
+    const ctx = { session: { state: () => ({ session: { artifactVersions: [] } }) } };
+    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: FIELDED });
+    const full = await t.tools['service.update']({ steps: GOOD_STEPS }, ctx);
+    assert.equal(full.updated, true);
+    const r = await t.tools['service.update']({ overrides: { selectors: ['div[role="none"]'] } }, ctx);
+    assert.equal(r.updated, true);
+    assert.equal(r.waiverRecorded, true, 'waiver acknowledged against the current artifact');
+    assert.equal(state.applied.length, 1, 'a waiver amendment re-applies nothing');
+  });
+
+  it('an overrides-only update with no artifact yet fails with a teaching error', async () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    const ctx = { session: { state: () => ({ session: { artifactVersions: [] } }) } };
+    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: FIELDED });
+    const r = await t.tools['service.update']({ overrides: ['div[role="none"]'] }, ctx);
+    assert.match(r.error, /no artifact yet/);
+  });
+});

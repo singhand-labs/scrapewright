@@ -136,7 +136,7 @@
       '# Service model',
       'A service is a step graph: steps[{id,name,script,onSuccess,onFailure,maxIterations?}].',
       'onSuccess/onFailure point at another step id or "TERMINATE". A step with maxIterations>1 is a poll/retry loop: return {done:false} to retry the same step, {done:true} or plain data to advance via onSuccess, {failed:true} or {error:"..."} to follow onFailure.',
-      'Step scripts are async JavaScript whose text is placed after `return`. Every script MUST return a value: a single expression, or an async IIFE whose LAST line is `return <value>;` — a script that yields undefined stores no result (later steps reading __stepResults__[stepId] get nothing; verify.run reports STEP_NO_RETURN). Await every $ call you depend on before returning. Globals: __input__ (run input object), __stepResults__ (prior results by step id), __lastResult__.',
+      'Step scripts run as the BODY of an async function — executed as `(async function(__input__) { <your script> })(__input__)`. Top-level `await` works directly, and every script MUST contain a top-level `return <value>;` statement (statement scripts like `const x = await $(...); return {...};` are the norm — no wrapper needed, and do NOT wrap the script in `return (...)` or an extra IIFE; the engine already provides the function body). A script that yields undefined stores no result (later steps reading __stepResults__[stepId] get nothing; verify.run reports STEP_NO_RETURN). Await every $ call you depend on before returning. Globals: __input__ (run input object), __stepResults__ (prior results by step id), __lastResult__.',
       '',
       '# $ API',
       '- $(sel) — first matching element data',
@@ -447,6 +447,18 @@
         }
         d.applyArtifact({ steps: currentSteps, testInput: a.testInput });
         return { updated: true, testInputAdopted: true, note: 'test input adopted — run verify.run WITHOUT an input override to confirm the default input works' };
+      }
+      // Twentieth log: the engine wrapper used to reject every steps-less
+      // call before this branch existed — a waiver the model sent alone
+      // (as the tool spec and the grounding-gate suggestion both describe)
+      // failed with "steps (non-empty array) required" and burned turns.
+      // Waivers are recorded stickily by the engine; this branch just
+      // acknowledges the amendment against the current artifact.
+      if (!steps.length && a.overrides != null && a.testInput == null) {
+        if (!currentSteps.length) {
+          return { error: 'no artifact yet — a steps-less waiver needs an existing step graph; author it with service.update({steps,...}) first' };
+        }
+        return { updated: true, waiverRecorded: true, note: 'waiver recorded against the current artifact — it stays in force for later service.update calls in this session' };
       }
       const chain = WU.validateChain(steps);
       if (!chain || chain.valid !== true) {
