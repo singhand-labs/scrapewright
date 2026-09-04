@@ -137,6 +137,36 @@ describe('engine happy path', () => {
     assert.deepEqual(vr.verify.partialEmpty, ['posts.time 3/3 empty']);
   });
 
+  it('tool_result event summary budgets the label so a big-args ERR stays visible (twenty-second log)', async () => {
+    // 2026-09-04: two service.update ERRs (grounding-gate + validate) were
+    // undiagnosable in the exported console log — the event payload sliced
+    // the FIRST 200 chars off a 4000-budgeted summary whose label (tool +
+    // JSON args echo) ran past 1000 chars, so the args ate the whole event
+    // and the error text never surfaced. The event must be its own budgeted
+    // summary: label capped at a quarter of the event cap, result gets the
+    // rest — same discipline the transcript summary already follows.
+    const events = [];
+    const bigArgs = { steps: [{ id: 'scrollLoad', name: 'x'.repeat(400), script: 'y'.repeat(400) }] };
+    const session = createResearchSession({
+      requirement: 'collect posts',
+      llm: scriptedLlm([
+        reply(envelope('service.update', bigArgs)),
+        reply(finishEnvelope('done'))
+      ], []),
+      tools: { 'service.update': async () => ({ error: 'GROUNDING_REJECTED: selector div.card has no observation-log grounding; probe it first (probe.count / probe.sample).' }) },
+      onEvent: (e) => events.push(e)
+    });
+    await session.run();
+    const tr = events.find((e) => e.type === 'tool_result' && e.tool === 'service.update');
+    assert.ok(tr, 'service.update tool_result captured');
+    assert.ok(tr.ok === false, 'error result flagged');
+    const arrow = tr.summary.indexOf(' → ');
+    assert.ok(arrow !== -1, 'summary must separate label from result; got: ' + tr.summary.slice(0, 80));
+    assert.ok(arrow <= 151, 'label (tool + args echo) capped at a quarter of the event budget');
+    assert.ok(tr.summary.indexOf('GROUNDING_REJECTED') !== -1, 'error text visible in the event summary');
+    assert.ok(tr.summary.length <= 600, 'event summary stays within the console mirror cap');
+  });
+
   it('finish after a GREEN verify (or none at all) keeps the completion detail clean', async () => {
     const gCalls = [];
     const green = await createResearchSession({

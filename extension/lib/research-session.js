@@ -34,7 +34,10 @@
     budgets: { maxTurns: 60, maxTokensPerCall: 8192, tokenCap: 2000000, wallClockMs: 1800000 },
     retry: { attempts: 3, backoffMs: 400 },
     compaction: { thresholdChars: 60000, keepTurns: 6 },
-    toolResultCapChars: 4000
+    toolResultCapChars: 4000,
+    // tool_result EVENT summaries ride the console mirror (wizard.js slices
+    // at 600), so the event budget matches it exactly.
+    eventSummaryCapChars: 600
   };
 
   function isErrorResult(r) {
@@ -121,6 +124,7 @@
     const retry = Object.assign({}, DEFAULTS.retry, cfg.retry || {});
     const compaction = Object.assign({}, DEFAULTS.compaction, cfg.compaction || {});
     const toolResultCapChars = typeof cfg.toolResultCapChars === 'number' ? cfg.toolResultCapChars : DEFAULTS.toolResultCapChars;
+    const eventSummaryCapChars = typeof cfg.eventSummaryCapChars === 'number' ? cfg.eventSummaryCapChars : DEFAULTS.eventSummaryCapChars;
     const knowledge = {
       units: Array.isArray(cfg.knowledge && cfg.knowledge.units) ? cfg.knowledge.units : [],
       index: Array.isArray(cfg.knowledge && cfg.knowledge.index) ? cfg.knowledge.index : []
@@ -781,7 +785,7 @@
               ? pe.slice(0, 6).map((f) => String(f.path || f.field) + ' ' + (f.emptyCount || 0) + '/' + (f.totalCount || 0) + ' empty')
               : null;
             state.lastVerifySchemaBlind = !!(Array.isArray(result && result.events) && result.events.indexOf('SCHEMA_BLIND') !== -1);
-            // The tool_result event's summary is capped at 200 chars — too
+            // The tool_result event's summary is a capped one-liner — too
             // short for the verify report's verdict. Attach a compact digest
             // (sixteenth log: tags and detector findings were invisible in
             // exported console logs, so green-with-empties was undiagnosable
@@ -798,7 +802,13 @@
           const callLabel = turn.tool + ' ' + JSON.stringify(turn.args || {});
           const summary = Protocol.summarizeToolResult(callLabel, result, toolResultCapChars);
           state.transcript.push({ kind: 'tool', name: turn.tool, ok: !isErrorResult(result), result: result, summary: summary });
-          const toolResultPayload = { tool: turn.tool, ok: !isErrorResult(result), summary: summary.slice(0, 200) };
+          // Twenty-second log: slicing the FIRST 200 chars off the
+          // transcript summary let a big-args label (service.update echoes
+          // 1000+ chars of steps) eat the whole event — two ERRs were
+          // undiagnosable in the exported console log. The event is its own
+          // budgeted summary (label ≤ cap/4, result gets the rest), sized
+          // to the console mirror's 600-char cut.
+          const toolResultPayload = { tool: turn.tool, ok: !isErrorResult(result), summary: Protocol.summarizeToolResult(callLabel, result, eventSummaryCapChars) };
           if (verifyDigest) toolResultPayload.verify = verifyDigest;
           emit('tool_result', toolResultPayload);
           attachKnowledge(result);

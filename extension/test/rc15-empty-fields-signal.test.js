@@ -260,6 +260,52 @@ describe('RC15 — detectEmptyOutputFieldsByRatio finds partial-empty fields', (
     assert.deepEqual(paths, ['posts.comments', 'posts.shares'],
       'whitespace-only strings must count as empty');
   });
+
+  it('flags fields a contract revision moved OUT of required (twenty-second log: required-only scope shipped postTime "" 5/5 under a green verify)', () => {
+    // 2026-09-04: confirm #2 narrowed items.required to [index, content,
+    // popovers] while postTime/postId/location stayed declared under
+    // properties. schemaArrayItemFieldKeys returned required ONLY when
+    // present, so the ratio census never looked at the optional fields —
+    // postTime was "" in 5/5 records, verify stayed green (score 152,
+    // partialEmpty:[]), and the gap only surfaced as user feedback on the
+    // shipped output. The census scope is every DECLARED field: required
+    // first, then the remaining properties.
+    const schema = {
+      type: 'object',
+      required: ['posts'],
+      properties: {
+        posts: {
+          type: 'array',
+          items: {
+            type: 'object',
+            required: ['index', 'content', 'popovers'],
+            properties: {
+              index: { type: 'number' },
+              postId: { type: 'string' },
+              postTime: { type: 'string' },
+              location: { type: 'string' },
+              content: { type: 'string' },
+              likes: { type: 'string' },
+              popovers: { type: 'array', items: { type: 'object' } }
+            }
+          }
+        }
+      }
+    };
+    const rec = (i) => ({
+      index: i, postId: '', postTime: '', location: '',
+      content: 'post body ' + i, likes: '3', popovers: [{ link: '/x', type: 'group', role: 'r' }]
+    });
+    const data = { posts: [rec(1), rec(2), rec(3), rec(4), rec(5)] };
+    const out = detectEmptyOutputFieldsByRatio(data, schema);
+    const paths = out.map(f => f.path).sort();
+    assert.deepEqual(paths, ['posts.location', 'posts.postId', 'posts.postTime'],
+      'properties-declared fields emptied by the revision must be flagged; got: ' + JSON.stringify(paths));
+    const postTime = out.find(f => f.path === 'posts.postTime');
+    assert.equal(postTime.emptyCount, 5);
+    assert.equal(postTime.totalCount, 5);
+    assert.equal(postTime.emptyRatio, 1);
+  });
 });
 
 describe('RC15 — formatEmptyOutputFieldsSignal renders prompt-ready block', () => {

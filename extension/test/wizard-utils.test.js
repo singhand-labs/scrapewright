@@ -792,6 +792,42 @@ describe('findEmptyExtractionFields', () => {
     assert.deepEqual(empty, []);
   });
 
+  it('scopes all-empty to required ∪ properties — a record with a populated OPTIONAL field is not all-empty (twenty-second log)', () => {
+    // Contract revisions move fields out of required; the record-level
+    // emptiness census must read every DECLARED field, not required alone —
+    // otherwise a record whose required fields are empty but whose optional
+    // popovers carry data reads as "all empty" and misfires EMPTY_FIELDS.
+    const revSchema = {
+      required: ['posts'],
+      properties: {
+        posts: {
+          type: 'array',
+          items: {
+            type: 'object',
+            required: ['index', 'content'],
+            properties: {
+              index: { type: 'number' },
+              content: { type: 'string' },
+              popovers: { type: 'array', items: { type: 'object' } }
+            }
+          }
+        }
+      }
+    };
+    const data = { posts: [
+      { index: null, content: '', popovers: [{ link: '/x' }] },
+      { index: null, content: '', popovers: [{ link: '/y' }] }
+    ] };
+    assert.deepEqual(findEmptyExtractionFields(data, revSchema), [],
+      'populated optional field keeps the record out of the all-empty bin');
+    const trulyEmpty = { posts: [
+      { index: null, content: '', popovers: [] },
+      { index: null, content: '', popovers: [] }
+    ] };
+    assert.deepEqual(findEmptyExtractionFields(trulyEmpty, revSchema), ['posts'],
+      'all declared fields empty still fires');
+  });
+
   it('does not flag scalar fields that are non-empty', () => {
     const data = { keyword: 'shoes' };
     const empty = findEmptyExtractionFields(data, { required: ['keyword'] });

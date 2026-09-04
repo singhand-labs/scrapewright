@@ -1841,11 +1841,18 @@ function findUpstreamProducingStepId(steps, fallbackStepId) {
 function schemaArrayItemFieldKeys(prop) {
   if (!prop || prop.type !== 'array' || !prop.items || typeof prop.items !== 'object') return null;
   const ir = (Array.isArray(prop.items.required) ? prop.items.required : []).filter(k => typeof k === 'string');
-  if (ir.length) return ir;
   const ip = (prop.items.properties && typeof prop.items.properties === 'object' && !Array.isArray(prop.items.properties))
     ? prop.items.properties
     : {};
-  const keys = Object.keys(ip).filter(k => typeof k === 'string');
+  const propKeys = Object.keys(ip).filter(k => typeof k === 'string');
+  // Twenty-second log: returning required ALONE when present made every
+  // per-record census (empty-ratio, duplicate signatures, all-empty) blind
+  // to fields a contract revision moved OUT of required — postTime stayed
+  // declared under properties, shipped "" in 5/5 records, and verify stayed
+  // green. The census scope is every DECLARED field: required first (the
+  // author's priority order), then the remaining properties.
+  const seen = new Set(ir);
+  const keys = ir.concat(propKeys.filter(k => !seen.has(k)));
   return keys.length ? keys : null;
 }
 
