@@ -328,12 +328,12 @@ describe('audit plan1: wizard lifecycle state machine (A1/A2/A3/A5/A6/A17/A18 + 
   });
 
   it('A18/A19: Resume and annotation-finish buttons disable in flight', () => {
-    assert.match(SRC, /btnSessionResume'\)\.addEventListener\('click', async \(\) => \{[\s\S]{0,700}?disabled = true/);
+    assert.match(SRC, /btnSessionResume'\)\.addEventListener\('click', async \(\) => \{[\s\S]{0,1100}?disabled = true/);
     assert.match(SRC, /btnAnnotationFinish'\)\.addEventListener\('click', async \(\) => \{[\s\S]{0,300}?disabled = true/);
   });
 
   it('budget-class stops route Resume through a fresh engine (G5 truthfulness)', () => {
-    const m = SRC.match(/btnSessionResume'\)\.addEventListener\('click', async \(\) => \{[\s\S]{0,1200}?return;\n  \}\);/);
+    const m = SRC.match(/btnSessionResume'\)\.addEventListener\('click', async \(\) => \{[\s\S]{0,1600}?return;\n  \}\);/);
     assert.ok(m);
     assert.match(m[0], /maxTurns/);
     assert.match(m[0], /resumeResearchSession\(\)/);
@@ -386,6 +386,31 @@ describe('audit plan1: wizard lifecycle state machine (A1/A2/A3/A5/A6/A17/A18 + 
     const body = m[1];
     assert.match(body, /llm:error/, 'llm stop recognized in the handler');
     assert.match(body, /resumeResearchSession\(\)/, 'routed to the fresh-engine resume path');
+  });
+
+  it('eighteenth log: protocol stops are resumable at EVERY whitelist site (fresh engine retries the turn)', () => {
+    // Live evidence (rs-1788489824160, turn 45): the final artifact write was
+    // cut off twice (glm tail degradation), the engine stopped 'protocol',
+    // and resumeResearchSession treated it as terminal — worse, it WIPED the
+    // persisted session, destroying 45 turns of research. A protocol stop is
+    // an LLM-output failure, not a dead end: the transcript is intact and a
+    // fresh engine retries the turn (now with the continuation-repair round).
+    const sites = SRC.match(/\['paused', 'aborted', 'maxTurns', 'wallClock', 'tokenCap'[^\]]*\]/g) || [];
+    assert.ok(sites.length >= 2, 'parked-fallback whitelist literals present (found ' + sites.length + ')');
+    for (const s of sites) {
+      assert.ok(/'protocol'/.test(s), 'whitelist includes protocol: ' + s);
+    }
+    const resumeBody = fnBody('resumeResearchSession');
+    assert.match(resumeBody, /'protocol'/, 'resumeResearchSession gate accepts protocol');
+    // The live-page Resume button must route protocol stops to the fresh
+    // engine too — wizardSession.run() would no-op on the stopped session.
+    const m = SRC.match(/btnSessionResume'\)\.addEventListener\('click',\s*async \(\) => \{([\s\S]*?)\n  \}\);/);
+    assert.ok(m, 'btnSessionResume handler found');
+    assert.match(m[1], /'protocol'/, 'protocol stop recognized in the live Resume handler');
+    // And the user-facing copy must say what happened and what to do.
+    const friendly = fnBody('friendlyStopReason');
+    assert.match(friendly, /case 'protocol':/, 'friendlyStopReason maps protocol');
+    assert.match(friendly, /Resume/, 'the copy points at Resume');
   });
 
   it('fourteenth log: friendlyStopReason explains llm-class stops actionably', () => {

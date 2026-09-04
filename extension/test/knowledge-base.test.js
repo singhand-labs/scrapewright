@@ -43,6 +43,15 @@ describe('knowledge units seed data', () => {
     assert.ok(/iteration preview|previews/i.test(u.body), 'must teach reading the iteration previews');
     assert.ok(/thin/i.test(u.body), 'must name the thin-content branch');
   });
+
+  it('includes the eighteenth-log ad-marker polarity unit keyed to AD_MARKER_SELECTOR', () => {
+    const u = KNOWLEDGE_UNITS.find(x => x.id === 'ad-marker-polarity');
+    assert.ok(u, 'ad-marker-polarity unit must exist');
+    assert.ok(u.matchEvents.includes('AD_MARKER_SELECTOR'));
+    assert.ok(/polarity/i.test(u.body), 'must teach the polarity check');
+    assert.ok(/:not/i.test(u.body), 'must distinguish the include form from the exclude :not() form');
+    assert.ok(/thin content/i.test(u.body), 'must name the thin-content alternative');
+  });
 });
 
 // Part 2: knowledge base operations
@@ -112,7 +121,8 @@ describe('KnowledgeBase', () => {
   it('every seed unit matchEvents value is inside the documented vocabulary', () => {
     const VOCAB = new Set(['COUNT_SHORTFALL', 'EMPTY_EXTRACTION', 'EMPTY_FIELDS', 'POPOVER_TIMEOUT',
       'HOVER_NO_SIGNAL', 'COUNTER_FROZEN', 'DUPLICATE_RECORDS', 'SELECTOR_ZERO_MATCH',
-      'FIELD_COLLISION', 'SCRIPT_TIMEOUT', 'CARD_POLICY', 'POLL_EXHAUSTED', 'SCHEMA_BLIND']);
+      'FIELD_COLLISION', 'SCRIPT_TIMEOUT', 'CARD_POLICY', 'POLL_EXHAUSTED', 'SCHEMA_BLIND',
+      'AD_MARKER_SELECTOR']);
     for (const u of KNOWLEDGE_UNITS) {
       for (const ev of u.matchEvents) {
         assert.ok(VOCAB.has(ev), u.id + ' has out-of-vocabulary event: ' + ev);

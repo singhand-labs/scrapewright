@@ -149,8 +149,7 @@
     }
   }
 
-  function detectJunkValues(data, schema) {
-    if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  function detectJunkValues(data, schema) {    if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
     const urlishHints = collectFieldHints(schema, /(url|link|href|src|image|photo|picture|media|avatar)/i);
     const rawishHints = collectFieldHints(schema, /(html|markup|raw source|embedded)/i);
     const fields = [];
@@ -183,6 +182,25 @@
       note: 'JUNK VALUES: ' + fields.map((f) => f.field + '(' + f.kind + ')').join(', ') +
         '. Structurally green but these values are junk: bare query strings ("?a=b…") are redirect/tracking href fragments, data: URIs inside url/media arrays are inline UI icons, markup dumps are raw HTML leaking into a data field. Fix the selector to read the real value, filter arrays in the step script (keep http(s) entries), or renegotiate the contract with io.confirm to drop/redefine the field. A green score with junk-valued fields is NOT a finished service.'
     };
+  }
+
+  // Eighteenth log: on a logged-out page that offered ONLY sponsored cards,
+  // the session shipped them AS the requested records ("sponsored posts are
+  // arguably posts") with the extraction container built ON an ad marker.
+  // Report-only: the same marker may legitimately do EXCLUSION work inside
+  // :not() — the note asks for the polarity check, not a verdict.
+  function detectAdMarkerSelectors(steps) {
+    const hits = [];
+    for (const s of (Array.isArray(steps) ? steps : [])) {
+      const script = String((s && s.script) || '');
+      const markers = script.match(/\bdata-ad-[a-z0-9_-]+|\bsponsored\b/gi);
+      if (markers && markers.length) {
+        const uniq = [];
+        for (const m of markers) if (uniq.indexOf(m) === -1) uniq.push(m);
+        hits.push({ stepId: s && s.id != null ? s.id : '?', markers: uniq });
+      }
+    }
+    return hits.length ? hits : null;
   }
 
   function createVerifyRunner(deps) {
@@ -333,7 +351,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], countShortfall: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, zeroMatchFields: null, containerZero: null, partialEmptyFields: null };
+      const detectors = { emptyFields: [], duplicateFields: [], countShortfall: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, zeroMatchFields: null, containerZero: null, partialEmptyFields: null, adMarkerSelectors: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -501,6 +519,11 @@
           // contract that wants these values — surface, teach, never block.
           detectors.junkValues = detectJunkValues(finalData, outputSchema);
         }
+        if (!error) {
+          // Report-only (eighteenth log): ad/sponsored markers in step
+          // selectors — include-usage inverts an exclusion requirement.
+          detectors.adMarkerSelectors = detectAdMarkerSelectors(stepsDefs);
+        }
         if (!error && typeof WU.detectEmptyOutputFieldsByRatio === 'function') {
           // Report-only (sixteenth log): findEmptyExtractionFields fires only
           // when EVERY value of EVERY record is empty, so time:""/location:""
@@ -552,6 +575,7 @@
         if (detectors.junkValues) add('JUNK_VALUES');
         if (detectors.partialEmptyFields) add('PARTIAL_EMPTY_FIELDS');
         if (schemaBlindNote(outputSchema)) add('SCHEMA_BLIND');
+        if (detectors.adMarkerSelectors) add('AD_MARKER_SELECTOR');
         for (const evt of events) {
           if (!evt || evt.type !== 'STEP_ITERATION') continue;
           const p = previewJson(evt.resultPreview);
@@ -602,13 +626,23 @@
         return 'outputSchema declares NO fields (no "required", no "properties") — scoring and every empty/junk detector are blind, so this green report is unverifiable. Run io.confirm with an outputSchema that lists the output fields under "properties" (and the must-haves in "required"), then service.update the artifact to match and re-verify.';
       }
 
+      // Eighteenth log: the model shipped sponsored cards AS the requested
+      // posts with the container built ON an ad marker. Report-only — the
+      // marker may also be doing legitimate EXCLUSION work inside :not();
+      // the note demands the polarity check, never a verdict.
+      function adMarkerNote(hits) {
+        if (!hits || !hits.length) return null;
+        const lines = hits.map((h) => (h.stepId != null ? h.stepId : '?') + ': ' + h.markers.join(', ')).join('; ');
+        return 'step selector(s) reference ad/sponsored markers (' + lines + '). Check the POLARITY against the requirement: if it EXCLUDES ads/recommendations, a container or content selector built ON an ad marker selects exactly what was to be removed — the exclusion form (:not() / :has()-negation over the marker) is the correct one. And if ad-marked cards are the ONLY cards the page offers, that is thin content for this input value: say so in the finish summary and prefer a more common input value instead of relabeling ad units as the requested records.';
+      }
+
       const score = WU.scoreAttemptResult(finalData, outputSchema);
       const report = {
         ok: !error,
         error: error ? { message: error.message, stepId: error.stepId || null } : null,
         aborted: !!(error && /TEST_ABORTED/.test(error.message)),
         score: score,
-        scoreNote: scoreMismatchNote(score, finalData, outputSchema) || schemaBlindNote(outputSchema),
+        scoreNote: scoreMismatchNote(score, finalData, outputSchema) || schemaBlindNote(outputSchema) || adMarkerNote(detectors.adMarkerSelectors),
         schemaOk: !!oc.ok,
         schemaMissing: oc.missing || [],
         detectors: detectors,

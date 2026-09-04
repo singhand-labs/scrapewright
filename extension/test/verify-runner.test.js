@@ -423,6 +423,53 @@ describe('verify-runner score-0 key-mismatch note (sixth-live-log I4)', () => {
   });
 });
 
+describe('AD_MARKER_SELECTOR detector (eighteenth log: sponsored cards relabeled as posts)', () => {
+  const FIELDED = { type: 'object', required: ['posts'], properties: { posts: { type: 'array' } } };
+  const orch = async () => ({
+    finalResult: { posts: [{ postId: 'p1', content: 'x' }] },
+    steps: [{ stepId: 's1', stepName: 'extract', result: { done: true }, snapshot: null }],
+    pages: [], pagesTruncated: false
+  });
+
+  it('a container built ON an ad marker carries the tag + polarity note', async () => {
+    const svc = {
+      targetUrl: 'https://example.com',
+      steps: [{ id: 's1', name: 'extract', onSuccess: 'TERMINATE',
+        script: "return $extractList(\"div[role='feed'] div[role='article']:has(div[data-ad-comet-preview])\", { postId: { selector: 'a', attr: 'href' } });" }],
+      config: {}
+    };
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: svc, input: {}, outputSchema: FIELDED });
+    assert.equal(out.report.ok, true);
+    assert.ok(out.report.events.indexOf('AD_MARKER_SELECTOR') !== -1, 'tag rides report.events');
+    assert.ok(Array.isArray(out.report.detectors.adMarkerSelectors) && out.report.detectors.adMarkerSelectors.length === 1);
+    assert.deepEqual(out.report.detectors.adMarkerSelectors[0].markers, ['data-ad-comet-preview']);
+    assert.match(out.report.scoreNote, /polarity/i, 'note demands the polarity check');
+    assert.match(out.report.scoreNote, /thin content/i, 'note names the thin-content alternative');
+  });
+
+  it('ad markers inside :not() exclusion also tag — the note teaches BOTH directions', async () => {
+    const svc = {
+      targetUrl: 'https://example.com',
+      steps: [{ id: 's1', name: 'extract', onSuccess: 'TERMINATE',
+        script: "return $extractList(\"div[role='feed'] div[role='article']:not(:has([data-ad-rendering-role]))\", { postId: { selector: 'a', attr: 'href' } });" }],
+      config: {}
+    };
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: svc, input: {}, outputSchema: FIELDED });
+    assert.ok(out.report.events.indexOf('AD_MARKER_SELECTOR') !== -1, 'report-only: exclusion usage still surfaces for review');
+    assert.match(out.report.scoreNote, /:not/i, 'note names the exclusion form as the correct direction');
+  });
+
+  it('clean scripts carry no tag and no note', async () => {
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: FIELDED });
+    assert.equal(out.report.events.indexOf('AD_MARKER_SELECTOR'), -1);
+    assert.equal(out.report.scoreNote, null);
+    assert.equal(out.report.detectors.adMarkerSelectors, null);
+  });
+});
+
 describe('SCHEMA_BLIND defense (seventeenth log: fieldless outputSchema → green score-0 garbage)', () => {
   it('green run under a fieldless schema carries the SCHEMA_BLIND tag and an io.confirm scoreNote', async () => {
     const orch = async (svc, input, d, opts) => {

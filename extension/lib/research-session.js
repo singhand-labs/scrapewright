@@ -49,6 +49,33 @@
 
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+  // Eighteenth log: splice a continuation onto a cut-off reply. The final
+  // artifact write (service.update) is an inherently long payload — "resend
+  // SHORTER" cannot shrink it, so the repair resend came back LONGER and cut
+  // off again (1224 → 2886 chars, finish_reason "stop"). The continuation
+  // round asks for only the remainder; the model often repeats the last
+  // tokens it emitted before continuing, so find the longest suffix/prefix
+  // overlap and merge past it. Keep the raw splice and the continuation
+  // standalone too (the model may have resent the whole object) — parse
+  // validation picks whichever is the real turn.
+  function continuationCandidates(base, cont) {
+    const raw = String(cont == null ? '' : cont);
+    const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const cleaned = ((fence && fence[1] && fence[1].trim()) ? fence[1] : raw).trim();
+    if (!cleaned) return [];
+    const out = [];
+    const maxOv = Math.min(240, base.length, cleaned.length);
+    for (let n = maxOv; n >= 8; n--) {
+      if (base.slice(base.length - n) === cleaned.slice(0, n)) {
+        out.push(base + cleaned.slice(n));
+        break;
+      }
+    }
+    out.push(base + cleaned);
+    out.push(cleaned);
+    return out;
+  }
+
   // Seventh-live-log J1: the 60-turn session spent turns 1-55 on research,
   // authored at 56-59 and hit its FIRST verify at turn 60 — the model had no
   // visibility into the remaining budget, so whatever ceiling G5 raises gets
@@ -621,10 +648,44 @@
             }
             parsed = Protocol.parseAssistantTurn(repaired);
             if (!parsed.ok) {
-              report = await stop('protocol', parsed.violation);
-              break;
+              // Eighteenth log: for a STILL-cut-off reply run ONE continuation
+              // round before giving up — quote the exact cut point, ask for
+              // ONLY the remainder, and splice (overlap-merge tolerates the
+              // model repeating its last tokens). Non-cut-off classes keep
+              // the original two-strike behavior.
+              const stillCutOff = !!(parsed.detail && /cut-off|Unterminated string|Unexpected end/i.test(parsed.detail));
+              let winning = null;
+              if (stillCutOff) {
+                const base = Protocol.extractJsonObject(repaired) || String(repaired || '');
+                state.transcript.push({ kind: 'system', text:
+                  'CONTINUATION REPAIR: your reply was cut off EXACTLY after ' + JSON.stringify(base.slice(-120)) +
+                  '. Reply with ONLY the continuation that completes it from that exact point — do NOT reopen the object, do NOT repeat earlier text, no prose, no code fence; start mid-token if the cut fell mid-token.' });
+                let cont = null;
+                try {
+                  cont = await callLlm(assembleMessages());
+                } catch (err) {
+                  const s = llmStopFromError(err);
+                  report = await stop(s[0], s[1]);
+                  break;
+                }
+                for (const variant of continuationCandidates(base, cont)) {
+                  const p = Protocol.parseAssistantTurn(variant);
+                  if (p.ok) { parsed = p; winning = variant; break; }
+                }
+              }
+              if (!parsed.ok) {
+                // Eighteenth log: the repair failure was invisible — only the
+                // first violation got an event, and stop() carried the bare
+                // class name while the parse evidence (position, tail)
+                // evaporated exactly where the session died.
+                emit('protocol_violation', { violation: parsed.violation, detail: parsed.detail || null });
+                report = await stop('protocol', parsed.violation + (parsed.detail ? ' — ' + parsed.detail : ''));
+                break;
+              }
+              content = winning;
+            } else {
+              content = repaired;
             }
-            content = repaired;
           }
           const turn = parsed.turn;
           applyTurnState(turn);

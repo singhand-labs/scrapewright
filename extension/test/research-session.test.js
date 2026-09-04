@@ -555,15 +555,72 @@ describe('protocol violations', () => {
   });
 
   it('a second consecutive violation stops the session with reason protocol', async () => {
+    const events = [];
     const session = createResearchSession({
       requirement: 'r',
       llm: scriptedLlm([reply('I will just describe it in prose.')], []),
-      tools: {}
+      tools: {},
+      onEvent: (e) => events.push(e)
     });
     const report = await session.run();
     assert.equal(report.stopped.reason, 'protocol');
-    assert.equal(report.stopped.detail, 'no-json');
+    // Eighteenth log: the repair failure used to carry only the bare class
+    // name — the second reply's parse evidence evaporated at the exact point
+    // the session died. The detail now keeps violation + parse evidence.
+    assert.ok(/^no-json/.test(report.stopped.detail), 'detail names the violation: ' + report.stopped.detail);
+    assert.ok(/first 120 chars/.test(report.stopped.detail), 'detail carries the head excerpt');
     assert.equal(report.turns, 0);
+    // Non-cut-off failures get NO continuation round: two calls, then stop.
+    assert.equal(report.spend.llmCalls, 2);
+    // The repair failure is visible as an event too (was: first-only).
+    const violations = events.filter(e => e.type === 'protocol_violation');
+    assert.equal(violations.length, 2, 'both the original and the repair failure emit events');
+  });
+
+  it('a second cut-off gets a continuation round: overlap-splice recovers the turn (eighteenth log)', async () => {
+    const cutA = '{"think":"write artifact","tool":"service.update","args":{"steps":[{"id":"s1","script":"return await $count(\'div.card\')"';
+    // Repair resend: LONGER than the original (1224→2886 in the log) and cut
+    // off again — "resend SHORTER" cannot shrink an artifact write.
+    const cutB = '{"think":"again","tool":"service.update","args":{"steps":[{"id":"s1","script":"return await $count(\'div.card\')"},{"id":"s2","script":"return await $list(\'div.card\')"}]';
+    // Continuation repeats the last tokens of cutB (models do) then closes.
+    const cont = '"return await $list(\'div.card\')"}]}}';
+    const calls = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([reply(cutA), reply(cutB), reply(cont), reply(finishEnvelope())], calls),
+      tools: {}
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    assert.equal(report.turns, 2, 'repair rounds are not turns');
+    assert.equal(report.spend.llmCalls, 4, 'original + resend + continuation + finish');
+    // The spliced turn is what entered the transcript — parse it back and
+    // confirm the artifact survived the stitch intact (both steps present).
+    const assistantTexts = session.state().session.transcript.filter(e => e.kind === 'assistant').map(e => e.text);
+    const stitched = assistantTexts.find(t => t && t.indexOf('service.update') !== -1);
+    assert.ok(stitched, 'the spliced turn reached the transcript');
+    const parsedTurn = JSON.parse(stitched);
+    assert.ok(Array.isArray(parsedTurn.args.steps) && parsedTurn.args.steps.length === 2
+      && parsedTurn.args.steps[1].id === 's2', 'splice kept the full artifact: ' + stitched);
+    const nudges = session.state().session.transcript.filter(e => e.kind === 'system');
+    assert.ok(nudges.length >= 2, 'cut-off nudge + continuation nudge');
+    assert.ok(/CUT OFF/i.test(nudges[0].text));
+    assert.ok(/CONTINUATION REPAIR/.test(nudges[1].text), 'continuation nudge names the exact cut point');
+    assert.ok(nudges[1].text.includes('div.card'), 'nudge quotes the cut tail verbatim');
+  });
+
+  it('a continuation that reopens the whole object parses standalone', async () => {
+    const cutA = '{"think":"final artifact","tool":"service.update","args":{"steps":[{"id":"s1","script":"return 1"';
+    const cutB = '{"think":"retry","tool":"service.update","args":{"steps":[{"id":"s1","script":"return 1"}';
+    const resent = envelope('service.update', { steps: [{ id: 's1', script: 'return 1' }] });
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([reply(cutA), reply(cutB), reply(resent), reply(finishEnvelope())], []),
+      tools: { 'service.update': async () => ({ ok: true }) }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    assert.equal(report.spend.llmCalls, 4);
   });
 
   it('a repaired turn does not count as two turns', async () => {
