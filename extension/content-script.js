@@ -340,13 +340,50 @@
           if (sampleTexts.length >= 3 && sampleHrefs.length >= 3) break;
         }
       }
-      return {
+      const out = {
         api: apiName,
         selector: selector || null,
         matchCount: arr.length,
         sampleTexts,
         sampleHrefs
       };
+      // Twenty-third log (mirror of lib/list-extract-ops.js): the count
+      // census carries the visible/invisible split — $count matches
+      // regardless of visibility while $exists is visibility-gated, and the
+      // divergence (count N / exists false) is exactly the hidden-but-
+      // readable trap. Census runs only for count.
+      if (apiName === 'count') {
+        let visibleCount = 0;
+        for (const el of arr) {
+          if (isVisibleForDiagnostics(el)) visibleCount += 1;
+        }
+        out.visibleCount = visibleCount;
+        out.invisibleCount = arr.length - visibleCount;
+      }
+      return out;
+    }
+
+    // Mirror of lib/list-extract-ops.js isVisibleForDiagnostics — defensive
+    // visibility check for the count census (diagnostics must never throw).
+    function isVisibleForDiagnostics(el) {
+      if (!el) return false;
+      try {
+        const doc = el.ownerDocument;
+        const win = doc && doc.defaultView;
+        if (win && typeof win.getComputedStyle === 'function') {
+          const style = win.getComputedStyle(el);
+          if (style) {
+            if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+          }
+        }
+        if (typeof el.getBoundingClientRect === 'function') {
+          const rect = el.getBoundingClientRect();
+          if (rect && rect.width === 0 && rect.height === 0) return false;
+        }
+        return true;
+      } catch {
+        return true;
+      }
     }
 
     // Inline mirror of lib/list-extract-ops.js computeClickInListDiagnostics —
@@ -399,7 +436,8 @@
       clickInListItems,
       computeExtractListDiagnostics,
       computeClickInListDiagnostics,
-      computeSimpleSelectorDiagnostics
+      computeSimpleSelectorDiagnostics,
+      isVisibleForDiagnostics
     };
   }
 
@@ -1015,6 +1053,13 @@
           const __t0 = Date.now();
           result = await domExists(data.selector, data.args[0]);
           recordDomActivity('$exists', data.selector, result ? 1 : 0, Date.now() - __t0);
+          if (result !== true) {
+            // Twenty-third log: a false $exists whose selector still MATCHES
+            // must not read as "absent" — hidden-but-readable elements are
+            // the exact trap (reads are not visibility-gated).
+            const __d = computeExistsDiagnostics(data.selector);
+            if (__d) _diagnostics = [__d];
+          }
           break;
         }
         case 'count': {
@@ -1352,6 +1397,78 @@
     const rect = el.getBoundingClientRect();
     if (rect.width === 0 && rect.height === 0) return false;
     return true;
+  }
+
+  // Which visibility check failed — for the exists diagnostics below. Mirrors
+  // isElementVisible's checks; defensive because diagnostics must never throw
+  // the read that would otherwise succeed.
+  function invisibleElementReason(el) {
+    if (!el) return 'hidden';
+    try {
+      const win = el.ownerDocument?.defaultView || window;
+      const style = win && typeof win.getComputedStyle === 'function' ? win.getComputedStyle(el) : null;
+      if (style) {
+        if (style.display === 'none') return 'display:none';
+        if (style.visibility === 'hidden') return 'visibility:hidden';
+        if (style.opacity === '0') return 'opacity:0';
+      }
+      if (typeof el.getBoundingClientRect === 'function') {
+        const rect = el.getBoundingClientRect();
+        if (rect && rect.width === 0 && rect.height === 0) return 'zero-size';
+      }
+    } catch { /* diagnostics must never throw */ }
+    return 'hidden';
+  }
+
+  // Twenty-third log: $exists is the ONLY $ primitive gated on visibility,
+  // while every read ($extract/$list/$count/$extractList) resolves through
+  // querySelector(All)Deep with no visibility filter. The model's natural
+  // guard idiom — `if (!(await $exists(sel))) return null` — therefore read
+  // hidden-but-readable elements (aria-labelledby tooltip spans, collapsed
+  // labels) as "absent", the guarded fields extracted "" in every record,
+  // and the bare `false` left the model to invent a wrong race hypothesis.
+  // When $exists returns false but the selector DOES match, record the
+  // hidden match: reason, sample text (readable right now through the
+  // ungated reads), and the teaching note. Rides the DOM_RESPONSE
+  // _diagnostics relay like every other selector diagnostic.
+  function computeExistsDiagnostics(sel) {
+    let els;
+    try {
+      els = querySelectorAllDeep(sel);
+    } catch (err) {
+      return null; // invalid selector: the caller's own error path speaks
+    }
+    if (!els.length) return null; // genuinely absent — no divergence to explain
+    const visible = els.filter(isElementVisible).length;
+    if (visible > 0) return null; // a visible match exists — no trap
+    const reasons = [];
+    const sampleTexts = [];
+    for (const el of els) {
+      if (!el) continue;
+      const reason = invisibleElementReason(el);
+      if (reason && reasons.length < 3 && reasons.indexOf(reason) === -1) reasons.push(reason);
+      if (sampleTexts.length < 3 && typeof el.textContent === 'string') {
+        const t = el.textContent.trim().slice(0, 80);
+        if (t) sampleTexts.push(t);
+      }
+      if (reasons.length >= 3 && sampleTexts.length >= 3) break;
+    }
+    sendDebugLog('warn', 'content-script', 'domExists false but selector matches invisible element(s)', {
+      selector: sel, invisibleMatches: els.length, reasons
+    });
+    return {
+      api: 'exists',
+      selector: sel,
+      exists: false,
+      matchedButInvisible: true,
+      matchCount: els.length,
+      visibleCount: 0,
+      invisibleCount: els.length,
+      invisibleReasons: reasons,
+      sampleTexts,
+      note: 'selector MATCHES ' + els.length + ' element(s) but every one is invisible (' +
+        (reasons.join(', ') || 'hidden') + '). $exists is visibility-gated; reads ($extract/$list/$extractList/$count) are NOT — the sample text above is readable right now via a direct read. Do not treat this false as "absent": bind the field directly or drop the $exists guard.'
+    };
   }
 
   async function domExists(sel, timeoutMs) {

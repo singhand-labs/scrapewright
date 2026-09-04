@@ -140,7 +140,7 @@
       '',
       '# $ API',
       '- $(sel) — first matching element data',
-      '- $count(sel) → number; $list(sel) → serializable element data (plain JSON objects, NOT live DOM nodes — you cannot call querySelectorAll on them); $exists(sel, timeoutMs?) → boolean',
+      '- $count(sel) → number; $list(sel) → serializable element data (plain JSON objects, NOT live DOM nodes — you cannot call querySelectorAll on them); $exists(sel, timeoutMs?) → boolean (VISIBILITY-gated — false for display:none/zero-size elements; reads are NOT gated, so never guard a read with it; probe.count reports the visible/invisible census)',
       '- $extract(sel, attr?) — first match; attr may be "outerHTML" or any attribute name',
       '- $extractList(containerSel, fieldMap, opts?) — one record per container; fieldMap {field:{selector,attr?}}; opts.allowEmpty keeps empty-string fields (return every record, never filter to [])',
       '- $extractListMulti(containerSel, fieldMap, opts?) — array-valued fields',

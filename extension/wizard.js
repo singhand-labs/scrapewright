@@ -1949,7 +1949,12 @@ function makeWizardRail() {
       const executor = new OffscreenExecutor(tabId);
       executor.timeoutMs = 30000;
       const r = await executor.execute(snippet, {});
-      return r.result; // probes want the snippet result
+      // Twenty-third log: return the {result, selectorDiagnostics} envelope —
+      // unwrapping here discarded selectorDiagnostics for every probe, so the
+      // count visible/invisible census never reached probe.count. Probe-tools
+      // runSnippet unwraps; live-rail error path is unchanged (rejections
+      // still surface as {error} there).
+      return r;
     },
     acquireLock: () => chrome.runtime.sendMessage({ type: 'ACQUIRE_EXEC_LOCK' }),
     releaseLock: () => chrome.runtime.sendMessage({ type: 'RELEASE_EXEC_LOCK' }),
@@ -2280,7 +2285,12 @@ function handleSessionEvent(ev) {
       // inference. Schemas ride these args; give them room.
       console.log('[session] TOOL', ev.tool, JSON.stringify(ev.args || {}).slice(0, 1200));
     } else if (ev && ev.type) {
-      console.log('[session]', ev.type, JSON.stringify(ev).slice(0, 200));
+      // Twenty-third log RC-C: 200 chars cut the stopped event's honest-ship
+      // disclosure ("[VERIFY PARTIAL-EMPTY — ...fields...]") mid-list in two
+      // consecutive live logs — the export read as a clean ship. Detail-
+      // bearing events (stopped/error/paused) get the same 600 budget the
+      // tool_result mirror uses.
+      console.log('[session]', ev.type, JSON.stringify(ev).slice(0, 600));
     }
   } catch (e) { /* mirror is best-effort */ }
   try {

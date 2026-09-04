@@ -444,6 +444,38 @@ function computeExtractListDiagnostics(containers, fieldMap, containerSelector, 
 // to 'list'. For 'count', returns only matchCount (no samples — caller
 // only wants the number). For 'list'/'extract', includes up to 3 sample
 // textContent + href.
+//
+// Twenty-third log: for 'count' the census also carries the
+// visible/invisible split — $count matches regardless of visibility while
+// $exists is visibility-gated, and the divergence (count N / exists false)
+// is exactly the hidden-but-readable trap that ships guarded fields as "".
+// Census runs only for count (match populations there are small and the
+// signal is only needed there; list/extract stay lean).
+
+// Visibility check for the census — mirrors content-script's isElementVisible
+// checks, but defensive: diagnostics must never throw the read it annotates.
+// Exported for the content-script inline-mirror parity test.
+function isVisibleForDiagnostics(el) {
+  if (!el) return false;
+  try {
+    const doc = el.ownerDocument;
+    const win = doc && doc.defaultView;
+    if (win && typeof win.getComputedStyle === 'function') {
+      const style = win.getComputedStyle(el);
+      if (style) {
+        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+      }
+    }
+    if (typeof el.getBoundingClientRect === 'function') {
+      const rect = el.getBoundingClientRect();
+      if (rect && rect.width === 0 && rect.height === 0) return false;
+    }
+    return true;
+  } catch {
+    return true;
+  }
+}
+
 function computeSimpleSelectorDiagnostics(elements, selector, api) {
   const apiName = api || 'list';
   const arr = Array.isArray(elements) ? elements : [];
@@ -463,13 +495,22 @@ function computeSimpleSelectorDiagnostics(elements, selector, api) {
       if (sampleTexts.length >= 3 && sampleHrefs.length >= 3) break;
     }
   }
-  return {
+  const out = {
     api: apiName,
     selector: selector || null,
     matchCount: arr.length,
     sampleTexts,
     sampleHrefs
   };
+  if (apiName === 'count') {
+    let visibleCount = 0;
+    for (const el of arr) {
+      if (isVisibleForDiagnostics(el)) visibleCount += 1;
+    }
+    out.visibleCount = visibleCount;
+    out.invisibleCount = arr.length - visibleCount;
+  }
+  return out;
 }
 
 const api = {
@@ -479,7 +520,8 @@ const api = {
   clickInListItems,
   computeExtractListDiagnostics,
   computeClickInListDiagnostics,
-  computeSimpleSelectorDiagnostics
+  computeSimpleSelectorDiagnostics,
+  isVisibleForDiagnostics
 };
 
 if (typeof module !== 'undefined' && module.exports) module.exports = api;

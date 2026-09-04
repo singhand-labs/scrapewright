@@ -46,9 +46,27 @@
       return html;
     }
 
+    // OffscreenExecutor resolves with an envelope {result, selectorDiagnostics};
+    // the wizard rail used to unwrap to `result` at the boundary, silently
+    // discarding selectorDiagnostics for every probe (twenty-third log — the
+    // count/exists visibility split rides exactly that field). runSnippet
+    // unwraps a recognizable envelope, stashes its diagnostics for the probe
+    // that just ran, and passes raw values (test executors, future rails)
+    // through untouched. Probes on one rail serialize through ensureLock, so
+    // the stash is never interleaved.
+    let lastSelectorDiagnostics = null;
+
     async function runSnippet(snippet) {
+      lastSelectorDiagnostics = null;
       try {
-        return await executeDsl(snippet);
+        const env = await executeDsl(snippet);
+        if (env && typeof env === 'object' && !Array.isArray(env) && typeof env.error === 'string') return env;
+        if (env && typeof env === 'object' && !Array.isArray(env) &&
+            typeof env.result !== 'undefined' && Array.isArray(env.selectorDiagnostics)) {
+          lastSelectorDiagnostics = env.selectorDiagnostics.length ? env.selectorDiagnostics : null;
+          return env.result;
+        }
+        return env;
       } catch (err) {
         return { error: String((err && err.message) || err) };
       }
@@ -69,10 +87,21 @@
       const r = await runSnippet('return $count(' + JSON.stringify(sel) + ');');
       if (r && typeof r.error === 'string') return r;
       const n = typeof r === 'number' ? r : 0;
+      const out = { count: n };
+      // Twenty-third log: $count matches regardless of visibility while
+      // $exists is visibility-gated — surface the split so "count 5 but
+      // $exists false" reconciles as hidden-but-readable, not as a mystery.
+      const cd = (lastSelectorDiagnostics || []).filter(d => d && d.api === 'count')[0];
+      if (cd && typeof cd.invisibleCount === 'number' && cd.invisibleCount > 0) {
+        out.visibleCount = typeof cd.visibleCount === 'number' ? cd.visibleCount : null;
+        out.invisibleCount = cd.invisibleCount;
+        out.note = 'visibility census: ' + out.visibleCount + ' visible / ' + cd.invisibleCount +
+          ' invisible of ' + n + ' match(es). $exists is visibility-gated and returns false for the invisible ones; reads ($extract/$list/$extractList) are NOT visibility-gated and read them fine — do not gate a read on $exists.';
+      }
       if (observationLog) {
         observationLog.record({ tool: 'probe.count', selectors: [sel], summary: 'count=' + n });
       }
-      return { count: n };
+      return out;
     }
 
     async function text(sel0) {
