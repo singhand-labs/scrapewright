@@ -257,6 +257,24 @@ describe('probe.attrStats', () => {
     const r = await tools.attrStats('div.card', 'data-k');
     assert.equal(r.error, 'BOOM');
   });
+
+  // Twenty-fifth log: absentPct 100 was misread as "the attr does not exist
+  // in my containers" while :has()/:not(:has()) filter by DESCENDANTS — the
+  // model kept a fatal :not() clause believing attrStats had cleared it.
+  it('absentPct 100 attaches the descendant-form recipe note (element-scope vs :has()-scope)', async () => {
+    const { tools } = makeTools(async () => [{ m: '' }, { m: '' }, { m: '' }]);
+    const r = await tools.attrStats("div[role='article']", 'data-ad-rendering-role');
+    assert.equal(r.absentPct, 100);
+    assert.match(r.note, /not ON any of the 3/i);
+    assert.match(r.note, /DESCENDANTS/i);
+    assert.match(r.note, /containerSel \+ " \[data-ad-rendering-role\]"/, 'gives the exact descendant-form selector');
+  });
+
+  it('partial absence does not attach the scope note', async () => {
+    const { tools } = makeTools(async () => [{ m: 'x' }, { m: '' }]);
+    const r = await tools.attrStats('div.card', 'data-k');
+    assert.equal(r.note, undefined);
+  });
 });
 
 describe('probe.extract (sixth-log turn-sink: verify loop t26-t40)', () => {

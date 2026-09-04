@@ -53,12 +53,20 @@ describe('B2: error diagnostics survive handleDomRequest', () => {
   it('B2 producer: domExtractWithHover no-containers throw carries _diagnostics', async () => {
     // Slice the real function and inject its free variables; the no-containers
     // throw fires before any hover machinery, so only the container resolver
-    // and the log relays need stubbing.
-    const factory = eval('(function (querySelectorAllDeep, sendDebugLog, notifyBackgroundDiagnostic, getListExtractOps, domHover) { return (async ' + sliceFn('domExtractWithHover') + '); })');
+    // and the log relays need stubbing. The twenty-fifth-log differential
+    // helpers ride along (sliced real implementations).
+    const diffFactory = eval('(function (querySelectorAllDeep, stripTrailingFilterClause) { return (' + sliceFn('computeSelectorDifferential') + '); })');
+    const fmtFactory = eval('(function () { return (' + sliceFn('formatSelectorDifferentialNote') + '); })');
+    const computeSelectorDifferential = diffFactory(() => [], () => null);
+    const factory = eval('(function (querySelectorAllDeep, sendDebugLog, notifyBackgroundDiagnostic, getListExtractOps, domHover, computeSelectorDifferential, formatSelectorDifferentialNote) { return (async ' + sliceFn('domExtractWithHover') + '); })');
     const fn = factory(
       () => [], // zero containers matched
       () => {},
-      () => {}
+      () => {},
+      undefined,
+      undefined,
+      computeSelectorDifferential,
+      fmtFactory()
     );
     await assert.rejects(
       fn('.no-such-container', { title: 'x' }, { hover: { anchorSel: '.a' } }),

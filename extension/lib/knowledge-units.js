@@ -10,7 +10,7 @@
 // tags): COUNT_SHORTFALL, EMPTY_EXTRACTION, EMPTY_FIELDS, POPOVER_TIMEOUT,
 // HOVER_NO_SIGNAL, COUNTER_FROZEN, DUPLICATE_RECORDS, SELECTOR_ZERO_MATCH,
 // FIELD_COLLISION, SCRIPT_TIMEOUT, CARD_POLICY, POLL_EXHAUSTED, SCHEMA_BLIND,
-// AD_MARKER_SELECTOR.
+// AD_MARKER_SELECTOR, SELECTOR_OVERFILTERED.
 //
 // Write path: sessions PROPOSE units; the user approves; the universality
 // guard test runs on every change to this file.
@@ -72,9 +72,9 @@
     {
       id: 'ad-marker-polarity',
       title: 'Ad-marker attributes name PAID units — build the extraction polarity accordingly',
-      matchEvents: ['AD_MARKER_SELECTOR'],
+      matchEvents: ['AD_MARKER_SELECTOR', 'SELECTOR_OVERFILTERED'],
       origin: '2026-09-04 eighteenth log survey; sponsored cards shipped as posts',
-      body: 'An attribute or label whose own name says ad/sponsored (a data-ad-* attribute, a "Sponsored" label) marks PAID or promotional units. If the requirement EXCLUDES ads/recommendations, a container or content selector built ON an ad marker inverts the requirement — it selects exactly what should have been removed. The include form (:has(div[data-ad-…])) and the exclude form (:not(:has([data-ad-…]))) look similar inside one selector string; check which polarity you wrote against what the requirement asked for. When ad-marked cards are the ONLY cards the page offers, that is thin content for the current input value: report it in the finish summary (and prefer a more common input value) instead of relabeling ad units as the requested records.'
+      body: 'An attribute or label whose own name says ad/sponsored (a data-ad-* attribute, a "Sponsored" label) marks PAID or promotional units. If the requirement EXCLUDES ads/recommendations, a container or content selector built ON an ad marker inverts the requirement — it selects exactly what should have been removed. The include form (:has(div[data-ad-…])) and the exclude form (:not(:has([data-ad-…]))) look similar inside one selector string; check which polarity you wrote against what the requirement asked for. The EXCLUDE form is not automatically safe either (twenty-fifth log): a data-* attr whose name looks promotional can be a DESIGN-SYSTEM attribute present inside every card — organic ones included — and then :not(:has([attr])) removes the whole population, matching zero containers forever while the base selector matches plenty. Verify EITHER polarity with a count differential (count the selector with vs without the clause; attrStats with the descendant form sel + " [attr]" shows which share of containers carries the marker inside) before shipping it. When ad-marked cards are the ONLY cards the page offers, that is thin content for the current input value: report it in the finish summary (and prefer a more common input value) instead of relabeling ad units as the requested records.'
     },
     {
       id: 'selector-coherence',

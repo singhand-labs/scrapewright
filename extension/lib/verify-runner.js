@@ -479,11 +479,30 @@
                 '(a) POPULATION DIVERGENCE — your selectors were grounded on the research page, and a different verify INPUT (different query values) can change the result-card population entirely; first re-verify with the SAME input values that drove the research page before touching selectors; ' +
                 '(b) your own step JS filters records on this field (e.g. .filter(p => p.' + census[0].field + ' && ...)) and silently dropped every extracted record — a filtered-to-0 result with containers present is NOT extraction success: keep a RAW fallback count (records.length before filtering / $count(containerSel)) and treat filtered-to-0 as not-ready or an error, never as {done:true}.';
             } else if (containerZero && containerZero.length) {
+              // Twenty-fifth log: when a census hit carries a live selector
+              // differential whose stripped-base count is >0, the page HAS
+              // the items and the caller's own trailing clauses removed
+              // them — lead with that instead of the input-value advice.
+              const diffHit = containerZero.find((z) => Array.isArray(z.selectorDifferential) &&
+                z.selectorDifferential.some((st) => st && st.count > 0));
               const zLines = containerZero.map((z) => {
                 const stepDefZ = stepsDefs.find((s) => String(s.id) === String(z.stepId));
-                return 'step "' + (stepDefZ ? stepDefZ.name : z.stepId) + '" (' + z.api + '): container ' + JSON.stringify(z.containerSelector) + ' matched 0 items on ' + z.calls + ' call(s)';
+                let line = 'step "' + (stepDefZ ? stepDefZ.name : z.stepId) + '" (' + z.api + '): container ' + JSON.stringify(z.containerSelector) + ' matched 0 items on ' + z.calls + ' call(s)';
+                if (Array.isArray(z.selectorDifferential) && z.selectorDifferential.length) {
+                  line += ' [differential: ' + z.selectorDifferential
+                    .map((st) => JSON.stringify(String(st.sel).slice(0, 100)) + ' → ' + st.count)
+                    .join(', ') + ']';
+                }
+                return line;
               });
-              msg = 'EMPTY_EXTRACTION / INPUT_VALUE_SUSPECT: no list containers matched at all — ' + zLines.join('; ') + '. When the page shows ZERO result items, the input VALUE itself is the prime suspect: the site may simply have no content for it (an obscure keyword, an over-specific filter) — that is not a selector bug. Before touching selectors, re-run verify.run with {"input": {<param>: <a DIFFERENT, more common value>}} (e.g. a headword you saw populate the page during research). If the alternate value returns data, the step graph is fine: adopt it via service.update({testInput: {...}}) so the default input works, and note the input-value sensitivity. Only if a common value ALSO returns zero containers are the selectors/steps the suspects.';
+              if (diffHit) {
+                const weakest = diffHit.selectorDifferential[diffHit.selectorDifferential.length - 1];
+                msg = 'EMPTY_EXTRACTION / SELECTOR_OVERFILTERED: no list containers matched — ' + zLines.join('; ') +
+                  '. The differential above is live evidence: the stripped base ' + JSON.stringify(String(weakest.sel).slice(0, 100)) + ' matched ' + weakest.count +
+                  ' element(s) on the verify page, so the page HAS items and YOUR OWN trailing :not()/:has() clause(s) removed every one of them. This is a selector problem — NOT an input-value problem (do not re-test other input values) and NOT a fieldMap problem. Census each clause: count the selector with and without it (or attrStats with the descendant form sel + " [attr]") and drop or invert the clause that zeroes the population — attribute markers whose names look promotional (data-ad-*) are often design-system attributes present on ALL cards, ads and organic alike.';
+              } else {
+                msg = 'EMPTY_EXTRACTION / INPUT_VALUE_SUSPECT: no list containers matched at all — ' + zLines.join('; ') + '. When the page shows ZERO result items, the input VALUE itself is the prime suspect: the site may simply have no content for it (an obscure keyword, an over-specific filter) — that is not a selector bug. Before touching selectors, re-run verify.run with {"input": {<param>: <a DIFFERENT, more common value>}} (e.g. a headword you saw populate the page during research). If the alternate value returns data, the step graph is fine: adopt it via service.update({testInput: {...}}) so the default input works, and note the input-value sensitivity. Only if a common value ALSO returns zero containers are the selectors/steps the suspects.';
+              }
             } else {
               msg = 'EMPTY_EXTRACTION: required field(s) [' + emptyFields.join(', ') + '] are present but every extracted item has only empty values, or no items were extracted at all. The script found list items but the field selectors are wrong.';
             }
@@ -522,11 +541,13 @@
           // contract that wants these values — surface, teach, never block.
           detectors.junkValues = detectJunkValues(finalData, outputSchema);
         }
-        if (!error) {
-          // Report-only (eighteenth log): ad/sponsored markers in step
-          // selectors — include-usage inverts an exclusion requirement.
-          detectors.adMarkerSelectors = detectAdMarkerSelectors(stepsDefs);
-        }
+        // Report-only (eighteenth log): ad/sponsored markers in step
+        // selectors — include-usage inverts an exclusion requirement.
+        // Twenty-fifth log: UNGATED from !error — the polarity teaching is
+        // most valuable exactly when extraction fails (all eight verifies of
+        // the twenty-fifth session errored, so the detector never ran while
+        // every shipped script carried data-ad-* markers).
+        detectors.adMarkerSelectors = detectAdMarkerSelectors(stepsDefs);
         if (!error && typeof WU.detectEmptyOutputFieldsByRatio === 'function') {
           // Report-only (sixteenth log): findEmptyExtractionFields fires only
           // when EVERY value of EVERY record is empty, so time:""/location:""
@@ -566,8 +587,9 @@
         // poll-exhaustion-differential knowledge unit attaches to it.
         if (/POLL_EXHAUSTED/.test(msg) && !/COUNT_SELECTOR_BLIND/.test(msg) && !/ZERO_COUNTER_FROZEN/.test(msg)) add('POLL_EXHAUSTED');
         if (/EMPTY_EXTRACTION/.test(msg)) add('EMPTY_EXTRACTION');
+        if (/SELECTOR_OVERFILTERED/.test(msg)) add('SELECTOR_OVERFILTERED');
         if (detectors.zeroMatchFields) add('FIELD_MATCH_ZERO');
-        if (detectors.containerZero) add('INPUT_VALUE_SUSPECT');
+        if (detectors.containerZero && !/SELECTOR_OVERFILTERED/.test(msg)) add('INPUT_VALUE_SUSPECT');
         if (/DUPLICATE_RECORDS/.test(msg)) add('DUPLICATE_RECORDS');
         if (/SCRIPT_TIMEOUT/.test(msg)) add('SCRIPT_TIMEOUT');
         if (/HOVER_ANCHORS_BLIND/.test(msg)) add('HOVER_NO_SIGNAL');

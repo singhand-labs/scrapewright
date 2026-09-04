@@ -164,11 +164,53 @@
         .map(v => ({ value: v.slice(0, 80), items: counts[v], pct: total ? Math.round(counts[v] / total * 1000) / 10 : 0 }))
         .sort((a, b) => b.items - a.items)
         .slice(0, ATTR_VALUES_MAX);
-      return {
+      const out = {
         totalItems: total,
         values: values,
         absentPct: total ? Math.round(absent / total * 1000) / 10 : 0
       };
+      // Twenty-fifth log: absentPct 100 reads as "the attr does not exist in
+      // my containers" but attrStats censuses the attr ON the matched
+      // elements themselves — :has()/:not(:has()) test DESCENDANTS. Point at
+      // the descendant form instead of leaving the scope ambiguity to guess.
+      if (total > 0 && out.absentPct >= 100) {
+        out.note = 'the attr is not ON any of the ' + total + ' element(s) containerSel matched — attrStats reads attributes on the matched elements THEMSELVES, while :has()/:not(:has()) filter by DESCENDANTS. To census what :has() sees (does the marker exist INSIDE each container, on which share), re-run attrStats with the descendant form: containerSel + " [' + attr + ']".';
+      }
+      return out;
+    }
+
+    // Twenty-fourth-log root fix (hidden-risk follow-up): research-side read
+    // of ARIA reference chains — the full tooltip/hovercard value usually
+    // lives in the hidden-but-readable element aria-labelledby points at.
+    async function labelledby(sel0, attr0) {
+      let sel = sel0, attr = attr0;
+      if (sel && typeof sel === 'object' && !Array.isArray(sel)) {
+        attr = sel.attr;
+        sel = sel.sel;
+      }
+      if (typeof sel !== 'string' || !sel) return { error: 'selector required' };
+      if (attr !== undefined && attr !== null && typeof attr !== 'string') return { error: 'attr must be a string (aria-labelledby | aria-describedby)' };
+      const snippet = 'return $labelledby(' + JSON.stringify(sel) + ', ' + JSON.stringify(attr || 'aria-labelledby') + ');';
+      const r = await runSnippet(snippet);
+      if (r && typeof r.error === 'string') return r;
+      if (observationLog) {
+        observationLog.record({
+          tool: 'probe.labelledby',
+          selectors: [sel],
+          attrs: [{ selector: sel, attr: attr || 'aria-labelledby' }],
+          summary: 'labelledby' + (typeof r === 'string' && r ? ' len=' + r.length : ' empty')
+        });
+      }
+      const out = { text: typeof r === 'string' ? r : '' };
+      const ld = (lastSelectorDiagnostics || []).filter(d => d && d.api === 'labelledby')[0];
+      if (ld) {
+        out.attr = ld.attr;
+        out.refCount = ld.refCount;
+        if (Array.isArray(ld.missingIds) && ld.missingIds.length) out.missingIds = ld.missingIds;
+        if (ld.note) out.note = ld.note;
+        else if (!out.text) out.note = 'referenced element(s) resolved but carry no text — check the sibling reference attr (aria-describedby) or read the anchor textContent directly';
+      }
+      return out;
     }
 
     async function sample(sel0, opts0) {
@@ -459,7 +501,7 @@
       return out;
     }
 
-    return { count, text, attrStats, sample, hover, scroll, extract };
+    return { count, text, attrStats, labelledby, sample, hover, scroll, extract };
   }
 
   const api = { createProbeTools };

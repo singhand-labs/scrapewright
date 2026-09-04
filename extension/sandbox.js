@@ -41,6 +41,7 @@
   window.$wait = (sel, ms) => sendDomRequest('wait', sel, [ms]);
   window.$check = (sel, prop) => sendDomRequest('check', sel, [prop]);
   window.$exists = (sel, timeoutMs) => sendDomRequest('exists', sel, [timeoutMs]);
+  window.$labelledby = (sel, attr, timeoutMs) => sendDomRequest('labelledby', sel, [attr, timeoutMs]);
   window.$count = (sel) => sendDomRequest('count', sel);
   window.$list = (sel) => sendDomRequest('list', sel);
 window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opts || {}]);

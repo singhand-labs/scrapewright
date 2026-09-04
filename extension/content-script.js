@@ -1062,6 +1062,14 @@
           }
           break;
         }
+        case 'labelledby': {
+          const __t0 = Date.now();
+          const __r = await domLabelledby(data.selector, data.args && data.args[0], data.args && data.args[1]);
+          result = __r.result;
+          _diagnostics = __r._diagnostics;
+          recordDomActivity('$labelledby', data.selector, result ? 1 : 0, Date.now() - __t0);
+          break;
+        }
         case 'count': {
           const __t0 = Date.now();
           const __r = domCount(data.selector);
@@ -1493,6 +1501,130 @@
     return out;
   }
 
+  // Twenty-fifth log: a list container matching ZERO while its own base
+  // selector matches many is the compound-selector trap — a trailing
+  // :not()/:has() clause built on an attr-name guess (data-ad-*) removed the
+  // whole population, and the bare "no containers matched" error carried no
+  // evidence, so the model iterated fieldMaps and input values for 60 turns
+  // while the fatal clause never changed. Strips trailing filter clauses
+  // (balanced-paren scan) and counts each stage live.
+  function stripTrailingFilterClause(sel) {
+    const s = String(sel || '').trim();
+    if (!s || s.slice(-1) !== ')') return null;
+    let depth = 0;
+    for (let i = s.length - 1; i >= 0; i--) {
+      const ch = s[i];
+      if (ch === ')') { depth += 1; continue; }
+      if (ch === '(') {
+        depth -= 1;
+        if (depth === 0) {
+          const m = s.slice(0, i).match(/:(not|has)$/i);
+          return m ? s.slice(0, i - m[0].length) : null;
+        }
+      }
+    }
+    return null;
+  }
+
+  // Returns [{sel, count}] from the FULL selector down to the stripped base
+  // (later entries are weaker), or null when the selector has no strippable
+  // trailing clause / is a comma list / cannot be counted. Best-effort: an
+  // invalid intermediate stage stops the walk, keeping earlier stages.
+  function computeSelectorDifferential(sel) {
+    if (typeof sel !== 'string' || !sel || sel.indexOf(',') !== -1) return null;
+    const stages = [];
+    let cur = sel.trim();
+    let guard = 0;
+    while (cur && guard++ < 5) {
+      let count = 0;
+      try {
+        count = querySelectorAllDeep(cur).length;
+      } catch (err) {
+        break;
+      }
+      stages.push({ sel: cur, count: count });
+      const next = stripTrailingFilterClause(cur);
+      if (next === null || !next.trim() || next.trim() === cur) break;
+      cur = next.trim();
+    }
+    return stages.length >= 2 ? stages : null;
+  }
+
+  // Human/model-readable collapse line: weakest stage first, then each clause
+  // re-added with the count it produces, so the reader sees WHERE the
+  // population dies. Returns null when the differential carries no signal.
+  function formatSelectorDifferentialNote(diff) {
+    if (!Array.isArray(diff) || diff.length < 2) return null;
+    const weakest = diff[diff.length - 1];
+    for (const st of diff) {
+      if (st.count > 0) {
+        const parts = [];
+        for (let i = diff.length - 1; i >= 0; i--) {
+          const clause = i === diff.length - 1 ? diff[i].sel : '+' + diff[i].sel.slice(diff[i + 1].sel.length);
+          parts.push(clause + ' → ' + diff[i].count);
+        }
+        return 'SELECTOR DIFFERENTIAL: ' + parts.join('; ') +
+          ' — your trailing :not()/:has() clause(s) removed EVERY item the base selector matches' +
+          ' (weakest form "' + weakest.sel + '" matched ' + weakest.count + ')' +
+          '. Census each clause by counting with and without it before iterating anything else:' +
+          ' an exclusion built on an attr-NAME guess (data-ad-*, data-sponsored-*) is often a design-system' +
+          ' attribute present on ALL cards, ads and organic alike.';
+      }
+    }
+    return 'SELECTOR DIFFERENTIAL: even the stripped base "' + weakest.sel + '" matched 0 — the page holds' +
+      ' no elements for the base selector itself, so this is a population/input question, not your filter clauses.';
+  }
+
+  // Twenty-fourth log root fix (hidden-risk follow-up): tooltip and card-name
+  // payloads frequently live ONLY in the hidden-but-readable element an ARIA
+  // reference attribute points at (aria-labelledby="id1 id2"). Resolves the
+  // id list and concatenates the referenced elements' text. Reads are not
+  // visibility-gated, so this works when the visual popover never renders.
+  function resolveLabelledbyText(el, attr) {
+    const out = { text: '', attr: attr || 'aria-labelledby', refCount: 0, missingIds: [] };
+    let raw = '';
+    try { raw = el.getAttribute(attr) || ''; } catch (err) { raw = ''; }
+    if (!raw.trim()) {
+      out.note = 'element matched but ' + out.attr + ' is absent — check the sibling reference attrs (aria-describedby, aria-label) or read textContent directly';
+      return out;
+    }
+    const ids = raw.trim().split(/\s+/).slice(0, 12);
+    const texts = [];
+    for (const id of ids) {
+      let ref = null;
+      try { ref = document.getElementById(id); } catch (err) { ref = null; }
+      if (!ref) { out.missingIds.push(id); continue; }
+      out.refCount += 1;
+      const t = String(ref.textContent || '').replace(/\s+/g, ' ').trim();
+      if (t) texts.push(t);
+    }
+    out.text = texts.join(' ');
+    if (!out.text && !out.missingIds.length) {
+      out.note = out.attr + ' references ' + ids.length + ' element(s) but none carry text';
+    } else if (out.missingIds.length && !out.text) {
+      out.note = out.attr + ' references id(s) that resolve to nothing in this document (dynamic/stale ids): ' + out.missingIds.slice(0, 3).join(', ');
+    }
+    return out;
+  }
+
+  async function domLabelledby(sel, attr, timeoutMs) {
+    const refAttr = (attr === 'aria-describedby' || attr === 'aria-labelledby') ? attr : 'aria-labelledby';
+    await domQuerySelector(sel, (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs : 5000);
+    const found = querySelectorDeep(sel);
+    if (!found) throw new Error('ELEMENT_NOT_FOUND: ' + sel);
+    const resolved = resolveLabelledbyText(found.element, refAttr);
+    const _diagnostics = {
+      api: 'labelledby',
+      selector: sel,
+      attr: refAttr,
+      refCount: resolved.refCount,
+      missingIds: resolved.missingIds,
+      textLength: resolved.text.length
+    };
+    if (resolved.note) _diagnostics.note = resolved.note;
+    return { result: resolved.text, _diagnostics };
+  }
+
   async function domExists(sel, timeoutMs) {
     // B11: an explicitly numeric timeoutMs of 0 (or negative) means "one
     // immediate query" — `timeoutMs || 5000` used to read 0 as unset and
@@ -1604,6 +1736,36 @@
     if (!ops) {
       throw new Error('$extractList runtime missing: lib/list-extract-ops.js did not attach window.ListExtractOps. Reload the extension and refresh the target tab.');
     }
+    if (containers.length === 0) {
+      // Twenty-fifth log: zero containers with a compound selector must not
+      // fail evidence-free — the trailing-clause differential tells the caller
+      // whether their own :not()/:has() removed the population.
+      const diff = computeSelectorDifferential(containerSel);
+      const diffNote = formatSelectorDifferentialNote(diff);
+      if (!(opts && opts.allowEmpty)) {
+        const err = new Error('$extractList: no containers matched' + (diffNote ? ' — ' + diffNote : ''));
+        err._diagnostics = {
+          api: 'extractList',
+          containerSelector: containerSel,
+          containerMatches: 0,
+          perField: [],
+          selectorDifferential: diff,
+          note: diffNote || 'no containers matched'
+        };
+        throw err;
+      }
+      return {
+        result: [],
+        _diagnostics: {
+          api: 'extractList',
+          containerSelector: containerSel,
+          containerMatches: 0,
+          perField: [],
+          selectorDifferential: diff,
+          note: diffNote || 'no containers matched (allowEmpty set)'
+        }
+      };
+    }
     const records = ops.extractListRecords(containers, fieldMap, opts || {});
     const _diagnostics = ops && ops.computeExtractListDiagnostics
       ? ops.computeExtractListDiagnostics(containers, fieldMap, containerSel)
@@ -1647,6 +1809,34 @@
       // at runtime, run the drift-guard test and update the inline fallback to
       // mirror the module's public api.
       throw new Error('$extractListMulti runtime stale: ops.extractListMultiRecords missing — lib/list-extract-ops.js and content-script.js inline fallback are out of sync. Reload the extension; if it persists, run test/inline-list-extract-ops-drift.test.js.');
+    }
+    if (containers.length === 0) {
+      // Twenty-fifth log: same zero-container differential as domExtractList.
+      const diff = computeSelectorDifferential(containerSel);
+      const diffNote = formatSelectorDifferentialNote(diff);
+      if (!(opts && opts.allowEmpty)) {
+        const err = new Error('$extractListMulti: no containers matched' + (diffNote ? ' — ' + diffNote : ''));
+        err._diagnostics = {
+          api: 'extractListMulti',
+          containerSelector: containerSel,
+          containerMatches: 0,
+          perField: [],
+          selectorDifferential: diff,
+          note: diffNote || 'no containers matched'
+        };
+        throw err;
+      }
+      return {
+        result: [],
+        _diagnostics: {
+          api: 'extractListMulti',
+          containerSelector: containerSel,
+          containerMatches: 0,
+          perField: [],
+          selectorDifferential: diff,
+          note: diffNote || 'no containers matched (allowEmpty set)'
+        }
+      };
     }
     const records = ops.extractListMultiRecords(containers, fieldMap, opts || {});
     // Fourth-session log 2026-08-31: step 2 counted posts by filtering hrefs
@@ -2841,6 +3031,11 @@
       processed = containers;
     }
     if (processed.length === 0) {
+      // Twenty-fifth log: when the CONTAINER selector itself matched nothing
+      // (not range filtering), attach the trailing-clause differential — same
+      // evidence duty as domExtractList.
+      var _contDiff = containers.length === 0 ? computeSelectorDifferential(containerSel) : null;
+      var _contDiffNote = formatSelectorDifferentialNote(_contDiff);
       if (opts.allowEmpty) {
         return {
           result: [],
@@ -2850,18 +3045,21 @@
             containerMatches: 0,
             processedContainers: 0,
             perField: [],
+            selectorDifferential: _contDiff,
             hoverSummary: { anchorsFound: 0, hovercardsCaptured: 0, hoverFailures: 0 }
           }
         };
       }
       var _noContainersErr = new Error('$extractWithHover: no containers matched' +
-        (rangeOptsSet === 1 ? ' (after range filtering)' : ''));
+        (rangeOptsSet === 1 ? ' (after range filtering)' : '') +
+        (_contDiffNote ? ' — ' + _contDiffNote : ''));
       _noContainersErr._diagnostics = {
         api: 'extractWithHover',
         containerSelector: containerSel,
         containerMatches: 0,
         processedContainers: 0,
         perField: [],
+        selectorDifferential: _contDiff,
         hoverSummary: { anchorsFound: 0, hovercardsCaptured: 0, hoverFailures: 0 },
         note: 'no containers matched' + (rangeOptsSet === 1 ? ' after range filtering' : '') +
           (opts.allowEmpty ? '' : ' (allowEmpty not set)')

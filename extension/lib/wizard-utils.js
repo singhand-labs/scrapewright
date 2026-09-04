@@ -20,6 +20,7 @@ AVAILABLE API FUNCTIONS:
 - $click(selector, timeoutMs?): Find element, wait for it up to timeoutMs (default 10000ms), click it. Returns true.
 - $type(selector, text, timeoutMs?): Find element, wait for it up to timeoutMs (default 10000ms), set value, dispatch input/change events. Works on INPUT, TEXTAREA, and contenteditable elements. If selector matches a container, searches inside for an inputtable child. Returns true.
 - $extract(selector, attribute?, timeoutMs?): Get textContent (or attribute if specified). Returns string. IMPORTANT: $extract waits only up to timeoutMs (default 5000ms, NOT 30s) for the element — if the selector is wrong it fails fast instead of burning the step's whole timeout. Prefer this over $() for reading known content; pass a longer timeoutMs only when you genuinely need to wait for content to render.
+- $labelledby(selector, attr?, timeoutMs?): Resolve an ARIA REFERENCE attribute on the first match (default 'aria-labelledby'; pass 'aria-describedby' for the description refs) and return the CONCATENATED text of the referenced element(s) — the attribute holds a whitespace-separated id list, each id is looked up in the document. Returns a string ('' when the attr is absent or the refs carry no text; diagnostics carry the reason). This is where tooltip/hovercard full values usually live: the referenced span is often HIDDEN but readable (reads are not visibility-gated), so when a hover popover never visibly renders, bind the field with $labelledby on the anchor instead of re-hovering.
 - $wait(selector, delayMs?): Wait for element (up to 30s via MutationObserver), then optional extra delay. Returns true. The selector is REQUIRED. If you only need a delay without waiting for an element, use 'await new Promise(r => setTimeout(r, ms))' instead.
 - $check(selector, property): Read element property (e.g., 'checked', 'disabled'). Returns value.
 - $openTab(url, functionBody): Open new tab at the given URL, wait for page load, then execute the function body (a string of JavaScript statements) in the new tab context. Returns whatever the function body returns. Use to scrape detail pages. Example: await $openTab(href, \`const title = await $extract('h1'); return { title };\`)
@@ -147,7 +148,7 @@ CARD-TYPE HETEROGENEITY (feeds mixing promoted and organic cards): when a requir
 (c) the scroll step's counter is a card filter too — an unfiltered counter counts recommendation/promoted cards toward the target, so the loop exits "successfully" carrying junk. Count with the SAME language-independent card signals the extraction step uses, and make the filtered counter safe against matching nothing (see ZERO-TRAP COUNTER);
 (d) a cursor over containers is not a count of records — when the extraction step walks containers with an index/cursor, gate its done on the number of records that PASS the card policy (what your filtering/output step would keep), never on the raw container cursor: recommendation/promoted cards consume cursor slots, so a cursor-gated step declares victory at the target having collected FEWER real records than requested;
 (e) exclude cards by positive structural evidence, not by label text alone — label regexes ("Sponsored", "Recommended for you") are locale- and markup-fragile and silently miss current markup; a card that lacks EVERY organic anchor (permalink href, timestamp link, author/profile hover anchor) is promoted/recommendation BY STRUCTURE, and its fields are empty precisely because they do not exist on that card type.
-(f) ATTRIBUTE-NAME POLARITY — when hunting a structural marker to select content cards, check the attribute's NAME before using it positively. An attribute whose name carries a promotion token (ad, sponsored, promoted, commercial) exists to MARK promoted cards: it is an EXCLUDE signal. Writing it as an include — \`div[card]:has(div[data-ad-...='message'])\` — inverts your card policy and keeps ONLY promoted cards, so count-like targets become unreachable (the page holds a handful of ads, not N of them) and the run "succeeds" returning ads whose permalink/timestamp fields are structurally empty. The correct uses are the negative form \`div[card]:not(:has([data-ad-...]))\` (or filtering \`data-*\` promotion attributes out in JS) — and when you need a positive organic marker, take it from evidence you verified exists on organic cards only (a permalink href, a timestamp link), never from an attribute that names itself as promotion markup.
+(f) ATTRIBUTE-NAME POLARITY — when hunting a structural marker to select content cards, check the attribute's NAME before using it positively. An attribute whose name carries a promotion token (ad, sponsored, promoted, commercial) exists to MARK promoted cards: it is an EXCLUDE signal. Writing it as an include — \`div[card]:has(div[data-ad-...='message'])\` — inverts your card policy and keeps ONLY promoted cards, so count-like targets become unreachable (the page holds a handful of ads, not N of them) and the run "succeeds" returning ads whose permalink/timestamp fields are structurally empty. The correct uses are the negative form \`div[card]:not(:has([data-ad-...]))\` (or filtering \`data-*\` promotion attributes out in JS) — and when you need a positive organic marker, take it from evidence you verified exists on organic cards only (a permalink href, a timestamp link), never from an attribute that names itself as promotion markup. CAVEAT — the negative form is not automatically safe either: some data-* attrs whose names look promotional are DESIGN-SYSTEM attributes present on EVERY card, organic ones included (a story renderer attr can sit inside every post), and then :not(:has([attr])) removes the whole population and matches zero containers forever. VERIFY either polarity by counting the selector WITH and WITHOUT the clause before shipping it ($count on the stripped form, or attrStats with the descendant form sel + ' [attr]' to see which share of containers actually carries the marker inside). When a list call matches zero containers, the error carries a SELECTOR DIFFERENTIAL — live counts of your container selector with trailing :not()/:has() clauses progressively stripped — read it FIRST: base matched N while the full selector matched 0 means your own clause removed everything, which is a selector problem, NOT an input-value or fieldMap problem; do not iterate anything else until the differential is explained.
 
 IMPORTANT: For waiting or polling scenarios (e.g., checking if AI has finished generating), do NOT use $() in a loop — it will throw after 30s if the element is not found. Instead:
 - Use 'await new Promise(r => setTimeout(r, ms))' for fixed delays
@@ -1145,14 +1146,27 @@ function detectContainerMatchZero(events) {
     const diags = Array.isArray(evt.selectorDiagnostics) ? evt.selectorDiagnostics : [];
     for (const d of diags) {
       if (!d) continue;
+      // Twenty-fifth log: diagnostics WITHOUT a numeric containerMatches
+      // ($count/$wait/$exists carry matchCount or nothing) used to aggregate
+      // as `container "" matched 0 items` lines — noise the session model
+      // misread as "the feed never loaded". Only list-family diagnostics
+      // participate in the CONTAINER census.
+      if (typeof d.containerMatches !== 'number') continue;
       const key = evt.stepId + ' ' + String(d.containerSelector || '');
       let e = agg.get(key);
       if (!e) {
-        e = { stepId: evt.stepId, api: d.api || 'extractList', containerSelector: d.containerSelector || '', calls: 0, zeroCalls: 0 };
+        e = { stepId: evt.stepId, api: d.api || 'extractList', containerSelector: d.containerSelector || '', calls: 0, zeroCalls: 0, selectorDifferential: null };
         agg.set(key, e);
       }
       e.calls += 1;
-      if ((d.containerMatches || 0) === 0) e.zeroCalls += 1;
+      if (d.containerMatches === 0) {
+        e.zeroCalls += 1;
+        // Twenty-fifth log: keep the latest live differential (counts of the
+        // selector with trailing :not()/:has() clauses stripped) so the verify
+        // message can say whether the caller's own clauses removed the
+        // population.
+        if (Array.isArray(d.selectorDifferential)) e.selectorDifferential = d.selectorDifferential;
+      }
     }
   }
   const hits = [];
