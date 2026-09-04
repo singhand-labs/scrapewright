@@ -1687,4 +1687,42 @@ describe('twentieth log: sticky waivers + steps-less service.update amendments',
     assert.equal(handlerArgs.length, 1, 'steps-less testInput reached the handler');
     assert.equal(report.artifactVersions, 0, 'an amendment is not a new artifact version');
   });
+
+  it('a steps-less schema-only update reaches the handler instead of "steps (non-empty array) required" (twenty-first log turn 57)', async () => {
+    const bag = {};
+    const handlerArgs = [];
+    const session = createResearchSession({
+      requirement: 'collect cards',
+      llm: scriptedLlm([
+        reply(envelope('service.update', { outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } })),
+        reply(finishEnvelope())
+      ], []),
+      tools: bag,
+      budgets: { maxTurns: 10 }
+    });
+    bag['service.update'] = async (a) => { handlerArgs.push(a); return { updated: true, schemasAttached: true }; };
+
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    assert.equal(handlerArgs.length, 1, 'the schema-only amendment reached the handler');
+    assert.equal(report.artifactVersions, 0, 'an amendment is not a new artifact version');
+  });
+});
+
+describe('twenty-first log: protocol-violation nudges teach strict JSON quoting', () => {
+  it('the nudge names the single-quote class and demands double quotes (turn-58 mangle → protocol death)', async () => {
+    const session = createResearchSession({
+      requirement: 'collect posts',
+      llm: scriptedLlm([
+        reply('Sure — I will just write my next turn with single quotes, much simpler.'),
+        reply(finishEnvelope())
+      ], []),
+      tools: {}
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    const sys = session.state().session.transcript.filter(e => e.kind === 'system');
+    assert.ok(sys.some(e => /single quotes/i.test(e.text)), 'nudge names the single-quote failure class');
+    assert.ok(sys.some(e => /double quotes/i.test(e.text)), 'nudge demands double quotes');
+  });
 });

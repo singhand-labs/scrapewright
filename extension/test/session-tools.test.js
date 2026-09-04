@@ -864,3 +864,121 @@ describe('twentieth log: steps-less waiver amendment', () => {
     assert.match(r.error, /no artifact yet/);
   });
 });
+
+describe('twenty-first log: the confirmed contract lands in the artifact', () => {
+  const IN = { type: 'object', required: ['keyword'], properties: { keyword: { type: 'string' } } };
+  const OUT = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } };
+  const OUT2 = { type: 'object', required: ['posts', 'time'], properties: { posts: { type: 'array', items: { type: 'object' } }, time: { type: 'string' } } };
+  const CTX = () => ({ session: { state: () => ({ session: { artifactVersions: [] } }) } });
+
+  it('a steps-only update after confirmation auto-attaches the confirmed schemas (schema-blind verify eliminated)', async () => {
+    const { deps, state } = makeDeps();
+    const t = createSessionTools(deps);
+    await t.tools['io.confirm']({ inputSchema: IN, outputSchema: OUT });
+    const upd = await t.tools['service.update']({ steps: GOOD_STEPS }, CTX());
+    assert.equal(upd.updated, true);
+    assert.deepEqual(state.applied[0].inputSchema, IN, 'confirmed inputSchema merged into the apply payload');
+    assert.deepEqual(state.applied[0].outputSchema, OUT, 'confirmed outputSchema merged into the apply payload');
+    assert.equal(upd.schemasAttached, true, 'names the attachment so the model knows verify sees the contract');
+  });
+
+  it('the ledger marker embeds the FULL schemas; a resumed session attaches them without the runtime flag', async () => {
+    const added = [];
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    await t.tools['io.confirm']({ inputSchema: IN, outputSchema: OUT }, { ledger: { add: (e) => added.push(e) } });
+    assert.match(added[0].finding, / schemas: \{"inputSchema"/, 'full schemas embedded in the marker');
+    assert.match(added[0].finding, / shape: \{"input"/, 'shape JSON still embedded (dedup path intact)');
+    // Fresh instance = runtime flag gone (reload / seed resume).
+    const second = makeDeps();
+    const t2 = createSessionTools(second.deps);
+    const upd = await t2.tools['service.update']({ steps: GOOD_STEPS }, {
+      ledger: { serialize: () => ({ entries: added }), add: () => {} },
+      session: { state: () => ({ session: { artifactVersions: [] } }) }
+    });
+    assert.equal(upd.updated, true);
+    assert.deepEqual(second.state.applied[0].outputSchema, OUT, 'schemas recovered from the ledger marker after resume');
+  });
+
+  it('DRIFT rejection embeds the confirmed schemas verbatim and teaches the omit path', async () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    await t.tools['io.confirm']({ inputSchema: IN, outputSchema: OUT });
+    const drifted = await t.tools['service.update']({ steps: GOOD_STEPS, outputSchema: OUT2 }, CTX());
+    assert.match(drifted.error, /I\/O CONTRACT DRIFT/);
+    assert.ok(drifted.error.indexOf(JSON.stringify(OUT)) !== -1, 'the confirmed schema itself is embedded for verbatim copy');
+    assert.match(drifted.error, /steps ONLY|omit/i, 'teaches the steps-only resend path (schemas auto-attach)');
+    assert.match(drifted.error, /io\.confirm/, 'teaches the renegotiation path');
+  });
+
+  it('a steps-less schema-only amendment attaches the confirmed schemas to the existing artifact and marks the last verify stale', async () => {
+    const { deps, state } = makeDeps();
+    const t = createSessionTools(deps);
+    await t.tools['io.confirm']({ inputSchema: IN, outputSchema: OUT });
+    state.draft = { targetUrl: 'x', steps: GOOD_STEPS };
+    await t.tools['verify.run']({});
+    const amend = await t.tools['service.update']({ outputSchema: OUT }, CTX());
+    assert.equal(amend.updated, true);
+    assert.equal(amend.schemasAttached, true);
+    const applied = state.applied[state.applied.length - 1];
+    assert.deepEqual(applied.outputSchema, OUT, 'schema applied against the current steps');
+    assert.ok(Array.isArray(applied.steps) && applied.steps.length === 1, 'existing steps preserved');
+    const r = await t.tools['diag.read']({});
+    assert.match(r.warning, /predates the current artifact/, 'stale verify flagged — re-verify before shipping');
+  });
+
+  it('a schema-only amendment whose shape DRIFTS is rejected with the renegotiation teaching', async () => {
+    const { deps, state } = makeDeps();
+    const t = createSessionTools(deps);
+    await t.tools['io.confirm']({ inputSchema: IN, outputSchema: OUT });
+    state.draft = { targetUrl: 'x', steps: GOOD_STEPS };
+    const amend = await t.tools['service.update']({ outputSchema: OUT2 }, CTX());
+    assert.match(amend.error, /I\/O CONTRACT DRIFT/);
+    assert.match(amend.error, /io\.confirm/);
+  });
+
+  it('a schema-only amendment with no artifact yet fails with a teaching error', async () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    await t.tools['io.confirm']({ inputSchema: IN, outputSchema: OUT });
+    const r = await t.tools['service.update']({ outputSchema: OUT }, CTX());
+    assert.match(r.error, /no artifact yet/);
+  });
+
+  it('verify.run falls back to the ledger-confirmed outputSchema when the artifact has none (resume was schema-blind)', async () => {
+    const added = [];
+    const seen = [];
+    const { deps, state } = makeDeps({
+      runVerify: async (o) => { seen.push(o.outputSchema); return { report: { ok: true, error: null, score: {}, events: [] }, events: [], raw: {} }; }
+    });
+    deps.getOutputSchema = () => null;
+    const t = createSessionTools(deps);
+    await t.tools['io.confirm']({ inputSchema: IN, outputSchema: OUT }, { ledger: { add: (e) => added.push(e) } });
+    state.draft = { targetUrl: 'x', steps: GOOD_STEPS };
+    await t.tools['verify.run']({}, { ledger: { serialize: () => ({ entries: added }) } });
+    assert.deepEqual(seen[0], OUT, 'verify used the confirmed schema recovered from the ledger');
+  });
+
+  it('diag.read {kind:"contract"} exposes confirmed-vs-artifact schema state without needing a verify run', async () => {
+    const added = [];
+    const { deps, state } = makeDeps({ getOutputSchema: () => null });
+    const t = createSessionTools(deps);
+    state.draft = { targetUrl: 'x', steps: GOOD_STEPS };
+    const pre = await t.tools['diag.read']({ kind: 'contract' }, { ledger: { serialize: () => ({ entries: [] }) } });
+    assert.equal(pre.contract.confirmed, false);
+    assert.match(pre.contract.hint, /io\.confirm/);
+    await t.tools['io.confirm']({ inputSchema: IN, outputSchema: OUT }, { ledger: { add: (e) => added.push(e) } });
+    const post = await t.tools['diag.read']({ kind: 'contract' }, { ledger: { serialize: () => ({ entries: added }) } });
+    assert.equal(post.contract.confirmed, true);
+    assert.equal(post.contract.artifactOutputSchema, 'MISSING');
+    assert.match(post.contract.hint, /service\.update/);
+  });
+
+  it('rule 9 teaches that post-confirmation updates may omit schemas (they attach automatically)', () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    assert.match(t.systemPromptBase, /schemas attach to the artifact automatically/i);
+    assert.match(t.systemPromptBase, /schema-only service\.update/i);
+    assert.ok(!/facebook|twitter|linkedin|tiktok|reddit|\bfb\b/i.test(t.systemPromptBase), 'no site tokens');
+  });
+});

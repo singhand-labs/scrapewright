@@ -165,7 +165,7 @@
       '6. To observe a hover popover during research call probe.hover (a session tool — do NOT call the $hover DSL primitive as a tool); it returns the popover evidence (observedPopover identity + htmlSnippet) and, when the popover is observed, a canonical popoverSelector whose EXACT string is recorded as an observation receipt — copy that string VERBATIM into popoverSel; an embellished variant (extra attributes) is a new string the gate must reject. Popover absence is ANCHOR-specific evidence: a link with no hovercard does not mean the page has none — hover at least one other anchor before concluding popovers do not work here — on a repeating item (list card, table row, or detail block) the element that carries identity or author metadata is the usual hovercard carrier. When two different anchors show no popover, stop: the page has none.',
       '7. Scrolling is available DURING research via probe.scroll (a session tool — do NOT call the $scroll DSL primitives as tools): use it to trigger lazy-load / viewport-gated content before counting, sampling, or writing scroll steps. The container selector you pass becomes an observation receipt, grounding a later $scrollToBottom(sel) in steps.',
       '8. Iterate the fieldMap in the LIVE tab with probe.extract BEFORE writing steps: one probe turn per revision, warm DOM, empty-field census included. Reserve service.update + verify.run for the end-to-end check — verify opens a FRESH tab, so cold-load divergence (fewer/different items than the research tab) is expected; investigate counts with probes on the research tab, not by re-verifying. Run the FIRST verify with the SAME input values that drove the research page: a different input value can change the result-card population ENTIRELY (a field selector grounded on the researched query may match 0 items under another query — population divergence, not a rendering failure; the verify error FIELD_MATCH_ZERO names the census). Only after a green verify, spot-check one other input. When verify reports INPUT_VALUE_SUSPECT (zero containers on the page — no result items at all), the input VALUE itself is the prime suspect: the site may simply have no content for it (an obscure keyword, an over-specific filter) — that is not a selector bug. Re-run verify.run with {"input": {<param>: <a DIFFERENT, more common value>}} BEFORE hardening selectors; if the alternate value succeeds, adopt it with service.update({testInput: {...}}) (steps-less update is allowed for adoption) and re-verify without an override; note the input-value sensitivity in the ledger.',
-      '9. EARLY contract confirmation: right after the first page.open and a coarse look at the repeating item\'s structure (list card, table row, or detail block), propose the input/output contract with io.confirm({inputSchema, outputSchema, note}) and WAIT for the user — service.update is REJECTED until the user confirms. annotate.request is likewise rejected until the confirmation lands: user annotation picks elements for output FIELDS, so settle the contract first. Apply every revision the user returns and re-confirm. Once confirmed, do NOT re-propose the same contract — a re-proposal whose shape matches the confirmed one auto-confirms without prompting the user; propose again only when the user asks for a change or evidence forces a MATERIAL renegotiation. Adding/renaming/removing fields or changing types later is a MATERIAL change: call io.confirm again with the new schemas before service.update (description-only edits are exempt).',
+      '9. EARLY contract confirmation: right after the first page.open and a coarse look at the repeating item\'s structure (list card, table row, or detail block), propose the input/output contract with io.confirm({inputSchema, outputSchema, note}) and WAIT for the user — service.update is REJECTED until the user confirms. annotate.request is likewise rejected until the confirmation lands: user annotation picks elements for output FIELDS, so settle the contract first. Apply every revision the user returns and re-confirm. Once confirmed, do NOT re-propose the same contract — a re-proposal whose shape matches the confirmed one auto-confirms without prompting the user; propose again only when the user asks for a change or evidence forces a MATERIAL renegotiation. Adding/renaming/removing fields or changing types later is a MATERIAL change: call io.confirm again with the new schemas before service.update (description-only edits are exempt). After confirmation you may send service.update with steps only — the confirmed schemas attach to the artifact automatically; a schema-only service.update ({inputSchema, outputSchema} alone, no steps) also lands the contract when the artifact already exists.',
       '10. Ship real values only. A green verify can still carry junk: bare query strings ("?a=b…") posing as ids, data: URIs polluting url/media arrays (inline UI icons — filter arrays to http(s) entries inside the step script), raw HTML dumps in data fields, and OBFUSCATED text (anti-scrape decoy characters mixed into textContent — interleaved/scrambled runs, reversed fragments, combining marks, zero-width chars). If a text value reads scrambled, the clean value usually lives in an ATTRIBUTE on the same element (aria-label, title, datetime) — probe it (attrStats, or extract with attr) and bind the field to that attribute; never ship an obfuscated "best-effort" value in a confirmed field. Check detectors.junkValues in the verify report. If research proves a confirmed field is unextractable or only junk-reachable, renegotiate the contract with io.confirm (drop or redefine the field) instead of shipping it empty/junk. Scalar or single-value outputs skip the array filters but still go through detectors.junkValues. An empty string is not a value either: check detectors.partialEmptyFields — a confirmed field empty in EVERY record (emptyRatio 1) is a binding failure or the page lacks the data, so fix the binding (attribute fallback) or renegotiate with io.confirm; a field empty in only SOME records may legitimately vary (a text-only item has no media) — if it does and the field is required, move it to optional in the contract. Never rationalize a persistent empty as timing or "acceptable", and never hardcode an empty-string placeholder for a confirmed field. Do not declare synthetic bookkeeping fields (an index, serialNumber, a loop counter) in outputSchema: declare only fields the requirement asks for — a populated synthetic field masks the empty-data signals (a record whose only filled field is index reads as non-empty).'
     ].join('\n');
   }
@@ -204,6 +204,13 @@
     // user entries). service.update is gated on one of them.
     let ioConfirmed = false;
     let ioConfirmedShape = null;
+    // Twenty-first log: the FULL schemas behind the confirmed shape. Shape
+    // alone could never land in the artifact — every steps-only update left
+    // the artifact schema-blind (verify score 0 over real data), and the
+    // model's only way out was re-sending schemas the DRIFT gate then
+    // rejected. The full copy lets service.update attach the confirmed
+    // contract automatically and the DRIFT error quote it verbatim.
+    let ioConfirmedSchemas = null;
     const IO_LEDGER_MARKER = 'I/O CONTRACT CONFIRMED';
 
     function ioContractConfirmed(ctx) {
@@ -231,6 +238,30 @@
           const at = f.indexOf(' shape: ');
           if (at === -1) return null;
           return JSON.parse(f.slice(at + ' shape: '.length));
+        }
+      } catch (e) { return null; }
+      return null;
+    }
+
+    // Full schemas the ledger marker recorded (twenty-first log). The marker
+    // embeds them BEFORE the shape JSON (' schemas: {...} shape: {...}'), so
+    // the slice runs from ' schemas: ' to the next ' shape: '. Legacy markers
+    // (shape only / field-name lists only) return null — callers fall back to
+    // not attaching anything, which is the pre-fix behavior (safe default).
+    function ledgerConfirmedSchemas(ctx) {
+      try {
+        const ser = (ctx && ctx.ledger && typeof ctx.ledger.serialize === 'function')
+          ? ctx.ledger.serialize() : null;
+        const entries = (ser && Array.isArray(ser.entries)) ? ser.entries : [];
+        for (let i = entries.length - 1; i >= 0; i--) {
+          const f = entries[i] && typeof entries[i].finding === 'string' ? entries[i].finding : '';
+          if (f.indexOf(IO_LEDGER_MARKER) === -1) continue;
+          const at = f.indexOf(' schemas: ');
+          if (at === -1) return null;
+          const end = f.indexOf(' shape: ', at);
+          const slice = end === -1 ? f.slice(at + ' schemas: '.length) : f.slice(at + ' schemas: '.length, end);
+          const parsed = JSON.parse(slice);
+          return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : null;
         }
       } catch (e) { return null; }
       return null;
@@ -264,6 +295,10 @@
           priorShape.input === incoming.input && priorShape.output === incoming.output) {
         ioConfirmed = true; // resume path: the runtime flag catches up
         ioConfirmedShape = incoming;
+        // A same-shape re-proposal carries the full schemas — capture them
+        // too (legacy markers stored shape only; this is the recovery path
+        // by which a resumed legacy session starts attaching the contract).
+        ioConfirmedSchemas = { inputSchema: a.inputSchema, outputSchema: a.outputSchema };
         return { confirmed: true, note: 'contract already confirmed — same contract, proceeding without re-prompting the user' };
       }
       const sess = (ctx && ctx.session) || null;
@@ -281,13 +316,15 @@
       if (res && res.confirmed) {
         ioConfirmed = true;
         ioConfirmedShape = { input: schemaShape(a.inputSchema), output: schemaShape(a.outputSchema) };
+        ioConfirmedSchemas = { inputSchema: a.inputSchema, outputSchema: a.outputSchema };
         const ledger = (ctx && ctx.ledger) || null;
         if (ledger) {
           try {
             ledger.add({
               finding: IO_LEDGER_MARKER + ' — inputs: [' + Object.keys((a.inputSchema && a.inputSchema.properties) || {}).join(', ') +
                 '] outputs: [' + Object.keys((a.outputSchema && a.outputSchema.properties) || {}).join(', ') +
-                '] shape: ' + JSON.stringify({ input: incoming.input, output: incoming.output }),
+                '] schemas: ' + JSON.stringify({ inputSchema: a.inputSchema, outputSchema: a.outputSchema }) +
+                ' shape: ' + JSON.stringify({ input: incoming.input, output: incoming.output }),
               evidence: 'io.confirm (user approved the proposed contract)',
               confidence: 'high',
               provenance: 'user',
@@ -295,7 +332,7 @@
             });
           } catch (e) { /* ledger secondary — the runtime flag already holds */ }
         }
-        return { confirmed: true, note: 'contract approved — author the steps and call service.update with exactly these schemas' };
+        return { confirmed: true, note: 'contract approved — author the steps and call service.update (schemas optional: the confirmed contract attaches automatically)' };
       }
       return {
         confirmed: false,
@@ -304,22 +341,56 @@
       };
     }
 
-    async function verifyRun(args) {
+    async function verifyRun(args, ctx) {
       const service = d.getDraftService();
       if (!service || !Array.isArray(service.steps) || !service.steps.length) {
         return { error: 'no artifact yet — author the step graph and call service.update first' };
       }
       const a = args && typeof args === 'object' ? args : {};
       const input = (a.input && typeof a.input === 'object' && !Array.isArray(a.input)) ? a.input : d.getTestInput();
-      const out = await d.runVerify({ service: service, input: input, outputSchema: d.getOutputSchema() });
+      // Twenty-first log: an artifact authored before confirmation (or a
+      // resumed session whose wizardState lost the schema) verifies
+      // SCHEMA-BLIND. The confirmed contract is the authority the user
+      // signed off on — fall back to it when the artifact carries no
+      // outputSchema.
+      const outputSchema = d.getOutputSchema() ||
+        ((ioConfirmedSchemas || ledgerConfirmedSchemas(ctx) || {}).outputSchema) || null;
+      const out = await d.runVerify({ service: service, input: input, outputSchema: outputSchema });
       lastVerify = { events: out.events || [], report: out.report, raw: out.raw, at: Date.now() };
       return out.report;
     }
 
-    async function diagRead(args) {
-      if (!lastVerify) return { error: 'no verify run yet in this session — run verify.run first' };
+    // Contract-state analysis view (twenty-first log, per the analysis-tools
+    // principle): the model's recurring question — "will my verify be
+    // schema-blind?" — answered from state, not inference. Available BEFORE
+    // any verify run; it is a census, not a post-mortem.
+    function contractView(ctx) {
+      const confirmed = ioContractConfirmed(ctx);
+      const confirmedSchemas = ioConfirmedSchemas || ledgerConfirmedSchemas(ctx);
+      const artifactSchema = (typeof d.getOutputSchema === 'function') ? d.getOutputSchema() : null;
+      const view = {
+        confirmed: confirmed,
+        artifactOutputSchema: artifactSchema ? 'present' : 'MISSING',
+        verifyWillBeSchemaBlind: !artifactSchema && !confirmedSchemas
+      };
+      if (confirmedSchemas) {
+        view.confirmedOutputFields = Object.keys((confirmedSchemas.outputSchema && confirmedSchemas.outputSchema.properties) || {});
+        if (!artifactSchema) {
+          view.hint = 'the confirmed contract is not in the artifact yet — a service.update with steps ONLY attaches the confirmed schemas automatically; a schema-only service.update also works against the existing artifact';
+        }
+      } else if (confirmed) {
+        view.hint = 'this confirmation predates full-schema capture (legacy session) — re-propose the SAME contract via io.confirm: a same-shape proposal auto-confirms without prompting and captures the full schemas';
+      } else {
+        view.hint = 'no confirmed contract yet — call io.confirm({inputSchema, outputSchema}) before service.update';
+      }
+      return { contract: view };
+    }
+
+    async function diagRead(args, ctx) {
       const a = args && typeof args === 'object' ? args : {};
       const kind = typeof a.kind === 'string' && a.kind ? a.kind : 'all';
+      if (kind === 'contract') return contractView(ctx);
+      if (!lastVerify) return { error: 'no verify run yet in this session — run verify.run first' };
       const all = lastVerify.events || [];
       const events = a.stepId != null ? all.filter((e) => e && String(e.stepId) === String(a.stepId)) : all;
       const out = { at: lastVerify.at, eventCount: all.length };
@@ -397,6 +468,18 @@
       };
     }
 
+    // Twenty-first log: the DRIFT rejection used to name the drifted schema
+    // but withhold the confirmed one — "resend exactly these schemas" was
+    // unanswerable, and nine turns burned trying. Embed the confirmed
+    // schemas verbatim and give both repair paths.
+    function driftTeaching(drift, ctx) {
+      const confirmedNow = ioConfirmedSchemas || ledgerConfirmedSchemas(ctx);
+      return 'I/O CONTRACT DRIFT — ' + drift.join(' and ') +
+        ' differ materially from the contract the user confirmed (fields added/removed/renamed or types changed; cosmetic description edits are fine).' +
+        (confirmedNow ? ' The user-confirmed schemas, verbatim: ' + JSON.stringify(confirmedNow) + '.' : '') +
+        ' Either resend service.update with steps ONLY (omit the schemas — the confirmed contract attaches to the artifact automatically), or, if the field list itself must change, call io.confirm with the NEW schemas and wait for the user.';
+    }
+
     async function serviceUpdate(args, ctx) {
       const a = args && typeof args === 'object' ? args : {};
       const steps = Array.isArray(a.steps) ? a.steps : [];
@@ -429,11 +512,7 @@
         const drift = [];
         if (a.inputSchema != null && schemaShape(a.inputSchema) !== ioConfirmedShape.input) drift.push('inputSchema');
         if (a.outputSchema != null && schemaShape(a.outputSchema) !== ioConfirmedShape.output) drift.push('outputSchema');
-        if (drift.length) {
-          return {
-            error: 'I/O CONTRACT DRIFT — ' + drift.join(' and ') + ' differ materially from the contract the user confirmed (fields added/removed/renamed or types changed; cosmetic description edits are fine). Call io.confirm with the NEW schemas, wait for the user, then service.update.'
-          };
-        }
+        if (drift.length) return { error: driftTeaching(drift, ctx) };
       }
       // Fourteenth-log follow-up (user request): when an alternate input
       // value turned out to be the fix (INPUT_VALUE_SUSPECT loop), the model
@@ -447,6 +526,31 @@
         }
         d.applyArtifact({ steps: currentSteps, testInput: a.testInput });
         return { updated: true, testInputAdopted: true, note: 'test input adopted — run verify.run WITHOUT an input override to confirm the default input works' };
+      }
+      // Twenty-first log: a steps-less schema-only amendment — the model
+      // landing the confirmed contract into an artifact authored without
+      // schemas (turn 57 of that log, previously rejected with "steps
+      // (non-empty array) required"). The DRIFT gate above has already
+      // rejected a mismatched shape by this point, so whatever arrives here
+      // matches the confirmed contract (or rides the lenient legacy-resume
+      // path, same as every other amendment).
+      if (!steps.length && (a.inputSchema != null || a.outputSchema != null)) {
+        if (!currentSteps.length) {
+          return { error: 'no artifact yet — a schema-only update needs an existing step graph; author it with service.update({steps,...}) first' };
+        }
+        const confirmedNow = ioConfirmedSchemas || ledgerConfirmedSchemas(ctx);
+        const amend = { steps: currentSteps };
+        if (a.inputSchema != null) amend.inputSchema = a.inputSchema;
+        else if (confirmedNow && confirmedNow.inputSchema) amend.inputSchema = confirmedNow.inputSchema;
+        if (a.outputSchema != null) amend.outputSchema = a.outputSchema;
+        else if (confirmedNow && confirmedNow.outputSchema) amend.outputSchema = confirmedNow.outputSchema;
+        try {
+          d.applyArtifact(amend);
+          if (lastVerify) lastVerify.staleArtifact = true;
+        } catch (e) {
+          return { error: 'artifact apply failed: ' + String((e && e.message) || e) };
+        }
+        return { updated: true, schemasAttached: true, note: 'schemas applied to the current artifact — run verify.run again before finishing' };
       }
       // Twentieth log: the engine wrapper used to reject every steps-less
       // call before this branch existed — a waiver the model sent alone
@@ -465,8 +569,26 @@
         return { error: 'step chain invalid: ' + String((chain && chain.error) || 'validation failed') };
       }
       try {
-        d.applyArtifact(a);
+        // Twenty-first log: the confirmed contract must land in the artifact
+        // even when the update omits schemas (steps-only updates were the
+        // norm — and left the artifact SCHEMA_BLIND at verify). Fill any
+        // absent schema with the confirmed one before applying.
+        const confirmedNow = ioConfirmedSchemas || ledgerConfirmedSchemas(ctx);
+        const merged = Object.assign({}, a);
+        let attached = false;
+        if (confirmedNow) {
+          if (merged.inputSchema == null && confirmedNow.inputSchema) { merged.inputSchema = confirmedNow.inputSchema; attached = true; }
+          if (merged.outputSchema == null && confirmedNow.outputSchema) { merged.outputSchema = confirmedNow.outputSchema; attached = true; }
+        }
+        d.applyArtifact(merged);
         if (lastVerify) lastVerify.staleArtifact = true;
+        if (attached) {
+          const st = ctx && ctx.session ? ctx.session.state() : null;
+          const version = (st && st.session && Array.isArray(st.session.artifactVersions))
+            ? st.session.artifactVersions.length + 1
+            : 1;
+          return { updated: true, version: version, schemasAttached: true, note: 'the confirmed I/O contract was attached (your update omitted schemas) — verify.run now scores against it' };
+        }
       } catch (e) {
         return { error: 'artifact apply failed: ' + String((e && e.message) || e) };
       }
@@ -537,7 +659,7 @@
       { name: 'probe.hover', args: '{anchorSel, popoverSel?, opts:{index,timeoutMs}}', returns: '{hovered,htmlSnippet,popoverSelector,popoverSelectorNote?,reason,observedPopover?}' },
       { name: 'probe.scroll', args: "{mode?:'bottom'|'by', sel?, by?}", returns: '{scrolled,prevY,newY}' },
       { name: 'probe.extract', args: '{containerSel, fieldMap, multi?, allowEmpty?}', returns: '{total,records[3],emptyFields{field:emptyCount}}' },
-      { name: 'diag.read', args: '{stepId?, kind?}', returns: '{selectorDiagnostics, failingStep?, popover, counters, lastError?}' },
+      { name: 'diag.read', args: '{stepId?, kind?}', returns: '{selectorDiagnostics, failingStep?, popover, counters, lastError?} — kind:"contract" (no verify needed) reports whether the I/O contract is confirmed and whether the artifact carries the schemas, so you can see schema-blindness BEFORE verify.run' },
       { name: 'verify.run', args: '{input?} — optional object overriding the test input for THIS run (the mechanism for alternate-value re-tests when INPUT_VALUE_SUSPECT says the site may have no content for the current value)', returns: '{ok,score,scoreNote?,error,detectors,steps,finalResult,schemaOk} — detectors.partialEmptyFields lists confirmed fields that came back empty with their emptyRatio (empty/total records): ratio 1 means fix the binding or renegotiate the contract, not ship it' },
       { name: 'annotate.request', args: '{why, fields?, containerSel?}', returns: '{annotations[{selector,purpose,outputField}]} | {cancelled} — REQUIRES a confirmed I/O contract (io.confirm first)' },
       { name: 'io.confirm', args: '{inputSchema, outputSchema, note?}', returns: '{confirmed:true} | {confirmed:false, feedback} — propose the contract EARLY and wait for the user; service.update is rejected until a confirmation lands; a SAME-shape re-proposal auto-confirms without prompting. outputSchema MUST declare its fields (properties + required); a fieldless {"type":"object"} verifies blind and is rejected' }

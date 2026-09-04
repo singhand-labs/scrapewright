@@ -183,6 +183,22 @@ describe('summarizeToolResult', () => {
     const cyc = {}; cyc.self = cyc;
     assert.ok(typeof Protocol.summarizeToolResult('t', cyc, 50) === 'string');
   });
+  it('caps the LABEL, not the result — a long args echo never pushes the error text out (twenty-first log)', () => {
+    // service.update with steps+schemas in args = a 1000+ char label; the
+    // ERROR is the payload the mirrors exist to carry. The old renderer put
+    // the whole label first, so every 200/600-char mirror showed only args.
+    const label = 'service.update ' + JSON.stringify({ steps: [{ id: 's1', script: 'x'.repeat(900) }], outputSchema: { type: 'object' } });
+    const result = { error: 'I/O CONTRACT DRIFT — outputSchema differ materially from the contract the user confirmed' };
+    const s = Protocol.summarizeToolResult(label, result, 200);
+    assert.ok(s.indexOf('I/O CONTRACT DRIFT') !== -1, 'error text visible within the cap: ' + s);
+    assert.ok(s.indexOf('→') !== -1, 'result part present');
+    assert.ok(s.length <= 240, 'cap still respected');
+  });
+  it('a short label keeps the exact name → result rendering', () => {
+    const s = Protocol.summarizeToolResult('probe.count {"sel":"div.card"}', { count: 8 }, 200);
+    assert.ok(s.startsWith('probe.count {"sel":"div.card"} → '));
+    assert.ok(s.indexOf('"count":8') !== -1);
+  });
 });
 
 describe('parseAssistantTurn malformed-JSON classification (third live log)', () => {

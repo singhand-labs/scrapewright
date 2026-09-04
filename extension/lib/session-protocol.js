@@ -214,7 +214,15 @@
     try { s = JSON.stringify(result); } catch (e) { s = String(result); }
     if (typeof s !== 'string') s = String(s);
     s = s.replace(/\s+/g, ' ');
-    return name + ' → ' + (s.length > c ? s.slice(0, c) + '…[truncated]' : s);
+    // Twenty-first log: the label (tool + args echo) must never eat the
+    // budget the result needs — service.update carries 1000+ char args, and
+    // the args-first rendering pushed every error out of the 200-char event
+    // summary (ERR tool results were undiagnosable in exported logs). Cap
+    // the label at a quarter of the budget; the result gets the rest.
+    const labelCap = Math.max(20, Math.floor(c / 4));
+    const label = name.length > labelCap ? name.slice(0, labelCap) + '…' : name;
+    const room = c - (label.length + 4);
+    return label + ' → ' + (s.length > room ? s.slice(0, Math.max(0, room)) + '…[truncated]' : s);
   }
 
   const api = { PROTOCOL_BLOCK, renderToolCatalog, buildSystemPrompt, extractJsonObject, parseAssistantTurn, summarizeToolResult };

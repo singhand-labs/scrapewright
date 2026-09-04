@@ -27,7 +27,7 @@
   const INTERNAL_TOOL_SPECS = [
     { name: 'ledger.add', args: '{finding, evidence?, confidence?, selectors?}', returns: '{added:true, id}' },
     { name: 'knowledge.query', args: '{ids:["unitId"]}', returns: '{units:[{id,title,body}]}' },
-    { name: 'service.update', args: '{steps, inputSchema?, outputSchema?, testInput?, name?, overrides?} — REPLACES the whole artifact (send the complete steps array every time); overrides waives grounding receipts (an array of selector strings, or {"selectors":[...]}) and never carries steps — a waiver stays in force for the rest of the session, you do NOT need to resend it with later updates; testInput (sample input values) is REQUIRED when the target URL has {{param}} placeholders, or verify.run fails with MISSING_URL_PARAM; inputSchema/outputSchema, when sent, MUST be JSON Schema objects like {"type":"object","required":["posts"],"properties":{"posts":{"type":"array","items":{"type":"object"}}}} — natural-language maps ({"posts":"array of post objects"}) are rejected: verify scoring reads "required"/"properties" and cannot see through descriptions', returns: '{version} | {updated, waiverRecorded} | {updated, testInputAdopted} | {grounding:"rejected", rejections}' }
+    { name: 'service.update', args: '{steps, inputSchema?, outputSchema?, testInput?, name?, overrides?} — REPLACES the whole artifact (send the complete steps array every time); overrides waives grounding receipts (an array of selector strings, or {"selectors":[...]}) and never carries steps — a waiver stays in force for the rest of the session, you do NOT need to resend it with later updates; testInput (sample input values) is REQUIRED when the target URL has {{param}} placeholders, or verify.run fails with MISSING_URL_PARAM; inputSchema/outputSchema, when sent, MUST be JSON Schema objects like {"type":"object","required":["posts"],"properties":{"posts":{"type":"array","items":{"type":"object"}}}} — natural-language maps ({"posts":"array of post objects"}) are rejected: verify scoring reads "required"/"properties" and cannot see through descriptions; once the user has confirmed the contract you may OMIT the schemas — the confirmed contract attaches to the artifact automatically — and sending schemas that MATERIALLY differ from the confirmed ones is rejected (renegotiate via io.confirm first)', returns: '{version} | {updated, waiverRecorded} | {updated, testInputAdopted} | {updated, schemasAttached} | {grounding:"rejected", rejections}' }
   ];
 
   const DEFAULTS = {
@@ -382,9 +382,10 @@
       // testInput-adoption branch in the session-tools handler was
       // unreachable through this wrapper for the same reason. Steps-less
       // calls that amend the CURRENT artifact (testInput adoption, waiver
-      // recording) pass straight through: no new selectors to ground, no
-      // artifact version to bump.
-      const stepsLessAmendment = !steps.length && (a.testInput != null || a.overrides != null);
+      // recording, twenty-first log: schema-only contract landing) pass
+      // straight through: no new selectors to ground, no artifact version
+      // to bump.
+      const stepsLessAmendment = !steps.length && (a.testInput != null || a.overrides != null || a.inputSchema != null || a.outputSchema != null);
       if (!steps.length && !stepsLessAmendment) return { error: 'steps (non-empty array) required' };
       // Sticky waivers (twentieth log): a waiver recorded once applies to
       // every later grounding check for the rest of the session. The model
@@ -678,7 +679,7 @@
             // "missing-action" alone sent the model hunting for an action it
             // had already written while the true problem was unescaped quotes
             // (third live log).
-            let nudgeText = 'PROTOCOL VIOLATION (' + parsed.violation + (parsed.detail ? ' — ' + parsed.detail : '') + '): reply with ONE JSON object with exactly one of "tool" or "finish". No prose outside the JSON. A token/position error usually means unescaped double quotes inside a string value — escape them (\") or do not quote text with ".';
+            let nudgeText = 'PROTOCOL VIOLATION (' + parsed.violation + (parsed.detail ? ' — ' + parsed.detail : '') + '): reply with ONE JSON object with exactly one of "tool" or "finish". No prose outside the JSON. Strict JSON quoting only: double quotes for every key and string value — single quotes are NOT valid JSON, and an unescaped double quote inside a value must be escaped (\\") or avoided.';
             // Fifth-live-log turn 21: BOTH the original and the repair reply
             // were cut off before the closing braces (finish_reason "stop").
             // Generic advice made the model resend at the same length and
