@@ -21,7 +21,7 @@ AVAILABLE API FUNCTIONS:
 - $type(selector, text, timeoutMs?): Find element, wait for it up to timeoutMs (default 10000ms), set value, dispatch input/change events. Works on INPUT, TEXTAREA, and contenteditable elements. If selector matches a container, searches inside for an inputtable child. Returns true.
 - $extract(selector, attribute?, timeoutMs?): Get textContent (or attribute if specified). Returns string. IMPORTANT: $extract waits only up to timeoutMs (default 5000ms, NOT 30s) for the element — if the selector is wrong it fails fast instead of burning the step's whole timeout. Prefer this over $() for reading known content; pass a longer timeoutMs only when you genuinely need to wait for content to render.
 - $labelledby(selector, attr?, timeoutMs?): Resolve an ARIA REFERENCE attribute on the first match (default 'aria-labelledby'; pass 'aria-describedby' for the description refs) and return the CONCATENATED text of the referenced element(s) — the attribute holds a whitespace-separated id list, each id is looked up in the document. Returns a string ('' when the attr is absent or the refs carry no text; diagnostics carry the reason). This is where tooltip/hovercard full values usually live: the referenced span is often HIDDEN but readable (reads are not visibility-gated), so when a hover popover never visibly renders, bind the field with $labelledby on the anchor instead of re-hovering.
-- $wait(selector, delayMs?): Wait for element (up to 30s via MutationObserver), then optional extra delay. Returns true. The selector is REQUIRED. If you only need a delay without waiting for an element, use 'await new Promise(r => setTimeout(r, ms))' instead.
+- $wait(selector, delayMs?): Wait for element (up to 30s via MutationObserver), then optional extra delay. Returns true. The selector is REQUIRED. If you only need a delay without waiting for an element, use 'await new Promise(r => setTimeout(r, ms))' instead. THROWS ELEMENT_NOT_FOUND if the selector never appears within the cap — never $wait on a selector whose ABSENCE is your poll condition (content still loading); $count it and return { done: false } so maxIterations drives the wait.
 - $check(selector, property): Read element property (e.g., 'checked', 'disabled'). Returns value.
 - $openTab(url, functionBody): Open new tab at the given URL, wait for page load, then execute the function body (a string of JavaScript statements) in the new tab context. Returns whatever the function body returns. Use to scrape detail pages. Example: await $openTab(href, \`const title = await $extract('h1'); return { title };\`)
 - $count(selector): Count elements matching selector (main document + same-origin iframes). Returns number. Do NOT use with :nth-child() to iterate — use $list() instead.
@@ -1970,15 +1970,21 @@ function findEmptyExtractionFields(data, outputSchema) {
 //     returned. Lower = more sensitive. 0 = return any field with at least
 //     one empty value (rarely useful).
 //   maxSamples (default 3) — cap on sampleNonEmpty values per field.
-//   minRecords (default 2) — ignore output arrays shorter than this. A single
-//     record can't meaningfully establish a "pattern of emptiness".
+//   minRecords (default 1) — ignore output arrays shorter than this. The
+//     default dropped to 1 in the twenty-seventh log: the only container on
+//     a cold verify tab was a loading skeleton, the output had ONE record
+//     with an items.required field (content) empty — and the ≥2 floor made
+//     both this advisory signal and the REQUIRED_FIELD_EMPTY verify gate
+//     blind to it, so a score-111 GREEN shipped. Emptiness in the only
+//     record is total emptiness for that field; callers that genuinely
+//     need a multi-record "pattern" pass { minRecords: 2 }.
 function detectEmptyOutputFieldsByRatio(data, outputSchema, options) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return [];
   if (!outputSchema || typeof outputSchema !== 'object') return [];
   const opts = options || {};
   const threshold = typeof opts.emptyRatioThreshold === 'number' ? opts.emptyRatioThreshold : 0.5;
   const maxSamples = typeof opts.maxSamples === 'number' ? opts.maxSamples : 3;
-  const minRecords = typeof opts.minRecords === 'number' ? opts.minRecords : 2;
+  const minRecords = typeof opts.minRecords === 'number' ? opts.minRecords : 1;
 
   const isEmptyValue = (v) =>
     v === '' || v === null || v === undefined ||

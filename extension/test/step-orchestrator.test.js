@@ -138,6 +138,57 @@ describe('StepOrchestrator', () => {
     );
   });
 
+  it('POLL_EXHAUSTED embeds the last not-ready returns as a trajectory (twenty-seventh log)', async () => {
+    // The model returned {done:false, seen:n} from every poll iteration but the
+    // exhaustion error carried NONE of them — the count plateau that explained
+    // the failure was invisible and the model guessed at the cause. The last
+    // few not-ready payloads (the poll's own progress signals) must ride the
+    // error message.
+    const returns = [
+      { done: false, seen: 0 },
+      { done: false, seen: 2 },
+      { done: false, seen: 3 },
+      { done: false, seen: 3 }
+    ];
+    let i = 0;
+    const service = {
+      targetUrl: 'http://example.com',
+      steps: [
+        { id: 'poll', name: 'Poll', script: 'x', onSuccess: 'extract', onFailure: 'TERMINATE', maxIterations: 4 },
+        { id: 'extract', name: 'Extract', script: 'y', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }
+      ],
+      config: {}
+    };
+    const deps = makeMockDeps({ executeScript: async () => returns[i++] });
+    await assert.rejects(
+      () => StepOrchestrator.execute(service, {}, deps),
+      (err) => err.code === 'POLL_EXHAUSTED' &&
+        err.message.includes('{"done":false,"seen":2}') &&
+        err.message.includes('{"done":false,"seen":3}') &&
+        !err.message.includes('{"done":false,"seen":0"}') &&
+        !err.message.includes('"seen":0}') &&
+        // the plateau shows BOTH trailing seen:3 iterations — a plateau is
+        // exactly the signal the model needs to see
+        err.message.split('"seen":3').length === 3
+    );
+  });
+
+  it('POLL_EXHAUSTED trajectory caps each payload preview', async () => {
+    const big = { done: false, blob: 'x'.repeat(500) };
+    const service = {
+      targetUrl: 'http://example.com',
+      steps: [
+        { id: 'poll', name: 'Poll', script: 'x', onSuccess: 'TERMINATE', onFailure: 'TERMINATE', maxIterations: 2 }
+      ],
+      config: {}
+    };
+    const deps = makeMockDeps({ executeScript: async () => big });
+    await assert.rejects(
+      () => StepOrchestrator.execute(service, {}, deps),
+      (err) => err.code === 'POLL_EXHAUSTED' && !err.message.includes('x'.repeat(200)) && err.message.includes('…')
+    );
+  });
+
   it('routes to onFailure when a step returns {failed:true}', async () => {
     // A failure signal bails to the failure branch without throwing — even on a
     // normal (maxIterations:1) step — so an expected failure can branch cleanly.

@@ -360,7 +360,36 @@ class StepOrchestrator {
                 // outputSchema validation produces a misleading "missing required
                 // field" error that hides the real cause: the step ran out of
                 // retries without ever producing data.
-                const err = new Error(`POLL_EXHAUSTED: Step "${step.name || step.id}" exhausted after ${stepIterations} attempt(s) without producing a ready result`);
+                //
+                // Twenty-seventh log: the poll's own not-ready payloads
+                // ({done:false, seen:n}) carry the progress trajectory (a count
+                // plateau was the WHOLE diagnosis) but never reached the model —
+                // err.steps has them structurally, yet every consumer reads the
+                // message. Embed the last few returns inline.
+                const traj = [];
+                for (let ti = stepOutputs.length - 1; ti >= 0 && traj.length < 3; ti--) {
+                  const so = stepOutputs[ti];
+                  if (!so || String(so.stepId) !== String(step.id)) continue;
+                  // sourcePageId is the engine's own bookkeeping stamp (RC16) —
+                  // strip it so the trajectory shows only what the step returned.
+                  let r = so.result;
+                  if (r && typeof r === 'object' && !Array.isArray(r) && 'sourcePageId' in r) {
+                    r = Object.assign({}, r);
+                    delete r.sourcePageId;
+                  }
+                  let preview;
+                  try {
+                    preview = JSON.stringify(r);
+                  } catch (e) {
+                    preview = String(r);
+                  }
+                  if (typeof preview !== 'string') preview = String(preview);
+                  traj.unshift(preview.length > 120 ? preview.slice(0, 117) + '…' : preview);
+                }
+                const trajNote = traj.length
+                  ? '; last not-ready return(s): ' + traj.join(' -> ')
+                  : '';
+                const err = new Error(`POLL_EXHAUSTED: Step "${step.name || step.id}" exhausted after ${stepIterations} attempt(s) without producing a ready result${trajNote}`);
                 err.code = 'POLL_EXHAUSTED';
                 err.stepId = step.id;
                 err.steps = stepOutputs;

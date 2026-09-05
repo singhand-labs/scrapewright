@@ -561,6 +561,10 @@
       }
     }
 
+    // Closure-scope (not persisted): the llm:length grace window is once per
+    // session instance lifetime, resume included — bounded extra spend.
+    let emptyLengthGraceUsed = false;
+
     async function callLlm(messages) {
       let attempt = 0;
       while (true) {
@@ -579,6 +583,18 @@
           if (!content.trim() && finish === 'length') {
             // RC55: empty + length is deterministic budget exhaustion — a retry
             // burns the same completion budget again. Non-retryable.
+            // Twenty-seventh log amendment: the burn is sometimes STOCHASTIC
+            // (turn 28 burned 16384 tokens pre-content; the same-context call
+            // one resume later succeeded). ONE session-scope grace retry
+            // recovers the transient case without user intervention — a
+            // second burn still hits the RC55 stop. Bounded extra spend:
+            // exactly one extra call per session.
+            if (!emptyLengthGraceUsed) {
+              emptyLengthGraceUsed = true;
+              emit('llm_grace_retry', { note: 'empty content with finish_reason=length — retrying the same context once before the non-retryable stop' });
+              attempt = 0;
+              continue;
+            }
             throw Object.assign(new Error('empty content with finish_reason=length (completion budget exhausted pre-content)'), { code: 'EMPTY_LENGTH' });
           }
           if (content.trim()) return content;
@@ -770,6 +786,19 @@
               detail = (detail ? detail + ' ' : '') +
                 '[VERIFY PARTIAL-EMPTY — confirmed field(s) empty in every record: ' + state.lastVerifyEmptyFields.join(', ') + ']';
             }
+            // Twenty-seventh log: v6 verified red → v7 landed → finish. The
+            // disclosure above named v6's failure but not the sharper fact
+            // that the SHIPPED artifact has no verify at all (the model's own
+            // summary even said "verify v7 next session"). The engine knows
+            // both versions — say so. Independent of the ladder: a red last
+            // verify AND a newer unverified artifact both disclose.
+            const shippedV = state.artifactVersions.length;
+            const verifiedV = state.lastVerifyArtifactVersion || 0;
+            if (shippedV > 0 && shippedV > verifiedV) {
+              detail = (detail ? detail + ' ' : '') +
+                '[CURRENT ARTIFACT UNVERIFIED — last verify ran against v' + verifiedV +
+                '; the shipped artifact is v' + shippedV + ' and was never verified]';
+            }
             report = await stop('completed', detail);
             break;
           }
@@ -778,6 +807,7 @@
           let verifyDigest = null;
           if (turn.tool === 'verify.run') {
             state.lastVerifyOk = !!(result && typeof result === 'object' && result.ok === true);
+            state.lastVerifyArtifactVersion = state.artifactVersions.length;
             const pe = (result && result.detectors && Array.isArray(result.detectors.partialEmptyFields))
               ? result.detectors.partialEmptyFields
               : [];

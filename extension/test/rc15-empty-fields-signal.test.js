@@ -191,12 +191,23 @@ describe('RC15 — detectEmptyOutputFieldsByRatio finds partial-empty fields', (
     assert.equal(postId.totalCount, 4);
   });
 
-  it('ignores arrays shorter than minRecords (default 2)', () => {
-    // A single record can't establish a "pattern of emptiness".
+  it('analyzes single-record arrays too (twenty-seventh log)', () => {
+    // The old default floor (minRecords 2) let the twenty-seventh log's v1
+    // verify sail through GREEN: the only container on the cold verify tab
+    // was a loading skeleton, posts had ONE record with content "" — an
+    // items.required field empty in 1/1 records. "A single record can't
+    // establish a pattern" is true for OPTIONAL-field advisory noise, but
+    // emptiness in the only record is total emptiness for that field, and
+    // the REQUIRED_FIELD_EMPTY gate reads this detector. Floor is now 1;
+    // callers that genuinely want the 2-record pattern floor pass
+    // { minRecords: 2 }.
     const data = { posts: [{ author: 'A', likes: '1', comments: '', shares: '' }] };
     const out = detectEmptyOutputFieldsByRatio(data, FB_SCHEMA);
-    assert.deepEqual(out, [],
-      'arrays of length 1 must be ignored — cannot establish a pattern');
+    const fields = out.map((f) => f.field).sort();
+    // absent keys (domHtml, publishTime, content) read as empty too — only
+    // author and likes are populated in the single record
+    assert.deepEqual(fields, ['comments', 'content', 'domHtml', 'publishTime', 'shares']);
+    assert.ok(out.every((f) => f.totalCount === 1 && f.emptyCount === 1 && f.emptyRatio === 1));
   });
 
   it('returns [] for non-array-of-objects outputs (scalars / scalar arrays)', () => {

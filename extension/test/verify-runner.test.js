@@ -892,3 +892,57 @@ describe('twentieth log: page-context bag parity (RC35/B5 drift family)', () => 
     }
   });
 });
+
+describe('twenty-seventh log: ELEMENT_NOT_FOUND on a $wait-using step teaches the throw semantics', () => {
+  // v3 burned a red verify + a broken-update turn on this: the model put
+  // `$wait(cnt, 4000)` INSIDE a count-check poll loop — but $wait THROWS when
+  // its selector never appears, and absence was the loop's whole waiting
+  // condition (content not hydrated yet). The bare ELEMENT_NOT_FOUND message
+  // carried no teaching, so the model guessed at href shapes instead.
+  function serviceWith(script) {
+    return { targetUrl: 'https://example.com', steps: [{ id: 's1', name: 'Poll', script, onSuccess: 'TERMINATE' }], config: {} };
+  }
+  function orchElemNotFound() {
+    return async () => {
+      const e = new Error("ELEMENT_NOT_FOUND: div[role='article']:has(a[href*='story.php'])");
+      e.stepId = 's1';
+      throw e;
+    };
+  }
+
+  it('appends the $wait-as-poll-condition note when the failing step script uses $wait(', async () => {
+    const { runner } = makeRunner(orchElemNotFound());
+    const out = await runner({
+      service: serviceWith("const n = await $count(cnt);\nif (n >= 5) return { done: true };\nawait $wait(cnt, 4000);\nreturn { done: false };"),
+      input: {},
+      outputSchema: { type: 'object' }
+    });
+    assert.equal(out.report.ok, false);
+    assert.match(out.report.error.message, /ELEMENT_NOT_FOUND/);
+    assert.match(out.report.error.message, /\$wait\(sel\) THROWS/i);
+    assert.match(out.report.error.message, /\{ done: false \}/);
+    assert.match(out.report.error.message, /maxIterations/i);
+  });
+
+  it('no note when the step script has no $wait call (other ELEMENT_NOT_FOUND causes stay clean)', async () => {
+    const { runner } = makeRunner(orchElemNotFound());
+    const out = await runner({
+      service: serviceWith("return $extract('div[role=\"article\"]');"),
+      input: {},
+      outputSchema: { type: 'object' }
+    });
+    assert.equal(out.report.ok, false);
+    assert.match(out.report.error.message, /ELEMENT_NOT_FOUND/);
+    assert.doesNotMatch(out.report.error.message, /THROWS/i);
+  });
+
+  it('DSL guide teaches the $wait throw semantics at the $wait entry', () => {
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const src = fs.readFileSync(path.join(__dirname, '../lib/wizard-utils.js'), 'utf8');
+    const line = src.split('\n').find((l) => l.indexOf('- $wait(selector, delayMs?)') !== -1);
+    assert.ok(line, '$wait DSL entry found');
+    assert.match(line, /THROWS/i, 'entry must state the throw-on-absent behavior');
+    assert.match(line, /done: false/, 'entry must point at the poll-condition alternative');
+  });
+});

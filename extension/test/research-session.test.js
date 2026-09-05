@@ -187,6 +187,51 @@ describe('engine happy path', () => {
     assert.equal(none.stopped.detail, 'done');
   });
 
+  it('finish discloses a CURRENT ARTIFACT UNVERIFIED when the shipped version was never verified (twenty-seventh log)', async () => {
+    // v6 verify (red) → v7 lands → turn-60 finish. The shipped artifact v7
+    // differs from everything ever verified, but the disclosure only said
+    // LAST VERIFY FAILED — it named v6's failure, not the fact that v7 has
+    // NO verify at all. The engine knows both versions; it must say so.
+    const steps = [{ id: 's1', name: 'one', script: 'return 1', onSuccess: 'TERMINATE' }];
+    const session = createResearchSession({
+      requirement: 'collect posts',
+      llm: scriptedLlm([
+        reply(envelope('verify.run', {})),
+        reply(envelope('service.update', { steps })),
+        reply(finishEnvelope('v7 landed, verify it next session'))
+      ], []),
+      tools: {
+        'verify.run': async () => ({ ok: false, error: { message: 'POLL_EXHAUSTED: gave up' } }),
+        'service.update': async () => ({ updated: true })
+      }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    assert.match(report.stopped.detail, /LAST VERIFY FAILED/);
+    assert.match(report.stopped.detail, /CURRENT ARTIFACT UNVERIFIED/);
+    assert.match(report.stopped.detail, /last verify ran against v0/);
+    assert.match(report.stopped.detail, /shipped artifact is v1/);
+  });
+
+  it('no unverified disclosure when the current artifact WAS the one verified', async () => {
+    const steps = [{ id: 's1', name: 'one', script: 'return 1', onSuccess: 'TERMINATE' }];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('service.update', { steps })),
+        reply(envelope('verify.run', {})),
+        reply(finishEnvelope('verified green'))
+      ], []),
+      tools: {
+        'verify.run': async () => ({ ok: true, score: { score: 10 }, detectors: {}, events: [] }),
+        'service.update': async () => ({ updated: true })
+      }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    assert.equal(report.stopped.detail, 'verified green', 'verify ran against the current version — no disclosure');
+  });
+
   it('sends an explicit maxTokens on EVERY llm call (RC52 class guard)', async () => {
     const calls = [];
     const session = createResearchSession({
@@ -519,7 +564,14 @@ describe('budgets and breakers', () => {
 });
 
 describe('LLM failure discipline', () => {
-  it('empty + finish_reason length is NON-RETRYABLE: exactly one call, stop llm:length', async () => {
+  it('empty + finish_reason length gets ONE grace retry, then stops llm:length (twenty-seventh log)', async () => {
+    // RC55 made empty+length non-retryable because a deterministic burn
+    // wastes the whole completion budget per retry. The twenty-seventh log
+    // falsified "always deterministic": turn 28 burned 16384 tokens
+    // pre-content, and the SAME-context retry (via manual resume) succeeded
+    // immediately — the burn is sometimes stochastic. One session-scope
+    // grace retry recovers the transient case without user intervention; a
+    // second burn still stops with the RC55 discipline.
     const calls = [];
     const session = createResearchSession({
       requirement: 'r',
@@ -529,8 +581,48 @@ describe('LLM failure discipline', () => {
     });
     const report = await session.run();
     assert.equal(report.stopped.reason, 'llm:length');
-    assert.equal(calls.length, 1, 'RC55: retrying empty+length burns the same budget again');
-    assert.equal(report.spend.llmCalls, 1);
+    assert.equal(calls.length, 2, 'one grace retry, then the RC55 stop');
+    assert.equal(report.spend.llmCalls, 2);
+  });
+
+  it('the grace retry recovering means the session continues without stopping', async () => {
+    const calls = [];
+    const events = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply('', { finish_reason: 'length' }),
+        reply(finishEnvelope('recovered after burn'))
+      ], calls),
+      tools: {},
+      retry: { attempts: 3, backoffMs: 0 },
+      onEvent: (e) => events.push(e)
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    assert.equal(calls.length, 2);
+    assert.ok(events.some((e) => e.type === 'llm_grace_retry'),
+      'the grace retry is visible as its own event (nineteenth-log retry-visibility rule)');
+  });
+
+  it('the grace retry is ONCE PER SESSION, not per turn', async () => {
+    // burn → grace retry recovers (tool turn runs) → a LATER turn burns again
+    // → immediate stop, no second grace window. Bounded extra spend: exactly
+    // one extra burned call per session.
+    const calls = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply('', { finish_reason: 'length' }),
+        reply(envelope('probe.count', { sel: 'div.card' })),
+        reply('', { finish_reason: 'length' })
+      ], calls),
+      tools: { 'probe.count': async () => ({ count: 1 }) },
+      retry: { attempts: 3, backoffMs: 0 }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'llm:length');
+    assert.equal(calls.length, 3, 'turn-1 burn + grace recovery, turn-2 burn stops immediately');
   });
 
   it('transient errors retry with backoff and succeed', async () => {

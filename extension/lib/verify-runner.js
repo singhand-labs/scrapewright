@@ -778,6 +778,22 @@
               }
             }
           }
+          // Twenty-seventh log: v3 put `$wait(cnt)` INSIDE a count-check poll
+          // loop — but $wait THROWS on an absent selector, and absence was the
+          // loop's waiting condition (content not hydrated yet). The bare
+          // ELEMENT_NOT_FOUND taught nothing, so the model guessed at href
+          // shapes and burned another turn on a broken update.
+          if (/^ELEMENT_NOT_FOUND/.test(e.message || '')) {
+            const selTxt = String(e.message).replace(/^ELEMENT_NOT_FOUND:\s*/, '').split(' (')[0];
+            let scope = stepDefsOfService.filter((s) => String(s.id) === String(e.stepId));
+            if (!scope.length && selTxt) {
+              scope = stepDefsOfService.filter((s) => String((s && s.script) || '').indexOf(selTxt) !== -1);
+            }
+            if (!scope.length) scope = stepDefsOfService;
+            if (scope.some((s) => String((s && s.script) || '').indexOf('$wait(') !== -1)) {
+              e.message += " — NOTE: $wait(sel) THROWS when its selector never appears within its cap. If this selector's absence is the waiting condition itself (content not hydrated yet inside a poll loop), $wait is the wrong tool: $count(sel) and return { done: false } so the step's maxIterations drives the wait, or $wait on a broader anchor that is present from initial load.";
+            }
+          }
           if (/is not a valid selector/i.test(e.message || '')) {
             e.message += " — NOTE: only standard CSS selectors are valid in querySelector/querySelectorAll. Playwright-only pseudo-classes such as :has-text(...), :text=..., :contains(...) do NOT exist here and throw instantly. Select by structure (tag/role/aria/class), then filter by visible text in JS: const els = await $list('h2, div[role=\"heading\"]'); const hit = els.find(el => /your phrase/i.test(el.textContent || ''));";
           }

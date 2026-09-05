@@ -119,4 +119,19 @@ describe('REQUIRED_FIELD_EMPTY gate (twenty-sixth log)', () => {
     assert.match(out.report.error.message, /POLL_EXHAUSTED/);
     assert.doesNotMatch(out.report.error.message, /REQUIRED_FIELD_EMPTY/);
   });
+
+  it('twenty-seventh log: a SINGLE record with a required field empty flips ok:false (no >=2 floor)', async () => {
+    // The cold verify tab hydrated one loading-skeleton container; posts had
+    // exactly one record with content "" (required) and only postHtml-ish
+    // fields populated. The detector's old >=2-record floor made both the
+    // advisory signal and this gate blind — verify read GREEN at score 111.
+    const runner = makeRunner(orchReturning([
+      { serialNumber: 1, postId: '', content: '', postingTime: '' }
+    ]));
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: SCHEMA_REQ_ITEM });
+    assert.equal(out.report.ok, false, 'required field empty in the ONLY record is a contract violation');
+    assert.match(out.report.error.message, /REQUIRED_FIELD_EMPTY/);
+    assert.match(out.report.error.message, /posts\.(content|postId) is empty in 1\/1/);
+    assert.match(out.report.error.message, /io\.confirm/);
+  });
 });
