@@ -2263,6 +2263,22 @@ function updateSessionSpendLine(st, parkedMs) {
     (parkedMs > 60000 ? ' (excl. ' + Math.round(parkedMs / 60000) + ' min paused)' : '');
 }
 
+// Twenty-sixth log: a head-only slice(0, 600) cut both stopped events
+// mid-sentence, and the honest-ship disclosure suffix
+// ("[VERIFY PARTIAL-EMPTY — ...]") is APPENDED TO THE TAIL of the detail —
+// exported logs lost exactly the part the sixteen/thirteenth-log fixes put
+// there. Keep head AND tail, and mark the elision explicitly.
+function mirrorClip(text, cap) {
+  const s = String(text == null ? '' : text);
+  if (s.length <= cap) return s;
+  const markerBudget = 24;
+  const keep = Math.max(40, cap - markerBudget);
+  const head = Math.floor(keep * 0.6);
+  const tail = keep - head;
+  const elided = s.length - head - tail;
+  return s.slice(0, head) + '…[+' + elided + ' chars]…' + s.slice(s.length - tail);
+}
+
 function handleSessionEvent(ev) {
   // Console mirror (second-live-log D2): the UI execution log is invisible in
   // exported console logs — the verify#2 anomaly was undiagnosable because
@@ -2272,7 +2288,7 @@ function handleSessionEvent(ev) {
     if (ev && ev.type === 'tool_result') {
       // Nineteenth log: 300 chars cut verify failure mid-teaching
       // ("...Every" + ZERO_COUNTER_FROZEN tails). 600 keeps the diagnosis.
-      console.log('[session] TOOL RESULT', ev.tool, ev.ok ? 'ok' : 'ERR', String(ev.summary || '').slice(0, 600));
+      console.log('[session] TOOL RESULT', ev.tool, ev.ok ? 'ok' : 'ERR', mirrorClip(String(ev.summary || ''), 600));
       // Sixteenth log: the engine caps the summary at 200 chars, so a green
       // verify's tags/detectors never reached exported console logs
       // (green-with-empty-fields was undiagnosable from the log alone). The
@@ -2283,14 +2299,14 @@ function handleSessionEvent(ev) {
       // at outputSchema — the actual schema the LLM authored was invisible in
       // exported logs and the typeless-items diagnosis had to proceed by
       // inference. Schemas ride these args; give them room.
-      console.log('[session] TOOL', ev.tool, JSON.stringify(ev.args || {}).slice(0, 1200));
+      console.log('[session] TOOL', ev.tool, mirrorClip(JSON.stringify(ev.args || {}), 1200));
     } else if (ev && ev.type) {
       // Twenty-third log RC-C: 200 chars cut the stopped event's honest-ship
       // disclosure ("[VERIFY PARTIAL-EMPTY — ...fields...]") mid-list in two
       // consecutive live logs — the export read as a clean ship. Detail-
       // bearing events (stopped/error/paused) get the same 600 budget the
       // tool_result mirror uses.
-      console.log('[session]', ev.type, JSON.stringify(ev).slice(0, 600));
+      console.log('[session]', ev.type, mirrorClip(JSON.stringify(ev), 600));
     }
   } catch (e) { /* mirror is best-effort */ }
   try {

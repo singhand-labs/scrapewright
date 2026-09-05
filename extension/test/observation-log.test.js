@@ -21,6 +21,22 @@ describe('ObservationLog', () => {
     assert.ok(!log.covers('div.nothing'));
   });
 
+  it('twenty-sixth log: CSS-equivalent quote style matches (div[role="none"] ≡ div[role=\'none\'])', () => {
+    const log = createObservationLog();
+    log.record({ tool: 'probe.hover', selectors: ["div[role='none']"], summary: 'observed popover' });
+    assert.ok(log.covers('div[role="none"]'), 'double-quoted variant of a single-quoted receipt is the SAME CSS selector');
+    log.record({ tool: 'probe.count', selectors: ['[data-x="a"]'], summary: 'count=1' });
+    assert.ok(log.covers("[data-x='a']"), 'and the reverse direction');
+    assert.ok(!log.covers("div[role='menu']"), 'quote folding must not make different selectors match');
+  });
+
+  it('quote-normalized matching still honors the epoch filter', () => {
+    const log = createObservationLog();
+    log.record({ tool: 'probe.hover', selectors: ["div[role='none']"], summary: 'observed popover', epoch: 3 });
+    assert.ok(log.covers('div[role="none"]', 3), 'normalized match within the same epoch');
+    assert.ok(!log.covers('div[role="none"]', 4), 'stale epoch stays stale under normalization');
+  });
+
   it('covers attribute names observed via attrStats', () => {
     const log = createObservationLog();
     log.record({

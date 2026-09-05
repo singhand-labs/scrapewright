@@ -68,6 +68,20 @@
         if (typeof epoch === 'number' && e.epoch !== epoch) continue;
         return true;
       }
+      // Twenty-sixth log: a model writing div[role="none"] was rejected
+      // against a probe.hover receipt that recorded div[role='none'] — the
+      // SAME CSS selector, differing only in attribute-value quote style.
+      // CSS treats both quote styles identically, so a quote-only
+      // difference is not an unobserved selector. Fold single quotes to
+      // double on both sides as a fallback; everything else stays
+      // exact-match.
+      const folded = selector.replace(/'/g, '"');
+      for (const e of entries) {
+        if (typeof epoch === 'number' && e.epoch !== epoch) continue;
+        for (const s of e.selectors) {
+          if (s !== selector && s.replace(/'/g, '"') === folded) return true;
+        }
+      }
       return false;
     }
 

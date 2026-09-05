@@ -561,6 +561,32 @@
         }
       }
 
+      // Twenty-sixth log: verifies 1-4 all returned ok:true (score 133) while
+      // posts.postId — an items.required field — was empty in 2/3 records;
+      // the finish summary read "Verified green" and only the user's
+      // feedback resume fixed the field. The ok gate was purely !error. An
+      // item-REQUIRED field empty at the same ratio the partial-empty
+      // detector censuses (>=0.5 of >=2 records) is a contract violation,
+      // not an advisory: flip the run red and teach both exits.
+      if (!error && Array.isArray(detectors.partialEmptyFields) && outputSchema && outputSchema.properties) {
+        const reqProps = outputSchema.properties;
+        for (const pe of detectors.partialEmptyFields) {
+          const key = String(pe.path || '').split('.')[0];
+          const prop = reqProps[key];
+          const itemRequired = prop && prop.items && Array.isArray(prop.items.required) ? prop.items.required : null;
+          if (itemRequired && itemRequired.indexOf(pe.field) !== -1) {
+            error = new Error(
+              'REQUIRED_FIELD_EMPTY: ' + pe.path + ' is empty in ' + pe.emptyCount + '/' + pe.totalCount +
+              ' records but the confirmed contract lists it as REQUIRED for every record. Either fix the extraction ' +
+              '(the field is contractually demanded — ground a selector for it, re-check the fieldMap anchor and the ' +
+              'record assembly), or renegotiate the contract with io.confirm (move the field out of required / drop it) ' +
+              'when it genuinely never exists on these cards. Optional-field emptiness stays advisory; a required one does not.'
+            );
+            break;
+          }
+        }
+      }
+
       const oc = (result ? WU.validateOutputAgainstSchema(finalData, outputSchema) : { ok: true, missing: [] }) || { ok: true, missing: [] };
 
       const compactSteps = result && Array.isArray(result.steps)

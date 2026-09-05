@@ -867,7 +867,11 @@ describe('twentieth log: page-context bag parity (RC35/B5 drift family)', () => 
       service: SERVICE, input: {},
       outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object', required: ['postId', 'time', 'content'], properties: { index: { type: 'number' }, postId: { type: 'string' }, time: { type: 'string' }, content: { type: 'string' } } } } } }
     });
-    assert.equal(out.report.ok, true);
+    // Twenty-sixth log: `time` sits in items.required and is empty in 2/2
+    // records — the REQUIRED_FIELD_EMPTY gate now flips the run red (the
+    // old ok:true here was exactly the false green this log shipped with).
+    assert.equal(out.report.ok, false);
+    assert.match(out.report.error.message, /REQUIRED_FIELD_EMPTY: posts\.time/);
     assert.ok(out.report.detectors.partialEmptyFields, 'ratio detector ran via the page-context bag');
     assert.deepEqual(out.report.detectors.partialEmptyFields.map((f) => f.path), ['posts.time']);
     assert.ok(out.report.events.indexOf('PARTIAL_EMPTY_FIELDS') !== -1, 'tag reachable in browser context');

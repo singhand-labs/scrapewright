@@ -174,6 +174,18 @@ describe('validateGrounding — receipt sources', () => {
     assert.ok(!/diag\.read/i.test(rej.suggestion), 'diag.read never creates a receipt — must not be suggested (sixth-live-log turns 20-21)');
   });
 
+  it('twenty-sixth log: a probe.hover receipt matches the CSS-equivalent double-quoted variant', async () => {
+    // The observer records the canonical popoverSelector with single quotes
+    // (div[role='none']); the model's update carried div[role="none"] and was
+    // rejected for a full turn — same CSS, quote style only.
+    const s = session([{ sel: 'div.card' }, { sel: 'a.p' }, { sel: "div[role='tooltip']" }]);
+    const r = await validateGrounding({
+      steps, observationLog: s.observationLog, ledger: s.ledger,
+      autoVerify: async () => 99
+    });
+    assert.equal(r.ok, true, 'quote-only difference must ground, not reject');
+  });
+
   it('a throwing autoVerify probe rejects the selector instead of crashing the gate', async () => {
     const s = session([]);
     let r;

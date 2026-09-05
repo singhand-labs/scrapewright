@@ -73,9 +73,11 @@ describe('wizard research-session integration (source audit)', () => {
 
   it('nineteenth log: console mirror caps leave room for schemas (tool args 1200, summaries 600)', () => {
     const body = fnBody('handleSessionEvent');
-    assert.ok(body.includes('JSON.stringify(ev.args || {}).slice(0, 1200)'),
+    // Twenty-sixth log: the bare slices became mirrorClip(head+tail) — the
+    // budgets stay, the cut no longer drops the tail disclosure.
+    assert.ok(body.includes('mirrorClip(JSON.stringify(ev.args || {}), 1200)'),
       'io.confirm/service.update args carry outputSchema — 200 chars cut it off mid-schema, making typeless-items failures undiagnosable from exported logs');
-    assert.ok(body.includes("String(ev.summary || '').slice(0, 600)"),
+    assert.ok(body.includes("mirrorClip(String(ev.summary || ''), 600)"),
       'verify failure teachings were cut mid-sentence at 300 chars');
   });
 
