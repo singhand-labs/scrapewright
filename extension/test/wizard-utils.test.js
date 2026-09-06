@@ -2137,3 +2137,72 @@ describe('headTailSlice (twenty-ninth log)', () => {
     assert.ok(out.length <= 4);
   });
 });
+
+describe('detectUnawaitedDollarCalls (thirtieth log)', () => {
+  const { detectUnawaitedDollarCalls } = require('../lib/wizard-utils');
+
+  it('flags an un-awaited $count whose comparison can never go true', () => {
+    const hits = detectUnawaitedDollarCalls('const n = $count("div"); if (n > 0) return { done: true }; return { done: false };');
+    assert.equal(hits.length, 1);
+    assert.equal(hits[0].api, '$count');
+    assert.ok(hits[0].near.includes('$count'), 'near carries the source window');
+  });
+
+  it('does not flag awaited calls', () => {
+    assert.deepEqual(detectUnawaitedDollarCalls('const n = await $count("div"); return { done: n > 0, count: n };'), []);
+  });
+
+  it('does not flag .then/.catch/.finally chains', () => {
+    assert.deepEqual(detectUnawaitedDollarCalls('$scrollToBottom().then(() => $count("div").then(c => c));'), []);
+  });
+
+  it('does not flag occurrences inside strings or comments', () => {
+    assert.deepEqual(detectUnawaitedDollarCalls('const s = "n = $count(x)"; // const n2 = $extract(y)\nconst ok = await $(s);'), []);
+  });
+
+  it('does not flag Promise.all arguments', () => {
+    assert.deepEqual(detectUnawaitedDollarCalls('const [a, b] = await Promise.all([$count("div"), $count("span")]);'), []);
+  });
+
+  it('does not flag a $ call preceded by a sibling call inside Promise.all', () => {
+    assert.deepEqual(
+      detectUnawaitedDollarCalls('const [a, b] = await Promise.all([$wait(sel), $count("div")]);'),
+      [],
+    );
+  });
+
+  it('does not flag assign-then-await deferral (const p = $call(...); ... await p)', () => {
+    assert.deepEqual(
+      detectUnawaitedDollarCalls('const p = $count("div"); const n = await p; return { done: n > 0 };'),
+      [],
+    );
+  });
+
+  it('flags a bare $ call placed in the returned object', () => {
+    const hits = detectUnawaitedDollarCalls('return { v: $(sel), done: true };');
+    assert.equal(hits.length, 1);
+    assert.equal(hits[0].api, '$');
+  });
+
+  it('flags multi-word APIs like $extractListMulti', () => {
+    const hits = detectUnawaitedDollarCalls('const rows = $extractListMulti(c, m);\nreturn rows;');
+    assert.equal(hits.length, 1);
+    assert.equal(hits[0].api, '$extractListMulti');
+  });
+
+  it('does not flag return-promise form — step scripts are async bodies (GOOD_STEPS idiom)', () => {
+    assert.deepEqual(
+      detectUnawaitedDollarCalls("return $extractList('div.card', {t:{selector:'.t'}});"),
+      [],
+    );
+  });
+
+  it('does not flag member calls like obj.$helper()', () => {
+    assert.deepEqual(detectUnawaitedDollarCalls('const v = api.$helper(1); return v;'), []);
+  });
+
+  it('returns [] for empty/non-string scripts', () => {
+    assert.deepEqual(detectUnawaitedDollarCalls(''), []);
+    assert.deepEqual(detectUnawaitedDollarCalls(null), []);
+  });
+});

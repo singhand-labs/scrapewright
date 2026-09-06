@@ -570,6 +570,20 @@
       if (!chain || chain.valid !== true) {
         return { error: 'step chain invalid: ' + String((chain && chain.error) || 'validation failed') };
       }
+      // Thirtieth log: `const n = $count(sel)` without await passes chain
+      // validation and lands — then burns turns at verify with a misleading
+      // POLL_EXHAUSTED (n holds a Promise, `n > 0` is false forever). Lint
+      // every incoming step script and put the hits in the receipt as a
+      // NON-BLOCKING advisory — the artifact still applies; verify-runner's
+      // failure-time arm remains the backstop for anything that slips past.
+      const staticLint = [];
+      if (typeof WU.detectUnawaitedDollarCalls === 'function') {
+        for (const s of steps) {
+          for (const h of WU.detectUnawaitedDollarCalls(String((s && s.script) || ''))) {
+            staticLint.push('step "' + ((s && s.name) || String(s && s.id)) + '": ' + h.api + '() called without await — a bare $ call returns a Promise, so every comparison on it is false/undefined forever; add await (near: ' + h.near + ')');
+          }
+        }
+      }
       try {
         // Twenty-first log: the confirmed contract must land in the artifact
         // even when the update omits schemas (steps-only updates were the
@@ -589,7 +603,7 @@
           const version = (st && st.session && Array.isArray(st.session.artifactVersions))
             ? st.session.artifactVersions.length + 1
             : 1;
-          return { updated: true, version: version, schemasAttached: true, note: 'the confirmed I/O contract was attached (your update omitted schemas) — verify.run now scores against it' };
+          return Object.assign({ updated: true, version: version, schemasAttached: true, note: 'the confirmed I/O contract was attached (your update omitted schemas) — verify.run now scores against it' }, staticLint.length ? { staticLint: staticLint } : {});
         }
       } catch (e) {
         return { error: 'artifact apply failed: ' + String((e && e.message) || e) };
@@ -598,7 +612,7 @@
       const version = (st && st.session && Array.isArray(st.session.artifactVersions))
         ? st.session.artifactVersions.length + 1
         : 1;
-      return { updated: true, version: version };
+      return Object.assign({ updated: true, version: version }, staticLint.length ? { staticLint: staticLint } : {});
     }
 
     // Ninth-log M3: the research tab must never open a LITERAL {{param}}

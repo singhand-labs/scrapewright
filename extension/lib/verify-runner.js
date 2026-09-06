@@ -54,6 +54,7 @@
       scoreAttemptResult: w.scoreAttemptResult,
       stripSnapshotsFromTestResult: w.stripSnapshotsFromTestResult,
       sampleRecordsForLLMContext: w.sampleRecordsForLLMContext,
+      detectUnawaitedDollarCalls: w.detectUnawaitedDollarCalls,
       headTailSlice: w.headTailSlice
     };
     const missing = [];
@@ -794,7 +795,32 @@
             e.stepId = zeroCounterBreaker.stepId;
           }
           if (/POLL_EXHAUSTED/.test(e.message || '')) {
-            const blind = WU.detectCountSelectorBlind(evts);
+            // Thirtieth log: `const n = $count(sel)` WITHOUT await — n holds a
+            // Promise, `n > 0` is always false, the poll can never go done,
+            // and ten turns burned on misdiagnoses (slow cold-load, transient
+            // hydration) because the clone error only surfaces later, if at
+            // all. Lint the failing step's script AT FAILURE TIME and name the
+            // bug in one read — more specific than the selector/zero arms, so
+            // it takes precedence over them.
+            let unawaitedAugmented = false;
+            if (typeof WU.detectUnawaitedDollarCalls === 'function') {
+              let lintScope = e.stepId ? stepDefsOfService.filter((s) => String(s.id) === String(e.stepId)) : [];
+              if (!lintScope.length) lintScope = stepDefsOfService;
+              const unawaited = [];
+              for (const s of lintScope) {
+                const lintHits = WU.detectUnawaitedDollarCalls(String((s && s.script) || ''));
+                for (const h of lintHits) unawaited.push({ stepId: s && s.id, name: (s && s.name) || String(s && s.id), hit: h });
+              }
+              if (unawaited.length) {
+                const first = unawaited[0];
+                e.message = 'POLL_EXHAUSTED — root cause: UNAWAITED_ASYNC_CALL. Step "' + first.name + '" calls ' +
+                  unawaited.map((u) => u.hit.api + '()').join(', ') + ' WITHOUT await — a bare $ call returns a Promise, so every comparison on it (n > 0, if (n), === expected) is false/undefined FOREVER and the step can never return done; the count you think you read was never a number. ' +
+                  'Fix: await the call — const n = await ' + first.hit.api + '(sel); — near: ' + first.hit.near + '. Original error: ' + e.message;
+                if (!e.stepId && first.stepId) e.stepId = first.stepId;
+                unawaitedAugmented = true;
+              }
+            }
+            const blind = !unawaitedAugmented && WU.detectCountSelectorBlind(evts);
             if (blind) {
               const stepDefB = stepDefsOfService.find((s) => String(s.id) === String(blind.stepId));
               e.message = 'POLL_EXHAUSTED — root cause: COUNT_SELECTOR_BLIND. Step "' + (stepDefB ? stepDefB.name : blind.stepId) + '" polled ' +

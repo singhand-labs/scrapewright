@@ -137,6 +137,28 @@ describe('createSessionTools', () => {
     assert.deepEqual(out, { updated: true, version: 2 });
   });
 
+  it('service.update receipt carries a staticLint advisory when a step calls $ APIs without await (thirtieth log)', async () => {
+    const { deps, state } = makeDeps();
+    const t = createSessionTools(deps);
+    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } });
+    const out = await t.tools['service.update'](
+      { steps: [
+        { id: 's1', name: 'count gate', script: 'const n = $count("div.card"); if (n > 0) return { done: true, count: n }; return { done: false };', onSuccess: 's2', onFailure: 'TERMINATE' },
+        { id: 's2', name: 'extract', script: "return $extractList('div.card', {t:{selector:'.t'}});", onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }
+      ] },
+      { session: { state: () => ({ session: { artifactVersions: [] } }) } });
+    assert.equal(out.updated, true, 'advisory is non-blocking — the artifact still lands');
+    assert.equal(state.applied.length, 1, 'artifact applied despite lint hits');
+    assert.equal(out.staticLint.length, 1, 'only the un-awaited step is flagged, not the return-promise idiom');
+    assert.match(out.staticLint[0], /count gate/);
+    assert.match(out.staticLint[0], /\$count/);
+    assert.match(out.staticLint[0], /await/);
+    // clean scripts get no field at all — receipts stay terse
+    const clean = await t.tools['service.update']({ steps: GOOD_STEPS }, { session: { state: () => ({ session: { artifactVersions: [] } }) } });
+    assert.equal(clean.updated, true);
+    assert.equal(clean.staticLint, undefined);
+  });
+
   it('service.update rejects natural-language schemas with a teaching error; JSON-Schema shapes pass (fourth-live-log G1)', async () => {
     const { deps, state } = makeDeps();
     const t = createSessionTools(deps);

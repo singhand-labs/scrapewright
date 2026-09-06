@@ -3925,9 +3925,120 @@ function headTailSlice(s, cap) {
   return s.slice(0, headLen) + sep + s.slice(-tailLen);
 }
 
+// Length-preserving blanker for the static lint below: comment bodies and
+// string/template CONTENTS become spaces (delimiters and newlines stay), so
+// character indices keep aligning with the original script.
+function blankStringsAndCommentsForLint(src) {
+  let out = '';
+  let mode = null; // "'" | '"' | '`' | '//' | '/*'
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    const d = i + 1 < src.length ? src[i + 1] : '';
+    if (mode) {
+      if (c === '\\') { out += '  '; i += 1; continue; }
+      if (mode === '//' && c === '\n') { out += '\n'; mode = null; continue; }
+      if (mode === '/*' && c === '*' && d === '/') { out += '  '; i += 1; mode = null; continue; }
+      if ((mode === "'" || mode === '"' || mode === '`') && c === mode) { out += c; mode = null; continue; }
+      out += (c === '\n') ? '\n' : ' ';
+      continue;
+    }
+    if (c === '/' && d === '/') { mode = '//'; out += '  '; i += 1; continue; }
+    if (c === '/' && d === '*') { mode = '/*'; out += '  '; i += 1; continue; }
+    if (c === "'" || c === '"' || c === '`') { mode = c; out += c; continue; }
+    out += c;
+  }
+  return out;
+}
+
+// Thirtieth log: ten turns burned on `const n = $count(sel)` without
+// `await` — n held a Promise, `n > 0` was always false, and the resulting
+// POLL_EXHAUSTED was misdiagnosed twice (slow cold-load, transient
+// hydration) before a downstream clone error exposed it. Static lint for
+// authoring-time (service.update receipt) and failure-time (POLL_EXHAUSTED
+// augmentation): name the bug in one read. Skips: awaited calls, member
+// calls (`obj.$x(`), `.then/.catch/.finally` chains, occurrences inside
+// strings/comments, `Promise.all(...)` arguments, and assign-then-await
+// deferral (`const p = $call(x)` with a later `await p`). The skip analysis
+// lives in a helper so the scan loop stays flat — deep control-flow nests
+// reading loop-external locals misresolve on some runtimes.
+function detectUnawaitedDollarCalls(script) {
+  if (typeof script !== 'string' || !script) return [];
+  const blanked = blankStringsAndCommentsForLint(script);
+  const hits = [];
+  const callRe = /\$[A-Za-z_]*\s*\(/g;
+  let m;
+  while ((m = callRe.exec(blanked)) !== null) {
+    if (unawaitedCallSkipped(blanked, m.index, m[0])) continue;
+    hits.push({
+      api: m[0].replace(/\s*\($/, ''),
+      near: script.slice(Math.max(0, m.index - 48), Math.min(script.length, m.index + 64)).replace(/\s+/g, ' ').trim()
+    });
+  }
+  return hits;
+}
+
+// Returns true when the $-call at `index` (matched text `matchText`) is an
+// intentional un-awaited usage; false means record it as a hit. Kept FLAT
+// (single-level guards, early returns): deep control-flow nests reading
+// outer bindings misresolve as global loads on some runtimes — see the
+// thirtieth-log notes.
+function unawaitedCallSkipped(blanked, index, matchText) {
+  const isIdChar = (ch) => /[A-Za-z0-9_$]/.test(ch);
+  // Preceding token: member calls (`.` before the api) and `await` are fine.
+  let j = index - 1;
+  while (j >= 0 && /\s/.test(blanked[j])) j -= 1;
+  if (j >= 0 && blanked[j] === '.') return true;
+  let k = j;
+  while (k >= 0 && isIdChar(blanked[k])) k -= 1;
+  if (j >= 0 && blanked.slice(k + 1, j + 1) === 'await') return true;
+  // `return $call(...)` — step scripts are async-function bodies, so returning
+  // the promise is the canonical extraction idiom (executor awaits the fn).
+  if (j >= 0 && blanked.slice(k + 1, j + 1) === 'return') return true;
+  // Enclosing-call check: a hit whose nearest unmatched '(' belongs to
+  // `Promise.all(...)` is intentional parallelism, not a bug. Scan
+  // backwards with a depth counter so sibling calls earlier in the
+  // argument list don't shadow the real enclosing paren.
+  let enclosing = -1;
+  let depth = 0;
+  for (let p = index - 1; p >= 0; p--) {
+    if (blanked[p] === ')') depth += 1;
+    else if (blanked[p] === '(' && depth === 0) { enclosing = p; break; }
+    else if (blanked[p] === '(') depth -= 1;
+  }
+  if (enclosing !== -1 && /Promise\.all\s*$/.test(blanked.slice(0, enclosing))) return true;
+  // Matching close paren, then `.then/.catch/.finally` chain check.
+  const openParen = index + matchText.length - 1;
+  let closeDepth = 0;
+  let close = -1;
+  for (let p = openParen; p < blanked.length; p++) {
+    if (blanked[p] === '(') closeDepth += 1;
+    else if (blanked[p] === ')') {
+      closeDepth -= 1;
+      if (closeDepth === 0) { close = p; break; }
+    }
+  }
+  const after = close !== -1 ? blanked.slice(close + 1).replace(/^\s+/, '') : '';
+  if (/^\.(then|catch|finally)\b/.test(after)) return true;
+  // Assignment-then-await deferral: `const p = $call(x)` followed later by
+  // `await p` / `p.then(...)` is intentional, not a bug.
+  const isAssign = j >= 1 && blanked[j] === '=' && blanked[j - 1] !== '=' &&
+    blanked[j - 1] !== '!' && blanked[j - 1] !== '<' && blanked[j - 1] !== '>' && blanked[j - 1] !== '+';
+  if (!isAssign) return false;
+  let e = j - 1;
+  while (e >= 0 && /\s/.test(blanked[e])) e -= 1;
+  let k2 = e;
+  while (k2 >= 0 && isIdChar(blanked[k2])) k2 -= 1;
+  const name = blanked.slice(k2 + 1, e + 1);
+  if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) return false;
+  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const laterRe = new RegExp('(?:await\\s+' + esc + '\\b|' + esc + '\\s*\\.\\s*then\\b)');
+  return laterRe.test(blanked.slice(index));
+}
+
+
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectCountShortfall, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+  module.exports = { parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectCountShortfall, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.hoverAwareTimeoutMs = hoverAwareTimeoutMs;
@@ -4036,5 +4147,6 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.fillEntryUrlDefaults = fillEntryUrlDefaults;
   self.normalizeStepTopology = normalizeStepTopology;
   self.headTailSlice = headTailSlice;
+  self.detectUnawaitedDollarCalls = detectUnawaitedDollarCalls;
   self.DEFAULT_POLL_MAX_ITERATIONS = DEFAULT_POLL_MAX_ITERATIONS;
 }

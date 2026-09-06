@@ -477,3 +477,19 @@ describe('audit C2 (pin): the runner signal includes the session abort flag', ()
     assert.match(SRC, /getSignal: \(\) => \(\{[\s\S]{0,220}sessionAbortRequested/);
   });
 });
+
+describe('wizard.html library load order (source audit)', () => {
+  it('page-tracker.js loads BEFORE step-orchestrator.js (thirtieth log: the verify rail reported pages:"0" structurally)', () => {
+    // PageTrackerRef resolves at step-orchestrator LOAD time via a global
+    // lookup — if page-tracker.js is absent (or loads later), the wizard
+    // verify rail never wires a tracker and every verify report says
+    // pages:"0" even while the tab opened and steps ran. The model then
+    // reads the structural zero as "the page never even opened" and
+    // misdiagnoses (thirtieth log t43: hydration-race theory, ~2 turns).
+    const pt = HTML.indexOf('lib/page-tracker.js');
+    const so = HTML.indexOf('lib/step-orchestrator.js');
+    assert.ok(pt !== -1, 'page-tracker.js is loaded by wizard.html');
+    assert.ok(so !== -1, 'step-orchestrator.js is loaded by wizard.html');
+    assert.ok(pt < so, 'page-tracker.js loads before step-orchestrator.js (load-time global lookup)');
+  });
+});

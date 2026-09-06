@@ -126,6 +126,45 @@ describe('createVerifyRunner', () => {
     assert.equal(out.raw.testResult && out.raw.testResult.steps ? out.raw.testResult.steps.length : 1, 1, 'partial steps preserved on raw');
   });
 
+  it('POLL_EXHAUSTED names UNAWAITED_ASYNC_CALL when the failing step calls $ APIs without await (thirtieth log)', async () => {
+    const svc = {
+      targetUrl: 'https://example.com',
+      steps: [{ id: 's1', name: 'poll count', script: 'const n = $count("div.card"); if (n > 0) return { done: true, count: n }; return { done: false };', onSuccess: 'TERMINATE' }],
+      config: {}
+    };
+    const orch = async () => {
+      const e = new Error('Step failed: POLL_EXHAUSTED step s1 gave up');
+      e.stepId = 's1';
+      throw e;
+    };
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: svc, input: {}, outputSchema: { type: 'object' } });
+    assert.equal(out.report.ok, false);
+    assert.match(out.report.error.message, /UNAWAITED_ASYNC_CALL/);
+    assert.match(out.report.error.message, /\$count/);
+    assert.match(out.report.error.message, /await/);
+    assert.match(out.report.error.message, /Original error:/);
+    assert.equal(out.report.error.stepId, 's1');
+  });
+
+  it('awaited script keeps the generic POLL_EXHAUSTED message — no false UNAWAITED_ASYNC_CALL', async () => {
+    const svc = {
+      targetUrl: 'https://example.com',
+      steps: [{ id: 's1', name: 'poll count', script: 'const n = await $count("div.card"); if (n > 0) return { done: true, count: n }; return { done: false };', onSuccess: 'TERMINATE' }],
+      config: {}
+    };
+    const orch = async () => {
+      const e = new Error('Step failed: POLL_EXHAUSTED step s1 gave up');
+      e.stepId = 's1';
+      throw e;
+    };
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: svc, input: {}, outputSchema: { type: 'object' } });
+    assert.equal(out.report.ok, false);
+    assert.doesNotMatch(out.report.error.message, /UNAWAITED_ASYNC_CALL/);
+    assert.match(out.report.error.message, /POLL_EXHAUSTED/);
+  });
+
   it('sandbox DataCloneError gets the un-awaited-Promise hint (fourth-live-log G4)', async () => {
     const orch = async () => {
       const e = new Error('Step failed: Error in invoked script script: #[object Promise] could not be cloned.');
