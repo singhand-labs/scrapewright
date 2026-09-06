@@ -226,22 +226,36 @@
       };
     }
 
+    // Twenty-seventh log: v6 verified red → v7 landed → finish. The
+    // disclosure ladder named v6's failure but not the sharper fact that the
+    // SHIPPED artifact has no verify at all. Twenty-eighth log: the same gap
+    // sat in the BUDGET stops — verify3 red against v3, v4+v5 landed, and
+    // the maxTurns detail said only [LAST VERIFY FAILED]. The engine knows
+    // both versions; every stop path says so. Independent of the ladder: a
+    // red last verify AND a newer unverified artifact both disclose.
+    function unverifiedArtifactSuffix(noun) {
+      const shippedV = state.artifactVersions.length;
+      const verifiedV = state.lastVerifyArtifactVersion || 0;
+      if (!(shippedV > 0 && shippedV > verifiedV)) return '';
+      return ' [CURRENT ARTIFACT UNVERIFIED — last verify ran against v' + verifiedV +
+        '; the ' + noun + ' artifact is v' + shippedV + ' and was never verified]';
+    }
+
     // Nineteenth log: the session hit maxTurns IMMEDIATELY after a
     // green-with-holes verify — the stop detail showed only the generic
     // budget text and the empties stayed invisible at the exact moment the
     // user looks at the toast. Budget stops carry the same honesty the
     // finish path (thirteenth/sixteenth/seventeenth logs) already discloses.
     function verifyStopSuffix() {
+      let ladder = '';
       if (state.lastVerifyOk === false) {
-        return ' [LAST VERIFY FAILED — the budget ran out before the failing run could be fixed; Resume to continue]';
+        ladder = ' [LAST VERIFY FAILED — the budget ran out before the failing run could be fixed; Resume to continue]';
+      } else if (state.lastVerifySchemaBlind) {
+        ladder = ' [VERIFY SCHEMA-BLIND — outputSchema declares no fields, so the last green is unverifiable. Renegotiate the contract with io.confirm (fielded properties + required), service.update the artifact to match, and re-verify]';
+      } else if (state.lastVerifyEmptyFields) {
+        ladder = ' [VERIFY PARTIAL-EMPTY — confirmed field(s) empty in every record: ' + state.lastVerifyEmptyFields.join(', ') + ']';
       }
-      if (state.lastVerifySchemaBlind) {
-        return ' [VERIFY SCHEMA-BLIND — outputSchema declares no fields, so the last green is unverifiable. Renegotiate the contract with io.confirm (fielded properties + required), service.update the artifact to match, and re-verify]';
-      }
-      if (state.lastVerifyEmptyFields) {
-        return ' [VERIFY PARTIAL-EMPTY — confirmed field(s) empty in every record: ' + state.lastVerifyEmptyFields.join(', ') + ']';
-      }
-      return '';
+      return ladder + unverifiedArtifactSuffix('current');
     }
 
     function stateForPersist() {
@@ -786,26 +800,34 @@
               detail = (detail ? detail + ' ' : '') +
                 '[VERIFY PARTIAL-EMPTY — confirmed field(s) empty in every record: ' + state.lastVerifyEmptyFields.join(', ') + ']';
             }
-            // Twenty-seventh log: v6 verified red → v7 landed → finish. The
-            // disclosure above named v6's failure but not the sharper fact
-            // that the SHIPPED artifact has no verify at all (the model's own
-            // summary even said "verify v7 next session"). The engine knows
-            // both versions — say so. Independent of the ladder: a red last
-            // verify AND a newer unverified artifact both disclose.
-            const shippedV = state.artifactVersions.length;
-            const verifiedV = state.lastVerifyArtifactVersion || 0;
-            if (shippedV > 0 && shippedV > verifiedV) {
-              detail = (detail ? detail + ' ' : '') +
-                '[CURRENT ARTIFACT UNVERIFIED — last verify ran against v' + verifiedV +
-                '; the shipped artifact is v' + shippedV + ' and was never verified]';
+            // Twenty-seventh log: the shipped artifact had no verify at all
+            // while the ladder named only the OLDER artifact's failure —
+            // both disclose. Shared helper with the budget stops
+            // (twenty-eighth log: same gap, maxTurns path).
+            const unverifiedSuffix = unverifiedArtifactSuffix('shipped');
+            if (unverifiedSuffix) {
+              detail = (detail ? detail + ' ' : '') + unverifiedSuffix;
             }
             report = await stop('completed', detail);
             break;
           }
           emit('tool_call', { tool: turn.tool, args: turn.args });
-          const result = await dispatchTool(turn.tool, turn.args);
+          let result = await dispatchTool(turn.tool, turn.args);
           let verifyDigest = null;
           if (turn.tool === 'verify.run') {
+            // Twenty-eighth log: verify2 and verify3 returned IDENTICAL
+            // scores and the model concluded "the run did NOT execute v3" —
+            // unfalsifiable from its vantage, and wrong (verify runs the
+            // live draft via getDraftService; staleness is impossible).
+            // Scores are count-based, so identical shapes repeat; name the
+            // version the report executed. First key, because the model
+            // reads tool results through a head-sliced summary window.
+            // 'ok' in result: a verify REPORT (green or red — red reports
+            // carry an `error` key by shape); plain dispatch failures look
+            // like {error:'no artifact yet'} and get no stamp.
+            if (result && typeof result === 'object' && !Array.isArray(result) && 'ok' in result) {
+              result = Object.assign({ executedArtifactVersion: state.artifactVersions.length }, result);
+            }
             state.lastVerifyOk = !!(result && typeof result === 'object' && result.ok === true);
             state.lastVerifyArtifactVersion = state.artifactVersions.length;
             const pe = (result && result.detectors && Array.isArray(result.detectors.partialEmptyFields))
@@ -823,6 +845,7 @@
             verifyDigest = {
               ok: state.lastVerifyOk,
               score: (result && result.score && typeof result.score.score === 'number') ? Math.round(result.score.score) : null,
+              executedVersion: state.artifactVersions.length,
               tags: Array.isArray(result.events) ? result.events.slice(0, 8) : [],
               partialEmpty: state.lastVerifyEmptyFields || []
             };

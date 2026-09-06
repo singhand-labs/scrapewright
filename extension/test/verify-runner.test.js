@@ -50,6 +50,32 @@ describe('createVerifyRunner', () => {
     assert.deepEqual(calls.removeTab, [11], 'scrape tab closed');
   });
 
+  it('steps carry each step LAST resultPreview, re-capped for the 4000-char tool-result window (twenty-eighth log: postingTime died between extract and resolve and the model had to blind-guess which)', async () => {
+    const longPreview = '{"spans":[{"id":"_r_aa_"},{"id":"_r_ab_"},{"id":"_r_ac_"},{"id":"_r_ad_"},{"id":"_r_ae_"},{"id":"_r_af_"},{"id":"_r_ag_"},{"id":"_r_ah_"},{"id":"_r_ai_"},{"id":"_r_aj_"},{"id":"_r_ak_"},{"id":"_r_al_"},{"id":"_r_am_"},{"id":"_r_an_"},{"id":"_r_ao_"},{"id":"_r_ap_"},{"id":"_r_aq_"},{"id":"_r_ar_"},{"id":"_r_as_"},{"id":"_r_at_"},{"id":"_r_au_"},{"id":"_r_av_"}]}';
+    const orch = async (svc, input, d, opts) => {
+      opts.onEvent({ type: 'STEP_ITERATION', stepId: 'extract', iteration: 1, resultPreview: '{"done":false}' });
+      opts.onEvent({ type: 'STEP_ITERATION', stepId: 'extract', iteration: 2, resultPreview: '{"posts":[{"timeRef":"_r_4c_"},{"timeRef":"_r_5i_"}]}' });
+      opts.onEvent({ type: 'STEP_ITERATION', stepId: 'resolve', iteration: 1, resultPreview: longPreview });
+      return {
+        finalResult: { posts: [{ postingTime: '' }, { postingTime: '' }] },
+        steps: [
+          { stepId: 'extract', stepName: 'extract cards', result: {}, snapshot: null },
+          { stepId: 'resolve', stepName: 'resolve timeRefs', result: {}, snapshot: null }
+        ],
+        pages: [], pagesTruncated: false
+      };
+    };
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object' } });
+    const byId = {};
+    for (const s of out.report.steps) byId[s.stepId] = s;
+    assert.equal(byId.extract.resultPreview, '{"posts":[{"timeRef":"_r_4c_"},{"timeRef":"_r_5i_"}]}', 'last iteration wins, not the first');
+    assert.ok(byId.resolve.resultPreview.length <= 200, 'preview re-capped at 200 chars, got ' + byId.resolve.resultPreview.length);
+    assert.match(byId.resolve.resultPreview, /…$/);
+    const serialized = JSON.stringify(out.report);
+    assert.ok(serialized.indexOf('_r_4c_') !== -1, 'intermediate value visible in the serialized report');
+  });
+
   it('report.finalResult caps long string fields (eighth-log K1: 3 kept records × 75K html = 226K-char transcript entry)', async () => {
     const bigHtml = 'z'.repeat(75000);
     const orch = async () => ({ finalResult: { posts: [{ id: 1, html: bigHtml }] }, steps: [], pages: [] });

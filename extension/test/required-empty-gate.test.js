@@ -72,6 +72,7 @@ describe('REQUIRED_FIELD_EMPTY gate (twenty-sixth log)', () => {
     assert.match(out.report.error.message, /posts\.postId/);
     assert.match(out.report.error.message, /2\/3/);
     assert.match(out.report.error.message, /io\.confirm/, 'must teach the contract-renegotiation exit');
+    assert.match(out.report.error.message, /steps\[\]\.resultPreview/, 'twenty-eighth log: point at the pipeline evidence in the report itself');
     assert.ok(out.report.events.includes('PARTIAL_EMPTY_FIELDS'), 'the advisory tag still fires');
     assert.equal(out.report.aborted, false);
   });

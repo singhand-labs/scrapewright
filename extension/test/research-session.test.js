@@ -187,6 +187,43 @@ describe('engine happy path', () => {
     assert.equal(none.stopped.detail, 'done');
   });
 
+  it('verify.run result is stamped with executedArtifactVersion as the FIRST key (twenty-eighth log: identical scores read as "verify did not execute v3")', async () => {
+    // verify2/verify3 scores matched to 13 decimal places (count-based
+    // scoring; same shape → same score) and the model inferred engine
+    // staleness — unfalsifiable from its vantage point. verify runs the
+    // LIVE draft (getDraftService), so staleness is impossible; the report
+    // must name the version it executed, ahead of every other key so it
+    // survives the head-sliced tool-result window the model reads.
+    const steps = [{ id: 's1', name: 'one', script: 'return 1', onSuccess: 'TERMINATE' }];
+    const events = [];
+    const session = createResearchSession({
+      requirement: 'collect posts',
+      llm: scriptedLlm([
+        reply(envelope('service.update', { steps })),
+        reply(envelope('verify.run', {})),
+        reply(envelope('service.update', { steps })),
+        reply(envelope('verify.run', {})),
+        reply(finishEnvelope('done'))
+      ], []),
+      tools: {
+        'verify.run': async () => ({ ok: false, error: { message: 'REQUIRED_FIELD_EMPTY: x' }, detectors: {}, events: [] }),
+        'service.update': async () => ({ updated: true })
+      },
+      onEvent: (e) => events.push(e)
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'completed');
+    const st = session.state();
+    const verifyEntries = st.session.transcript.filter((e) => e.kind === 'tool' && e.name === 'verify.run');
+    assert.equal(verifyEntries.length, 2);
+    assert.equal(verifyEntries[0].result.executedArtifactVersion, 1, 'first verify ran against v1');
+    assert.equal(verifyEntries[1].result.executedArtifactVersion, 2, 'second verify ran against v2');
+    assert.equal(JSON.stringify(verifyEntries[1].result).indexOf('executedArtifactVersion'), 2,
+      'stamp serializes as the first key so the summary window keeps it');
+    const digests = events.filter((e) => e.type === 'tool_result' && e.tool === 'verify.run');
+    assert.equal(digests[1].verify.executedVersion, 2, 'mirror digest carries the version too');
+  });
+
   it('finish discloses a CURRENT ARTIFACT UNVERIFIED when the shipped version was never verified (twenty-seventh log)', async () => {
     // v6 verify (red) → v7 lands → turn-60 finish. The shipped artifact v7
     // differs from everything ever verified, but the disclosure only said
@@ -423,6 +460,35 @@ describe('budgets and breakers', () => {
     const report = await session.run();
     assert.equal(report.stopped.reason, 'maxTurns');
     assert.match(report.stopped.detail, /LAST VERIFY FAILED/);
+  });
+
+  it('maxTurns after updates landed post-verify discloses CURRENT ARTIFACT UNVERIFIED too (twenty-eighth log)', async () => {
+    // Production shape 2026-09-06: verify3 red against v3 → v4 (turn 59) →
+    // v5 (turn 60) → budget stop. The stop detail carried only
+    // [LAST VERIFY FAILED] — the sharper fact (shipped v5 never verified)
+    // stayed hidden at the exact moment the user reads the toast. Budget
+    // stops owe the same disclosure the finish path already gives.
+    const steps = [{ id: 's1', name: 'one', script: 'return 1', onSuccess: 'TERMINATE' }];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('service.update', { steps })),
+        reply(envelope('verify.run', {})),
+        reply(envelope('service.update', { steps })),
+        reply(envelope('service.update', { steps }))
+      ], []),
+      tools: {
+        'verify.run': async () => ({ ok: false, error: { message: 'REQUIRED_FIELD_EMPTY: posts.postingTime 10/10' }, detectors: {}, events: [] }),
+        'service.update': async () => ({ updated: true })
+      },
+      budgets: { maxTurns: 4 }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'maxTurns');
+    assert.match(report.stopped.detail, /LAST VERIFY FAILED/);
+    assert.match(report.stopped.detail, /CURRENT ARTIFACT UNVERIFIED/);
+    assert.match(report.stopped.detail, /last verify ran against v1/);
+    assert.match(report.stopped.detail, /current artifact is v3/);
   });
 
   it('DEFAULT maxTurns is 60 (sixth-log G5: first two full sessions died at the 40 cap)', async () => {

@@ -580,7 +580,9 @@
               ' records but the confirmed contract lists it as REQUIRED for every record. Either fix the extraction ' +
               '(the field is contractually demanded — ground a selector for it, re-check the fieldMap anchor and the ' +
               'record assembly), or renegotiate the contract with io.confirm (move the field out of required / drop it) ' +
-              'when it genuinely never exists on these cards. Optional-field emptiness stays advisory; a required one does not.'
+              'when it genuinely never exists on these cards. Optional-field emptiness stays advisory; a required one does not.' +
+              ' Before re-probing the research tab, read steps[].resultPreview in THIS report — it shows each step\'s last ' +
+              'return from the verify tab itself, so you can see which step lost the value (extraction vs resolution vs assembly).'
             );
             break;
           }
@@ -589,14 +591,37 @@
 
       const oc = (result ? WU.validateOutputAgainstSchema(finalData, outputSchema) : { ok: true, missing: [] }) || { ok: true, missing: [] };
 
+      // Twenty-eighth log: the report showed {stepId, iterations} only — the
+      // model knew postingTime was 10/10 empty but NOT where in the pipeline
+      // the value died (extract produced timeRef? resolve returned what?),
+      // and burnt ten turns blind-guessing about a tab it cannot probe
+      // (probes run on the research tab; verify opens a fresh one). Each
+      // step's LAST STEP_ITERATION resultPreview (already 500-capped by the
+      // orchestrator) makes the pipeline legible in the report itself;
+      // re-cap at 200 so a six-step graph stays inside the ~4000-char
+      // tool-result window the model actually sees.
       const compactSteps = result && Array.isArray(result.steps)
-        ? result.steps.map((s) => ({
-            stepId: s.stepId,
-            stepName: s.stepName,
-            skipped: !!s.skipped,
-            skipReason: s.skipReason || null,
-            iterations: events.filter((e) => e && e.type === 'STEP_ITERATION' && String(e.stepId) === String(s.stepId)).length
-          }))
+        ? result.steps.map((s) => {
+            let lastPreview = null;
+            for (let i = events.length - 1; i >= 0; i--) {
+              const e = events[i];
+              if (e && e.type === 'STEP_ITERATION' && String(e.stepId) === String(s.stepId) && typeof e.resultPreview === 'string') {
+                lastPreview = e.resultPreview;
+                break;
+              }
+            }
+            const entry = {
+              stepId: s.stepId,
+              stepName: s.stepName,
+              skipped: !!s.skipped,
+              skipReason: s.skipReason || null,
+              iterations: events.filter((e) => e && e.type === 'STEP_ITERATION' && String(e.stepId) === String(s.stepId)).length
+            };
+            if (lastPreview !== null) {
+              entry.resultPreview = lastPreview.length > 200 ? lastPreview.slice(0, 197) + '…' : lastPreview;
+            }
+            return entry;
+          })
         : [];
 
       // hoisted — declared after the return for top-down reading
