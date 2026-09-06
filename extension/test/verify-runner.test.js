@@ -71,9 +71,29 @@ describe('createVerifyRunner', () => {
     for (const s of out.report.steps) byId[s.stepId] = s;
     assert.equal(byId.extract.resultPreview, '{"posts":[{"timeRef":"_r_4c_"},{"timeRef":"_r_5i_"}]}', 'last iteration wins, not the first');
     assert.ok(byId.resolve.resultPreview.length <= 200, 'preview re-capped at 200 chars, got ' + byId.resolve.resultPreview.length);
-    assert.match(byId.resolve.resultPreview, /…$/);
+    assert.match(byId.resolve.resultPreview, /…/, 'cut disclosed');
+    assert.match(byId.resolve.resultPreview, /\]\}$/, 'tail of the preview survives the re-cap (twenty-ninth log: head+tail)');
     const serialized = JSON.stringify(out.report);
     assert.ok(serialized.indexOf('_r_4c_') !== -1, 'intermediate value visible in the serialized report');
+  });
+
+  it('the 200 re-cap keeps the TAIL (twenty-ninth log: a head-only re-cap destroyed the timeMapSize instrumentation the model placed at the END of its extract return — exactly the key that discriminates spans-absent from lookup-failed)', async () => {
+    const src = '{"posts":[{"content":"' + 'x'.repeat(400) + '"}],"totalCards":15,"timeMapSize":0}';
+    const orch = async (svc, input, d, opts) => {
+      opts.onEvent({ type: 'STEP_ITERATION', stepId: 'extract', iteration: 1, resultPreview: src });
+      return {
+        finalResult: { posts: [{ postingTime: '' }] },
+        steps: [{ stepId: 'extract', stepName: 'extract cards', result: {}, snapshot: null }],
+        pages: [], pagesTruncated: false
+      };
+    };
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: { type: 'object' } });
+    const p = out.report.steps[0].resultPreview;
+    assert.ok(p.length <= 200, 're-capped at 200 chars, got ' + p.length);
+    assert.match(p, /^{"posts":\[\{"content":"/, 'head shape survives both layers');
+    assert.match(p, /"timeMapSize":0\}$/, 'instrumented tail key survives both layers');
+    assert.ok(p.includes('…'), 'cut disclosed');
   });
 
   it('report.finalResult caps long string fields (eighth-log K1: 3 kept records × 75K html = 226K-char transcript entry)', async () => {

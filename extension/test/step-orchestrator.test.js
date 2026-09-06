@@ -520,6 +520,27 @@ describe('StepOrchestrator onEvent callback', () => {
     assert.ok(Array.isArray(events[2].domActivity));
   });
 
+  it('result previews keep head AND tail of oversized results (twenty-ninth log)', async () => {
+    // The model instrumented its extract step's return with timeMapSize at
+    // the END — the one key discriminating "spans absent (0)" from "lookup
+    // failed (>0)". A head-only 500 slice destroyed it before any report
+    // could show it, so the pipeline question was unanswerable from evidence.
+    const bigResult = { posts: [{ content: 'x'.repeat(600) }], totalCards: 15, timeMapSize: 0 };
+    const service = {
+      targetUrl: 'about:blank',
+      steps: [{ id: 's1', name: 'extract', script: 'return 1', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }]
+    };
+    const events = [];
+    await StepOrchestrator.execute(service, {}, buildDeps({ executeScript: async () => bigResult }), { onEvent: (e) => events.push(e) });
+    const iter = events.find(e => e.type === 'STEP_ITERATION');
+    assert.ok(iter, 'STEP_ITERATION emitted');
+    assert.ok(iter.resultPreview.length <= 500, 'preview stays within the 500 cap');
+    assert.match(iter.resultPreview, /^{"posts":\[\{"content":"/, 'head shows the opening shape');
+    assert.match(iter.resultPreview, /"timeMapSize":0\}$/, 'tail keeps the instrumented summary key');
+    const done = events.find(e => e.type === 'STEP_DONE');
+    assert.match(done.resultPreview, /"timeMapSize":0\}$/, 'STEP_DONE preview keeps the tail too');
+  });
+
   it('omits STEP_ITERATION for a skipped (condition:false) step', async () => {
     const service = {
       targetUrl: 'about:blank',

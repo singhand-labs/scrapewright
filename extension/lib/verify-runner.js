@@ -53,7 +53,8 @@
       validateOutputAgainstSchema: w.validateOutputAgainstSchema,
       scoreAttemptResult: w.scoreAttemptResult,
       stripSnapshotsFromTestResult: w.stripSnapshotsFromTestResult,
-      sampleRecordsForLLMContext: w.sampleRecordsForLLMContext
+      sampleRecordsForLLMContext: w.sampleRecordsForLLMContext,
+      headTailSlice: w.headTailSlice
     };
     const missing = [];
     for (const k of Object.keys(bag)) {
@@ -63,6 +64,11 @@
       try { console.warn('[verify-runner] wizard-utils functions unavailable (detectors degraded): ' + missing.join(', ')); } catch (e) { /* warn is best-effort */ }
       bag.__missing = missing;
     }
+    // Twenty-ninth log: headTailSlice must degrade to the head-only re-cap
+    // at the call site, never to the detector no-op stub — a stubbed slice
+    // would null every preview. The stub pass above may have replaced a
+    // missing one; settle it to real-function-or-null.
+    bag.headTailSlice = typeof w.headTailSlice === 'function' ? w.headTailSlice : null;
     return bag;
   }
 
@@ -600,6 +606,11 @@
       // orchestrator) makes the pipeline legible in the report itself;
       // re-cap at 200 so a six-step graph stays inside the ~4000-char
       // tool-result window the model actually sees.
+      // Twenty-ninth log: the re-cap was head-only, so a large extract
+      // preview (orchestrator head+tail, 500) lost its tail AGAIN here —
+      // the tail is exactly where scripts put instrumented summary keys
+      // (timeMapSize etc.). Re-cap head+tail so both ends survive both
+      // layers.
       const compactSteps = result && Array.isArray(result.steps)
         ? result.steps.map((s) => {
             let lastPreview = null;
@@ -618,7 +629,9 @@
               iterations: events.filter((e) => e && e.type === 'STEP_ITERATION' && String(e.stepId) === String(s.stepId)).length
             };
             if (lastPreview !== null) {
-              entry.resultPreview = lastPreview.length > 200 ? lastPreview.slice(0, 197) + '…' : lastPreview;
+              entry.resultPreview = (typeof WU.headTailSlice === 'function')
+                ? WU.headTailSlice(lastPreview, 200)
+                : (lastPreview.length > 200 ? lastPreview.slice(0, 197) + '…' : lastPreview);
             }
             return entry;
           })

@@ -2106,3 +2106,34 @@ describe('getFirstRecordHtmlFromAnyStep', () => {
     assert.ok(html.includes('real') && !html.includes('skip'));
   });
 });
+
+describe('headTailSlice (twenty-ninth log)', () => {
+  const { headTailSlice } = require('../lib/wizard-utils');
+
+  it('returns strings at or under the cap untouched', () => {
+    assert.equal(headTailSlice('{"done":true,"count":3}', 200), '{"done":true,"count":3}');
+  });
+
+  it('keeps the opening shape AND the trailing summary keys of oversized previews', () => {
+    const big = '{"posts":[{"content":"' + 'x'.repeat(600) + '"}],"totalCards":15,"timeMapSize":0}';
+    const out = headTailSlice(big, 500);
+    assert.ok(out.length <= 500, 'never exceeds the cap');
+    assert.match(out, /^{"posts":\[\{"content":"/, 'head shows the opening shape');
+    assert.match(out, /"timeMapSize":0\}$/, 'tail keeps the instrumented summary key');
+    assert.ok(out.includes('…'), 'the cut is disclosed');
+  });
+
+  it('composes: re-slicing a head+tail slice preserves both ends', () => {
+    const big = 'H' + 'x'.repeat(1000) + 'T';
+    const once = headTailSlice(big, 500);
+    const twice = headTailSlice(once, 200);
+    assert.ok(twice.startsWith('H'));
+    assert.ok(twice.endsWith('T'));
+    assert.ok(twice.length <= 200);
+  });
+
+  it('never returns longer than cap for tiny caps', () => {
+    const out = headTailSlice('abcdefghijklmnop', 4);
+    assert.ok(out.length <= 4);
+  });
+});

@@ -41,6 +41,30 @@ try {
 } catch { /* fall through to global lookup below */ }
 const PageTrackerRef = _PageTracker || (typeof PageTracker !== 'undefined' ? PageTracker : null);
 
+// Twenty-ninth log: result previews were head-only slices, so summary keys a
+// script placed at the END of its return value (instrumented counts like a
+// timeMapSize probe — the evidence that discriminates "value never extracted"
+// from "value lost downstream") were destroyed before any report could show
+// them. Canonical impl: wizard-utils.headTailSlice (head ~70% + '…' + tail).
+// Node resolves it via require at load; in the service worker the global only
+// appears once sibling importScripts finish, so resolution retries at call
+// time — importScripts order stays irrelevant.
+let _HeadTailSlice = null;
+try {
+  if (typeof require === 'function') {
+    const _wu = require('./wizard-utils');
+    if (_wu && typeof _wu.headTailSlice === 'function') _HeadTailSlice = _wu.headTailSlice;
+  }
+} catch { /* fall through to the call-time global lookup */ }
+
+function previewOf(result, cap) {
+  const s = JSON.stringify(result);
+  if (typeof s !== 'string') return s;
+  const fn = _HeadTailSlice || (typeof headTailSlice === 'function' ? headTailSlice : null);
+  if (fn) return fn(s, cap);
+  return s.slice(0, cap);
+}
+
 class StepOrchestrator {
   static async execute(service, input, deps, options = {}) {
     debugLogger.log('info', 'step-orchestrator', 'execute start', {
@@ -257,7 +281,7 @@ class StepOrchestrator {
           if (typeof deps.getDomActivity === 'function') {
             try { domActivity = await deps.getDomActivity(tabId) || []; } catch (_) {}
           }
-          const resultPreview = JSON.stringify(result)?.slice(0, 500);
+          const resultPreview = previewOf(result, 500);
           debugLogger.log('info', 'step-orchestrator', 'Script executed', { stepId: step.id, resultType: typeof result, resultPreview, selectorDiagnosticCount: selectorDiagnostics.length });
           emit('STEP_ITERATION', {
             stepId: step.id,
@@ -408,7 +432,7 @@ class StepOrchestrator {
         if (next !== step.id) {
           emit('STEP_DONE', {
             stepId: step.id,
-            resultPreview: JSON.stringify(result)?.slice(0, 500),
+            resultPreview: previewOf(result, 500),
             iterations: stepIterations
           });
         }
