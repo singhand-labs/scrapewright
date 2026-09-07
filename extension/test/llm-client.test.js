@@ -262,6 +262,41 @@ describe('LLMClient.chat retry behavior', () => {
     assert.equal(calls, 2, 'should have retried once');
   });
 
+  // Thirty-fourth log: Zhipu reports a PERMANENT billing condition via 429
+  // ("Insufficient balance or no resource package. Please recharge." — four
+  // identical attempts in the live log). Status-only classification burned the
+  // full 10-retry budget (~63s) on every call, and the restate modal's retry
+  // notes made a terminal condition read like a transient hiccup.
+  it('balance-class 429 fails fast: non-retryable, actionable, exactly one request', async () => {
+    let calls = 0;
+    let onRetryCalls = 0;
+    global.fetch = async () => {
+      calls++;
+      return mockResponse({
+        status: 429,
+        body: { error: { message: 'Insufficient balance or no resource package. Please recharge.' } }
+      });
+    };
+
+    const client = makeClient();
+    await assert.rejects(
+      client.chat(
+        [{ role: 'user', content: 'hi' }],
+        { maxRetries: 3, backoffMs: fastBackoff, onRetry: () => { onRetryCalls++; } }
+      ),
+      (err) => {
+        assert.equal(err.name, 'LLMError', 'not wrapped in LLMRetryExhausted');
+        assert.equal(err.retryable, false, 'billing condition is deterministic');
+        assert.match(err.message, /Insufficient balance or no resource package/, 'provider detail preserved');
+        assert.match(err.message, /recharge|resource package/i, 'actionable: name the remedy');
+        assert.match(err.message, /no retry was attempted|deterministic|cannot fix/i, 'says why there was no retry');
+        return true;
+      }
+    );
+    assert.equal(calls, 1, 'must not retry a deterministic billing failure');
+    assert.equal(onRetryCalls, 0, 'onRetry never fires');
+  });
+
   it('retries on HTTP 503 then succeeds', async () => {
     let calls = 0;
     global.fetch = async () => {

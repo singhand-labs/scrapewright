@@ -7,6 +7,15 @@ const DEFAULT_TIMEOUT_MS = 300_000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 16_384;
 const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 
+// Thirty-fourth log: Zhipu reports a PERMANENT billing condition via 429 with
+// "Insufficient balance or no resource package. Please recharge." (four
+// identical attempts in the live log — deterministic). Status-only
+// classification burned the whole 10-retry budget (~63s) on every call and
+// the retry notes made a terminal condition read as a transient hiccup.
+// The signal is the error BODY semantics (balance/recharge), not the status —
+// matched provider-agnostically, alongside the CN-provider phrasings.
+const BALANCE_EXHAUSTED_RE = /insufficient balance|no resource package|please recharge|balance is exhausted|insufficient credits|arrears|欠费|余额不足/i;
+
 // Thirty-second log (user directive): the 300-char response preview hid the
 // model's think + tool-call — exported logs could not show WHAT the model
 // decided, only that it replied. Chunk the full content across console lines
@@ -185,6 +194,15 @@ class LLMClient {
       }
       const retryable = RETRYABLE_STATUS.has(response.status);
       const base = { retryable, status: response.status };
+      // Balance/recharge bodies name a deterministic provider-side billing
+      // condition — identical retries cannot succeed (RC55 family: don't burn
+      // the budget on deterministic failures). Fail fast with the remedy.
+      if (BALANCE_EXHAUSTED_RE.test(detail)) {
+        throw new LLMError(
+          `LLM provider reports an account billing condition (status ${response.status}): ${detail} This is deterministic — no retry was attempted because identical retries cannot fix it. Recharge the provider account (or claim/activate a resource package covering model ${this.model}), or switch provider/model in Settings.`,
+          { retryable: false, status: response.status }
+        );
+      }
       if (response.status === 404) {
         throw new LLMError(`LLM API endpoint not found (404). URL: ${url}. Check your Base URL and Model name. Detail: ${detail}`, base);
       }
