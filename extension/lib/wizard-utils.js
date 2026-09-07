@@ -26,7 +26,7 @@ AVAILABLE API FUNCTIONS:
 - $openTab(url, functionBody): Open new tab at the given URL, wait for page load, then execute the function body (a string of JavaScript statements) in the new tab context. Returns whatever the function body returns. Use to scrape detail pages. Example: await $openTab(href, \`const title = await $extract('h1'); return { title };\`)
 - $count(selector): Count elements matching selector (main document + same-origin iframes). Returns number. Do NOT use with :nth-child() to iterate — use $list() instead.
 - $list(selector): Get ALL matching elements across main document + same-origin iframes. Returns array of { tagName, id, className, textContent, value, href, src, checked, disabled }. Use this for iterating multiple elements. Same data-object limitation as $().
-- $extractList(containerSel, fieldMap, opts?): Extract a list of records in ONE call. fieldMap is { subField: subSelector | { selector, attr? } }; each sub-selector is evaluated INSIDE each container element and returns the FIRST match per container. Returns an array of objects in container order. Prefers this over $list-per-field for multi-field lists (avoids field-misalignment when fields are missing on some items). Throws 'empty list' if no container matches; set opts.allowEmpty=true to return [] instead.
+- $extractList(containerSel, fieldMap, opts?): Extract a list of records in ONE call. fieldMap is { subField: subSelector | { selector, attr?, labelledby? } }; labelledby:true (or an attr name like aria-describedby) resolves the ARIA reference on each match and returns the referenced elements' concatenated text — the read for anti-scrambled pages where the visible textContent is decoy junk (the clean value lives in the hidden elements the reference points at; same resolution as $labelledby). each sub-selector is evaluated INSIDE each container element and returns the FIRST match per container. Returns an array of objects in container order. Prefers this over $list-per-field for multi-field lists (avoids field-misalignment when fields are missing on some items). Throws 'empty list' if no container matches; set opts.allowEmpty=true to return [] instead.
 - $extractListMulti(containerSel, fieldMap, opts?): Like $extractList, but EACH FIELD VALUE IS AN ARRAY of ALL matches per container (in document order, as textContent/attr strings — NOT element objects), regardless of the field name. Use $extractList (single-value) by default; reach for $extractListMulti ONLY when CSS alone cannot disambiguate which match is the right one — e.g. a[role="link"] inside a post matches BOTH the author link (1st) AND the timestamp link (2nd). With $extractList you'd get only the author; with $extractListMulti you get both and can pick in JS by text/attribute regex. attr may be 'outerHTML' or 'innerHTML' to read raw HTML.
   CRITICAL — every field value is Array<string|null>. Calling .trim(), .match(), .includes(), .replace() etc. DIRECTLY on a field value crashes with "X.trim is not a function" (Array has no such method). Always index into the array first, even when the field name is singular (author, content, timestamp):
   // WRONG — r.author is an array; (r.author || '') short-circuits to the array (truthy), then .trim() crashes:
@@ -4138,6 +4138,21 @@ function falsificationCrumb(d, field) {
         selector: String(f.subSelector),
         note: 'sub-selector for field "' + field + '" matched 0' + (total !== null ? ' of ' + total : '') + ' containers' +
           (d.containerSelector ? ' (container ' + d.containerSelector + ')' : '')
+      };
+    }
+    // Thirty-third log D1: a labelledby field can MATCH every container yet
+    // resolve no text (stale/dynamic referenced ids, or referenced elements
+    // empty). That is a distinct falsification from a 0-match sub-selector —
+    // the selector is right, the reference resolution died.
+    if (f.labelledby && f.matchCount > 0 && f.refResolved === 0) {
+      const ids = Array.isArray(f.missingIds) && f.missingIds.length
+        ? ' (unresolved ids: ' + f.missingIds.slice(0, 3).map(String).join(', ') + ')'
+        : '';
+      return {
+        api: api || 'extractList',
+        selector: String(f.subSelector || ''),
+        note: 'sub-selector for field "' + field + '" matched ' + f.matchCount + ' container(s) but the ' +
+          String(f.labelledby) + ' resolution produced no text' + ids + ' — the anchor is right, the ARIA reference resolution died'
       };
     }
     return null;

@@ -175,7 +175,7 @@ User scripts (LLM-generated) run as `return <expr>` in the sandbox with these as
 
 **Interaction** — `$click(sel, timeoutMs?)` / `$type(sel, text, timeoutMs?)`: element wait defaults 10s (override via the timeout param; reads keep 30s). `$type` coerces non-string `text` with `String()` and records the original type in `_diagnostics`. `$clickInList(containerSel, subSel, opts?)` clicks a sub-element in each container (`{clicked, errors[{index,reason}]}`, default `delayMs=500`). `$waitForStable(sel, opts?)` polls textContent until stable (streaming-content completion, default 20000ms).
 
-**Lists** — `$extractList(containerSel, fieldMap, opts?)` extracts one record per container (first-match per sub-selector; `opts.allowEmpty` waives the empty-throw). `$extractListMulti(containerSel, fieldMap, opts?)` returns arrays of ALL matches per field per container.
+**Lists** — `$extractList(containerSel, fieldMap, opts?)` extracts one record per container (first-match per sub-selector; `opts.allowEmpty` waives the empty-throw; field spec `{selector, attr?, labelledby?}` — `labelledby:true`/`aria-describedby` resolves the ARIA reference on the match, the read for anti-scrambled textContent where the clean value lives only in the referenced hidden elements; thirty-third-log D1). `$extractListMulti(containerSel, fieldMap, opts?)` returns arrays of ALL matches per field per container.
 
 **Scroll** — `$scrollBy(deltaY, selector?)`, `$scrollToBottom(selector?)` (incremental growth-probe loop; dual-signal stall: 3 no-progress iterations OR 3000ms without height growth; trusted-wheel fallback when stalled; returns `{scrolled, newY, newScrollHeight, stalled, stallReason, attempts, stallWindowMs}`), `$scrollIntoView(selector)`.
 

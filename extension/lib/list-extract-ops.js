@@ -18,12 +18,59 @@
 // field in extraction outputs.
 const DOM_PROPERTY_READS = new Set(['outerHTML', 'innerHTML']);
 
+const ARIA_REFERENCE_DEFAULT = 'aria-labelledby';
+
+// spec.labelledby: true → resolve the default reference attr; a non-empty
+// string → resolve THAT attr ('aria-describedby'). null when unset.
+function normalizeLabelledby(spec) {
+  const lb = (spec && typeof spec === 'object') ? spec.labelledby : undefined;
+  if (lb === true) return ARIA_REFERENCE_DEFAULT;
+  if (typeof lb === 'string' && lb.trim()) return lb.trim();
+  return null;
+}
+
+// Thirty-third log D1: anti-scraped pages put decoy characters in the
+// visible element's textContent while the clean value lives only in the
+// hidden-but-readable elements an ARIA reference attribute points at.
+// Mirrors content-script.js resolveLabelledbyText (kept behaviorally in
+// sync by test/labelledby-fieldmap.test.js parity cases).
+function resolveAriaReference(el, attr) {
+  const out = { text: '', attr: attr || ARIA_REFERENCE_DEFAULT, refCount: 0, missingIds: [] };
+  let raw = '';
+  try { raw = el.getAttribute(out.attr) || ''; } catch (err) { raw = ''; }
+  if (!raw.trim()) {
+    out.note = 'element matched but ' + out.attr + ' is absent';
+    return out;
+  }
+  const ids = raw.trim().split(/\s+/).slice(0, 12);
+  const texts = [];
+  for (const id of ids) {
+    let ref = null;
+    try { ref = document.getElementById(id); } catch (err) { ref = null; }
+    if (!ref) { out.missingIds.push(id); continue; }
+    out.refCount += 1;
+    const t = String(ref.textContent || '').replace(/\s+/g, ' ').trim();
+    if (t) texts.push(t);
+  }
+  out.text = texts.join(' ');
+  if (!out.text && !out.missingIds.length) {
+    out.note = out.attr + ' references ' + ids.length + ' element(s) but none carry text';
+  } else if (out.missingIds.length && !out.text) {
+    out.note = out.attr + ' references id(s) that resolve to nothing in this document (dynamic/stale ids): ' + out.missingIds.slice(0, 3).join(', ');
+  }
+  return out;
+}
+
 function readField(container, spec) {
-  // spec is either a string ('.author') or { selector, attr? }
+  // spec is either a string ('.author') or { selector, attr?, labelledby? }
   const sel = typeof spec === 'string' ? spec : spec.selector;
   const attr = typeof spec === 'string' ? null : spec.attr;
+  // labelledby takes precedence over attr when both are present: reading the
+  // raw attribute value back is an id list, never the human text.
+  const refAttr = typeof spec === 'string' ? null : normalizeLabelledby(spec);
   if (!sel) {
     // Empty selector → the container itself.
+    if (refAttr) return resolveAriaReference(container, refAttr).text;
     if (attr) {
       if (DOM_PROPERTY_READS.has(attr)) return container[attr];
       return container.getAttribute(attr);
@@ -32,6 +79,7 @@ function readField(container, spec) {
   }
   const el = container.querySelector(sel);
   if (!el) return undefined;
+  if (refAttr) return resolveAriaReference(el, refAttr).text;
   if (attr) {
     if (DOM_PROPERTY_READS.has(attr)) return el[attr];
     return el.getAttribute(attr);
@@ -52,9 +100,11 @@ function readField(container, spec) {
 function readFieldAll(container, spec) {
   const sel = typeof spec === 'string' ? spec : spec.selector;
   const attr = typeof spec === 'string' ? null : spec.attr;
+  const refAttr = typeof spec === 'string' ? null : normalizeLabelledby(spec);
   if (!sel) {
     // Empty selector → the container itself (single-element "match").
     // Used to read the container's own outerHTML/textContent/attribute.
+    if (refAttr) return [resolveAriaReference(container, refAttr).text];
     let val;
     if (attr) {
       if (DOM_PROPERTY_READS.has(attr)) val = container[attr];
@@ -68,7 +118,9 @@ function readFieldAll(container, spec) {
   const out = [];
   for (let i = 0; i < els.length; i++) {
     const el = els[i];
-    if (attr) {
+    if (refAttr) {
+      out.push(resolveAriaReference(el, refAttr).text);
+    } else if (attr) {
       if (DOM_PROPERTY_READS.has(attr)) out.push(el[attr]);
       else out.push(el.getAttribute(attr));
     } else {
@@ -352,17 +404,34 @@ function computeExtractListDiagnostics(containers, fieldMap, containerSelector, 
   const perField = fields.map(([field, spec]) => {
     const subSelector = typeof spec === 'string' ? spec : (spec && spec.selector);
     const attr = typeof spec === 'string' ? null : (spec && spec.attr) || null;
+    const refAttr = typeof spec === 'string' ? null : normalizeLabelledby(spec);
     const sampleTexts = [];
     const sampleHrefs = [];
     const sampleValues = [];
     let matchCount = 0;
+    // Thirty-third log D1: for labelledby fields the interesting census is
+    // the RESOLUTION outcome — an element can match while every referenced
+    // id is stale/missing. refResolved counts containers whose resolution
+    // produced text; missingIds samples the stale ids for the crumbs.
+    let refResolved = 0;
+    let missingIds = null;
     if (!subSelector) {
-      return { field, subSelector: null, attr, matchCount: 0, sampleTexts: [], sampleHrefs: [], sampleValues: [] };
+      return { field, subSelector: null, attr, labelledby: refAttr, matchCount: 0, refResolved: 0, missingIds: [], sampleTexts: [], sampleHrefs: [], sampleValues: [] };
     }
     const pushValue = (el) => {
       if (sampleValues.length >= 5) return;
       let v = null;
-      if (attr) {
+      if (refAttr) {
+        const r = resolveAriaReference(el, refAttr);
+        if (r.text) refResolved += 1;
+        if (r.missingIds && r.missingIds.length) {
+          if (!missingIds) missingIds = [];
+          for (const mid of r.missingIds) {
+            if (missingIds.length < 3) missingIds.push(mid);
+          }
+        }
+        v = r.text;
+      } else if (attr) {
         v = DOM_PROPERTY_READS.has(attr) ? el[attr] : (el.getAttribute ? el.getAttribute(attr) : null);
       } else {
         v = (el.textContent || '').trim();
@@ -388,16 +457,16 @@ function computeExtractListDiagnostics(containers, fieldMap, containerSelector, 
         if (!el) continue;
         matchCount += 1;
         pushValue(el);
-        if (!attr && sampleTexts.length < 3 && typeof el.textContent === 'string') {
+        if (!attr && !refAttr && sampleTexts.length < 3 && typeof el.textContent === 'string') {
           sampleTexts.push(el.textContent.trim().slice(0, 80));
         }
-        if (!attr && sampleHrefs.length < 3 && el.getAttribute) {
+        if (!attr && !refAttr && sampleHrefs.length < 3 && el.getAttribute) {
           const href = el.getAttribute('href');
           if (href) sampleHrefs.push(String(href).slice(0, 120));
         }
       }
     }
-    return { field, subSelector, attr, matchCount, sampleTexts, sampleHrefs, sampleValues };
+    return { field, subSelector, attr, labelledby: refAttr, matchCount, refResolved, missingIds: missingIds || [], sampleTexts, sampleHrefs, sampleValues };
   });
   // Capture up to ~8000 chars of the first container's outerHTML, head+tail
   // split. The cap is per-call: if there are multiple $extractList calls in one

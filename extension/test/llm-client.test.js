@@ -642,3 +642,69 @@ describe('LLMClient.chat response content chunked logging', () => {
     assert.equal(parts[0][2], '{"tool":"probe.count","args":{"sel":"div"}}');
   });
 });
+
+// Thirty-third log D4: every "[LLMClient] Request body:" line in the
+// exported console capture was EMPTY — the pretty-printed multi-line
+// JSON.stringify(body, null, 2) single argument does not survive DevTools
+// "Save as…". The response path proved chunked one-line strings DO survive
+// (32nd-log RC-B); mirror it for the request body at a tighter cap (the
+// transcript is already mirrored at the wizard layer).
+describe('LLMClient request body chunked logging', () => {
+  let consoleStub;
+  const originalConsoleLog = console.log;
+  const originalConsoleError = console.error;
+  const originalConsoleWarn = console.warn;
+
+  beforeEach(() => {
+    consoleStub = [];
+    console.log = (...args) => consoleStub.push(['log', ...args]);
+    console.error = (...args) => consoleStub.push(['error', ...args]);
+    console.warn = (...args) => consoleStub.push(['warn', ...args]);
+  });
+
+  afterEach(() => {
+    global.fetch = undefined;
+    console.log = originalConsoleLog;
+    console.error = originalConsoleError;
+    console.warn = originalConsoleWarn;
+  });
+
+  function makeClient() {
+    return new LLMClient({
+      provider: 'openai', model: 'test-model', apiKey: 'test-key', apiBaseUrl: 'http://test.local/v1'
+    });
+  }
+
+  it('logs the request body as (i/N) one-line JSON chunks, never a pretty-printed object', async () => {
+    // Payload must stay under the 8000-char mirror cap so the losslessness
+    // assertion (a full uninterrupted q-run in the joined chunks) can hold.
+    const bigMsg = 'q'.repeat(6000);
+    global.fetch = async () => mockResponse({ body: successBody('{"tool":"probe.count","args":{}}') });
+    const client = makeClient();
+    await client.chat([{ role: 'user', content: bigMsg }]);
+    const parts = consoleStub.filter((l) => l[0] === 'log' && /^\[LLMClient\] Request body \(\d+\/\d+\):$/.test(l[1]));
+    assert.ok(parts.length >= 2, 'request split across lines, got ' + parts.length);
+    const n = parseInt(/^\[LLMClient\] Request body \((\d+)\/(\d+)\):$/.exec(parts[0][1])[2], 10);
+    assert.equal(parts.length, n, 'exactly N parts');
+    for (const p of parts) {
+      assert.equal(typeof p[2], 'string', 'chunk is a single-line string arg');
+      assert.ok(p[2].indexOf('\n') === -1, 'no embedded newlines (capture-safe)');
+    }
+    const joined = parts.map((l) => l[2]).join('');
+    assert.match(joined, /"model":"test-model"/);
+    assert.match(joined, /q{6000}/);
+  });
+
+  it('caps the request mirror at 8000 chars with a disclosed elision count', async () => {
+    const bigMsg = 'w'.repeat(30000);
+    global.fetch = async () => mockResponse({ body: successBody('{"tool":"probe.count","args":{}}') });
+    const client = makeClient();
+    await client.chat([{ role: 'user', content: bigMsg }]);
+    const parts = consoleStub.filter((l) => l[0] === 'log' && /^\[LLMClient\] Request body \(\d+\/\d+\):$/.test(l[1]));
+    const shown = parts.map((l) => l[2]).join('');
+    assert.ok(shown.length <= 8000, 'mirror respects the cap, got ' + shown.length);
+    const elided = consoleStub.filter((l) => l[0] === 'log' && l[1] === '[LLMClient] Request body (tail elided):');
+    assert.equal(elided.length, 1, 'elision disclosure line present');
+    assert.match(elided[0][2], /\[\+\d+ chars not shown\]/);
+  });
+});

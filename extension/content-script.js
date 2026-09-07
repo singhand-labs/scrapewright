@@ -34,7 +34,16 @@
     function readField(container, spec) {
       const sel = typeof spec === 'string' ? spec : spec.selector;
       const attr = typeof spec === 'string' ? null : spec.attr;
+      // Thirty-third log D1 (mirrors lib/list-extract-ops.js): labelledby
+      // resolves the ARIA reference on the match — the anti-scrape decoy in
+      // textContent is bypassed. Takes precedence over attr (the raw attr
+      // value is an id list, never human text). resolveLabelledbyText is
+      // hoisted into this IIFE's scope.
+      const lb = (spec && typeof spec === 'object') ? spec.labelledby : undefined;
+      const refAttr = lb === true ? 'aria-labelledby'
+        : (typeof lb === 'string' && lb.trim() ? lb.trim() : null);
       if (!sel) {
+        if (refAttr) return resolveLabelledbyText(container, refAttr).text;
         if (attr) {
           if (DOM_PROPERTY_READS.has(attr)) return container[attr];
           return container.getAttribute(attr);
@@ -43,6 +52,7 @@
       }
       const el = container.querySelector(sel);
       if (!el) return undefined;
+      if (refAttr) return resolveLabelledbyText(el, refAttr).text;
       if (attr) {
         if (DOM_PROPERTY_READS.has(attr)) return el[attr];
         return el.getAttribute(attr);
@@ -53,7 +63,11 @@
     function readFieldAll(container, spec) {
       const sel = typeof spec === 'string' ? spec : spec.selector;
       const attr = typeof spec === 'string' ? null : spec.attr;
+      const lb = (spec && typeof spec === 'object') ? spec.labelledby : undefined;
+      const refAttr = lb === true ? 'aria-labelledby'
+        : (typeof lb === 'string' && lb.trim() ? lb.trim() : null);
       if (!sel) {
+        if (refAttr) return [resolveLabelledbyText(container, refAttr).text];
         let val;
         if (attr) {
           if (DOM_PROPERTY_READS.has(attr)) val = container[attr];
@@ -67,7 +81,9 @@
       const out = [];
       for (let i = 0; i < els.length; i++) {
         const el = els[i];
-        if (attr) {
+        if (refAttr) {
+          out.push(resolveLabelledbyText(el, refAttr).text);
+        } else if (attr) {
           if (DOM_PROPERTY_READS.has(attr)) out.push(el[attr]);
           else out.push(el.getAttribute(attr));
         } else {
@@ -241,17 +257,32 @@
       const perField = fields.map(([field, spec]) => {
         const subSelector = typeof spec === 'string' ? spec : (spec && spec.selector);
         const attr = typeof spec === 'string' ? null : (spec && spec.attr) || null;
+        const lb = (spec && typeof spec === 'object') ? spec.labelledby : undefined;
+        const refAttr = lb === true ? 'aria-labelledby'
+          : (typeof lb === 'string' && lb.trim() ? lb.trim() : null);
         const sampleTexts = [];
         const sampleHrefs = [];
         const sampleValues = [];
         let matchCount = 0;
+        let refResolved = 0;
+        let missingIds = null;
         if (!subSelector) {
-          return { field, subSelector: null, attr, matchCount: 0, sampleTexts: [], sampleHrefs: [], sampleValues: [] };
+          return { field, subSelector: null, attr, labelledby: refAttr, matchCount: 0, refResolved: 0, missingIds: [], sampleTexts: [], sampleHrefs: [], sampleValues: [] };
         }
         const pushValue = (el) => {
           if (sampleValues.length >= 5) return;
           let v = null;
-          if (attr) {
+          if (refAttr) {
+            const r = resolveLabelledbyText(el, refAttr);
+            if (r.text) refResolved += 1;
+            if (r.missingIds && r.missingIds.length) {
+              if (!missingIds) missingIds = [];
+              for (const mid of r.missingIds) {
+                if (missingIds.length < 3) missingIds.push(mid);
+              }
+            }
+            v = r.text;
+          } else if (attr) {
             v = (attr === 'outerHTML' || attr === 'innerHTML') ? el[attr] : (el.getAttribute ? el.getAttribute(attr) : null);
           } else {
             v = (el.textContent || '').trim();
@@ -275,16 +306,16 @@
             if (!el) continue;
             matchCount += 1;
             pushValue(el);
-            if (!attr && sampleTexts.length < 3 && typeof el.textContent === 'string') {
+            if (!attr && !refAttr && sampleTexts.length < 3 && typeof el.textContent === 'string') {
               sampleTexts.push(el.textContent.trim().slice(0, 80));
             }
-            if (!attr && sampleHrefs.length < 3 && el.getAttribute) {
+            if (!attr && !refAttr && sampleHrefs.length < 3 && el.getAttribute) {
               const href = el.getAttribute('href');
               if (href) sampleHrefs.push(String(href).slice(0, 120));
             }
           }
         }
-        return { field, subSelector, attr, matchCount, sampleTexts, sampleHrefs, sampleValues };
+        return { field, subSelector, attr, labelledby: refAttr, matchCount, refResolved, missingIds: missingIds || [], sampleTexts, sampleHrefs, sampleValues };
       });
       // Mirror lib/list-extract-ops.js RC13 + RC59: capture ~2000 chars of
       // the first container outerHTML with a head+tail split. WITHOUT this,

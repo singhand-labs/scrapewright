@@ -85,9 +85,28 @@
   // Surfaced so the model renegotiates the contract instead of shipping them.
   const URLISH_FIELD = /(url|link|href|src|image|img|media|photo|pic|avatar)/i;
   const RAWISH_FIELD = /(html|markup|raw)/i;
+  // Thirty-third log D2: fields whose VALUES are legitimately opaque
+  // machine identifiers — the opaqueToken junk heuristic must not fire on
+  // them even when the value shape matches a random token.
+  const IDISH_FIELD = /(id|hash|token|key|guid|uuid|slug|nonce|signature|checksum|ref)$/i;
 
   function isQueryBlob(v) {
     return typeof v === 'string' && v.length > 3 && /^\?[^=]+=/.test(v);
+  }
+
+  // Thirty-third log D2: the live decoy read raw from an anti-scraped
+  // textContent ("eporntosdS9u77m62gllh0i16i81a1l5gcf7hg2taf..."). Shape:
+  // one long token, letters AND digits interleaved, vowel density far below
+  // any human language (~0.27 vs ~0.38+ for English). Values like this in a
+  // human-readable field are obfuscation leaking through, not data.
+  function isOpaqueToken(v) {
+    if (typeof v !== 'string' || v.length < 24) return false;
+    if (!/^[A-Za-z0-9_-]+$/.test(v)) return false;
+    if (!/[A-Za-z]/.test(v) || !/[0-9]/.test(v)) return false;
+    const letters = v.replace(/[^A-Za-z]/g, '');
+    if (!letters.length) return false;
+    const vowels = (letters.match(/[aeiouAEIOU]/g) || []).length;
+    return (vowels / letters.length) < 0.3;
   }
 
   function isMarkupDump(v) {
@@ -128,8 +147,9 @@
 
   const isUrlishName = (key, hints) => URLISH_FIELD.test(key) || hints.has(key);
   const isRawishName = (key, hints) => RAWISH_FIELD.test(key) || hints.has(key);
+  const isIdishName = (key, hints) => IDISH_FIELD.test(key) || hints.has(key);
 
-  function scanRecords(recs, fieldPath, urlishHints, rawishHints, fields) {
+  function scanRecords(recs, fieldPath, urlishHints, rawishHints, idishHints, fields) {
     const recKeys = [];
     const seen = {};
     for (const r of recs) {
@@ -141,11 +161,15 @@
       let blobs = 0; let blobSample = '';
       let dataJunk = 0; let dataTotal = 0;
       let dumps = 0; let dumpSample = '';
+      let opaque = 0; let opaqueSample = '';
       for (const r of recs) {
         const v = r[rk];
         if (typeof v === 'string') {
           if (isQueryBlob(v)) { blobs += 1; if (!blobSample) blobSample = v; }
           if (!isRawishName(rk, rawishHints) && isMarkupDump(v)) { dumps += 1; if (!dumpSample) dumpSample = v; }
+          if (isOpaqueToken(v) && !isIdishName(rk, idishHints) && !isUrlishName(rk, urlishHints) && !isRawishName(rk, rawishHints)) {
+            opaque += 1; if (!opaqueSample) opaqueSample = v;
+          }
         } else if (Array.isArray(v)) {
           for (const x of v) {
             if (typeof x !== 'string') continue;
@@ -155,6 +179,7 @@
         }
       }
       if (blobs) fields.push({ field: fieldPath + '.' + rk, kind: 'queryBlob', count: blobs, sample: capSample(blobSample) });
+      if (opaque) fields.push({ field: fieldPath + '.' + rk, kind: 'opaqueToken', count: opaque, sample: capSample(opaqueSample) });
       if (dataJunk && isUrlishName(rk, urlishHints)) fields.push({ field: fieldPath + '.' + rk, kind: 'dataUri', junkCount: dataJunk, total: dataTotal });
       if (dumps) fields.push({ field: fieldPath + '.' + rk, kind: 'markupDump', count: dumps, sample: capSample(dumpSample) });
     }
@@ -163,6 +188,7 @@
   function detectJunkValues(data, schema) {    if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
     const urlishHints = collectFieldHints(schema, /(url|link|href|src|image|photo|picture|media|avatar)/i);
     const rawishHints = collectFieldHints(schema, /(html|markup|raw source|embedded)/i);
+    const idishHints = collectFieldHints(schema, /(id|hash|token|key|guid|uuid|slug|nonce|signature|checksum|ref)$/i);
     const fields = [];
     (function walk(obj, path, depth) {
       if (!obj || typeof obj !== 'object' || depth > 3) return;
@@ -180,7 +206,7 @@
             continue;
           }
           const recs = val.filter((r) => r && typeof r === 'object' && !Array.isArray(r));
-          if (recs.length) scanRecords(recs, fieldPath, urlishHints, rawishHints, fields);
+          if (recs.length) scanRecords(recs, fieldPath, urlishHints, rawishHints, idishHints, fields);
           for (const r of recs) walk(r, path.concat(key), depth + 1);
         } else if (val && typeof val === 'object') {
           walk(val, path.concat(key), depth + 1);
@@ -191,8 +217,64 @@
     return {
       fields: fields,
       note: 'JUNK VALUES: ' + fields.map((f) => f.field + '(' + f.kind + ')').join(', ') +
-        '. Structurally green but these values are junk: bare query strings ("?a=b…") are redirect/tracking href fragments, data: URIs inside url/media arrays are inline UI icons, markup dumps are raw HTML leaking into a data field. Fix the selector to read the real value, filter arrays in the step script (keep http(s) entries), or renegotiate the contract with io.confirm to drop/redefine the field. A green score with junk-valued fields is NOT a finished service.'
+        '. Structurally green but these values are junk: bare query strings ("?a=b…") are redirect/tracking href fragments, data: URIs inside url/media arrays are inline UI icons, markup dumps are raw HTML leaking into a data field, and long single-token opaque strings (random alphanumerics, no spaces, no vowel structure) are anti-scrape DECOYS leaking through a raw textContent read — the real value usually lives in the elements an ARIA reference points at, so re-read the field with the fieldMap labelledby:true option (or $labelledby) instead of textContent. Fix the selector to read the real value, filter arrays in the step script (keep http(s) entries), or renegotiate the contract with io.confirm to drop/redefine the field. A green score with junk-valued fields is NOT a finished service.'
     };
+  }
+
+  // Thirty-third log D3: v2's verify populated postingTime 1/2; v3's verify
+  // zero-matched it — and the model read the flip as "session-state-dependent,
+  // never reproduces on fresh loads", shipping a required field empty. The
+  // real difference was the model's OWN v3 load-step edit (early no-growth
+  // exit → extract at ~5s instead of ~25s; same cards, same postIds). A field
+  // a prior verify POPULATED that comes back fully empty is a regression the
+  // step changes likely explain — surface the cross-run delta so
+  // "genuinely never exists" has to be earned against it.
+  function detectFieldRegression(current, prior, currentVersion) {
+    if (!prior || typeof prior !== 'object') return null;
+    const curPe = (current && current.detectors && Array.isArray(current.detectors.partialEmptyFields))
+      ? current.detectors.partialEmptyFields : [];
+    const priPe = (prior.detectors && Array.isArray(prior.detectors.partialEmptyFields))
+      ? prior.detectors.partialEmptyFields : [];
+    if (!curPe.length || !priPe.length) return null;
+    const priorByPath = {};
+    for (const p of priPe) {
+      if (p && typeof p === 'object' && p.path) priorByPath[String(p.path)] = p;
+    }
+    const priorVersion = (typeof prior.executedArtifactVersion === 'number')
+      ? prior.executedArtifactVersion : null;
+    const fields = [];
+    for (const c of curPe) {
+      if (!c || typeof c !== 'object' || !c.path) continue;
+      const total = (typeof c.totalCount === 'number') ? c.totalCount : 0;
+      const empty = (typeof c.emptyCount === 'number') ? c.emptyCount : 0;
+      if (!(total > 0 && empty === total)) continue; // only fully-empty-now fields
+      const p = priorByPath[String(c.path)];
+      if (!p) continue;
+      const pTotal = (typeof p.totalCount === 'number') ? p.totalCount : 0;
+      const pEmpty = (typeof p.emptyCount === 'number') ? p.emptyCount : 0;
+      if (!(pTotal > 0 && pEmpty < pTotal)) continue; // was at least partially populated before
+      fields.push({
+        field: c.field || null,
+        path: String(c.path),
+        priorEmpty: pEmpty + '/' + pTotal,
+        nowEmpty: empty + '/' + total,
+        priorVersion: priorVersion,
+        priorSample: (Array.isArray(p.sampleNonEmpty) && p.sampleNonEmpty.length)
+          ? String(p.sampleNonEmpty[0]).slice(0, 80) : '',
+        sameVersion: (priorVersion !== null && priorVersion === currentVersion)
+      });
+    }
+    if (!fields.length) return null;
+    const allSame = fields.every((f) => f.sameVersion);
+    const note = 'FIELD REGRESSION: ' + fields.map((f) =>
+      f.path + ' was non-empty in the ' + (f.priorVersion !== null ? 'v' + f.priorVersion + ' ' : '') +
+      'prior verify run (' + f.priorEmpty + ' non-empty' +
+      (f.priorSample ? ', sample ' + JSON.stringify(f.priorSample) : '') + ') but is now ' + f.nowEmpty + ' empty. ' +
+      (allSame
+        ? 'The SAME artifact version flipped populated→empty across two runs — pure timing flakiness (late hydration, render order): add a settle wait or poll-before-extract instead of renegotiating the field away.'
+        : 'The artifact CHANGED between those runs — your own step edits (earlier exit conditions, shorter settle, fewer scrolls) are the first suspect, not permanent absence. A field that extracted once can almost always extract again: restore the step shape that last populated it, or add a settle wait before extract, and re-verify BEFORE concluding the value genuinely never exists or shipping it empty.') +
+      ' Do not read this regression as "session-state-dependent, never reproduces" without having re-tested the prior step shape.').join(' ');
+    return { fields: fields, note: note };
   }
 
   // Eighteenth log: on a logged-out page that offered ONLY sponsored cards,
@@ -893,7 +975,7 @@
     };
   }
 
-  const api = { createVerifyRunner, detectJunkValues };
+  const api = { createVerifyRunner, detectJunkValues, detectFieldRegression };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.VerifyRunner = api;
 })(typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : self));

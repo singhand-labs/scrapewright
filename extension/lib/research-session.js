@@ -23,6 +23,7 @@
   const Obs = resolveLib('./observation-log', 'ObservationLogLib');
   const LedgerLib = resolveLib('./findings-ledger', 'FindingsLedgerLib');
   const KB = resolveLib('./knowledge-base', 'KnowledgeBase');
+  const VR = resolveLib('./verify-runner', 'VerifyRunner');
 
   const INTERNAL_TOOL_SPECS = [
     { name: 'ledger.add', args: '{finding, evidence?, confidence?, selectors?}', returns: '{added:true, id}' },
@@ -155,7 +156,8 @@
       elapsedMs: 0,
       stopped: null,
       budgetAdvisories: [],
-      waivedSelectors: []
+      waivedSelectors: [],
+      priorVerifyReport: null
     };
     if (cfg.seed && cfg.seed.session) {
       state = JSON.parse(JSON.stringify(cfg.seed.session));
@@ -834,6 +836,28 @@
             // like {error:'no artifact yet'} and get no stamp.
             if (result && typeof result === 'object' && !Array.isArray(result) && 'ok' in result) {
               result = Object.assign({ executedArtifactVersion: state.artifactVersions.length }, result);
+              // Thirty-third log D3: cross-verify memory. A field a PRIOR
+              // verify populated that this one empties completely is a
+              // regression the step changes between the runs likely explain
+              // — without this signal the model read the flip as
+              // "session-state-dependent, never reproduces" and shipped a
+              // required field empty over its own timing change.
+              if (VR && typeof VR.detectFieldRegression === 'function') {
+                const reg = VR.detectFieldRegression(result, state.priorVerifyReport, state.artifactVersions.length);
+                if (reg) {
+                  if (result.detectors && typeof result.detectors === 'object' && !Array.isArray(result.detectors)) {
+                    result.detectors.fieldRegression = reg;
+                  }
+                  if (Array.isArray(result.events)) result.events.push('FIELD_REGRESSION');
+                  if (result.error && typeof result.error === 'object' && typeof result.error.message === 'string' &&
+                      result.error.message.indexOf('FIELD REGRESSION') === -1) {
+                    result.error.message += ' (FIELD REGRESSION: a prior verify run POPULATED ' +
+                      reg.fields.map((f) => f.path).join(', ') +
+                      ' — read detectors.fieldRegression before concluding the value never exists)';
+                  }
+                }
+              }
+              state.priorVerifyReport = result;
             }
             state.lastVerifyOk = !!(result && typeof result === 'object' && result.ok === true);
             state.lastVerifyArtifactVersion = state.artifactVersions.length;

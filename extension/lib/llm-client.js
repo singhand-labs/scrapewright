@@ -13,16 +13,17 @@ const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 // (one output per line, (i/N) parts); 32000 caps pathological echoes.
 const CONTENT_LOG_CHUNK = 1500;
 const CONTENT_LOG_CAP = 32000;
-function logContentChunks(label, content) {
+function logContentChunks(label, content, capOverride) {
+  const cap = (typeof capOverride === 'number' && capOverride > 0) ? capOverride : CONTENT_LOG_CAP;
   const s = String(content == null ? '' : content);
   if (!s) return;
-  const shown = s.length > CONTENT_LOG_CAP ? s.slice(0, CONTENT_LOG_CAP) : s;
+  const shown = s.length > cap ? s.slice(0, cap) : s;
   const n = Math.ceil(shown.length / CONTENT_LOG_CHUNK);
   for (let i = 0; i < n; i++) {
     console.log(label + ' (' + (i + 1) + '/' + n + '):', shown.slice(i * CONTENT_LOG_CHUNK, (i + 1) * CONTENT_LOG_CHUNK));
   }
-  if (s.length > CONTENT_LOG_CAP) {
-    console.log(label + ' (tail elided):', '…[+' + (s.length - CONTENT_LOG_CAP) + ' chars not shown]…');
+  if (s.length > cap) {
+    console.log(label + ' (tail elided):', '…[+' + (s.length - cap) + ' chars not shown]…');
   }
 }
 
@@ -136,7 +137,12 @@ class LLMClient {
 
     console.log('[LLMClient] Request URL:', url);
     console.log('[LLMClient] Request model:', this.model);
-    console.log('[LLMClient] Request body:', JSON.stringify(body, null, 2));
+    // Thirty-third log D4: the pretty-printed multi-line JSON single arg
+    // vanished from every exported console capture ("Request body:" lines
+    // read empty). One-line chunked strings survive DevTools "Save as…"
+    // (response path, 32nd log). Tighter cap than the response: the
+    // transcript itself is already mirrored at the wizard layer.
+    logContentChunks('[LLMClient] Request body', JSON.stringify(body), 8000);
 
     const timeoutMs = options.timeoutMs ?? this.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
