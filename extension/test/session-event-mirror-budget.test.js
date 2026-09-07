@@ -7,7 +7,7 @@
 // exactly when it matters. mirrorClip keeps head AND tail with an explicit
 // elision marker.
 
-const { describe, it } = require('node:test');
+const { describe, it, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -59,15 +59,66 @@ describe('mirrorClip (twenty-sixth log: tail disclosure must survive)', () => {
 });
 
 describe('wizard.js session-event mirror budgets (RC-C + twenty-sixth log)', () => {
-  it('all three mirror branches route through mirrorClip, not a bare head slice', () => {
-    assert.match(SRC, /console\.log\('\[session\] TOOL RESULT', ev\.tool, ev\.ok \? 'ok' : 'ERR', mirrorClip\(String\(ev\.summary \|\| ''\), \d+\)\)/);
+  it('small status events route through mirrorClip, not a bare head slice', () => {
     assert.match(SRC, /console\.log\('\[session\]', ev\.type, mirrorClip\(JSON\.stringify\(ev\), \d+\)\)/);
-    assert.match(SRC, /console\.log\('\[session\] TOOL', ev\.tool, mirrorClip\(JSON\.stringify\(ev\.args \|\| \{\}\), \d+\)\)/);
+    assert.match(SRC, /console\.log\('\[session\] TOOL RESULT', ev\.tool, ev\.ok \? 'ok' : 'ERR', mirrorClip\(String\(ev\.summary \|\| ''\), \d+\)\)/);
   });
 
   it('detail-bearing events keep ≥600-char budgets', () => {
     const m = /console\.log\('\[session\]', ev\.type, mirrorClip\(JSON\.stringify\(ev\), (\d+)\)\)/.exec(SRC);
     assert.ok(m, 'generic event mirror line exists in wizard.js');
     assert.ok(parseInt(m[1], 10) >= 600, 'stopped/error/paused mirror budget >= 600');
+  });
+});
+
+// Thirty-second log (user directive): "console 日志如果一次输出不全，就分多次"
+// — payload-bearing mirrors (TOOL args, TOOL RESULT detail) must CHUNK across
+// multiple console lines instead of truncating: the exported log is the
+// debugging lifeline.
+describe('mirrorLines (thirty-second log: chunk, never clip, payload mirrors)', () => {
+  const mirrorLines = eval('(function () { return (' + sliceFn('mirrorLines') + '); })()');
+  const originalLog = console.log;
+  let lines;
+  beforeEach(() => { lines = []; console.log = (...a) => lines.push(a); });
+  afterEach(() => { console.log = originalLog; });
+
+  it('a short payload logs as one line', () => {
+    mirrorLines('LBL', '{"steps":[]}', 8000);
+    assert.equal(lines.length, 1);
+    assert.equal(lines[0][0], 'LBL');
+    assert.equal(lines[0][1], '{"steps":[]}');
+  });
+
+  it('a long payload splits into (i/N) parts that concatenate to the whole', () => {
+    const payload = JSON.stringify({ steps: Array.from({ length: 200 }, (_, i) => ({ id: 's' + i, script: 'x'.repeat(80) })) });
+    mirrorLines('[session] TOOL service.update', payload, 8000);
+    assert.ok(lines.length >= 6, 'multiple chunk lines, got ' + lines.length);
+    assert.match(lines[0][0], /\(1\/(\d+)\)$/);
+    const n = parseInt(/\(1\/(\d+)\)/.exec(lines[0][0])[1], 10);
+    assert.equal(lines.length, n + 1, 'exactly N parts plus the tail-elision disclosure');
+    const reassembled = lines.slice(0, n).map((l) => l[1]).join('');
+    assert.equal(reassembled, payload.slice(0, 8000), 'chunks concatenate losslessly up to the cap');
+  });
+
+  it('beyond the cap the elision is disclosed with a count', () => {
+    const payload = 'y'.repeat(20000);
+    mirrorLines('LBL', payload, 8000);
+    const last = lines[lines.length - 1];
+    assert.equal(last[0], 'LBL (tail elided)');
+    assert.match(last[1], /\[\+12000 chars not shown\]/);
+  });
+});
+
+describe('wizard.js payload mirrors use mirrorLines (source audit)', () => {
+  it('TOOL args chunk-log at a generous cap, not the old 1200 clip', () => {
+    assert.match(SRC, /mirrorLines\('\[session\] TOOL ' \+ ev\.tool, JSON\.stringify\(ev\.args \|\| \{\}\), (\d+)\)/);
+    const cap = parseInt(/mirrorLines\('\[session\] TOOL ' \+ ev\.tool, JSON\.stringify\(ev\.args \|\| \{\}\), (\d+)\)/.exec(SRC)[1], 10);
+    assert.ok(cap >= 8000, 'args budget generous enough to carry full step scripts');
+  });
+
+  it('TOOL RESULT detail chunk-logs when the engine attached one', () => {
+    assert.match(SRC, /if \(ev\.detail\) mirrorLines\('\[session\] TOOL RESULT DETAIL ' \+ ev\.tool, ev\.detail, (\d+)\)/);
+    const cap = parseInt(/if \(ev\.detail\) mirrorLines\('\[session\] TOOL RESULT DETAIL ' \+ ev\.tool, ev\.detail, (\d+)\)/.exec(SRC)[1], 10);
+    assert.ok(cap >= 12000, 'detail budget matches the engine eventDetailCapChars');
   });
 });

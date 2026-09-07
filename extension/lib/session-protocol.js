@@ -208,6 +208,107 @@
     return { ok: true, turn: turn };
   }
 
+  // Thirty-second log root fix (RC-A): summarizeToolResult's flat head-only
+  // slice is right for the 600-char UI one-liner, but as the LLM transcript's
+  // ONLY rendering of a tool result it destroyed everything past byte ~4000 —
+  // verify-report tail keys (detectors.partialEmptyFields,
+  // emptyFieldDiagnostics, steps[].resultPreview, finalResult) never reached
+  // the model, and one long error string ate the whole head budget
+  // (29th-log timeMapSize class). Structure-aware compaction instead:
+  //   - every object KEY name survives (values elide, names never vanish);
+  //   - long strings keep head AND tail with a disclosed [+N chars elided];
+  //   - arrays keep their first items and disclose the elided remainder;
+  //   - the label is capped tight — the model authored the args one message
+  //     earlier, so echoing them at length only burns the result's budget.
+  const COMPACT_LABEL_CAP = 160;
+
+  function compactStringForLLM(s, budget) {
+    if (s.length <= budget) return JSON.stringify(s);
+    const marker = 26;
+    const keep = Math.max(20, budget - marker);
+    const head = Math.ceil(keep * 0.6);
+    const tail = keep - head;
+    const elided = s.length - head - tail;
+    return JSON.stringify(s.slice(0, head)) + '…[+' + elided + ' chars elided]…' + JSON.stringify(s.slice(s.length - tail));
+  }
+
+  function compactArrayForLLM(arr, budget) {
+    const parts = [];
+    let left = budget - 2; // brackets
+    for (let i = 0; i < arr.length; i++) {
+      const remaining = arr.length - i;
+      const share = Math.max(40, Math.floor(left / remaining));
+      let rendered;
+      try { rendered = compactValueForLLM(arr[i], share); } catch (e) { rendered = compactStringForLLM(String(arr[i]), share); }
+      const cost = rendered.length + 1; // comma
+      if (i > 0 && (left - cost < 40 || rendered.length > share + 40)) {
+        parts.push('…[+' + remaining + ' more items elided]');
+        break;
+      }
+      if (i === 0 && rendered.length > share + 40) {
+        // Even the first element had to shrink — still keep it: the array's
+        // element SHAPE must stay visible or the model cannot read the list.
+        parts.push(rendered);
+        left -= cost;
+        continue;
+      }
+      if (left - cost < 40 && i > 0) {
+        parts.push('…[+' + remaining + ' more items elided]');
+        break;
+      }
+      parts.push(rendered);
+      left -= cost;
+    }
+    return '[' + parts.join(',') + ']';
+  }
+
+  function compactObjectForLLM(obj, budget) {
+    const keys = Object.keys(obj);
+    const parts = [];
+    let left = budget - 2; // braces
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      const remaining = keys.length - i;
+      const nameCost = JSON.stringify(key).length + 3; // "key":
+      // Names must survive even when values cannot: list the remaining keys
+      // as elided stubs and stop.
+      if (left - nameCost < 12) {
+        const restNames = keys.slice(i).map((k) => k).join(',');
+        const stub = '"…[+' + remaining + ' keys elided: ' + compactStringForLLM(restNames, 240) + ']';
+        parts.push(stub);
+        break;
+      }
+      const share = Math.max(40, Math.floor((left - nameCost) / remaining));
+      let rendered;
+      try { rendered = compactValueForLLM(obj[key], share); } catch (e) { rendered = compactStringForLLM(String(obj[key]), share); }
+      parts.push(JSON.stringify(key) + ':' + rendered);
+      left -= nameCost + rendered.length;
+    }
+    return '{' + parts.join(',') + '}';
+  }
+
+  function compactValueForLLM(v, budget) {
+    if (budget <= 24) return '"…"';
+    if (v === null || typeof v === 'number' || typeof v === 'boolean') return JSON.stringify(v);
+    if (typeof v === 'string') return compactStringForLLM(v, budget);
+    let s;
+    try { s = JSON.stringify(v); } catch (e) { s = null; }
+    if (s == null) return compactStringForLLM(String(v), budget);
+    if (s.length <= budget) return s;
+    if (Array.isArray(v)) return compactArrayForLLM(v, budget);
+    if (typeof v === 'object') return compactObjectForLLM(v, budget);
+    return compactStringForLLM(String(v), budget);
+  }
+
+  function compactToolResultForLLM(name, result, cap) {
+    const c = typeof cap === 'number' && cap > 0 ? cap : 2000;
+    const label = name.length > COMPACT_LABEL_CAP ? name.slice(0, COMPACT_LABEL_CAP) + '…' : name;
+    const budget = c - (label.length + 4);
+    let body;
+    try { body = compactValueForLLM(result, budget); } catch (e) { body = compactStringForLLM(String(result), budget); }
+    return label + ' → ' + body;
+  }
+
   function summarizeToolResult(name, result, cap) {
     const c = typeof cap === 'number' && cap > 0 ? cap : 200;
     let s;
@@ -225,7 +326,7 @@
     return label + ' → ' + (s.length > room ? s.slice(0, Math.max(0, room)) + '…[truncated]' : s);
   }
 
-  const api = { PROTOCOL_BLOCK, renderToolCatalog, buildSystemPrompt, extractJsonObject, parseAssistantTurn, summarizeToolResult };
+  const api = { PROTOCOL_BLOCK, renderToolCatalog, buildSystemPrompt, extractJsonObject, parseAssistantTurn, summarizeToolResult, compactToolResultForLLM };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.SessionProtocol = api;
 })(typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : self));

@@ -198,18 +198,22 @@
           tool: 'probe.labelledby',
           selectors: [sel],
           attrs: [{ selector: sel, attr: attr || 'aria-labelledby' }],
-          summary: 'labelledby' + (typeof r === 'string' && r ? ' len=' + r.length : ' empty')
+          summary: 'labelledby' + (r && typeof r.text === 'string' && r.text ? ' len=' + r.text.length : ' empty')
         });
       }
-      const out = { text: typeof r === 'string' ? r : '' };
+      // Thirty-second log RC-C: the DSL now returns the self-describing
+      // {text, attr, refCount, missingIds, note?} object — pass it through
+      // VERBATIM so the probe envelope a step script copies is CORRECT (the
+      // old {text}-only envelope taught scripts `.text` on a bare string).
+      const isDslShape = r && typeof r === 'object' && typeof r.text === 'string';
+      const out = isDslShape
+        ? { text: r.text, attr: r.attr || attr || 'aria-labelledby', refCount: typeof r.refCount === 'number' ? r.refCount : 0, missingIds: Array.isArray(r.missingIds) ? r.missingIds : [] }
+        : { text: '' };
+      const src = isDslShape ? r : null;
       const ld = (lastSelectorDiagnostics || []).filter(d => d && d.api === 'labelledby')[0];
-      if (ld) {
-        out.attr = ld.attr;
-        out.refCount = ld.refCount;
-        if (Array.isArray(ld.missingIds) && ld.missingIds.length) out.missingIds = ld.missingIds;
-        if (ld.note) out.note = ld.note;
-        else if (!out.text) out.note = 'referenced element(s) resolved but carry no text — check the sibling reference attr (aria-describedby) or read the anchor textContent directly';
-      }
+      const note = (src && src.note) || (ld && ld.note);
+      if (note) out.note = note;
+      else if (!out.text) out.note = 'referenced element(s) resolved but carry no text — check the sibling reference attr (aria-describedby) or read the anchor textContent directly';
       return out;
     }
 

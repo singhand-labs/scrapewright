@@ -380,7 +380,7 @@ describe('tool dispatch', () => {
     assert.equal(toolEntry.result.error, 'tab died');
   });
 
-  it('caps tool results replayed into later prompts (context diet)', async () => {
+  it('caps tool results replayed into later prompts (context diet, structure-aware)', async () => {
     const calls = [];
     const session = createResearchSession({
       requirement: 'r',
@@ -395,7 +395,10 @@ describe('tool dispatch', () => {
     const replay = calls[1].messages.filter(m => m.role === 'user' && m.content.startsWith('TOOL RESULT'));
     assert.equal(replay.length, 1);
     assert.ok(replay[0].content.length <= 300 + 60, 'replayed result must be capped');
-    assert.ok(replay[0].content.includes('…[truncated]'));
+    // Thirty-second log RC-A: flat head-slice → structure-aware compaction —
+    // the KEY survives and the long value elides with a disclosed count.
+    assert.ok(replay[0].content.includes('"blob"'), 'the key name survives the cap');
+    assert.match(replay[0].content, /\[\+\d+ chars? elided\]/);
   });
 });
 

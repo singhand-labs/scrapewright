@@ -118,12 +118,13 @@ describe('probe.labelledby', () => {
     const { tools, observationLog } = makeTools(async (snippet) => {
       assert.match(snippet, /return \$labelledby\(/);
       assert.match(snippet, /"aria-labelledby"/);
-      return 'July 17, 2026 at 3:42 PM';
+      // Thirty-second log RC-C: the DSL returns the self-describing object —
+      // probe.labelledby passes that exact shape through.
+      return { text: 'July 17, 2026 at 3:42 PM', attr: 'aria-labelledby', refCount: 2, missingIds: [] };
     });
-    // probe-tools keeps the LAST run's selectorDiagnostics module-locally;
-    // emulate the rail envelope for the merge path.
     const r = await tools.labelledby('#anchor1');
     assert.equal(r.text, 'July 17, 2026 at 3:42 PM');
+    assert.equal(r.refCount, 2);
     assert.ok(observationLog.covers('#anchor1'), 'observation receipt recorded');
     assert.ok(observationLog.serialize().entries.some(e => e.tool === 'probe.labelledby'));
   });

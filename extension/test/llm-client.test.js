@@ -579,3 +579,66 @@ describe('LLMClient timeout configuration', () => {
     assert.equal(string.timeoutMs, 60000);
   });
 });
+
+// Thirty-second log (user directive): the 300-char response preview hid the
+// model's think + tool-call from exported console logs — chunk the FULL
+// content across multiple console lines (i/N parts), capped at 32000 with a
+// disclosed elision.
+describe('LLMClient.chat response content chunked logging', () => {
+  let consoleStub;
+  const originalConsoleLog = console.log;
+  const originalConsoleError = console.error;
+  const originalConsoleWarn = console.warn;
+
+  beforeEach(() => {
+    consoleStub = [];
+    console.log = (...args) => consoleStub.push(['log', ...args]);
+    console.error = (...args) => consoleStub.push(['error', ...args]);
+    console.warn = (...args) => consoleStub.push(['warn', ...args]);
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    console.log = originalConsoleLog;
+    console.error = originalConsoleError;
+    console.warn = originalConsoleWarn;
+  });
+
+  function makeClient() {
+    return new LLMClient({
+      provider: 'openai', model: 'test-model', apiKey: 'test-key', apiBaseUrl: 'http://test.local/v1'
+    });
+  }
+
+  it('a long response logs in (i/N) parts that concatenate to the whole', async () => {
+    const content = JSON.stringify({ think: 't'.repeat(4000), tool: 'service.update', args: { steps: 's'.repeat(2000) } });
+    global.fetch = async () => mockResponse({ body: successBody(content) });
+    const client = makeClient();
+    await client.chat([{ role: 'user', content: 'go' }]);
+    const parts = consoleStub.filter((l) => l[0] === 'log' && /^\[LLMClient\] Response content \(\d+\/\d+\):$/.test(l[1]));
+    assert.ok(parts.length >= 3, 'content split across lines, got ' + parts.length);
+    const n = parseInt(/^\[LLMClient\] Response content \(\d+\/(\d+)\):$/.exec(parts[0][1])[1], 10);
+    assert.equal(parts.length, n, 'exactly N parts');
+    assert.equal(parts.map((l) => l[2]).join(''), content, 'chunks concatenate losslessly');
+  });
+
+  it('beyond 32000 chars the tail elision is disclosed with a count', async () => {
+    const content = 'z'.repeat(40000);
+    global.fetch = async () => mockResponse({ body: successBody(content) });
+    const client = makeClient();
+    await client.chat([{ role: 'user', content: 'go' }]);
+    const elided = consoleStub.filter((l) => l[0] === 'log' && l[1] === '[LLMClient] Response content (tail elided):');
+    assert.equal(elided.length, 1, 'elision disclosure line present');
+    assert.match(elided[0][2], /\[\+8000 chars not shown\]/);
+  });
+
+  it('a short response logs in one part with no preview cut', async () => {
+    global.fetch = async () => mockResponse({ body: successBody('{"tool":"probe.count","args":{"sel":"div"}}') });
+    const client = makeClient();
+    await client.chat([{ role: 'user', content: 'go' }]);
+    const parts = consoleStub.filter((l) => l[0] === 'log' && /^\[LLMClient\] Response content \(|^Response content \(/.test(l[1]) && /\(\d+\/\d+\):$/.test(l[1]));
+    assert.equal(parts.length, 1);
+    assert.equal(parts[0][1], '[LLMClient] Response content (1/1):');
+    assert.equal(parts[0][2], '{"tool":"probe.count","args":{"sel":"div"}}');
+  });
+});

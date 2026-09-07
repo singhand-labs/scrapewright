@@ -2343,6 +2343,25 @@ function mirrorClip(text, cap) {
   return s.slice(0, head) + '…[+' + elided + ' chars]…' + s.slice(s.length - tail);
 }
 
+// Thirty-second log (user request): when one console line cannot carry the
+// payload, split it across MULTIPLE lines instead of truncating — the
+// exported console log is the debugging lifeline, and the 1200/600-char
+// clips hid exactly the evidence the diagnosis needed (v2-v5 step scripts,
+// verify report bodies, the model's own replies).
+function mirrorLines(label, text, cap) {
+  const s = String(text == null ? '' : text);
+  if (s.length <= cap) { console.log(label, s); return; }
+  const CHUNK = 1500;
+  const shown = s.slice(0, cap);
+  const n = Math.ceil(shown.length / CHUNK);
+  for (let i = 0; i < n; i++) {
+    console.log(label + ' (' + (i + 1) + '/' + n + ')', shown.slice(i * CHUNK, (i + 1) * CHUNK));
+  }
+  if (s.length > cap) {
+    console.log(label + ' (tail elided)', '…[+' + (s.length - cap) + ' chars not shown]…');
+  }
+}
+
 function handleSessionEvent(ev) {
   // Console mirror (second-live-log D2): the UI execution log is invisible in
   // exported console logs — the verify#2 anomaly was undiagnosable because
@@ -2358,12 +2377,18 @@ function handleSessionEvent(ev) {
       // (green-with-empty-fields was undiagnosable from the log alone). The
       // engine attaches a compact digest for verify.run — mirror it.
       if (ev.verify) console.log('[session] VERIFY', JSON.stringify(ev.verify));
+      // Thirty-second log RC-B: the one-liner above is for the UI stream;
+      // the engine also attaches a key-preserving compact DETAIL (all keys
+      // alive, head+tail strings, array counts). Chunk-log it in full —
+      // v2-v4 mirrors truncated mid-error and the report body the diagnosis
+      // needed was invisible in the export.
+      if (ev.detail) mirrorLines('[session] TOOL RESULT DETAIL ' + ev.tool, ev.detail, 12000);
     } else if (ev && ev.type === 'tool_call') {
-      // Nineteenth log: 200 chars cut io.confirm/service.update payloads right
-      // at outputSchema — the actual schema the LLM authored was invisible in
-      // exported logs and the typeless-items diagnosis had to proceed by
-      // inference. Schemas ride these args; give them room.
-      console.log('[session] TOOL', ev.tool, mirrorClip(JSON.stringify(ev.args || {}), 1200));
+      // Nineteenth log: schemas ride these args and were invisible at 200
+      // chars; thirty-second log: even 1200 clip-cut the v2-v5 step scripts
+      // (the postTime extraction lived exactly in the elided middle) —
+      // chunk the FULL args across lines instead of truncating.
+      mirrorLines('[session] TOOL ' + ev.tool, JSON.stringify(ev.args || {}), 8000);
     } else if (ev && ev.type) {
       // Twenty-third log RC-C: 200 chars cut the stopped event's honest-ship
       // disclosure ("[VERIFY PARTIAL-EMPTY — ...fields...]") mid-list in two

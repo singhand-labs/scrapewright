@@ -7,6 +7,25 @@ const DEFAULT_TIMEOUT_MS = 300_000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 16_384;
 const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 
+// Thirty-second log (user directive): the 300-char response preview hid the
+// model's think + tool-call — exported logs could not show WHAT the model
+// decided, only that it replied. Chunk the full content across console lines
+// (one output per line, (i/N) parts); 32000 caps pathological echoes.
+const CONTENT_LOG_CHUNK = 1500;
+const CONTENT_LOG_CAP = 32000;
+function logContentChunks(label, content) {
+  const s = String(content == null ? '' : content);
+  if (!s) return;
+  const shown = s.length > CONTENT_LOG_CAP ? s.slice(0, CONTENT_LOG_CAP) : s;
+  const n = Math.ceil(shown.length / CONTENT_LOG_CHUNK);
+  for (let i = 0; i < n; i++) {
+    console.log(label + ' (' + (i + 1) + '/' + n + '):', shown.slice(i * CONTENT_LOG_CHUNK, (i + 1) * CONTENT_LOG_CHUNK));
+  }
+  if (s.length > CONTENT_LOG_CAP) {
+    console.log(label + ' (tail elided):', '…[+' + (s.length - CONTENT_LOG_CAP) + ' chars not shown]…');
+  }
+}
+
 class LLMError extends Error {
   constructor(message, { retryable = false, status, cause } = {}) {
     super(message);
@@ -191,7 +210,7 @@ class LLMClient {
 
     const content = message.content;
     console.log('[LLMClient] Response content length:', content?.length);
-    console.log('[LLMClient] Response content preview:', content?.slice(0, 300));
+    logContentChunks('[LLMClient] Response content', content);
 
     if (!content || !String(content).trim()) {
       const detail = JSON.stringify({ finish_reason: finishReason, usage, model: this.model });

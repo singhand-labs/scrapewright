@@ -1622,7 +1622,13 @@
       textLength: resolved.text.length
     };
     if (resolved.note) _diagnostics.note = resolved.note;
-    return { result: resolved.text, _diagnostics };
+    // Thirty-second log RC-C: the DSL used to flatten this to the bare text
+    // string while probe.labelledby showed the {text, ...} object — the probe
+    // is empirical evidence and beat the prose doc, so step scripts copied
+    // `.text` off a string and the field was structurally always empty.
+    // Return the self-describing object (same shape as the probe): empty
+    // paths carry their falsification note IN the return value.
+    return { result: resolved, _diagnostics };
   }
 
   async function domExists(sel, timeoutMs) {

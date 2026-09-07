@@ -37,7 +37,13 @@
     toolResultCapChars: 4000,
     // tool_result EVENT summaries ride the console mirror (wizard.js slices
     // at 600), so the event budget matches it exactly.
-    eventSummaryCapChars: 600
+    eventSummaryCapChars: 600,
+    // Thirty-second log RC-B: the exported console log is the debugging
+    // lifeline, and the 600-char one-liner hid the report body the diagnosis
+    // needed (v2-v4 mirror truncated mid-error). The event also carries a
+    // key-preserving compact DETAIL (all keys alive, long strings head+tail
+    // with disclosed elision) that the wizard mirror chunk-logs in full.
+    eventDetailCapChars: 12000
   };
 
   function isErrorResult(r) {
@@ -125,6 +131,7 @@
     const compaction = Object.assign({}, DEFAULTS.compaction, cfg.compaction || {});
     const toolResultCapChars = typeof cfg.toolResultCapChars === 'number' ? cfg.toolResultCapChars : DEFAULTS.toolResultCapChars;
     const eventSummaryCapChars = typeof cfg.eventSummaryCapChars === 'number' ? cfg.eventSummaryCapChars : DEFAULTS.eventSummaryCapChars;
+    const eventDetailCapChars = typeof cfg.eventDetailCapChars === 'number' ? cfg.eventDetailCapChars : DEFAULTS.eventDetailCapChars;
     const knowledge = {
       units: Array.isArray(cfg.knowledge && cfg.knowledge.units) ? cfg.knowledge.units : [],
       index: Array.isArray(cfg.knowledge && cfg.knowledge.index) ? cfg.knowledge.index : []
@@ -853,7 +860,13 @@
           // Replay/persistence must carry WHAT was probed (the args), not just
           // the result — a resumed context still shows the selector used.
           const callLabel = turn.tool + ' ' + JSON.stringify(turn.args || {});
-          const summary = Protocol.summarizeToolResult(callLabel, result, toolResultCapChars);
+          // Thirty-second log RC-A: the transcript entry is what the LLM
+          // actually reads next turn. The flat head-only summarize destroyed
+          // every tail key past ~4000 chars (detectors/steps/finalResult were
+          // invisible and the model guessed DSL shapes for want of evidence)
+          // — compact structure-aware instead: all keys alive, head+tail
+          // strings, array counts, tight label.
+          const summary = Protocol.compactToolResultForLLM(callLabel, result, toolResultCapChars);
           state.transcript.push({ kind: 'tool', name: turn.tool, ok: !isErrorResult(result), result: result, summary: summary });
           // Twenty-second log: slicing the FIRST 200 chars off the
           // transcript summary let a big-args label (service.update echoes
@@ -861,7 +874,15 @@
           // undiagnosable in the exported console log. The event is its own
           // budgeted summary (label ≤ cap/4, result gets the rest), sized
           // to the console mirror's 600-char cut.
-          const toolResultPayload = { tool: turn.tool, ok: !isErrorResult(result), summary: Protocol.summarizeToolResult(callLabel, result, eventSummaryCapChars) };
+          const toolResultPayload = {
+            tool: turn.tool,
+            ok: !isErrorResult(result),
+            summary: Protocol.summarizeToolResult(callLabel, result, eventSummaryCapChars),
+            // Thirty-second log RC-B: full key-preserving rendering for the
+            // console mirror — the one-liner above stays for the UI stream,
+            // but the exported log must carry the evidence a diagnosis needs.
+            detail: Protocol.compactToolResultForLLM(callLabel, result, eventDetailCapChars)
+          };
           if (verifyDigest) toolResultPayload.verify = verifyDigest;
           emit('tool_result', toolResultPayload);
           attachKnowledge(result);

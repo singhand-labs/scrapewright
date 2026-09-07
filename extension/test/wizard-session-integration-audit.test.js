@@ -71,14 +71,16 @@ describe('wizard research-session integration (source audit)', () => {
     assert.ok(body.includes('ev.verify'), 'digest logged only when the engine attached one');
   });
 
-  it('nineteenth log: console mirror caps leave room for schemas (tool args 1200, summaries 600)', () => {
+  it('nineteenth/thirty-second log: console mirrors leave room for schemas and never clip payloads', () => {
     const body = fnBody('handleSessionEvent');
-    // Twenty-sixth log: the bare slices became mirrorClip(head+tail) — the
-    // budgets stay, the cut no longer drops the tail disclosure.
-    assert.ok(body.includes('mirrorClip(JSON.stringify(ev.args || {}), 1200)'),
-      'io.confirm/service.update args carry outputSchema — 200 chars cut it off mid-schema, making typeless-items failures undiagnosable from exported logs');
+    // Thirty-second log: the tool-args mirror moved from mirrorClip(…, 1200)
+    // to mirrorLines chunk-logging — full step scripts must reach the export.
+    assert.ok(body.includes("mirrorLines('[session] TOOL ' + ev.tool, JSON.stringify(ev.args || {}), 8000)"),
+      'io.confirm/service.update args (schemas, full step scripts) chunk-log in full — a clip cut the v2-v5 postTime script exactly where the diagnosis needed it');
     assert.ok(body.includes("mirrorClip(String(ev.summary || ''), 600)"),
-      'verify failure teachings were cut mid-sentence at 300 chars');
+      'the UI one-liner summary keeps its 600-char head+tail form');
+    assert.ok(body.includes("mirrorLines('[session] TOOL RESULT DETAIL ' + ev.tool, ev.detail, 12000)"),
+      'thirty-second log RC-B: the engine-attached compact detail chunk-logs in full');
   });
 
   it('nineteenth log: LLM retries are visible in the research log (user directive)', () => {
