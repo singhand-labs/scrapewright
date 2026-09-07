@@ -108,7 +108,9 @@ describe('requirement restatement: wizard wiring (source audit)', () => {
   it('the LLM reply is rendered with textContent (never innerHTML) — XSS-safe', () => {
     const body = SRC.slice(SRC.indexOf('async function showRequirementRestatePanel('), SRC.indexOf('async function startResearchSession('));
     assert.match(body, /body\.textContent\s*=\s*norm\.restatement/, 'restatement set via textContent');
-    assert.match(body, /li\.textContent\s*=\s*q/, 'question items set via textContent');
+    // Interaction UX: the question text lives in a child div (qt) since the
+    // li also hosts the inline answer input — still textContent.
+    assert.match(body, /qt\.textContent\s*=\s*q/, 'question items set via textContent');
     const assigns = body.match(/(?:body|li|note)\.innerHTML\s*=/g) || [];
     assert.equal(assigns.length, 0, 'no innerHTML assignment on LLM-derived nodes (note/questions innerHTML clears are on static containers only)');
   });

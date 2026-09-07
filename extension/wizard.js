@@ -327,6 +327,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // requirement box (an edit changes the key → next Research re-gates).
   document.getElementById('btnRestateConfirm').addEventListener('click', async () => {
     restateConfirmedKey = requirementGateKey();
+    restateAnswers = collectRestateAnswers();
     document.getElementById('requirementRestatePanel').classList.add('hidden');
     await startResearchSession();
   });
@@ -336,6 +337,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   document.getElementById('btnRestateSkip').addEventListener('click', async () => {
     restateConfirmedKey = requirementGateKey();
+    restateAnswers = collectRestateAnswers();
     document.getElementById('requirementRestatePanel').classList.add('hidden');
     await startResearchSession();
   });
@@ -361,6 +363,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
   document.getElementById('btnCustomTestRun').addEventListener('click', () => { runCustomTest(); });
+  document.getElementById('btnCustomTestSave').addEventListener('click', () => { saveCustomTestInput(); });
   document.getElementById('btnSessionPause').addEventListener('click', () => { wizardSession && wizardSession.pause(); });
   document.getElementById('btnSessionResume').addEventListener('click', async () => {
     const btn = document.getElementById('btnSessionResume');
@@ -1459,14 +1462,25 @@ function renderCustomTestFields() {
       row.appendChild(hint);
       host.appendChild(row);
     });
-    return;
+  } else {
+    const ta = document.createElement('textarea');
+    ta.id = 'customTestJson';
+    ta.rows = 4;
+    ta.placeholder = '{"param": "value"}';
+    ta.value = JSON.stringify(wizardState.testInput || {}, null, 2);
+    host.appendChild(ta);
   }
-  const ta = document.createElement('textarea');
-  ta.id = 'customTestJson';
-  ta.rows = 4;
-  ta.placeholder = '{"param": "value"}';
-  ta.value = JSON.stringify(wizardState.testInput || {}, null, 2);
-  host.appendChild(ta);
+  // Interaction UX: the AI-generated values are a decision the user has not
+  // signed off on — when values exist, the panel opens itself on phase-5
+  // entry instead of hiding behind a collapsed summary.
+  const details = document.getElementById('customTestPanel');
+  if (details) {
+    const hasValues = wizardState.testInput && Object.keys(wizardState.testInput).some((k) => {
+      const v = wizardState.testInput[k];
+      return v !== undefined && v !== null && String(v) !== '';
+    });
+    details.open = !!hasValues;
+  }
 }
 
 // Collect the hand-edited values; number/boolean schema types are coerced.
@@ -1522,6 +1536,21 @@ async function runCustomTest() {
     hideLoading();
     btn.disabled = false;
   }
+}
+
+// Interaction UX (user request): the AI's generated test values are a guess
+// the user never confirmed — this adopts the (possibly edited) values as the
+// DEFAULT the deployed service is tested with, on the review stage itself.
+function saveCustomTestInput() {
+  const custom = collectCustomTestInput();
+  if (custom === null) {
+    appendLog('Custom test input is not valid JSON — fix the values and retry.', 'error');
+    return;
+  }
+  wizardState.testInput = custom;
+  wizardState.sampleInput = JSON.parse(JSON.stringify(custom));
+  appendLog('Default test input saved from the review panel: ' + JSON.stringify(custom), 'success');
+  showToast('Saved as the default test input.', 'success');
 }
 
 async function testScript() {
@@ -2129,6 +2158,7 @@ function createWizardIoBridge() {
         setSessionBadge('waiting', 'waiting for contract confirmation');
         appendLog('I/O contract proposed — confirm or revise it to let the session continue.', 'warn');
         showToast('Confirm the input/output contract to continue the research session.', 'info', 6000);
+        focusWizardTab();
       });
     },
     confirm() {
@@ -2256,6 +2286,24 @@ function startSessionElapsedTimer(reset) {
 function stopSessionElapsedTimer() {
   if (sessionElapsedTimer) { clearInterval(sessionElapsedTimer); sessionElapsedTimer = null; }
   updateSessionElapsed(); // freeze showing the final total
+}
+
+// Interaction UX (user request): when a wizard panel needs the user, bring
+// the wizard's own tab (and window) to the front — during a long research
+// turn the user drifts to another tab and never notices the panel. The
+// annotation request deliberately does NOT call this: it activates the PAGE
+// tab because the user must click elements there.
+function focusWizardTab() {
+  try {
+    if (!(chrome.tabs && chrome.tabs.getCurrent)) return;
+    chrome.tabs.getCurrent((tab) => {
+      if (!tab || tab.id == null || tab.active) return;
+      chrome.tabs.update(tab.id, { active: true }, () => { void chrome.runtime.lastError; });
+      if (tab.windowId != null && chrome.windows && chrome.windows.update) {
+        chrome.windows.update(tab.windowId, { focused: true }, () => { void chrome.runtime.lastError; });
+      }
+    });
+  } catch (e) { /* best-effort — must never break the panel that called it */ }
 }
 
 function setSessionControls(mode) {
@@ -2416,6 +2464,28 @@ function buildRequirementText() {
 let restateConfirmedKey = null;
 let restateInFlight = false;
 
+// Interaction UX (user request): elapsed clock for the restatement LLM call —
+// see showRequirementRestatePanel.
+let restateTimerInt = null;
+
+function stopRestateTimer() {
+  if (restateTimerInt) { clearInterval(restateTimerInt); restateTimerInt = null; }
+}
+
+// Inline follow-up answers: non-empty answers collected at Confirm/Skip time
+// ride into the requirement text (startResearchSession appends the Q/A pairs
+// on the fresh-start path), so the engine starts with the clarifications.
+let restateAnswers = null;
+
+function collectRestateAnswers() {
+  const out = [];
+  document.querySelectorAll('#restateQuestions input.restate-answer').forEach((el) => {
+    const a = String(el.value || '').trim();
+    if (a) out.push({ q: String(el.dataset.question || ''), a: a });
+  });
+  return out;
+}
+
 function requirementGateKey() {
   const { inputParams, pageOps, outputStruct } = buildRequirementText();
   return hashString([
@@ -2445,6 +2515,21 @@ async function showRequirementRestatePanel() {
   const btnSkip = document.getElementById('btnRestateSkip');
   const btnRetry = document.getElementById('btnRestateRetry');
   panel.classList.remove('hidden');
+  focusWizardTab();
+  // Interaction UX: the restatement is a live LLM call — an elapsed clock in
+  // the modal keeps it visibly working (provider retries can add minutes),
+  // so the panel never reads as hung. Frozen at the total once the call
+  // settles; Retry restarts it.
+  const timerEl = document.getElementById('restateTimer');
+  stopRestateTimer();
+  const restateT0 = Date.now();
+  if (timerEl) {
+    timerEl.classList.remove('hidden');
+    timerEl.textContent = 'elapsed ' + formatSessionElapsed(0);
+    restateTimerInt = setInterval(() => {
+      timerEl.textContent = 'elapsed ' + formatSessionElapsed(Date.now() - restateT0);
+    }, 1000);
+  }
   note.textContent = 'The AI is restating your requirement for confirmation…';
   body.textContent = '';
   questions.innerHTML = '';
@@ -2480,10 +2565,23 @@ async function showRequirementRestatePanel() {
     body.textContent = norm.restatement;
     questions.innerHTML = '';
     if (norm.openQuestions.length) {
+      // Interaction UX: answer the follow-ups inline instead of Revise-ing
+      // the whole requirement — each answer is appended to the confirmed
+      // requirement as a Q/A pair, so the research engine starts with the
+      // clarification already in hand.
       const ul = document.createElement('ul');
+      ul.className = 'restate-questions';
       for (const q of norm.openQuestions) {
         const li = document.createElement('li');
-        li.textContent = q;
+        const qt = document.createElement('div');
+        qt.textContent = q;
+        const ans = document.createElement('input');
+        ans.type = 'text';
+        ans.className = 'restate-answer';
+        ans.dataset.question = q;
+        ans.placeholder = 'Your answer (optional)';
+        li.appendChild(qt);
+        li.appendChild(ans);
         ul.appendChild(li);
       }
       questions.appendChild(ul);
@@ -2497,6 +2595,7 @@ async function showRequirementRestatePanel() {
     btnSkip.classList.remove('hidden');
     btnRetry.classList.remove('hidden');
   } finally {
+    stopRestateTimer();
     restateInFlight = false;
   }
 }
@@ -2572,6 +2671,12 @@ async function startResearchSession(seedOverride) {
   } else {
     wizardState.requirements = { inputParams, pageOps, outputStruct };
     wizardState.description = buildRequirementsBlock(wizardState.requirements, wizardState.targetUrl);
+    // Inline follow-up answers from the restatement gate ride into the
+    // requirement the engine researches against.
+    if (restateAnswers && restateAnswers.length) {
+      wizardState.description += '\n\nFollow-up answers:\n' +
+        restateAnswers.map((x) => 'Q: ' + x.q + '\nA: ' + x.a).join('\n');
+    }
   }
   if (!wizardState.userDescription) wizardState.userDescription = wizardState.description;
 
@@ -2660,6 +2765,7 @@ async function startResearchSession(seedOverride) {
     setSessionBadge('crashed', 'crashed');
     stopSessionElapsedTimer();
     setSessionControls('stopped');
+    focusWizardTab();
     if (wizardPersistence) { try { await wizardPersistence.flush(); } catch (_) {} }
     return;
   }
@@ -2748,6 +2854,9 @@ function sessionStopResumable(st) {
 //   3. an artifact-less completion keeps the historical bare landing.
 async function presentSessionCompletion() {
   if (wizardPersistence) { try { await wizardPersistence.flush(); } catch (_) {} }
+  // The research may have run for many minutes — the user can be anywhere;
+  // bring the wizard tab forward for the results/feedback presentation.
+  focusWizardTab();
   const lv = (wizardToolsBag && typeof wizardToolsBag.getLastVerify === 'function')
     ? wizardToolsBag.getLastVerify() : null;
   const st = wizardSession ? wizardSession.state() : null;
