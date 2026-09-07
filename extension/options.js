@@ -313,6 +313,9 @@ async function loadLlmConfig() {
   document.getElementById('model').value = config.model || '';
   document.getElementById('apiKey').value = config.apiKey || '';
   document.getElementById('apiBaseUrl').value = config.apiBaseUrl || '';
+  // Protocol preference (Anthropic Messages vs OpenAI chat). Blank/legacy → auto.
+  const proto = config.apiProtocol;
+  document.getElementById('apiProtocol').value = (proto === 'anthropic' || proto === 'openai') ? proto : 'auto';
   // timeoutMs is stored in ms; the UI is in seconds. Blank → default (300).
   const timeoutSeconds = config.timeoutMs ? Math.round(config.timeoutMs / 1000) : '';
   document.getElementById('llmTimeout').value = timeoutSeconds;
@@ -338,6 +341,10 @@ async function saveLlmConfig() {
     model: document.getElementById('model').value,
     apiKey: document.getElementById('apiKey').value,
     apiBaseUrl: document.getElementById('apiBaseUrl').value || undefined,
+    // Protocol preference; anything unexpected falls back to 'auto' in llm-client.
+    apiProtocol: ['auto', 'anthropic', 'openai'].includes(document.getElementById('apiProtocol').value)
+      ? document.getElementById('apiProtocol').value
+      : 'auto',
     temperature: 0.1,
     timeoutMs: timeoutSeconds * 1000,
     maxOutputTokens

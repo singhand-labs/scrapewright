@@ -16,6 +16,19 @@ const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 // matched provider-agnostically, alongside the CN-provider phrasings.
 const BALANCE_EXHAUSTED_RE = /insufficient balance|no resource package|please recharge|balance is exhausted|insufficient credits|arrears|欠费|余额不足/i;
 
+// Thirty-fourth log followup (user directive): speak the Anthropic Messages
+// protocol natively, PREFER it by default when the server supports it (coding
+// plans — GLM Coding Plan, Kimi, ... — expose /v1/messages and provision the
+// generous agent lane there), and fall back to OpenAI chat/completions when
+// the server does not. Capability is probed once per base URL and cached in
+// this map for the lifetime of the page context.
+const ANTHROPIC_VERSION = '2023-06-01';
+// Coding-plan lanes are provisioned for agent clients and classify traffic by
+// the Claude Code client signature; mirror it so paid plan traffic lands in
+// the agent lane instead of the generic low-limit pool.
+const CLAUDE_CLI_USER_AGENT = 'claude-cli/2.1.6 (external, cli)';
+const anthropicCapableByBase = new Map();
+
 // Thirty-second log (user directive): the 300-char response preview hid the
 // model's think + tool-call — exported logs could not show WHAT the model
 // decided, only that it replied. Chunk the full content across console lines
@@ -64,6 +77,18 @@ function defaultBackoffMs(attempt) {
   return base + Math.floor(Math.random() * 500);
 }
 
+function normalizeBase(url) {
+  return String(url || '').replace(/\/+$/, '');
+}
+
+// The Messages API path depends on the base convention: Anthropic-native
+// bases already end in /v1 (.../v1/messages); coding-plan bases are bare
+// prefixes and take the appended /v1/messages (.../v4/v1/messages).
+function anthropicMessagesUrl(base) {
+  const b = normalizeBase(base);
+  return /\/v1$/i.test(b) ? b + '/messages' : b + '/v1/messages';
+}
+
 class LLMClient {
   constructor(config) {
     this.provider = config.provider;
@@ -71,6 +96,12 @@ class LLMClient {
     this.apiKey = config.apiKey;
     this.apiBaseUrl = config.apiBaseUrl || this.getDefaultBaseUrl();
     this.temperature = config.temperature ?? 0.1;
+    // 'auto' (default) prefers Anthropic Messages and falls back to OpenAI
+    // chat/completions when the server does not speak it; 'anthropic'/
+    // 'openai' pin the protocol (no silent switching).
+    this.apiProtocol = config.apiProtocol === 'anthropic' || config.apiProtocol === 'openai'
+      ? config.apiProtocol
+      : 'auto';
     // Per-config timeout (ms). Falls back to DEFAULT_TIMEOUT_MS at use site
     // when undefined/invalid so legacy configs without this field still work.
     const configured = Number(config.timeoutMs);
@@ -93,6 +124,18 @@ class LLMClient {
       case 'glm': return 'https://open.bigmodel.cn/api/paas/v4';
       default: throw new Error(`Unknown provider: ${this.provider}`);
     }
+  }
+
+  _resolveProtocol() {
+    if (this.apiProtocol !== 'auto') return this.apiProtocol;
+    const cached = anthropicCapableByBase.get(normalizeBase(this.apiBaseUrl));
+    if (cached === false) return 'openai';
+    return 'anthropic';
+  }
+
+  _markProtocol(capable) {
+    if (this.apiProtocol !== 'auto') return;
+    anthropicCapableByBase.set(normalizeBase(this.apiBaseUrl), !!capable);
   }
 
   async chat(messages, options = {}) {
@@ -134,40 +177,17 @@ class LLMClient {
   }
 
   async _chatOnce(messages, options = {}) {
-    const base = this.apiBaseUrl.replace(/\/$/, '');
-    const url = `${base}/chat/completions`;
-    const body = {
-      model: this.model,
-      messages,
-      temperature: options.temperature ?? this.temperature,
-      max_tokens: options.maxTokens ?? this.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
-      response_format: options.jsonMode ? { type: 'json_object' } : undefined
-    };
+    if (this._resolveProtocol() === 'anthropic') return this._chatAnthropic(messages, options);
+    return this._chatOpenAI(messages, options);
+  }
 
-    console.log('[LLMClient] Request URL:', url);
-    console.log('[LLMClient] Request model:', this.model);
-    // Thirty-third log D4: the pretty-printed multi-line JSON single arg
-    // vanished from every exported console capture ("Request body:" lines
-    // read empty). One-line chunked strings survive DevTools "Save as…"
-    // (response path, 32nd log). Tighter cap than the response: the
-    // transcript itself is already mirrored at the wizard layer.
-    logContentChunks('[LLMClient] Request body', JSON.stringify(body), 8000);
-
-    const timeoutMs = options.timeoutMs ?? this.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  async _fetchWithTimeout(url, init, timeoutMs) {
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
-
-    let response;
     try {
-      response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.apiKey}`
-        },
-        body: JSON.stringify(body),
+      return await fetch(url, Object.assign({}, init, {
         signal: controller ? controller.signal : undefined
-      });
+      }));
     } catch (e) {
       const name = e && e.name;
       // AbortError = our timeout; network failures are also retryable.
@@ -179,60 +199,46 @@ class LLMClient {
     } finally {
       if (timer) clearTimeout(timer);
     }
+  }
 
-    console.log('[LLMClient] Response status:', response.status);
-    console.log('[LLMClient] Response content-type:', response.headers.get('content-type'));
-
-    const contentType = response.headers.get('content-type') || '';
-    if (!response.ok) {
-      let detail = '';
-      try {
-        const errBody = await response.json();
-        detail = errBody.error?.message || JSON.stringify(errBody).slice(0, 300);
-      } catch (e) {
-        detail = (await response.text()).slice(0, 300);
-      }
-      const retryable = RETRYABLE_STATUS.has(response.status);
-      const base = { retryable, status: response.status };
-      // Balance/recharge bodies name a deterministic provider-side billing
-      // condition — identical retries cannot succeed (RC55 family: don't burn
-      // the budget on deterministic failures). Fail fast with the remedy.
-      if (BALANCE_EXHAUSTED_RE.test(detail)) {
-        throw new LLMError(
-          `LLM provider reports an account billing condition (status ${response.status}): ${detail} This is deterministic — no retry was attempted because identical retries cannot fix it. Recharge the provider account (or claim/activate a resource package covering model ${this.model}), or switch provider/model in Settings.`,
-          { retryable: false, status: response.status }
-        );
-      }
-      if (response.status === 404) {
-        throw new LLMError(`LLM API endpoint not found (404). URL: ${url}. Check your Base URL and Model name. Detail: ${detail}`, base);
-      }
-      if (response.status === 401 || response.status === 403) {
-        throw new LLMError(`LLM API auth failed (${response.status}). Check your API key. Detail: ${detail}`, base);
-      }
-      throw new LLMError(`LLM API error (${response.status}): ${detail}`, base);
+  // Both protocol families carry the error detail as error.message (OpenAI
+  // {error:{message}} and Anthropic {type:'error', error:{type,message}}).
+  async _extractErrorDetail(response) {
+    try {
+      const errBody = await response.json();
+      return (errBody && errBody.error && errBody.error.message) || JSON.stringify(errBody).slice(0, 300);
+    } catch (e) {
+      try { return (await response.text()).slice(0, 300); } catch (_) { return ''; }
     }
-    if (!contentType.includes('application/json')) {
-      const text = await response.text();
-      console.error('[LLMClient] Non-JSON response:', text.slice(0, 500));
-      // Proxy hiccups (HTML error pages) are often transient.
-      throw new LLMError(`LLM API returned non-JSON (status ${response.status}, content-type: ${contentType}, url: ${url}). Response starts with: ${text.slice(0, 200)}`, { retryable: true, status: response.status });
+  }
+
+  _throwHttpError(response, url, detail) {
+    // Balance/recharge bodies name a deterministic provider-side billing
+    // condition — identical retries cannot succeed (RC55 family: don't burn
+    // the budget on deterministic failures). Fail fast with the remedy.
+    if (BALANCE_EXHAUSTED_RE.test(detail)) {
+      throw new LLMError(
+        `LLM provider reports an account billing condition (status ${response.status}): ${detail} This is deterministic — no retry was attempted because identical retries cannot fix it. Recharge the provider account (or claim/activate a resource package covering model ${this.model}), or switch provider/model in Settings. If your key rides a coding-plan subscription (GLM Coding Plan and similar), its quota is only honored on the plan's dedicated Base URL — e.g. point Settings → Base URL at https://open.bigmodel.cn/api/coding/paas/v4 for Zhipu coding plans.`,
+        { retryable: false, status: response.status }
+      );
     }
-
-    const data = await response.json();
-    console.log('[LLMClient] Response data keys:', Object.keys(data));
-
-    if (!data.choices || !data.choices[0] || !data.choices[0].message) {
-      console.error('[LLMClient] Unexpected response structure:', JSON.stringify(data, null, 2).slice(0, 500));
-      throw new LLMError(`LLM API returned unexpected format. Expected data.choices[0].message.content, got: ${JSON.stringify(data).slice(0, 200)}`, { retryable: false });
+    if (response.status === 404) {
+      throw new LLMError(`LLM API endpoint not found (404). URL: ${url}. Check your Base URL and Model name. Detail: ${detail}`, { retryable: false, status: 404 });
     }
+    if (response.status === 401 || response.status === 403) {
+      throw new LLMError(`LLM API auth failed (${response.status}). Check your API key. Detail: ${detail}`, { retryable: false, status: response.status });
+    }
+    throw new LLMError(`LLM API error (${response.status}): ${detail}`, { retryable: RETRYABLE_STATUS.has(response.status), status: response.status });
+  }
 
-    const message = data.choices[0].message;
-    const finishReason = data.choices[0].finish_reason;
-    const usage = data.usage || {};
+  // Shared post-response pipeline: logging, empty-content classification
+  // (overflow / RC55 budget burn / transient), truncation disclosure.
+  // finishReason is normalized to OpenAI vocabulary by the caller ('length',
+  // 'content_filter', 'stop').
+  _finalizeContent(content, finishReason, usage, options = {}) {
+    const effectiveMaxTokens = options.maxTokens ?? this.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
     console.log('[LLMClient] Response finish_reason:', finishReason);
     console.log('[LLMClient] Response usage:', JSON.stringify(usage));
-
-    const content = message.content;
     console.log('[LLMClient] Response content length:', content?.length);
     logContentChunks('[LLMClient] Response content', content);
 
@@ -263,8 +269,8 @@ class LLMClient {
       // knows which knob (Settings maxOutputTokens) to raise.
       if (finishReason === 'length') {
         throw new LLMError(
-          `LLM API returned empty content and consumed the ENTIRE ${body.max_tokens}-token completion budget before emitting any content (finish_reason=length). This failure is deterministic — identical retries cannot succeed, so no retry was attempted. Raise the Settings maxOutputTokens (effective budget was ${body.max_tokens}) or use a provider/model with lower reasoning overhead. Detail: ${detail}`,
-          { retryable: false, finish_reason: finishReason, usage, effectiveMaxTokens: body.max_tokens }
+          `LLM API returned empty content and consumed the ENTIRE ${effectiveMaxTokens}-token completion budget before emitting any content (finish_reason=length). This failure is deterministic — identical retries cannot succeed, so no retry was attempted. Raise the Settings maxOutputTokens (effective budget was ${effectiveMaxTokens}) or use a provider/model with lower reasoning overhead. Detail: ${detail}`,
+          { retryable: false, finish_reason: finishReason, usage, effectiveMaxTokens }
         );
       }
       const hint = finishReason === 'content_filter'
@@ -283,13 +289,181 @@ class LLMClient {
     // visible, with the effective budget and the Settings knob to raise.
     if (finishReason === 'length' && content) {
       console.warn(
-        `[LLMClient] Output TRUNCATED (finish_reason=length): the response was cut at the ${body.max_tokens}-token completion budget before finishing ` +
+        `[LLMClient] Output TRUNCATED (finish_reason=length): the response was cut at the ${effectiveMaxTokens}-token completion budget before finishing ` +
         `(${String(content).length} chars received, completion_tokens=${usage.completion_tokens ?? 'unknown'}). ` +
         `A truncated payload will likely fail JSON parsing or end mid-script. ` +
-        `If this recurs, raise the Settings maxOutputTokens above ${body.max_tokens} for this provider.`
+        `If this recurs, raise the Settings maxOutputTokens above ${effectiveMaxTokens} for this provider.`
       );
     }
     return content;
+  }
+
+  async _chatAnthropic(messages, options = {}) {
+    const url = anthropicMessagesUrl(this.apiBaseUrl);
+    const body = {
+      model: this.model,
+      messages: [],
+      temperature: options.temperature ?? this.temperature,
+      max_tokens: options.maxTokens ?? this.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS
+    };
+    // The Messages API takes system as a top-level parameter, not a message
+    // role; multiple system messages concatenate.
+    const systemParts = [];
+    for (const m of messages) {
+      if (m && m.role === 'system') systemParts.push(String(m.content ?? ''));
+      else body.messages.push({ role: m.role, content: String(m.content ?? '') });
+    }
+    if (systemParts.filter((s) => s).length) body.system = systemParts.join('\n\n');
+    // No response_format/jsonMode equivalent in the Messages API — JSON-ness
+    // is enforced by the prompts and the lenient parser downstream.
+
+    console.log('[LLMClient] Request URL:', url);
+    console.log('[LLMClient] Request model:', this.model);
+    console.log('[LLMClient] Request protocol: anthropic-messages');
+    // Thirty-third log D4: one-line chunked strings survive DevTools
+    // "Save as…" (response path, 32nd log). Tighter cap than the response:
+    // the transcript itself is already mirrored at the wizard layer.
+    logContentChunks('[LLMClient] Request body', JSON.stringify(body), 8000);
+
+    const timeoutMs = options.timeoutMs ?? this.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const response = await this._fetchWithTimeout(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        // Both auth spellings: native Anthropic keys x-api-key; bridges and
+        // coding-plan gateways usually accept Bearer (many only Bearer).
+        'x-api-key': this.apiKey,
+        'Authorization': `Bearer ${this.apiKey}`,
+        'anthropic-version': ANTHROPIC_VERSION,
+        'user-agent': CLAUDE_CLI_USER_AGENT,
+        'x-app': 'cli'
+      },
+      body: JSON.stringify(body)
+    }, timeoutMs);
+
+    console.log('[LLMClient] Response status:', response.status);
+    console.log('[LLMClient] Response content-type:', response.headers.get('content-type'));
+    const contentType = response.headers.get('content-type') || '';
+
+    if (!response.ok) {
+      const detail = await this._extractErrorDetail(response);
+      // Capability probe (auto only): a missing Messages surface answers
+      // 404/405 — pin OpenAI for this base and re-run the call there.
+      if ((response.status === 404 || response.status === 405) && this.apiProtocol === 'auto') {
+        this._markProtocol(false);
+        console.warn(`[LLMClient] ${url} does not speak the Anthropic Messages protocol (HTTP ${response.status}) — falling back to OpenAI chat/completions for this base URL.`);
+        return this._chatOpenAI(messages, options);
+      }
+      this._throwHttpError(response, url, detail);
+    }
+    if (!contentType.includes('application/json')) {
+      const text = await response.text();
+      console.error('[LLMClient] Non-JSON response:', text.slice(0, 500));
+      // Proxy hiccups (HTML error pages) are often transient.
+      throw new LLMError(`LLM API returned non-JSON (status ${response.status}, content-type: ${contentType}, url: ${url}). Response starts with: ${text.slice(0, 200)}`, { retryable: true, status: response.status });
+    }
+
+    const data = await response.json();
+    console.log('[LLMClient] Response data keys:', Object.keys(data));
+
+    if (Array.isArray(data.content)) {
+      this._markProtocol(true);
+      const text = data.content
+        .filter((b) => b && b.type === 'text')
+        .map((b) => b.text || '')
+        .join('');
+      // Normalize stop_reason to the OpenAI finish_reason vocabulary the
+      // shared pipeline (and the RC55/truncation branches) speak.
+      const stop = data.stop_reason;
+      const finishReason = stop === 'max_tokens' ? 'length'
+        : stop === 'refusal' ? 'content_filter'
+        : 'stop';
+      const u = data.usage || {};
+      const usage = {
+        prompt_tokens: u.input_tokens,
+        completion_tokens: u.output_tokens,
+        total_tokens: (u.input_tokens || 0) + (u.output_tokens || 0)
+      };
+      return this._finalizeContent(text, finishReason, usage, options);
+    }
+
+    // 200 but OpenAI-shaped: a bridge aliasing both protocols on one URL —
+    // parse the response we already hold instead of paying another request.
+    if (data.choices && data.choices[0] && data.choices[0].message) {
+      this._markProtocol(false);
+      console.log('[LLMClient] Protocol note: OpenAI-shaped response on the Messages URL — parsing as OpenAI and pinning OpenAI for this base.');
+      return this._parseOpenAISuccess(data, options);
+    }
+
+    if (this.apiProtocol === 'auto') {
+      this._markProtocol(false);
+      console.warn(`[LLMClient] Unrecognized response shape on ${url} — falling back to OpenAI chat/completions for this base URL.`);
+      return this._chatOpenAI(messages, options);
+    }
+    console.error('[LLMClient] Unexpected response structure:', JSON.stringify(data, null, 2).slice(0, 500));
+    throw new LLMError(`LLM API returned unexpected format. Expected an Anthropic Messages response (content blocks) or data.choices[0].message.content, got: ${JSON.stringify(data).slice(0, 200)}`, { retryable: false });
+  }
+
+  async _chatOpenAI(messages, options = {}) {
+    const base = normalizeBase(this.apiBaseUrl);
+    const url = `${base}/chat/completions`;
+    const body = {
+      model: this.model,
+      messages,
+      temperature: options.temperature ?? this.temperature,
+      max_tokens: options.maxTokens ?? this.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+      response_format: options.jsonMode ? { type: 'json_object' } : undefined
+    };
+
+    console.log('[LLMClient] Request URL:', url);
+    console.log('[LLMClient] Request model:', this.model);
+    console.log('[LLMClient] Request protocol: openai-chat');
+    // Thirty-third log D4: the pretty-printed multi-line JSON single arg
+    // vanished from every exported console capture ("Request body:" lines
+    // read empty). One-line chunked strings survive DevTools "Save as…"
+    // (response path, 32nd log). Tighter cap than the response: the
+    // transcript itself is already mirrored at the wizard layer.
+    logContentChunks('[LLMClient] Request body', JSON.stringify(body), 8000);
+
+    const timeoutMs = options.timeoutMs ?? this.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const response = await this._fetchWithTimeout(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.apiKey}`
+      },
+      body: JSON.stringify(body)
+    }, timeoutMs);
+
+    console.log('[LLMClient] Response status:', response.status);
+    console.log('[LLMClient] Response content-type:', response.headers.get('content-type'));
+
+    const contentType = response.headers.get('content-type') || '';
+    if (!response.ok) {
+      const detail = await this._extractErrorDetail(response);
+      this._throwHttpError(response, url, detail);
+    }
+    if (!contentType.includes('application/json')) {
+      const text = await response.text();
+      console.error('[LLMClient] Non-JSON response:', text.slice(0, 500));
+      // Proxy hiccups (HTML error pages) are often transient.
+      throw new LLMError(`LLM API returned non-JSON (status ${response.status}, content-type: ${contentType}, url: ${url}). Response starts with: ${text.slice(0, 200)}`, { retryable: true, status: response.status });
+    }
+
+    const data = await response.json();
+    console.log('[LLMClient] Response data keys:', Object.keys(data));
+    return this._parseOpenAISuccess(data, options);
+  }
+
+  _parseOpenAISuccess(data, options = {}) {
+    if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+      console.error('[LLMClient] Unexpected response structure:', JSON.stringify(data, null, 2).slice(0, 500));
+      throw new LLMError(`LLM API returned unexpected format. Expected data.choices[0].message.content, got: ${JSON.stringify(data).slice(0, 200)}`, { retryable: false });
+    }
+    const message = data.choices[0].message;
+    const finishReason = data.choices[0].finish_reason;
+    const usage = data.usage || {};
+    return this._finalizeContent(message.content, finishReason, usage, options);
   }
 }
 

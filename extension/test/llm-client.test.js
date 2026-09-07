@@ -743,3 +743,186 @@ describe('LLMClient request body chunked logging', () => {
     assert.match(elided[0][2], /\[\+\d+ chars not shown\]/);
   });
 });
+
+// Thirty-fourth log followup (user directive): support the Anthropic
+// Messages protocol natively, PREFER it by default when the server speaks it
+// (Zhipu coding plans, Moonshot, ... expose /v1/messages), fall back to
+// OpenAI chat/completions when it does not, and identify as the Claude Code
+// agent client on that path so coding-plan lanes classify us into the agent
+// lane. Distinct base URLs per test — the protocol capability cache is
+// module-level and keyed by base.
+describe('Anthropic Messages protocol (auto-prefer + fallback + agent identity)', () => {
+  let consoleStub;
+  const originalConsoleLog = console.log;
+  const originalConsoleError = console.error;
+  const originalConsoleWarn = console.warn;
+
+  beforeEach(() => {
+    consoleStub = [];
+    console.log = (...args) => consoleStub.push(['log', ...args]);
+    console.error = (...args) => consoleStub.push(['error', ...args]);
+    console.warn = (...args) => consoleStub.push(['warn', ...args]);
+  });
+  afterEach(() => {
+    global.fetch = originalFetch;
+    console.log = originalConsoleLog;
+    console.error = originalConsoleError;
+    console.warn = originalConsoleWarn;
+  });
+
+  function anthropicBody({ text = 'ok', stop_reason = 'end_turn', input_tokens = 5, output_tokens = 2 } = {}) {
+    return {
+      id: 'msg_1', type: 'message', role: 'assistant', model: 'test-model',
+      content: [{ type: 'text', text }],
+      stop_reason, stop_sequence: null,
+      usage: { input_tokens, output_tokens }
+    };
+  }
+  function anthropicEmpty(stop_reason, output_tokens) {
+    return {
+      id: 'msg_2', type: 'message', role: 'assistant', model: 'test-model',
+      content: [], stop_reason, stop_sequence: null,
+      usage: { input_tokens: 100, output_tokens }
+    };
+  }
+  function clientAt(base, extraConfig = {}) {
+    return new LLMClient(Object.assign({
+      provider: 'glm', model: 'test-model', apiKey: 'test-key', apiBaseUrl: base
+    }, extraConfig));
+  }
+
+  it('auto prefers Anthropic Messages: native URL, agent headers, system extraction, content-block parsing', async () => {
+    const seen = [];
+    global.fetch = async (url, init) => {
+      seen.push({ url: String(url), headers: init.headers, body: JSON.parse(init.body) });
+      return mockResponse({ body: anthropicBody({ text: 'hello world' }) });
+    };
+    const client = clientAt('http://a.test/v1');
+    const out = await client.chat([
+      { role: 'system', content: 'be brief' },
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'hello?' },
+      { role: 'user', content: 'again' }
+    ], { maxRetries: 1 });
+    assert.equal(out, 'hello world');
+    assert.equal(seen.length, 1, 'exactly one request');
+    assert.equal(seen[0].url, 'http://a.test/v1/messages');
+    assert.equal(seen[0].headers['x-api-key'], 'test-key', 'x-api-key header');
+    assert.equal(seen[0].headers['Authorization'], 'Bearer test-key', 'Bearer also sent for bridges');
+    assert.equal(seen[0].headers['anthropic-version'], '2023-06-01');
+    assert.match(seen[0].headers['user-agent'] || '', /^claude-cli\/.+ \(external, cli\)$/, 'Claude Code client signature');
+    assert.equal(seen[0].body.system, 'be brief', 'leading system message extracted top-level');
+    assert.deepEqual(seen[0].body.messages.map((m) => m.role), ['user', 'assistant', 'user']);
+    assert.equal(seen[0].body.max_tokens, 16384, 'max_tokens preserved (default chain)');
+    assert.ok(!('response_format' in seen[0].body), 'no OpenAI response_format on the Messages path');
+  });
+
+  it('base without /v1 (Zhipu coding lane) appends /v1/messages', async () => {
+    let url = '';
+    global.fetch = async (u) => { url = String(u); return mockResponse({ body: anthropicBody() }); };
+    await clientAt('https://open.bigmodel.cn/api/coding/paas/v4').chat([{ role: 'user', content: 'hi' }], { maxRetries: 1 });
+    assert.equal(url, 'https://open.bigmodel.cn/api/coding/paas/v4/v1/messages');
+  });
+
+  it('empty content + stop_reason max_tokens maps to the RC55 non-retryable length error with the budget', async () => {
+    global.fetch = async () => mockResponse({ body: anthropicEmpty('max_tokens', 4096) });
+    const client = clientAt('http://c.test/v1', { maxOutputTokens: 4096 });
+    await assert.rejects(
+      client.chat([{ role: 'user', content: 'hi' }], { maxRetries: 3 }),
+      (err) => {
+        assert.equal(err.retryable, false, 'deterministic budget burn');
+        assert.match(err.message, /finish_reason=length/, 'stop_reason=max_tokens mapped to length semantics');
+        assert.match(err.message, /4096/, 'effective budget named');
+        return true;
+      }
+    );
+  });
+
+  it('partial content + stop_reason max_tokens warns TRUNCATED and still returns the text', async () => {
+    global.fetch = async () => mockResponse({ body: anthropicBody({ text: 'partial answer', stop_reason: 'max_tokens' }) });
+    const out = await clientAt('http://d.test/v1', { maxOutputTokens: 4096 }).chat([{ role: 'user', content: 'hi' }], { maxRetries: 1 });
+    assert.equal(out, 'partial answer');
+    const warns = consoleStub.filter((l) => l[0] === 'warn' && /TRUNCATED/.test(l[1]));
+    assert.equal(warns.length, 1, 'truncation warning present');
+  });
+
+  it('404 on the Messages URL (auto) falls back to chat/completions and pins the base', async () => {
+    const urls = [];
+    global.fetch = async (u) => {
+      urls.push(String(u));
+      if (String(u).endsWith('/messages')) return mockResponse({ status: 404, body: {}, contentType: 'text/html' });
+      return mockResponse({ body: successBody('{"ok":true}') });
+    };
+    const client = clientAt('http://e.test/v1');
+    assert.equal(await client.chat([{ role: 'user', content: 'hi' }], { maxRetries: 1 }), '{"ok":true}');
+    assert.deepEqual(urls, ['http://e.test/v1/messages', 'http://e.test/v1/chat/completions']);
+    assert.equal(await client.chat([{ role: 'user', content: 'hi' }], { maxRetries: 1 }), '{"ok":true}');
+    assert.equal(urls.length, 3, 'second call skips the probe');
+    assert.equal(urls[2], 'http://e.test/v1/chat/completions', 'sticky openai for this base');
+  });
+
+  it('200 with an OpenAI-shaped body on the Messages URL parses in place — no second request', async () => {
+    let calls = 0;
+    const urls = [];
+    global.fetch = async (u) => { calls++; urls.push(String(u)); return mockResponse({ body: successBody('bridge-ok') }); };
+    const client = clientAt('http://f.test/v1');
+    assert.equal(await client.chat([{ role: 'user', content: 'hi' }], { maxRetries: 1 }), 'bridge-ok');
+    assert.equal(calls, 1, 'the response we already hold is parsed, not refetched');
+    await client.chat([{ role: 'user', content: 'hi' }], { maxRetries: 1 });
+    assert.equal(urls[1], 'http://f.test/v1/chat/completions', 'base pinned openai after the shape sniff');
+  });
+
+  it('protocol pinned anthropic + 404 throws (no silent openai fallback)', async () => {
+    const urls = [];
+    global.fetch = async (u) => { urls.push(String(u)); return mockResponse({ status: 404, body: {}, contentType: 'text/html' }); };
+    await assert.rejects(
+      clientAt('http://g.test/v1', { apiProtocol: 'anthropic' }).chat([{ role: 'user', content: 'hi' }], { maxRetries: 1 }),
+      (err) => /404/.test(err.message)
+    );
+    assert.equal(urls.length, 1, 'pinned protocol never silently switches');
+  });
+
+  it('protocol pinned openai never touches the Messages URL', async () => {
+    const urls = [];
+    global.fetch = async (u) => { urls.push(String(u)); return mockResponse({ body: successBody('ok') }); };
+    await clientAt('http://h.test/v1', { apiProtocol: 'openai' }).chat([{ role: 'user', content: 'hi' }], { maxRetries: 1 });
+    assert.deepEqual(urls, ['http://h.test/v1/chat/completions']);
+  });
+
+  it('balance-class 429 on the Messages path fails fast AND names the coding-plan base URL remedy', async () => {
+    const urls = [];
+    global.fetch = async (u) => {
+      urls.push(String(u));
+      if (String(u).endsWith('/messages')) {
+        return mockResponse({ status: 429, body: { error: { message: 'Insufficient balance or no resource package. Please recharge.' } } });
+      }
+      return mockResponse({ body: successBody('should-not-be-reached') });
+    };
+    await assert.rejects(
+      clientAt('http://i.test/v1').chat([{ role: 'user', content: 'hi' }], { maxRetries: 3 }),
+      (err) => {
+        assert.equal(err.retryable, false);
+        assert.match(err.message, /recharge|resource package/i);
+        assert.match(err.message, /coding-plan/i, 'mentions the coding-plan pattern');
+        assert.match(err.message, /coding\/paas\/v4/, 'names the dedicated base URL example');
+        return true;
+      }
+    );
+    assert.equal(urls.length, 1, 'no fallback attempt — the server speaks Messages; the wall is billing');
+  });
+
+  it('Anthropic error envelope detail flows through the auth-error message', async () => {
+    global.fetch = async () => mockResponse({
+      status: 401,
+      body: { type: 'error', error: { type: 'authentication_error', message: 'invalid api key supplied' } }
+    });
+    await assert.rejects(
+      clientAt('http://j.test/v1', { apiProtocol: 'anthropic' }).chat([{ role: 'user', content: 'hi' }], { maxRetries: 1 }),
+      (err) => {
+        assert.match(err.message, /invalid api key supplied/);
+        assert.match(err.message, /API key/);
+        return true;
+      }
+    );
+  });
+});

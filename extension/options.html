@@ -85,6 +85,12 @@
       <input type="text" id="model" placeholder="Model name (e.g. kimi-for-coding)" />
       <input type="password" id="apiKey" placeholder="API Key" />
       <input type="text" id="apiBaseUrl" placeholder="Base URL (optional)" />
+      <select id="apiProtocol">
+        <option value="auto">API protocol: Auto — prefer Anthropic Messages, fall back to OpenAI</option>
+        <option value="anthropic">API protocol: Anthropic Messages only</option>
+        <option value="openai">API protocol: OpenAI chat/completions only</option>
+      </select>
+      <p class="hint">Auto probes the Anthropic Messages API first (the protocol coding plans like GLM Coding Plan provision for agents) and falls back to OpenAI chat/completions when the server does not speak it. Pin a protocol if a bridge behaves differently on the two paths.</p>
       <input type="number" id="llmTimeout" placeholder="Request timeout in seconds (default 300)" min="10" max="600" step="5" />
       <p class="hint">Per-request timeout for LLM calls. Blank = 300s. Increase if your model is slow; lower for faster failure.</p>
       <input type="number" id="llmMaxTokens" placeholder="Max output tokens (default 16384)" min="1024" max="131072" step="1024" />
