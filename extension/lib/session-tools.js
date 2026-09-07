@@ -269,6 +269,55 @@
       return null;
     }
 
+    // Thirty-first log: the confirm panel rendered raw schemas, and a
+    // renegotiation that moved a field OUT of items.required (dropping the
+    // REQUIRED_FIELD_EMPTY guarantee) was approved in ~90 seconds — the user
+    // confirmed "something changed" without the requirement change being
+    // readable. Compute the exact diff against the confirmed contract so the
+    // panel renders WHAT changes (fields leaving/entering required, fields
+    // added/removed, type changes), not just that the JSON differs.
+    function contractDiffLines(prevOut, nextOut) {
+      const lines = [];
+      const prev = (prevOut && typeof prevOut === 'object') ? prevOut : {};
+      const next = (nextOut && typeof nextOut === 'object') ? nextOut : {};
+      const reqOf = (s) => (Array.isArray(s.required) ? s.required.map(String) : []);
+      const propsOf = (s) => (s.properties && typeof s.properties === 'object' && !Array.isArray(s.properties)) ? s.properties : {};
+      const typeOf = (v) => (v && Array.isArray(v.type)) ? v.type.join('|') : ((v && v.type) ? String(v.type) : '-');
+      const reqDiff = (scope, a, b) => {
+        for (const f of a.filter((x) => b.indexOf(x) === -1)) {
+          lines.push(scope + ' "' + f + '" LEAVING required — it was contractually demanded for every record and becomes optional or dropped');
+        }
+        for (const f of b.filter((x) => a.indexOf(x) === -1)) {
+          lines.push(scope + ' "' + f + '" ENTERING required — now contractually demanded for every record');
+        }
+      };
+      const propsDiff = (scope, prevProps, nextProps) => {
+        const a = Object.keys(prevProps);
+        const b = Object.keys(nextProps);
+        for (const f of a.filter((x) => b.indexOf(x) === -1)) lines.push(scope + ' "' + f + '" REMOVED from the output');
+        for (const f of b.filter((x) => a.indexOf(x) === -1)) lines.push(scope + ' "' + f + '" ADDED to the output');
+        for (const f of a.filter((x) => b.indexOf(x) !== -1)) {
+          const ta = typeOf(prevProps[f]);
+          const tb = typeOf(nextProps[f]);
+          if (ta !== tb) lines.push(scope + ' "' + f + '" type ' + ta + ' → ' + tb);
+        }
+      };
+      const pp = propsOf(prev);
+      const np = propsOf(next);
+      reqDiff('output key', reqOf(prev), reqOf(next));
+      propsDiff('output key', pp, np);
+      for (const key of Object.keys(np)) {
+        const ni = np[key] && np[key].items;
+        if (!ni || typeof ni !== 'object') continue;
+        const pi = (pp[key] && pp[key].items) || null;
+        const scope = 'record field of "' + key + '"';
+        reqDiff(scope, pi && Array.isArray(pi.required) ? pi.required.map(String) : [], Array.isArray(ni.required) ? ni.required.map(String) : []);
+        propsDiff(scope, (pi && pi.properties && typeof pi.properties === 'object' && !Array.isArray(pi.properties)) ? pi.properties : {},
+          (ni.properties && typeof ni.properties === 'object' && !Array.isArray(ni.properties)) ? ni.properties : {});
+      }
+      return lines;
+    }
+
     async function ioConfirm(args, ctx) {
       const a = args && typeof args === 'object' ? args : {};
       const bridge = d.ioConfirmBridge;
@@ -307,10 +356,18 @@
       let res;
       if (sess && typeof sess.parkBegin === 'function') sess.parkBegin();
       try {
+        // Thirty-first log: a renegotiation must show the user WHAT changes
+        // against the confirmed contract (a field leaving items.required is
+        // losing its REQUIRED_FIELD_EMPTY guarantee) — not raw JSON only.
+        const priorSchemas = ioConfirmedSchemas || ledgerConfirmedSchemas(ctx);
+        const diffLines = (priorSchemas && priorSchemas.outputSchema)
+          ? contractDiffLines(priorSchemas.outputSchema, a.outputSchema)
+          : [];
         res = await bridge.request({
           inputSchema: a.inputSchema,
           outputSchema: a.outputSchema,
-          note: typeof a.note === 'string' ? a.note : ''
+          note: typeof a.note === 'string' ? a.note : '',
+          diffLines: diffLines
         });
       } finally {
         if (sess && typeof sess.parkEnd === 'function') sess.parkEnd();
@@ -584,6 +641,18 @@
           }
         }
       }
+      // Thirty-first log: comments/shares shipped as `comments: "", shares:
+      // ""` hardcoded literals — schema record fields no step ever extracts.
+      // Verify stayed green (a literal satisfies shape checks) and only the
+      // user noticed. Name the pattern at landing time, same advisory-only
+      // contract as the un-awaited-$ lint above.
+      const lintSchema = (a.outputSchema != null) ? a.outputSchema
+        : ((ioConfirmedSchemas || ledgerConfirmedSchemas(ctx) || {}).outputSchema) || null;
+      if (lintSchema && typeof WU.detectNeverExtractedFields === 'function') {
+        for (const f of WU.detectNeverExtractedFields(steps, lintSchema)) {
+          staticLint.push('schema field "' + f.path + '" appears ONLY as hardcoded string literal(s) in the step scripts — no step extracts it (no fieldMap entry, no assignment). A literal verifies green while carrying no data: bind the field in a fieldMap or compute it, or renegotiate the contract with io.confirm if the page genuinely lacks it.');
+        }
+      }
       try {
         // Twenty-first log: the confirmed contract must land in the artifact
         // even when the update omits schemas (steps-only updates were the
@@ -674,11 +743,11 @@
       { name: 'probe.attrStats', args: '{containerSel, attr}', returns: '{totalItems,values[{value,items,pct}],absentPct,note?} — note appears when absentPct is 100: the attr is not ON the matched elements; :has() sees DESCENDANTS, so census the descendant form containerSel + " [attr]" to know what a :not()/:has() clause actually filters' },
       { name: 'probe.labelledby', args: '{sel, attr?}', returns: '{text,attr,refCount,missingIds?,note?} — resolves the ARIA reference attr (default aria-labelledby; pass aria-describedby) on the first match and concatenates the referenced elements\' text. Use it when a tooltip/hovercard value never renders visually: the referenced span is usually hidden but readable' },
       { name: 'probe.sample', args: '{sel, opts:{index,wantHtml,clean}}', returns: '{match,total,element,html?} — clean:true strips scripts/styles/noise from the HTML (prefer it when reading structure)' },
-      { name: 'probe.hover', args: '{anchorSel, popoverSel?, opts:{index,timeoutMs}}', returns: '{hovered,htmlSnippet,popoverSelector,popoverSelectorNote?,reason,observedPopover?,rejectedAddedTexts?}' },
+      { name: 'probe.hover', args: '{anchorSel, popoverSel?, opts:{index,timeoutMs}}', returns: '{hovered,htmlSnippet,popoverSelector,popoverSelectorNote?,reason,observedPopover?,rejectedAddedTexts?,budgetNote?,timeoutMs?} — on reason:popover_timeout the result carries the budget it waited (timeoutMs+budgetNote): absence at N ms says nothing about a larger budget, retry with a bigger opts.timeoutMs before concluding the popover never renders' },
       { name: 'probe.scroll', args: "{mode?:'bottom'|'by', sel?, by?}", returns: '{scrolled,prevY,newY}' },
       { name: 'probe.extract', args: '{containerSel, fieldMap, multi?, allowEmpty?}', returns: '{total,records[3],emptyFields{field:emptyCount}}' },
       { name: 'diag.read', args: '{stepId?, kind?}', returns: '{selectorDiagnostics, failingStep?, popover, counters, lastError?} — kind:"contract" (no verify needed) reports whether the I/O contract is confirmed and whether the artifact carries the schemas, so you can see schema-blindness BEFORE verify.run' },
-      { name: 'verify.run', args: '{input?} — optional object overriding the test input for THIS run (the mechanism for alternate-value re-tests when INPUT_VALUE_SUSPECT says the site may have no content for the current value)', returns: '{ok,score,scoreNote?,error,detectors,steps,resultDebug?,finalResult,schemaOk} — detectors.partialEmptyFields lists confirmed fields that came back empty with their emptyRatio (empty/total records): ratio 1 means fix the binding or renegotiate the contract, not ship it. resultDebug surfaces your step result\'s SMALL non-record keys (debug payloads you attached to the return) ahead of the sampled records, so you can read your own instrumentation. A field you SAW populated on the research tab but empty in verify means the mechanism depends on page state the research tab ACCUMULATED (earlier hovers mounting hidden spans, long dwell hydrating extras) — a fresh load does not reproduce it: re-derive the read on a freshly opened page, do not iterate the same binding blind' },
+      { name: 'verify.run', args: '{input?} — optional object overriding the test input for THIS run (the mechanism for alternate-value re-tests when INPUT_VALUE_SUSPECT says the site may have no content for the current value)', returns: '{ok,score,scoreNote?,error,detectors,steps,resultDebug?,finalResult,schemaOk} — detectors.partialEmptyFields lists confirmed fields that came back empty with their emptyRatio (empty/total records): ratio 1 means fix the binding or renegotiate the contract, not ship it. detectors.emptyFieldDiagnostics (beside it) carries per-field falsification crumbs lifted from the owning step\'s LAST iteration diagnostics — an aria reference that resolves to nothing (missingIds), a sub-selector matching 0 containers, an absent attribute — read it BEFORE re-probing: it names WHERE and WHY the empty field died. resultDebug surfaces your step result\'s SMALL non-record keys (debug payloads you attached to the return) ahead of the sampled records, so you can read your own instrumentation. A field you SAW populated on the research tab but empty in verify means the mechanism depends on page state the research tab ACCUMULATED (earlier hovers mounting hidden spans, long dwell hydrating extras) — a fresh load does not reproduce it: re-derive the read on a freshly opened page, do not iterate the same binding blind' },
       { name: 'annotate.request', args: '{why, fields?, containerSel?}', returns: '{annotations[{selector,purpose,outputField}]} | {cancelled} — REQUIRES a confirmed I/O contract (io.confirm first)' },
       { name: 'io.confirm', args: '{inputSchema, outputSchema, note?}', returns: '{confirmed:true} | {confirmed:false, feedback} — propose the contract EARLY and wait for the user; service.update is rejected until a confirmation lands; a SAME-shape re-proposal auto-confirms without prompting. outputSchema MUST declare its fields (properties + required); a fieldless {"type":"object"} verifies blind and is rejected' }
     ];

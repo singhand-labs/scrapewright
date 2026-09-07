@@ -159,6 +159,35 @@ describe('createSessionTools', () => {
     assert.equal(clean.staticLint, undefined);
   });
 
+  it('service.update receipt names schema fields that exist ONLY as hardcoded literals (thirty-first log: comments/shares shipped as "")', async () => {
+    const { deps, state } = makeDeps();
+    const t = createSessionTools(deps);
+    const outSchema = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object', required: ['content'], properties: {
+      content: { type: 'string' }, comments: { type: 'string' }, shares: { type: 'string' }
+    } } } } };
+    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: outSchema });
+    const out = await t.tools['service.update'](
+      { steps: [
+        { id: 's1', name: 'extract', script: "const recs = await $extractList('div.post', { content: { selector: 'span.txt' } });\nreturn { posts: recs.map(r => ({ content: r.content, comments: \"\", shares: \"\" })) };", onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }
+      ], outputSchema: outSchema },
+      { session: { state: () => ({ session: { artifactVersions: [] } }) } });
+    assert.equal(out.updated, true, 'advisory is non-blocking — the artifact still lands');
+    assert.equal(out.staticLint.length, 2, 'comments and shares both named');
+    const blob = out.staticLint.join('\n');
+    assert.match(blob, /posts\.comments/, 'field named by schema path');
+    assert.match(blob, /posts\.shares/);
+    assert.match(blob, /no step extracts it/);
+    // the schema may also come from the CONFIRMED contract (steps-only update)
+    const out2 = await t.tools['service.update'](
+      { steps: [
+        { id: 's1', name: 'extract', script: "const c = await $extract('span.txt');\nreturn { posts: [{ content: c, comments: 'n/a' }] };", onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }
+      ] },
+      { session: { state: () => ({ session: { artifactVersions: [] } }) } });
+    assert.equal(out2.updated, true);
+    assert.match(out2.staticLint.join('\n'), /posts\.comments/, 'confirmed-contract schema lints a steps-only update; non-empty literals flag too');
+    assert.ok(!/posts\.content/.test(out2.staticLint.join('\n')), 'a computed/assigned mention keeps the field quiet');
+  });
+
   it('service.update rejects natural-language schemas with a teaching error; JSON-Schema shapes pass (fourth-live-log G1)', async () => {
     const { deps, state } = makeDeps();
     const t = createSessionTools(deps);
@@ -352,6 +381,54 @@ describe('io.confirm — early I/O contract gate', () => {
     assert.match(r.feedback, /publishDate/);
     const upd = await t.tools['service.update']({ steps: GOOD_STEPS }, { session: { state: () => ({ session: { artifactVersions: [] } }) } });
     assert.match(upd.error, /I\/O CONTRACT UNCONFIRMED/);
+  });
+
+  it('a renegotiation carries exact diff lines against the confirmed contract (thirty-first log: items.required weakening rubber-stamped from raw JSON)', async () => {
+    const requests = [];
+    const { deps } = makeDeps({
+      ioConfirmBridge: { request: async (p) => { requests.push(p); return { confirmed: true }; } }
+    });
+    const ledger = { add: () => {} };
+    const t = createSessionTools(deps);
+    const v1 = {
+      type: 'object', required: ['posts'],
+      properties: { posts: { type: 'array', items: { type: 'object', required: ['content', 'popovers', 'time'], properties: {
+        content: { type: 'string' }, popovers: { type: 'array', items: { type: 'object' } }, time: { type: 'string' }
+      } } } }
+    };
+    await t.tools['io.confirm']({ inputSchema: IN, outputSchema: v1 }, { ledger });
+    assert.deepEqual(requests[0].diffLines, [], 'first proposal has no prior contract — no diff');
+
+    // Material renegotiation: popovers LEAVES items.required, comments/shares
+    // arrive as optional fields. This is the exact weakening the 31st log
+    // shipped — the panel must name it, not bury it in JSON.
+    const v2 = {
+      type: 'object', required: ['posts'],
+      properties: { posts: { type: 'array', items: { type: 'object', required: ['content', 'time'], properties: {
+        content: { type: 'string' }, popovers: { type: 'array', items: { type: 'object' } }, time: { type: 'string' },
+        comments: { type: 'string' }, shares: { type: 'string' }
+      } } } }
+    };
+    await t.tools['io.confirm']({ inputSchema: IN, outputSchema: v2, note: 'hovercards never render' }, { ledger });
+    const diff = requests[1].diffLines;
+    assert.ok(Array.isArray(diff) && diff.length, 'diff lines present on renegotiation');
+    const blob = diff.join('\n');
+    assert.match(blob, /record field of "posts" "popovers" LEAVING required/, 'names the field losing its REQUIRED guarantee');
+    assert.match(blob, /"comments" ADDED/, 'names newly proposed fields');
+    assert.ok(!/ENTERING required/.test(blob), 'no false ENTERING lines');
+
+    // A resumed session recovers the prior contract from the ledger marker,
+    // so the diff still lands (runtime ioConfirmedSchemas is gone).
+    const { deps: deps2 } = makeDeps({
+      ioConfirmBridge: { request: async (p) => { requests.push(p); return { confirmed: true }; } }
+    });
+    const ledgerEntries = [];
+    const ledger2 = { add: (e) => ledgerEntries.push(e), serialize: () => ({ entries: ledgerEntries }) };
+    const t3 = createSessionTools(deps2);
+    await t3.tools['io.confirm']({ inputSchema: IN, outputSchema: v1 }, { ledger: ledger2 });
+    await t3.tools['io.confirm']({ inputSchema: IN, outputSchema: v2 }, { ledger: ledger2 });
+    assert.match(requests[3].diffLines.join('\n'), /"popovers" LEAVING required/,
+      'ledger-recovered prior schema still produces the diff');
   });
 
   it('malformed schemas get the teaching error without consulting the bridge', async () => {

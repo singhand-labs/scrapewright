@@ -55,6 +55,7 @@
       stripSnapshotsFromTestResult: w.stripSnapshotsFromTestResult,
       sampleRecordsForLLMContext: w.sampleRecordsForLLMContext,
       detectUnawaitedDollarCalls: w.detectUnawaitedDollarCalls,
+      emptyFieldDiagnostics: w.emptyFieldDiagnostics,
       headTailSlice: w.headTailSlice
     };
     const missing = [];
@@ -361,7 +362,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], countShortfall: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, zeroMatchFields: null, containerZero: null, partialEmptyFields: null, adMarkerSelectors: null };
+      const detectors = { emptyFields: [], duplicateFields: [], countShortfall: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, zeroMatchFields: null, containerZero: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -565,6 +566,18 @@
           // carries the evidence.
           const pe = WU.detectEmptyOutputFieldsByRatio(finalData, outputSchema) || [];
           detectors.partialEmptyFields = pe.length ? pe : null;
+          // Thirty-first log: the census names the empty field but not the
+          // WHY. The owning step's LAST STEP_ITERATION diagnostics already
+          // carry falsification evidence (labelledby missingIds / "references
+          // id(s) that resolve to nothing", zero-match sub-selectors,
+          // attrAbsent) — lift per-field crumbs into the report so a green
+          // verify still tells the model exactly where and why each empty
+          // field died, instead of leaving it to conclude "state-dependent,
+          // not extractable" over fifteen turns.
+          if (pe.length && typeof WU.emptyFieldDiagnostics === 'function') {
+            const efd = WU.emptyFieldDiagnostics(pe, stepsDefs, events) || [];
+            detectors.emptyFieldDiagnostics = efd.length ? efd : null;
+          }
         }
       }
 

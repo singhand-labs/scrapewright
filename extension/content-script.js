@@ -2899,6 +2899,14 @@
       result.reason = 'no_hover_signal_early_exit';
     } else if (!htmlSnippet && (popoverSel || observer)) {
       result.reason = 'popover_timeout';
+      // Thirty-first log: the contract was renegotiated on underpowered
+      // evidence — probes self-shrunk to a 3000ms timeoutMs read as "the
+      // hovercard never renders" while later probes at 5-9s budgets captured
+      // real cards. Absence at N ms says nothing about N+1 ms: disclose the
+      // budget the failure is bounded by so the caller retries larger before
+      // concluding the popover does not exist.
+      result.timeoutMs = timeoutMs;
+      result.budgetNote = 'absence is budget-bounded — hover waited ' + timeoutMs + 'ms; slow/cold popovers can exceed it, retry with a larger opts.timeoutMs before concluding the popover never renders';
     } else if (!result.hovered) {
       result.reason = hoverResp && hoverResp.reason ? hoverResp.reason : 'hover_failed';
     }

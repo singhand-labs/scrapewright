@@ -744,3 +744,32 @@ test('domHover auto-discovery diagnostic emits dwellMs and per-candidate source 
     'source per candidate (added vs efp) in picked and considered[] summaries. Without these, future ' +
     'hover incidents cannot be triaged from the SW log alone.');
 });
+
+test('domHover popover_timeout discloses its budget (thirty-first log: probes self-shrunk to 3000ms read as "never renders")', () => {
+  // The contract was renegotiated on underpowered evidence: probe.hover calls
+  // with timeoutMs:3000 (below the 4500ms default) returned popover_timeout,
+  // the model read "the hovercard never renders", and later probes at 5-9s
+  // budgets captured real cards. Absence at N ms says nothing about N+1 ms —
+  // the failure result must carry the budget it is bounded by and the
+  // retry-larger hint, and probe.hover must forward both to the model.
+  const cs = readSrc('content-script.js');
+  const fnStart = cs.indexOf('async function domHover(');
+  const fnEnd = cs.indexOf('async function domOpenTab(', fnStart);
+  const fnBody = cs.slice(fnStart, fnEnd);
+  assert.ok(fnStart > -1 && fnEnd > fnStart, 'domHover must exist');
+  const timeoutStart = fnBody.indexOf("result.reason = 'popover_timeout'");
+  assert.ok(timeoutStart > -1, 'popover_timeout branch must exist');
+  const branch = fnBody.slice(timeoutStart, timeoutStart + 900);
+  assert.match(branch, /result\.timeoutMs\s*=\s*timeoutMs/,
+    'popover_timeout result must carry the effective timeoutMs');
+  assert.match(branch, /result\.budgetNote\s*=/,
+    'popover_timeout result must carry a budgetNote');
+  assert.match(branch, /retry with a larger opts\.timeoutMs/,
+    'the note must teach retrying with a larger budget before concluding the popover never renders');
+  // probe layer must forward it (the teaching contract ends at the tool result)
+  const pt = readSrc('lib/probe-tools.js');
+  assert.match(pt, /out\.budgetNote\s*=\s*r\.budgetNote/,
+    'probe.hover must forward budgetNote to the model');
+  assert.match(pt, /out\.timeoutMs\s*=\s*r\.timeoutMs/,
+    'probe.hover must forward the waited budget to the model');
+});

@@ -493,6 +493,20 @@
         // rewrites popoverSel from); matches the record-HTML 8000 precedent.
         htmlSnippet: typeof r.htmlSnippet === 'string' && r.htmlSnippet ? r.htmlSnippet.slice(0, 8000) : null
       };
+      // Thirty-first log: hover-layer evidence MUST survive the probe layer.
+      // budgetNote/timeoutMs (popover_timeout waited N ms — absence at N ms
+      // says nothing about a larger budget) and rejectedAddedTexts (the
+      // twenty-fourth-log readable-mounts evidence) are both taught in the
+      // toolSpec and rule 6, but this object silently dropped them — the
+      // teaching promised fields the plumbing never delivered.
+      if (typeof r.budgetNote === 'string' && r.budgetNote) {
+        out.budgetNote = r.budgetNote;
+        if (typeof r.timeoutMs === 'number') out.timeoutMs = r.timeoutMs;
+      }
+      if (Array.isArray(r.rejectedAddedTexts) && r.rejectedAddedTexts.length) {
+        out.rejectedAddedTexts = r.rejectedAddedTexts;
+        if (typeof r.rejectedAddedNote === 'string' && r.rejectedAddedNote) out.rejectedAddedNote = r.rejectedAddedNote;
+      }
       if (canonical) {
         out.popoverSelectorNote = 'canonical popoverSelector derived from the observed popover — an observation receipt was recorded for THIS EXACT STRING. If you configure popoverSel in a step, copy it VERBATIM; an embellished variant (e.g. adding [aria-modal=\'true\']) is a new string the grounding gate must reject.';
       } else if (out.htmlSnippet) {

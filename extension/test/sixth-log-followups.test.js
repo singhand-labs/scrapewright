@@ -205,7 +205,10 @@ describe('P2: HOVER ENRICHMENT teaches evidence-based popoverSelector repair', (
 
 describe('P3: hover_anchor_timing phase diagnostics (source audit)', () => {
   const fnStart = CS_SRC.indexOf('async function domHover(');
-  const fnBody = CS_SRC.slice(fnStart, fnStart + 40000);
+  // Thirty-first log: the budget-disclosure additions to domHover's
+  // popover_timeout branch pushed the notify past the old 40000 window —
+  // the window is a scoping heuristic, not a size contract.
+  const fnBody = CS_SRC.slice(fnStart, fnStart + 42000);
 
   it('emits hover_anchor_timing with per-phase durations', () => {
     const i = fnBody.indexOf('hover_anchor_timing');

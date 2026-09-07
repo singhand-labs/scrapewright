@@ -4036,9 +4036,189 @@ function unawaitedCallSkipped(blanked, index, matchText) {
 }
 
 
+// emptyFieldDiagnostics(partialEmpty, steps, events) → array of
+// { field, path, emptyCount, totalCount, crumbs: [{stepId, stepName, api, selector, note}] }
+//
+// Thirty-first log: the time field was 5/5 empty across fifteen turns while
+// the evidence ALREADY existed — the extract step's $labelledby calls were
+// emitting falsification diagnostics (missingIds, "references id(s) that
+// resolve to nothing") that STEP_ITERATION events carried in full, but green
+// verify reports never surfaced them, so the model never learned WHY the
+// lookup failed and concluded "state-dependent, not extractable".
+//
+// For each partial-empty field (from detectEmptyOutputFieldsByRatio), find
+// the steps that own it and lift the falsification signals from the step's
+// LAST STEP_ITERATION diagnostics into the verify report:
+//   - perField entries (extractList family) whose field name matches with
+//     matchCount === 0 — the sub-selector never matched;
+//   - api-level diagnostics with a falsification note — labelledby's
+//     missingIds/notes, attrAbsent, refCount === 0, matchCount === 0.
+//
+// Step association is a word-boundary scan over the RAW script (NOT the
+// blanked lint form): quoted fieldMap keys ({'time': {...}}) live inside
+// string literals, which blankStringsAndCommentsForLint erases. A
+// coincidental selector hit only widens which steps' diagnostics get
+// checked; the falsification filter restores precision. perField name
+// matches associate independently of script text.
+//
+// Only the LAST iteration's diagnostics are read — earlier iterations are
+// stale retries whose failures the final run may have outgrown.
+function emptyFieldDiagnostics(partialEmpty, steps, events) {
+  if (!Array.isArray(partialEmpty) || !partialEmpty.length) return [];
+  if (!Array.isArray(steps) || !steps.length) return [];
+  if (!Array.isArray(events) || !events.length) return [];
+  const out = [];
+  for (const pe of partialEmpty) {
+    if (!pe || typeof pe !== 'object') continue;
+    const field = typeof pe.field === 'string' ? pe.field : '';
+    if (!field) continue;
+    const isIdent = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(field);
+    const esc = field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    let mentionRe = null;
+    if (isIdent) {
+      try { mentionRe = new RegExp('(?<![A-Za-z0-9_$])' + esc + '(?![A-Za-z0-9_$])'); }
+      catch (e) { mentionRe = new RegExp('(^|[^A-Za-z0-9_$])' + esc + '($|[^A-Za-z0-9_$])'); }
+    }
+    const crumbs = [];
+    const seen = [];
+    for (const st of steps) {
+      if (!st) continue;
+      const script = String(st.script || '');
+      const mentioned = !!(mentionRe && mentionRe.test(script));
+      let lastDiags = null;
+      for (let i = events.length - 1; i >= 0; i--) {
+        const ev = events[i];
+        if (ev && ev.type === 'STEP_ITERATION' && String(ev.stepId) === String(st.id) && Array.isArray(ev.selectorDiagnostics)) {
+          lastDiags = ev.selectorDiagnostics;
+          break;
+        }
+      }
+      if (!lastDiags) continue;
+      // Association: script mention, or the step's own fieldMap names the
+      // field (perField entries carry the fieldMap key verbatim).
+      const namedInDiags = lastDiags.some((d) => d && Array.isArray(d.perField) &&
+        d.perField.some((f) => f && String(f.field) === field));
+      if (!mentioned && !namedInDiags) continue;
+      for (const d of lastDiags) {
+        const crumb = falsificationCrumb(d, field);
+        if (!crumb) continue;
+        const key = String(st.id) + '|' + crumb.api + '|' + String(crumb.selector);
+        if (seen.indexOf(key) !== -1) continue;
+        seen.push(key);
+        crumbs.push(Object.assign({ stepId: st.id, stepName: st.name || null }, crumb));
+        if (crumbs.length >= 2) break;
+      }
+      if (crumbs.length >= 2) break;
+    }
+    if (crumbs.length) {
+      out.push({
+        field: field,
+        path: pe.path || field,
+        emptyCount: pe.emptyCount,
+        totalCount: pe.totalCount,
+        crumbs: crumbs
+      });
+    }
+  }
+  return out;
+}
+
+// One falsification signal from a diagnostics entry, for the given field —
+// null when the entry shows no evidence of WHY a value comes back empty.
+function falsificationCrumb(d, field) {
+  if (!d || typeof d !== 'object') return null;
+  const api = typeof d.api === 'string' ? d.api : null;
+  if (Array.isArray(d.perField)) {
+    const f = d.perField.find((x) => x && String(x.field) === field);
+    if (!f) return null;
+    if (f.subSelector && f.matchCount === 0) {
+      const total = typeof d.containerMatches === 'number' ? d.containerMatches : null;
+      return {
+        api: api || 'extractList',
+        selector: String(f.subSelector),
+        note: 'sub-selector for field "' + field + '" matched 0' + (total !== null ? ' of ' + total : '') + ' containers' +
+          (d.containerSelector ? ' (container ' + d.containerSelector + ')' : '')
+      };
+    }
+    return null;
+  }
+  const bits = [];
+  if (typeof d.note === 'string' && d.note) bits.push(d.note);
+  if (Array.isArray(d.missingIds) && d.missingIds.length) {
+    bits.push('unresolved aria reference ids: ' + d.missingIds.slice(0, 4).map(String).join(', '));
+  }
+  if (d.refCount === 0) bits.push('aria reference resolved 0 elements');
+  if (d.attrAbsent) bits.push(typeof d.attrAbsentNote === 'string' && d.attrAbsentNote ? d.attrAbsentNote : 'attribute "' + String(d.attrAbsent) + '" absent on the matched element');
+  if (d.matchCount === 0 && typeof d.selector === 'string' && d.selector) bits.push('selector matched 0 elements');
+  if (!bits.length) return null;
+  let note = bits.join('; ');
+  if (note.length > 240) note = note.slice(0, 237) + '…';
+  return {
+    api: api,
+    selector: typeof d.selector === 'string' ? d.selector : null,
+    note: note
+  };
+}
+
+
+// detectNeverExtractedFields(steps, outputSchema) → array of
+// { field, path, literalCount }
+//
+// Thirty-first log: comments/shares shipped as `comments: "", shares: ""`
+// hardcoded literals inside the record-assembly return — schema-declared
+// record fields no step ever extracts. Verify stayed green (a hardcoded ""
+// satisfies shape checks) and only the user noticed. Statically detectable:
+// scan the BLANKED scripts (strings/comments neutralized) for each schema
+// record-field name; when EVERY mention is the `field: "..."` literal form
+// (empty OR non-empty — a hardcoded "n/a" is the same failure), no fieldMap
+// entry and no computed assignment exists anywhere — the field is never
+// extracted. Any other mention-form (fieldMap `field: {selector}`) breaks
+// the flag. Advisory-only: quoted fieldMap keys ('field': {...}) are blanked
+// with their string content and produce ZERO mentions — never flagged (the
+// verify-time emptyFieldDiagnostics digest is the runtime backstop).
+function detectNeverExtractedFields(steps, outputSchema) {
+  if (!Array.isArray(steps) || !steps.length) return [];
+  const props = (outputSchema && outputSchema.properties && typeof outputSchema.properties === 'object' && !Array.isArray(outputSchema.properties))
+    ? outputSchema.properties : {};
+  let blanked = null;
+  const out = [];
+  for (const key of Object.keys(props)) {
+    const prop = props[key];
+    const items = (prop && prop.items && typeof prop.items === 'object') ? prop.items : null;
+    if (!items) continue;
+    const req = Array.isArray(items.required) ? items.required.map(String) : [];
+    const ip = (items.properties && typeof items.properties === 'object' && !Array.isArray(items.properties)) ? Object.keys(items.properties) : [];
+    const fields = [];
+    for (const f of req.concat(ip)) if (fields.indexOf(f) === -1) fields.push(f);
+    if (!fields.length) continue;
+    if (blanked === null) {
+      blanked = steps.map((s) => blankStringsAndCommentsForLint(String((s && s.script) || ''))).join('\n');
+    }
+    for (const f of fields) {
+      if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(f)) continue;
+      const esc = f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      let mentionRe, literalRe;
+      try {
+        mentionRe = new RegExp('(?<![A-Za-z0-9_$])' + esc + '(?![A-Za-z0-9_$])', 'g');
+        literalRe = new RegExp('(?<![A-Za-z0-9_$])' + esc + '\\s*:\\s*([\'"`])[^\'"`\n]*\\1', 'g');
+      } catch (e) {
+        mentionRe = new RegExp('(^|[^A-Za-z0-9_$])' + esc + '($|[^A-Za-z0-9_$])', 'g');
+        literalRe = new RegExp('(^|[^A-Za-z0-9_$])' + esc + '\\s*:\\s*([\'"`])[^\'"`\n]*\\2', 'g');
+      }
+      const mentions = (blanked.match(mentionRe) || []).length;
+      const literals = (blanked.match(literalRe) || []).length;
+      if (mentions > 0 && mentions === literals) {
+        out.push({ field: f, path: key + '.' + f, literalCount: literals });
+      }
+    }
+  }
+  return out;
+}
+
+
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectCountShortfall, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+  module.exports = { parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectCountShortfall, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.hoverAwareTimeoutMs = hoverAwareTimeoutMs;
@@ -4148,5 +4328,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.normalizeStepTopology = normalizeStepTopology;
   self.headTailSlice = headTailSlice;
   self.detectUnawaitedDollarCalls = detectUnawaitedDollarCalls;
+  self.emptyFieldDiagnostics = emptyFieldDiagnostics;
+  self.detectNeverExtractedFields = detectNeverExtractedFields;
   self.DEFAULT_POLL_MAX_ITERATIONS = DEFAULT_POLL_MAX_ITERATIONS;
 }

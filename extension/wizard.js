@@ -2102,6 +2102,22 @@ function createWizardIoBridge() {
         const r = req && typeof req === 'object' ? req : {};
         const noteEl = document.getElementById('ioConfirmNote');
         if (noteEl) noteEl.textContent = String(r.note || '');
+        // Thirty-first log: a renegotiation that moved a field OUT of
+        // items.required was rubber-stamped from raw JSON — render the diff
+        // lines (computed by the session layer against the confirmed
+        // contract) above the schemas so the requirement change is the first
+        // thing read, not something reverse-engineered from JSON.
+        const diffEl = document.getElementById('ioConfirmDiff');
+        if (diffEl) {
+          const lines = Array.isArray(r.diffLines) ? r.diffLines.filter((l) => typeof l === 'string' && l) : [];
+          if (lines.length) {
+            diffEl.textContent = 'This proposal CHANGES the confirmed contract:\n' + lines.join('\n');
+            diffEl.classList.remove('hidden');
+          } else {
+            diffEl.textContent = '';
+            diffEl.classList.add('hidden');
+          }
+        }
         const inEl = document.getElementById('ioConfirmInput');
         if (inEl) inEl.textContent = JSON.stringify(r.inputSchema || {}, null, 2);
         const outEl = document.getElementById('ioConfirmOutput');

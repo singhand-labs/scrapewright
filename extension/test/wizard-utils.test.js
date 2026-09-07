@@ -2206,3 +2206,191 @@ describe('detectUnawaitedDollarCalls (thirtieth log)', () => {
     assert.deepEqual(detectUnawaitedDollarCalls(null), []);
   });
 });
+
+describe('emptyFieldDiagnostics (thirty-first log)', () => {
+  const { emptyFieldDiagnostics } = require('../lib/wizard-utils');
+
+  const partialEmpty = [
+    { field: 'time', path: 'posts.time', emptyCount: 5, totalCount: 5, emptyRatio: 1, sampleNonEmpty: [] },
+    { field: 'likes', path: 'posts.likes', emptyCount: 3, totalCount: 5, emptyRatio: 0.6, sampleNonEmpty: ['4', '294'] }
+  ];
+
+  const steps = [
+    { id: 's1', name: 'scroll', script: 'await $scrollToBottom(); return { done: true };' },
+    {
+      id: 's2',
+      name: 'extract posts',
+      script: "const time = await $labelledby('div[aria-labelledby]'); return $extractList('div.post', { time: { selector: 'abbr' }, content: { selector: 'span' } });"
+    },
+    {
+      id: 's3',
+      name: 'likes only',
+      script: "return $extractList('div.post', { likes: { selector: 'span.like-count' } });"
+    }
+  ];
+
+  it('surfaces labelledby falsification notes and zero-match perField entries from owning steps', () => {
+    const events = [
+      { type: 'STEP_ITERATION', stepId: 's1', iteration: 1, resultPreview: '{"done":true}' },
+      {
+        // One run of s2 calls $labelledby AND $extractList — both signals
+        // land in the SAME last-iteration diagnostics array, and both are
+        // lifted (the note names the mechanism, the perField names the
+        // zero-match sub-selector).
+        type: 'STEP_ITERATION', stepId: 's2', iteration: 3, resultPreview: 'y',
+        selectorDiagnostics: [
+          { api: 'labelledby', selector: 'div[aria-labelledby]', attr: 'aria-labelledby', refCount: 1, missingIds: ['u_0_1'], textLength: 0, note: 'references id(s) that resolve to nothing in this document (dynamic/stale ids): u_0_1' },
+          { api: 'extractList', containerSelector: 'div.post', containerMatches: 5, perField: [ { field: 'time', subSelector: 'abbr', attr: null, matchCount: 0, sampleTexts: [], sampleHrefs: [], sampleValues: [] } ] }
+        ]
+      },
+      {
+        type: 'STEP_ITERATION', stepId: 's3', iteration: 1, resultPreview: 'z',
+        selectorDiagnostics: [
+          { api: 'extractList', containerSelector: 'div.post', containerMatches: 5, perField: [ { field: 'likes', subSelector: 'span.like-count', attr: null, matchCount: 5, sampleTexts: ['4'], sampleHrefs: [], sampleValues: ['4'] } ] }
+        ]
+      }
+    ];
+    const out = emptyFieldDiagnostics(partialEmpty, steps, events);
+    const timeEntry = out.find((e) => e.field === 'time');
+    assert.ok(timeEntry, 'time entry present');
+    assert.equal(timeEntry.path, 'posts.time');
+    assert.equal(timeEntry.emptyCount, 5);
+    assert.equal(timeEntry.crumbs.length, 2, 'both signals of the owning step lifted (cap 2)');
+    const blob = JSON.stringify(timeEntry.crumbs);
+    assert.ok(/resolve to nothing/.test(blob), 'carries the labelledby falsification note');
+    assert.ok(/abbr/.test(blob), 'carries the zero-match sub-selector');
+    // likes matched 5/5 — no falsification signal, no entry
+    assert.ok(!out.find((e) => e.field === 'likes'), 'healthy fields produce no entry');
+  });
+
+  it('uses the last iteration only — a healthy last iteration drops earlier falsification notes', () => {
+    const events = [
+      {
+        type: 'STEP_ITERATION', stepId: 's2', iteration: 1, resultPreview: 'x',
+        selectorDiagnostics: [
+          { api: 'labelledby', selector: 'div[aria-labelledby]', refCount: 0, missingIds: ['a'], textLength: 0, note: 'references id(s) that resolve to nothing: a' }
+        ]
+      },
+      {
+        type: 'STEP_ITERATION', stepId: 's2', iteration: 2, resultPreview: 'y',
+        selectorDiagnostics: [
+          { api: 'extractList', containerSelector: 'div.post', containerMatches: 5, perField: [ { field: 'time', subSelector: 'abbr', attr: null, matchCount: 5, sampleValues: ['Jun 11'] } ] }
+        ]
+      }
+    ];
+    const out = emptyFieldDiagnostics([partialEmpty[0]], steps, events);
+    assert.deepEqual(out, [], 'healthy last iteration → no stale falsification crumb');
+  });
+
+  it('associates steps by word-boundary mentions and perField names, never by substring', () => {
+    // 'timeline' contains 'time' as substring — must NOT associate
+    const stepsSub = [
+      { id: 's9', name: 'timeline step', script: "return $extractList('div.tl', { timeline: { selector: 'span' } });" }
+    ];
+    const events = [
+      {
+        type: 'STEP_ITERATION', stepId: 's9', iteration: 1, resultPreview: 'x',
+        selectorDiagnostics: [
+          { api: 'extractList', containerSelector: 'div.tl', containerMatches: 3, perField: [ { field: 'timeline', subSelector: 'span', attr: null, matchCount: 0, sampleValues: [] } ] }
+        ]
+      }
+    ];
+    const out = emptyFieldDiagnostics([partialEmpty[0]], stepsSub, events);
+    assert.deepEqual(out, [], 'substring field names do not associate');
+  });
+
+  it('caps crumbs at 2 per field and skips steps without diagnostics', () => {
+    const manySteps = ['a', 'b', 'c'].map((k) => ({
+      id: 's_' + k,
+      name: 'm' + k,
+      script: "const time = await $labelledby('div[" + k + "]'); return { time };"
+    }));
+    const events = manySteps.map((st) => ({
+      type: 'STEP_ITERATION', stepId: st.id, iteration: 1, resultPreview: 'x',
+      selectorDiagnostics: [
+        { api: 'labelledby', selector: 'div[' + st.id + ']', refCount: 0, missingIds: ['m_' + st.id], textLength: 0, note: 'references id(s) that resolve to nothing: m_' + st.id }
+      ]
+    }));
+    const out = emptyFieldDiagnostics([partialEmpty[0]], manySteps, events);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].crumbs.length, 2, 'crumb cap');
+    assert.ok(out[0].crumbs.every((c) => c.stepId && c.api && c.note), 'crumb shape');
+  });
+
+  it('returns [] for empty or malformed inputs', () => {
+    assert.deepEqual(emptyFieldDiagnostics([], steps, []), []);
+    assert.deepEqual(emptyFieldDiagnostics(null, steps, []), []);
+    assert.deepEqual(emptyFieldDiagnostics(partialEmpty, null, []), []);
+    assert.deepEqual(emptyFieldDiagnostics(partialEmpty, steps, null), []);
+    assert.deepEqual(emptyFieldDiagnostics(partialEmpty, steps, [{ type: 'OTHER' }]), []);
+  });
+});
+
+describe('detectNeverExtractedFields (thirty-first log)', () => {
+  const { detectNeverExtractedFields } = require('../lib/wizard-utils');
+
+  const SCHEMA = {
+    type: 'object', required: ['posts'],
+    properties: { posts: { type: 'array', items: { type: 'object', required: ['content'], properties: {
+      content: { type: 'string' }, comments: { type: 'string' }, shares: { type: 'string' },
+      likes: { type: 'string' }, hovercards: { type: 'string' }
+    } } } }
+  };
+
+  it('flags schema fields whose every mention is a hardcoded string literal (the shipped `comments: "", shares: ""` shape)', () => {
+    const steps = [
+      {
+        id: 's1', name: 'assemble', onSuccess: 'TERMINATE',
+        script: "const recs = await $extractList('div.post', { content: { selector: 'span.txt' }, likes: { selector: 'span.like' } });\n" +
+          "return { posts: recs.map(r => ({ content: r.content, likes: r.likes, comments: \"\", shares: \"\" })) };"
+      }
+    ];
+    const out = detectNeverExtractedFields(steps, SCHEMA);
+    const paths = out.map((f) => f.path).sort();
+    assert.deepEqual(paths, ['posts.comments', 'posts.shares'], 'literal-only fields flagged; got ' + JSON.stringify(out));
+    assert.equal(out[0].literalCount, 1);
+  });
+
+  it('does not flag a field with a fieldMap entry even when a literal fallback also exists', () => {
+    const steps = [
+      {
+        id: 's1', name: 'extract', onSuccess: 'TERMINATE',
+        script: "const recs = await $extractList('div.post', { content: { selector: 'span.txt' }, comments: { selector: 'span.cmt' } });\n" +
+          "return { posts: recs.map(r => ({ content: r.content, comments: r.comments || '', likes: 'many' })) };"
+      }
+    ];
+    const out = detectNeverExtractedFields(steps, SCHEMA);
+    assert.ok(!out.find((f) => f.field === 'comments'), 'fieldMap mention breaks the flag');
+    // likes: 'many' is still literal-only — a hardcoded NON-empty literal is the same failure
+    assert.ok(out.find((f) => f.field === 'likes'), 'non-empty hardcoded literals flag too');
+  });
+
+  it('does not flag computed assignments, shorthand mentions, or zero-mention fields', () => {
+    const steps = [
+      {
+        id: 's1', name: 'extract', onSuccess: 'TERMINATE',
+        script: "const recs = await $extractList('div.post', { content: { selector: 'span.txt' } });\n" +
+          "return { posts: recs.map(r => { const comments = parseCount(r); return { content: r.content, comments }; }) };"
+      }
+    ];
+    assert.deepEqual(detectNeverExtractedFields(steps, SCHEMA), [],
+      'comments has a computed mention; shares/hovercards are zero-mention (extraction may be dynamic — verify-time detectors own that case)');
+  });
+
+  it('mentions inside strings or comments do not count (blanked scan)', () => {
+    const steps = [
+      {
+        id: 's1', name: 'x', onSuccess: 'TERMINATE',
+        script: "const note = 'comments: \"\" placeholder removed'; // shares: \"\" was here\nreturn { posts: [] };"
+      }
+    ];
+    assert.deepEqual(detectNeverExtractedFields(steps, SCHEMA), [],
+      'string/comment mentions are blanked away — no literal-form hit in code');
+  });
+
+  it('returns [] for empty steps or schema without array items', () => {
+    assert.deepEqual(detectNeverExtractedFields([], SCHEMA), []);
+    assert.deepEqual(detectNeverExtractedFields([{ id: 's', script: 'comments: ""' }], { type: 'object' }), []);
+    assert.deepEqual(detectNeverExtractedFields([{ id: 's', script: 'comments: ""' }], null), []);
+  });
+});

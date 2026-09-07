@@ -108,6 +108,12 @@
       <div id="ioConfirmPanel" class="exploration-panel hidden">
         <h3>Confirm the input/output contract</h3>
         <p id="ioConfirmNote" class="hint-label"></p>
+        <!-- Thirty-first log: a renegotiation that dropped a field from
+             items.required was confirmed as raw JSON in ~90s — the user
+             approved "schema changed" without seeing WHAT requirement was
+             being dropped. The diff box names every field leaving/entering
+             required and every property added/removed BEFORE the schemas. -->
+        <div id="ioConfirmDiff" class="hint-label hidden"></div>
         <div class="io-schema-row">
           <label>Input schema</label>
           <pre id="ioConfirmInput"></pre>

@@ -845,6 +845,99 @@ describe('verify-runner partialEmptyFields detector (sixteenth log: green verify
   });
 });
 
+describe('verify-runner emptyFieldDiagnostics (thirty-first log: green verify, time 5/5 empty, labelledby falsification already in STEP_ITERATION events)', () => {
+  const SCHEMA = {
+    type: 'object', required: ['posts'],
+    properties: { posts: { type: 'array', items: { type: 'object', properties: {
+      content: { type: 'string' }, time: { type: 'string' }
+    }, required: ['content'] } } }
+  };
+  const SERVICE2 = {
+    targetUrl: 'https://example.com',
+    steps: [
+      {
+        id: 'extract', name: 'extract posts', onSuccess: 'TERMINATE',
+        script: "const t = await $labelledby('div[aria-labelledby]'); return $extractList('div.post', { time: { selector: 'abbr' }, content: { selector: 'span' } });"
+      }
+    ],
+    config: {}
+  };
+
+  it('lifts the owning step\'s last-iteration falsification notes into detectors.emptyFieldDiagnostics beside the census', async () => {
+    const posts = [
+      { content: 'post one', time: '' },
+      { content: 'post two', time: '' }
+    ];
+    const orch = async (svc, input, d, opts) => {
+      // Earlier iteration: stale falsification that the final run outgrew
+      // must NOT be lifted — only the LAST iteration's diagnostics count.
+      opts.onEvent({
+        type: 'STEP_ITERATION', stepId: 'extract', iteration: 1, resultPreview: 'x',
+        selectorDiagnostics: [
+          { api: 'labelledby', selector: 'div[aria-labelledby]', refCount: 0, missingIds: ['stale_id'], textLength: 0, note: 'references id(s) that resolve to nothing: stale_id' }
+        ]
+      });
+      opts.onEvent({
+        type: 'STEP_ITERATION', stepId: 'extract', iteration: 2, resultPreview: 'y',
+        selectorDiagnostics: [
+          {
+            api: 'extractList', containerSelector: 'div.post', containerMatches: 2,
+            perField: [{ field: 'time', subSelector: 'abbr', attr: null, matchCount: 0, sampleTexts: [], sampleHrefs: [], sampleValues: [] }]
+          }
+        ]
+      });
+      return {
+        finalResult: { posts },
+        steps: [{ stepId: 'extract', stepName: 'extract posts', result: { done: true }, snapshot: null }],
+        pages: [], pagesTruncated: false
+      };
+    };
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE2, input: {}, outputSchema: SCHEMA });
+    assert.equal(out.report.ok, true, 'report-only — never blocking');
+    assert.ok(out.report.detectors.partialEmptyFields, 'census fired');
+    const efd = out.report.detectors.emptyFieldDiagnostics;
+    assert.ok(efd, 'diagnostics digest present');
+    assert.equal(efd.length, 1);
+    assert.equal(efd[0].field, 'time');
+    assert.equal(efd[0].path, 'posts.time');
+    assert.equal(efd[0].emptyCount, 2);
+    const blob = JSON.stringify(efd[0].crumbs);
+    assert.ok(/abbr/.test(blob), 'zero-match sub-selector named');
+    assert.ok(/matched 0/.test(blob), 'matchCount-0 falsification phrased');
+    assert.ok(/stale_id/.test(blob) === false, 'earlier-iteration notes are stale and dropped');
+    // the serialized report alone lets the model see WHY time is empty
+    assert.ok(JSON.stringify(out.report).indexOf('matched 0') !== -1);
+  });
+
+  it('healthy last-iteration diagnostics keep the digest null even when the census fires (emptiness lives downstream of extraction)', async () => {
+    const posts = [
+      { content: 'post one', time: '' },
+      { content: 'post two', time: '' }
+    ];
+    const orch = async (svc, input, d, opts) => {
+      opts.onEvent({
+        type: 'STEP_ITERATION', stepId: 'extract', iteration: 1, resultPreview: 'y',
+        selectorDiagnostics: [
+          {
+            api: 'extractList', containerSelector: 'div.post', containerMatches: 2,
+            perField: [{ field: 'time', subSelector: 'abbr', attr: null, matchCount: 2, sampleTexts: ['2h', '5h'], sampleHrefs: [], sampleValues: ['2h', '5h'] }]
+          }
+        ]
+      });
+      return {
+        finalResult: { posts },
+        steps: [{ stepId: 'extract', stepName: 'extract posts', result: { done: true }, snapshot: null }],
+        pages: [], pagesTruncated: false
+      };
+    };
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE2, input: {}, outputSchema: SCHEMA });
+    assert.ok(out.report.detectors.partialEmptyFields, 'census still names the empty field');
+    assert.equal(out.report.detectors.emptyFieldDiagnostics, null, 'no falsification at the extraction layer — digest stays quiet instead of guessing');
+  });
+});
+
 describe('audit batch: junk/depth/hints/degradation (C7/C9/C11/C19/C20/C26)', () => {
   const { detectJunkValues } = require('../lib/verify-runner');
 

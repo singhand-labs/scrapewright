@@ -487,6 +487,32 @@ describe('probe.hover', () => {
     const r = await tools.hover({ anchorSel: 'a.z' });
     assert.equal(r.error, 'ELEMENT_NOT_FOUND: a.z');
   });
+
+  it('forwards the hover layer\'s budget disclosure on popover_timeout (thirty-first log: probes self-shrunk to 3000ms read as "never renders")', async () => {
+    const { tools } = makeTools(async () => ({
+      hovered: false,
+      reason: 'popover_timeout',
+      timeoutMs: 3000,
+      budgetNote: 'absence is budget-bounded — hover waited 3000ms; slow/cold popovers can exceed it, retry with a larger opts.timeoutMs before concluding the popover never renders',
+      observedPopover: null
+    }));
+    const r = await tools.hover({ anchorSel: 'a.author', opts: { timeoutMs: 3000 } });
+    assert.equal(r.reason, 'popover_timeout');
+    assert.equal(r.timeoutMs, 3000, 'the budget actually waited survives the probe layer');
+    assert.match(r.budgetNote, /budget-bounded/, 'retry-larger hint survives the probe layer');
+  });
+
+  it('forwards rejectedAddedTexts/rejectedAddedNote (twenty-fourth-log teaching promised them; the probe layer dropped them)', async () => {
+    const { tools } = makeTools(async () => ({
+      hovered: false,
+      reason: 'popover_timeout',
+      rejectedAddedTexts: ['June 11', 'Group · 1.2K members'],
+      rejectedAddedNote: "no visible popover was captured, but the hover mounted node(s) whose text was READ out of the visual filter's rejects."
+    }));
+    const r = await tools.hover({ anchorSel: 'a.author' });
+    assert.deepEqual(r.rejectedAddedTexts, ['June 11', 'Group · 1.2K members']);
+    assert.match(r.rejectedAddedNote, /READ out/);
+  });
 });
 
 describe('audit C10: canonical popover selector accepts a single stable class token', () => {

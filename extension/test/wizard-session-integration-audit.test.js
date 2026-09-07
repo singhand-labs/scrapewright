@@ -278,6 +278,14 @@ describe('ninth-log follow-up: early I/O contract confirmation (io.confirm)', ()
     }
   });
 
+  it('thirty-first log: renegotiation renders the contract diff above the schemas, not raw JSON only', () => {
+    assert.ok(HTML.includes('id="ioConfirmDiff"'), 'diff box exists in the panel');
+    const body = fnBody('createWizardIoBridge');
+    assert.match(body, /r\.diffLines/, 'the bridge reads diffLines from the request');
+    assert.match(body, /CHANGES the confirmed contract/, 'the diff box names renegotiation explicitly');
+    assert.match(body, /ioConfirmDiff[\s\S]*?classList\.(remove|add)\('hidden'\)/, 'the box hides when there is no prior contract');
+  });
+
   it('createWizardIoBridge parks the engine turn on a promise; confirm/revise/cancel resolve it', () => {
     const body = fnBody('createWizardIoBridge');
     assert.match(body, /request\(req\)\s*\{\s*return new Promise/, 'request parks the engine turn on a pending promise');
