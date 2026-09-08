@@ -11,7 +11,7 @@ function makeDeps(overrides) {
     waitForTabLoad: async () => {},
     getTab: async (id) => ({ id, url: 'https://example.com/list', title: 'List', status: 'complete' }),
     pingReady: async () => true,
-    execute: async (tabId, snippet) => ({ result: 42, snippet }),
+    execute: async (tabId, snippet) => ({ result: 5311, snippet }),
     acquireLock: async () => { d.lockAcquires += 1; },
     releaseLock: async () => { d.lockReleases += 1; },
     log: () => {},
@@ -30,7 +30,7 @@ describe('createLiveRail', () => {
     const d = makeDeps();
     const rail = createLiveRail(d);
     const r = await rail.pageOpen({});
-    assert.deepEqual(Object.keys(r).sort(), ['ready', 'tabId', 'url']);
+    assert.deepEqual(Object.keys(r).sort(), ['bodyTextChars', 'ready', 'tabId', 'url']);
     assert.equal(r.tabId, 7);
     assert.equal(r.url, 'https://example.com/list');
     assert.equal(r.ready, true);
@@ -75,6 +75,33 @@ describe('createLiveRail', () => {
     assert.match(r.warning, /60s exceeded/);
   });
 
+  // Thirty-sixth log RC-E: ready:true only means the content script answers
+  // PING — the model probed an unhydrated shell for ~8 turns because nothing
+  // distinguished "loaded" from "populated". The open receipt now carries a
+  // body-text census.
+  it('pageOpen censuses bodyTextChars after readiness and warns on a shell-sized body', async () => {
+    const snippets = [];
+    const d = makeDeps({ execute: async (tabId, snippet) => { snippets.push(snippet); return { result: 87, selectorDiagnostics: [] }; } });
+    const rail = createLiveRail(d);
+    const r = await rail.pageOpen({});
+    assert.equal(r.ready, true);
+    assert.equal(r.bodyTextChars, 87, 'census lands in the receipt');
+    assert.ok(/unhydrated|shell/i.test(r.warning), 'tiny body warns about the shell: ' + r.warning);
+    assert.ok(/\$extract\('body'/.test(snippets[0]), 'census composed over the DSL: ' + snippets[0]);
+  });
+
+  it('pageOpen census: hydrated-size body adds no shell warning; census failure degrades silently', async () => {
+    const d = makeDeps({ execute: async () => ({ result: 48213, selectorDiagnostics: [] }) });
+    const rail = createLiveRail(d);
+    const r = await rail.pageOpen({});
+    assert.equal(r.bodyTextChars, 48213);
+    assert.ok(!r.warning, 'hydrated page carries no warning');
+    const d2 = makeDeps({ execute: async () => { throw new Error('boom'); } });
+    const r2 = await createLiveRail(d2).pageOpen({});
+    assert.equal(r2.ready, true, 'census failure must not fail the open');
+    assert.equal(r2.bodyTextChars, undefined, 'no census value on failure');
+  });
+
   it('pageState reports open tab; dead tab self-heals to open:false with re-open hint', async () => {
     const d = makeDeps();
     const rail = createLiveRail(d);
@@ -96,7 +123,7 @@ describe('createLiveRail', () => {
     assert.match(r0.error, /page\.open/);
     await rail.pageOpen({});
     const r = await rail.executeDsl('return $count("div");');
-    assert.deepEqual(r, { result: 42, snippet: 'return $count("div");' });
+    assert.deepEqual(r, { result: 5311, snippet: 'return $count("div");' });
     d.execute = async () => { throw new Error('RELAY_FAILED'); };
     const r2 = await rail.executeDsl('return 1;');
     assert.match(r2.error, /RELAY_FAILED/);

@@ -344,9 +344,11 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
           // Sixth-log followup (2026-09-01): failed hovers carry the
           // structural identity of the popover auto-discovery observed
           // (role/aria/id/class), so a popoverSelector mismatch can be
-          // repaired from evidence instead of re-guessed. Attached ONLY on
-          // failure — a success already has htmlSnippet.
-          observedPopover: (r && !r.hovered && r.observedPopover) || null,
+          // repaired from evidence instead of re-guessed. Thirty-sixth log:
+          // forwarded on success too — the identity now names the CAPTURED
+          // popover, so harvest gates reading `observedPopover &&
+          // htmlSnippet` see a successful capture.
+          observedPopover: (r && r.observedPopover) || null,
           anchorIndex: j,
           anchorHref: anchorHref,
           anchorText: anchorText

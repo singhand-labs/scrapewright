@@ -127,9 +127,27 @@
           catch (e) { ready = false; }
         }
         const out = { tabId: tab.id, url: url, ready: !!ready };
+        // Thirty-sixth log RC-E: ready:true means the content script answers
+        // PING — NOT that the page rendered content. The model probed an
+        // unhydrated shell for ~8 turns because nothing distinguished
+        // "loaded" from "populated". Census the body text so the open
+        // receipt itself shows shell vs hydrated. Best-effort: a census
+        // failure never fails the open.
+        if (ready && typeof d.execute === 'function') {
+          try {
+            const env = await d.execute(tab.id, "return (await $extract('body', null, 3000)) || '';");
+            if (env && typeof env === 'object') {
+              if (typeof env.result === 'string') out.bodyTextChars = env.result.length;
+              else if (typeof env.result === 'number') out.bodyTextChars = env.result;
+            }
+          } catch (e) { /* census is best-effort */ }
+        }
         if (warning) out.warning = warning;
         else if (templateWarn) out.warning = templateWarn;
         else if (!ready) out.warning = 'content script not responding yet';
+        else if (typeof out.bodyTextChars === 'number' && out.bodyTextChars < 200) {
+          out.warning = 'body text is only ' + out.bodyTextChars + ' chars — the page is likely an UNHYDRATED SHELL (splash/loading markup; client JS has not rendered content yet). Call page.settle (or re-open and re-check) before probing and concluding the page is empty';
+        }
         return out;
       })();
       try {

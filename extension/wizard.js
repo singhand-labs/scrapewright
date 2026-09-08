@@ -2737,6 +2737,7 @@ async function startResearchSession(seedOverride) {
     applyArtifact: applySessionArtifact,
     getTestInput: () => wizardState.testInput || {},
     getOutputSchema: () => wizardState.outputSchema,
+    getInputSchema: () => wizardState.inputSchema,
     getSteps: () => wizardState.steps,
     annotationBridge: wizardAnnotationBridge,
     ioConfirmBridge: wizardIoBridge

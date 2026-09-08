@@ -36,7 +36,7 @@ describe('createSessionTools', () => {
   it('exposes the full tool bag + toolSpecs + DSL-contract system prompt', () => {
     const { deps } = makeDeps();
     const t = createSessionTools(deps);
-    for (const name of ['page.open', 'page.state', 'probe.count', 'probe.text', 'probe.attrStats', 'probe.sample', 'probe.hover', 'probe.scroll', 'probe.extract', 'diag.read', 'verify.run', 'annotate.request', 'io.confirm', 'service.update']) {
+    for (const name of ['page.open', 'page.state', 'page.settle', 'probe.count', 'probe.text', 'probe.attrStats', 'probe.sample', 'probe.hover', 'probe.scroll', 'probe.extract', 'diag.read', 'verify.run', 'annotate.request', 'io.confirm', 'service.update']) {
       assert.equal(typeof t.tools[name], 'function', name + ' wired');
     }
     assert.ok(t.toolSpecs.every(s => s.name && typeof s.returns === 'string'));
@@ -431,6 +431,57 @@ describe('io.confirm — early I/O contract gate', () => {
       'ledger-recovered prior schema still produces the diff');
   });
 
+  // Thirty-sixth log: the amendment (postingTime/location → optional) was
+  // confirmed, but the artifact kept the OLD schema until the next
+  // service.update — and verify prefers the artifact-attached schema, so the
+  // post-amendment verify judged the stale REQUIRED contract and reported
+  // "the confirmed contract lists it as REQUIRED" about fields the user had
+  // just waived. The confirmation itself must land the contract.
+  it('a confirmed amendment attaches the amended schemas to the existing artifact — the very next verify scores the amended contract', async () => {
+    const store = { steps: [], inputSchema: null, outputSchema: null };
+    const applied = [];
+    const verifySchemas = [];
+    const { deps } = makeDeps({
+      applyArtifact: (a) => {
+        applied.push(a);
+        store.steps = a.steps;
+        if (a.inputSchema) store.inputSchema = a.inputSchema;
+        if (a.outputSchema) store.outputSchema = a.outputSchema;
+      },
+      getDraftService: () => (store.steps.length ? { targetUrl: 'https://example.com', steps: store.steps, config: {} } : null),
+      getOutputSchema: () => store.outputSchema,
+      getInputSchema: () => store.inputSchema,
+      getSteps: () => store.steps,
+      runVerify: async (o) => {
+        verifySchemas.push(o.outputSchema);
+        return { report: { ok: true, error: null, aborted: false, score: { score: 100 }, schemaOk: true, schemaMissing: [], detectors: {}, steps: [], finalResult: {}, pages: '1', eventCount: 0, events: [] }, events: [], raw: {} };
+      }
+    });
+    const t = createSessionTools(deps);
+    const ledger = { add: () => {} };
+    const rec = (fields, required) => ({
+      type: 'object', required: ['posts'],
+      properties: { posts: { type: 'array', items: { type: 'object', required: required, properties: fields } } }
+    });
+    const v1 = rec({ content: { type: 'string' }, postingTime: { type: 'string' }, location: { type: 'string' } }, ['content', 'postingTime', 'location']);
+    const v2 = rec({ content: { type: 'string' }, postingTime: { type: 'string' }, location: { type: 'string' } }, ['content']);
+    await t.tools['io.confirm']({ inputSchema: IN, outputSchema: v1 }, { ledger });
+    assert.equal(applied.length, 0, 'nothing to attach before an artifact exists');
+    // Artifact lands with v1 (the service.update auto-attach).
+    store.steps = GOOD_STEPS; store.inputSchema = IN; store.outputSchema = v1;
+    const r = await t.tools['io.confirm']({ inputSchema: IN, outputSchema: v2, note: 'tooltips unreliable' }, { ledger });
+    assert.equal(r.confirmed, true);
+    assert.equal(applied.length, 1, 'confirmation applied the amended contract to the artifact');
+    assert.deepEqual(store.outputSchema, v2, 'artifact carries the AMENDED schema immediately');
+    assert.match(r.note, /applied to the current artifact/, 'note tells the model the artifact is already on the amended contract');
+    await t.tools['verify.run']({});
+    assert.deepEqual(verifySchemas[0], v2, 'verify scores the amended contract, not the stale one');
+    // Idempotence: re-confirming the standing shape attaches nothing.
+    const again = await t.tools['io.confirm']({ inputSchema: IN, outputSchema: v2 }, { ledger });
+    assert.equal(again.confirmed, true);
+    assert.equal(applied.length, 1, 'same-shape re-confirmation is a no-op');
+  });
+
   it('malformed schemas get the teaching error without consulting the bridge', async () => {
     let called = 0;
     const { deps } = makeDeps({
@@ -484,6 +535,50 @@ describe('io.confirm — early I/O contract gate', () => {
     assert.match(t.systemPromptBase, /io\.confirm\(\{inputSchema, outputSchema/);
     assert.match(t.systemPromptBase, /MATERIAL change/);
     assert.ok(t.toolSpecs.some((s) => s.name === 'io.confirm'), 'io.confirm in the spec list');
+  });
+
+  // Thirty-sixth log RC-E: no settle/wait tool existed, so the model probed
+  // an unhydrated shell for ~8 turns (page.open said ready:true on a
+  // splash-scripts-only body). page.settle turns "wait for hydration" into
+  // one call with a receipt.
+  it('page.settle composes $waitForStable over the rail and returns the settle receipt', async () => {
+    const snippets = [];
+    const base = makeDeps();
+    const { deps } = makeDeps({
+      rail: Object.assign(base.deps.rail, {
+        executeDsl: async (s) => {
+          snippets.push(s);
+          return { result: { settled: true, chars: 4321, textHead: 'hydrated' }, selectorDiagnostics: [] };
+        }
+      })
+    });
+    const t = createSessionTools(deps);
+    const recorded = [];
+    t.bindEngine({ observationLog: { record: (o) => recorded.push(o) } });
+    const r = await t.tools['page.settle']({ timeoutMs: 5000 });
+    assert.equal(r.settled, true);
+    assert.equal(r.chars, 4321);
+    assert.equal(r.sel, 'body');
+    assert.ok(typeof r.waitedMs === 'number');
+    assert.ok(snippets[0].includes('$waitForStable("body"'), 'composed over the DSL: ' + snippets[0]);
+    assert.ok(snippets[0].includes('maxMs: 5000'), 'timeout forwarded');
+    assert.equal(recorded.length, 1, 'settle records an observation receipt');
+    assert.equal(recorded[0].tool, 'page.settle');
+    const r2 = await t.tools['page.settle']({ sel: '#main' });
+    assert.ok(snippets[1].includes('$waitForStable("#main"'), 'custom sel forwarded');
+  });
+
+  it('page.settle unsettled result carries shell guidance, not silence', async () => {
+    const base = makeDeps();
+    const { deps } = makeDeps({
+      rail: Object.assign(base.deps.rail, { executeDsl: async () => ({ result: { settled: false, chars: 87, textHead: '' }, selectorDiagnostics: [] }) })
+    });
+    const t = createSessionTools(deps);
+    const r = await t.tools['page.settle']({});
+    assert.equal(r.settled, false);
+    assert.equal(r.chars, 87);
+    assert.match(r.note, /shell|hydrat/i, 'note names the unhydrated-shell mechanism');
+    assert.match(r.note, /page\.settle|scroll/, 'note names the next action');
   });
 
   it('rule 8 teaches verify-input consistency (thirteenth log: research q=news, verify keyword=cat — 0 /posts/ permalinks on the cat population)', () => {

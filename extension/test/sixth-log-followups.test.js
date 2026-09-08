@@ -77,15 +77,40 @@ describe('P1: domHover keeps the observed candidate (source audit)', () => {
     assert.ok(/result\.observedPopover/.test(fnBody),
       'failed hovers must expose observedPopover');
     const asmIdx = fnBody.indexOf('result.observedPopover');
-    const asmChunk = fnBody.slice(asmIdx - 900, asmIdx + 1200);
+    const asmChunk = fnBody.slice(asmIdx - 900, asmIdx + 1400);
     assert.ok(/!htmlSnippet/.test(asmChunk),
-      'observedPopover is failure evidence — only attach when nothing was captured');
+      'the failure branch keeps its !htmlSnippet guard (no capture = failure evidence)');
+    // The identity fields live in the shared popoverIdentityOf helper —
+    // audit it directly so the success and failure branches can never
+    // drift apart (RC8/RC35 inline-drift family).
+    const helperIdx = CS_SRC.indexOf('function popoverIdentityOf(');
+    assert.ok(helperIdx > -1, 'popoverIdentityOf helper exists');
+    const helper = CS_SRC.slice(helperIdx, helperIdx + 2600);
     for (const field of ['role', 'ariaLabel', 'classHead', 'getAttribute']) {
-      assert.ok(new RegExp(field).test(asmChunk),
+      assert.ok(new RegExp(field).test(helper),
         'observedPopover summary must include ' + field);
     }
-    assert.ok(/\.slice\(0, 120\)/.test(asmChunk),
+    assert.ok(/\.slice\(0, 120\)/.test(helper),
       'classHead must be capped (context-diet discipline)');
+  });
+
+  // Thirty-sixth log: observedPopover used to ride ONLY failures, so the
+  // natural harvest gate `h.observedPopover && h.htmlSnippet` ("a popover
+  // was observed AND captured") was structurally impossible — whole
+  // sessions shipped hovercards:[] with the hover layer working end to end.
+  it('attaches observedPopover to SUCCESSFUL captures too (the harvest gate must be satisfiable)', () => {
+    const asmIdx = fnBody.indexOf('result.observedPopover');
+    const asmChunk = fnBody.slice(asmIdx - 900, asmIdx + 1400);
+    assert.ok(/capturedEl/.test(asmChunk),
+      'the success branch keys off the element htmlSnippet was captured from');
+    assert.ok(/popoverIdentityOf\(capturedEl/.test(asmChunk),
+      'success identity goes through the same shared helper');
+    const capA = fnBody.indexOf('matchedSel = popoverSel;');
+    assert.ok(/capturedEl = popEl/.test(fnBody.slice(capA, capA + 200)),
+      'path (a) explicit-selector captures record their element');
+    const capB = fnBody.indexOf("matchedSel = '[auto-discovered popover]';");
+    assert.ok(/capturedEl = bestEl/.test(fnBody.slice(capB, capB + 200)),
+      'path (b) auto-discovered captures record their element');
   });
 });
 
@@ -131,7 +156,32 @@ describe('P1: extractWithHoverRecords carries observedPopover on failed entries'
       'the failed entry must carry the observed popover identity verbatim');
   });
 
-  it('does NOT attach observedPopover on successful captures (diet discipline)', async () => {
+  it('forwards observedPopover from a SUCCESSFUL hover too (thirty-sixth log: the harvest gate must see captures)', async () => {
+    oneContainer();
+    const observed = {
+      tag: 'DIV', role: 'tooltip', ariaLabel: 'Sponsor profile',
+      id: '', classHead: 'x1n2 x2s7', source: 'added',
+      posAbsolute: false, z: 0, dist: 216, area: 166372,
+      wonTicks: 3, lastSeenDwellMs: 1863
+    };
+    const records = await extractWithHoverRecords(
+      Array.from(document.querySelectorAll('.item')),
+      fieldMap,
+      hoverCfg,
+      async () => ({
+        hovered: true, htmlSnippet: '<div role="tooltip">card</div>',
+        popoverSelector: 'div[role="tooltip"]', autoDiscovered: true,
+        observedPopover: observed
+      }),
+      { allowEmpty: true }
+    );
+    const card = records[0].hovercards[0];
+    assert.equal(card.hovered, true);
+    assert.deepEqual(card.observedPopover, observed,
+      'a success entry carries the captured popover identity — `observedPopover && htmlSnippet` gates must be satisfiable');
+  });
+
+  it('still serializes absent observations as null on success (hover fn returned no identity)', async () => {
     oneContainer();
     const records = await extractWithHoverRecords(
       Array.from(document.querySelectorAll('.item')),
@@ -144,9 +194,8 @@ describe('P1: extractWithHoverRecords carries observedPopover on failed entries'
       { allowEmpty: true }
     );
     const card = records[0].hovercards[0];
-    assert.equal(card.hovered, true);
-    assert.ok(!card.observedPopover,
-      'success entries keep htmlSnippet only — no payload bloat');
+    assert.equal(card.observedPopover, null,
+      'absence of identity must serialize as null, not undefined/throw');
   });
 
   it('tolerates a failed hover with no observation (popover never mounted)', async () => {
@@ -165,12 +214,16 @@ describe('P1: extractWithHoverRecords carries observedPopover on failed entries'
       'absence of observation must serialize as null, not undefined/throw');
   });
 
-  it('source audit: the entry assembly copies observedPopover (lib mirror)', () => {
-    const i = LIB_SRC.indexOf('observedPopover: (r && !r.hovered');
-    assert.ok(i > -1, 'the lib entry must gate observedPopover on failure');
+  it('source audit: the entry assembly copies observedPopover on success and failure alike (lib mirror)', () => {
+    const i = LIB_SRC.indexOf('observedPopover: (r && r.observedPopover) || null');
+    assert.ok(i > -1, 'the lib entry forwards observedPopover without gating on !hovered');
+    assert.ok(!/!r\.hovered && r\.observedPopover/.test(LIB_SRC),
+      'the failure-only strip must be gone from the lib (thirty-sixth log)');
     const chunk = LIB_SRC.slice(i - 700, i + 700);
     assert.ok(/anchorHref/.test(chunk),
       'the propagation lives in the hovercards entry assembly');
+    const csIdx = CS_SRC.indexOf('observedPopover: (r && r.observedPopover) || null');
+    assert.ok(csIdx > -1, 'the content-script inline mirror forwards it identically');
   });
 });
 

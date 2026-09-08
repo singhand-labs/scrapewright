@@ -164,10 +164,10 @@
       '3. Attribute DISTRIBUTIONS (probe.attrStats), not single samples, reveal what a data-* attribute means (attr is read on every element containerSel matches — the elements themselves, not their descendants). :has()/:not(:has()) filter by DESCENDANTS: before shipping a clause on an attr, census the descendant form containerSel + " [attr]" — absentPct 100 on the element form does NOT mean the attr is absent inside your containers, and a clause built on that misreading can exclude the whole population.',
       '4. After any container/filter fix, propagate it to every step sharing that selector.',
       '5. When verify.run fails, read diag.read BEFORE changing anything.',
-      '6. To observe a hover popover during research call probe.hover (a session tool — do NOT call the $hover DSL primitive as a tool); it returns the popover evidence (observedPopover identity + htmlSnippet) and, when the popover is observed, a canonical popoverSelector whose EXACT string is recorded as an observation receipt — copy that string VERBATIM into popoverSel; an embellished variant (extra attributes) is a new string the gate must reject. A no-popover probe.hover result may carry rejectedAddedTexts — text READ out of hover-mounted nodes the visual filter rejected (hidden or zero-height mounts): the popover "exists" as readable content even though it never rendered visually; if the value you need is in rejectedAddedTexts, bind the field from it directly instead of re-hovering. Also try probe.labelledby on the anchor first: tooltip and timestamp values very often live in the element an aria-labelledby reference points at — hidden but readable in one call, no hover needed. Popover absence is ANCHOR-specific evidence: a link with no hovercard does not mean the page has none — hover at least one other anchor before concluding popovers do not work here — on a repeating item (list card, table row, or detail block) the element that carries identity or author metadata is the usual hovercard carrier. When two different anchors show no popover, stop: the page has none.',
+      '6. To observe a hover popover during research call probe.hover (a session tool — do NOT call the $hover DSL primitive as a tool); it returns the popover evidence (observedPopover identity + htmlSnippet) and, when the popover is observed, a canonical popoverSelector whose EXACT string is recorded as an observation receipt — copy that string VERBATIM into popoverSel; an embellished variant (extra attributes) is a new string the gate must reject. A no-popover probe.hover result may carry rejectedAddedTexts — text READ out of hover-mounted nodes the visual filter rejected (hidden or zero-height mounts): the popover "exists" as readable content even though it never rendered visually; if the value you need is in rejectedAddedTexts, bind the field from it directly instead of re-hovering. Also try probe.labelledby on the anchor first: tooltip and timestamp values very often live in the element an aria-labelledby reference points at — hidden but readable in one call, no hover needed. Popover absence is ANCHOR-specific evidence: a link with no hovercard does not mean the page has none — hover at least one other anchor before concluding popovers do not work here — on a repeating item (list card, table row, or detail block) the element that carries identity or author metadata is the usual hovercard carrier. When two different anchors show no popover, stop: the page has none. CHOOSE THE ANCHOR BY REQUIREMENT SEMANTICS, not element type: any element can carry a hover or click handler (span, abbr, time, div, li — not just links), so to read a timestamp tooltip hover the timestamp element itself (the abbr/time/span rendering the relative age); an a[href]-typed anchor both misses the semantic target (its popover never triggers) and wastes budget on navigation chrome that matches first in document order.',
       '7. Scrolling is available DURING research via probe.scroll (a session tool — do NOT call the $scroll DSL primitives as tools): use it to trigger lazy-load / viewport-gated content before counting, sampling, or writing scroll steps. The container selector you pass becomes an observation receipt, grounding a later $scrollToBottom(sel) in steps.',
       '8. Iterate the fieldMap in the LIVE tab with probe.extract BEFORE writing steps: one probe turn per revision, warm DOM, empty-field census included. Reserve service.update + verify.run for the end-to-end check — verify opens a FRESH tab, so cold-load divergence (fewer/different items than the research tab) is expected; investigate counts with probes on the research tab, not by re-verifying. Run the FIRST verify with the SAME input values that drove the research page: a different input value can change the result-card population ENTIRELY (a field selector grounded on the researched query may match 0 items under another query — population divergence, not a rendering failure; the verify error FIELD_MATCH_ZERO names the census). Only after a green verify, spot-check one other input. When verify reports INPUT_VALUE_SUSPECT (zero containers on the page — no result items at all), the input VALUE itself is the prime suspect: the site may simply have no content for it (an obscure keyword, an over-specific filter) — that is not a selector bug. Re-run verify.run with {"input": {<param>: <a DIFFERENT, more common value>}} BEFORE hardening selectors; if the alternate value succeeds, adopt it with service.update({testInput: {...}}) (steps-less update is allowed for adoption) and re-verify without an override; note the input-value sensitivity in the ledger. BUT read the differential first: when the error says SELECTOR_OVERFILTERED (or the census carries [differential: ...] showing the stripped base selector matched >0), the page HAS items and your own trailing :not()/:has() clause(s) removed them — that is a selector problem, NOT an input-value problem: census each clause (count with/without it; attrStats descendant form) and drop or fix the fatal clause instead of re-testing input values. A "no containers matched" probe error carries the same differential inline.',
-      '9. EARLY contract confirmation: right after the first page.open and a coarse look at the repeating item\'s structure (list card, table row, or detail block), propose the input/output contract with io.confirm({inputSchema, outputSchema, note}) and WAIT for the user — service.update is REJECTED until the user confirms. annotate.request is likewise rejected until the confirmation lands: user annotation picks elements for output FIELDS, so settle the contract first. Apply every revision the user returns and re-confirm. Once confirmed, do NOT re-propose the same contract — a re-proposal whose shape matches the confirmed one auto-confirms without prompting the user; propose again only when the user asks for a change or evidence forces a MATERIAL renegotiation. Adding/renaming/removing fields or changing types later is a MATERIAL change: call io.confirm again with the new schemas before service.update (description-only edits are exempt). After confirmation you may send service.update with steps only — the confirmed schemas attach to the artifact automatically; a schema-only service.update ({inputSchema, outputSchema} alone, no steps) also lands the contract when the artifact already exists.',
+      '9. EARLY contract confirmation: right after the first page.open and a coarse look at the repeating item\'s structure (list card, table row, or detail block), propose the input/output contract with io.confirm({inputSchema, outputSchema, note}) and WAIT for the user — service.update is REJECTED until the user confirms. Before that coarse look, make sure the page is RENDERED, not just loaded: ready/bodyTextChars from page.open says the tab loaded; a shell-sized body or empty-looking page on a JS-heavy site is usually still hydrating — call page.settle and only then probe (probing an unhydrated shell yields "empty page" evidence about timing, not about the page). annotate.request is likewise rejected until the confirmation lands: user annotation picks elements for output FIELDS, so settle the contract first. Apply every revision the user returns and re-confirm. Once confirmed, do NOT re-propose the same contract — a re-proposal whose shape matches the confirmed one auto-confirms without prompting the user; propose again only when the user asks for a change or evidence forces a MATERIAL renegotiation. Adding/renaming/removing fields or changing types later is a MATERIAL change: call io.confirm again with the new schemas before service.update (description-only edits are exempt). After confirmation you may send service.update with steps only — the confirmed schemas attach to the artifact automatically; a schema-only service.update ({inputSchema, outputSchema} alone, no steps) also lands the contract when the artifact already exists.',
       '10. Ship real values only. A green verify can still carry junk: bare query strings ("?a=b…") posing as ids, data: URIs polluting url/media arrays (inline UI icons — filter arrays to http(s) entries inside the step script), raw HTML dumps in data fields, and OBFUSCATED text (anti-scrape decoy characters mixed into textContent — interleaved/scrambled runs, reversed fragments, combining marks, zero-width chars). If a text value reads scrambled, the clean value usually lives in an ATTRIBUTE on the same element (aria-label, title, datetime) — probe it (attrStats, or extract with attr) and bind the field to that attribute; never ship an obfuscated "best-effort" value in a confirmed field. Check detectors.junkValues in the verify report. If research proves a confirmed field is unextractable or only junk-reachable, renegotiate the contract with io.confirm (drop or redefine the field) instead of shipping it empty/junk. Scalar or single-value outputs skip the array filters but still go through detectors.junkValues. An empty string is not a value either: check detectors.partialEmptyFields — a confirmed field empty in EVERY record (emptyRatio 1) is a binding failure or the page lacks the data, so fix the binding (attribute fallback) or renegotiate with io.confirm; a field empty in only SOME records may legitimately vary (a text-only item has no media) — if it does and the field is required, move it to optional in the contract. Never rationalize a persistent empty as timing or "acceptable", and never hardcode an empty-string placeholder for a confirmed field. Do not declare synthetic bookkeeping fields (an index, serialNumber, a loop counter) in outputSchema: declare only fields the requirement asks for — a populated synthetic field masks the empty-data signals (a record whose only filled field is index reads as non-empty).'
     ].join('\n');
   }
@@ -318,6 +318,31 @@
       return lines;
     }
 
+    // Thirty-sixth log: a confirmed amendment updated only the runtime
+    // ioConfirmedSchemas — the artifact kept the PREVIOUS schema until the
+    // next service.update, and verify prefers the artifact-attached schema,
+    // so a verify run between amendment and update judged the stale
+    // REQUIRED contract (reporting "the confirmed contract lists it as
+    // REQUIRED" about fields the user had just waived, burning the final
+    // turns). The confirmation IS the moment the contract changes: land it
+    // on the artifact immediately. The shape guard keeps it idempotent —
+    // re-confirming the standing contract (or the ledger-recovery
+    // re-proposal of a resumed session) attaches nothing.
+    function attachConfirmedSchemas(schemas) {
+      const currentSteps = (typeof d.getSteps === 'function' ? (d.getSteps() || []) : []);
+      if (!currentSteps.length) return false; // no artifact yet — service.update attaches on landing
+      const artifactOut = (typeof d.getOutputSchema === 'function') ? d.getOutputSchema() : null;
+      const artifactIn = (typeof d.getInputSchema === 'function') ? d.getInputSchema() : null;
+      const outDrift = !artifactOut || schemaShape(artifactOut) !== schemaShape(schemas.outputSchema);
+      const inDrift = !!schemas.inputSchema && (!artifactIn || schemaShape(artifactIn) !== schemaShape(schemas.inputSchema));
+      if (!outDrift && !inDrift) return false;
+      try {
+        d.applyArtifact({ steps: currentSteps, inputSchema: schemas.inputSchema, outputSchema: schemas.outputSchema });
+        if (lastVerify) lastVerify.staleArtifact = true;
+        return true;
+      } catch (e) { return false; }
+    }
+
     async function ioConfirm(args, ctx) {
       const a = args && typeof args === 'object' ? args : {};
       const bridge = d.ioConfirmBridge;
@@ -350,7 +375,12 @@
         // too (legacy markers stored shape only; this is the recovery path
         // by which a resumed legacy session starts attaching the contract).
         ioConfirmedSchemas = { inputSchema: a.inputSchema, outputSchema: a.outputSchema };
-        return { confirmed: true, note: 'contract already confirmed — same contract, proceeding without re-prompting the user' };
+        const recoveredAttached = attachConfirmedSchemas(ioConfirmedSchemas);
+        return {
+          confirmed: true,
+          note: 'contract already confirmed — same contract, proceeding without re-prompting the user'
+            + (recoveredAttached ? '; recovered schemas applied to the current artifact' : '')
+        };
       }
       const sess = (ctx && ctx.session) || null;
       let res;
@@ -391,7 +421,12 @@
             });
           } catch (e) { /* ledger secondary — the runtime flag already holds */ }
         }
-        return { confirmed: true, note: 'contract approved — author the steps and call service.update (schemas optional: the confirmed contract attaches automatically)' };
+        const attachedNow = attachConfirmedSchemas(ioConfirmedSchemas);
+        return {
+          confirmed: true,
+          note: 'contract approved — author the steps and call service.update (schemas optional: the confirmed contract attaches automatically)'
+            + (attachedNow ? '; amended contract applied to the current artifact — verify.run scores against it now' : '')
+        };
       }
       return {
         confirmed: false,
@@ -717,9 +752,53 @@
       return d.rail.pageOpen(substituted ? Object.assign({}, a, { url: url }) : args);
     }
 
+    // Thirty-sixth log RC-E: the session had no wait/settle tool — the
+    // model probed an unhydrated shell repeatedly (page.open reported
+    // ready:true on a splash-scripts-only body) and burned ~8 turns
+    // concluding "empty page" while client rendering was still in flight.
+    // Settle = one $waitForStable poll over the page body (or a narrower
+    // sel) plus a text census, with a receipt. Pure composition over the
+    // DSL — no new page-side code.
+    async function pageSettle(args) {
+      const a = (args && typeof args === 'object') ? args : {};
+      const sel = (typeof a.sel === 'string' && a.sel.trim()) ? a.sel.trim() : 'body';
+      const maxMs = (typeof a.timeoutMs === 'number' && a.timeoutMs > 0)
+        ? Math.min(Math.round(a.timeoutMs), 60000) : 15000;
+      const startedAt = Date.now();
+      const snippet =
+        'var st = await $waitForStable(' + JSON.stringify(sel) + ', { interval: 800, stableChecks: 3, maxMs: ' + maxMs + ' });' +
+        'var chars = null; var textHead = null;' +
+        'try { var t = await $extract(' + JSON.stringify(sel) + ', null, 3000); chars = (t || "").length; textHead = (t || "").slice(0, 200); } catch (e) { /* census best-effort */ }' +
+        'return { settled: st === true, chars: chars, textHead: textHead };';
+      const env = await d.rail.executeDsl(snippet);
+      if (env && typeof env === 'object' && typeof env.error === 'string') {
+        return { error: env.error + ' — settle needs an open page; call page.open first' };
+      }
+      let r = null;
+      if (env && typeof env === 'object' && !Array.isArray(env) && env.result && typeof env.result === 'object') r = env.result;
+      else if (env && typeof env === 'object' && !Array.isArray(env) && typeof env.settled !== 'undefined') r = env;
+      if (!r) return { error: 'settle failed: unexpected DSL result' };
+      const out = {
+        settled: r.settled === true,
+        sel: sel,
+        chars: (typeof r.chars === 'number') ? r.chars : null,
+        waitedMs: Date.now() - startedAt
+      };
+      if (typeof r.textHead === 'string' && r.textHead) out.textHead = r.textHead;
+      lateBoundLog.record({ tool: 'page.settle', selectors: [sel], summary: 'settled=' + out.settled + ' chars=' + out.chars });
+      if (!out.settled) {
+        out.note = 'content never stabilized within ' + maxMs + 'ms' +
+          ((out.chars !== null && out.chars < 200)
+            ? ' and the body is only ' + out.chars + ' chars — likely an UNHYDRATED SHELL (client JS still rendering). Re-run page.settle with a larger timeoutMs, or probe.scroll to force lazy loading, before concluding the page is empty'
+            : ' (it may still be streaming — re-run page.settle or probe the population directly)');
+      }
+      return out;
+    }
+
     const tools = {
       'page.open': pageOpen,
       'page.state': d.rail.pageState,
+      'page.settle': pageSettle,
       'probe.count': probes.count,
       'probe.text': probes.text,
       'probe.attrStats': probes.attrStats,
@@ -736,8 +815,9 @@
     };
 
     const toolSpecs = [
-      { name: 'page.open', args: '{url?}', returns: '{tabId,url,ready,warning?} — {{param}} placeholders are filled from the test input; a URL that still has one is rejected (never probe the literal placeholder page)' },
+      { name: 'page.open', args: '{url?}', returns: '{tabId,url,ready,bodyTextChars?,warning?} — {{param}} placeholders are filled from the test input; a URL that still has one is rejected (never probe the literal placeholder page). bodyTextChars censuses the rendered body text: ready:true only means the tab loaded, and a tiny body means an unhydrated shell' },
       { name: 'page.state', args: '{}', returns: '{open,tabId,url,title,status}' },
+      { name: 'page.settle', args: '{sel?,timeoutMs?}', returns: '{settled,sel,chars,waitedMs,textHead?,note?} — polls until the content stops changing ($waitForStable over the sel, default body). JS-heavy pages report loaded/ready long BEFORE client rendering fills the body: settle (or re-check bodyTextChars from page.open) before concluding a page is empty' },
       { name: 'probe.count', args: '{sel}', returns: '{count}' },
       { name: 'probe.text', args: '{sel}', returns: '{total,items[]}' },
       { name: 'probe.attrStats', args: '{containerSel, attr}', returns: '{totalItems,values[{value,items,pct}],absentPct,note?} — note appears when absentPct is 100: the attr is not ON the matched elements; :has() sees DESCENDANTS, so census the descendant form containerSel + " [attr]" to know what a :not()/:has() clause actually filters' },

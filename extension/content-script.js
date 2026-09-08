@@ -202,8 +202,11 @@
                 autoDiscovered: !!(r && r.autoDiscovered),
                 reason: (r && r.reason) || null,
                 // Sixth-log followup: observed popover identity on failures
-                // (inline mirror of lib/list-extract-ops.js).
-                observedPopover: (r && !r.hovered && r.observedPopover) || null,
+                // (inline mirror of lib/list-extract-ops.js). Thirty-sixth
+                // log: forwarded on success too — the identity now names the
+                // CAPTURED popover, and harvest gates read
+                // `observedPopover && htmlSnippet`.
+                observedPopover: (r && r.observedPopover) || null,
                 anchorIndex: j,
                 anchorHref: anchorHref,
                 anchorText: anchorText
@@ -2220,6 +2223,66 @@
   // on hover/popover failure — returns hovered:false or htmlSnippet:null so
   // the LLM script can branch. Throws only on ELEMENT_NOT_FOUND for the
   // anchor (so the LLM gets an autoFix-able error, not silent empty).
+  //
+  // Structural identity of a popover element for hover results. Shared by
+  // the SUCCESS path (the element the htmlSnippet was captured from) and
+  // the FAILURE path (the best candidate auto-discovery observed) so the
+  // two can never drift. meta carries the scoring-cascade fields when the
+  // element came out of auto-discovery; an explicit-selector capture passes
+  // only source and the geometry fields are computed here (cheap one-shot
+  // reads on a single element).
+  function popoverIdentityOf(node, meta, ox, oy) {
+    if (!node || typeof node.getAttribute !== 'function') return null;
+    try {
+      var m = meta || {};
+      var posAbsolute = m.posAbsolute;
+      var z = m.z;
+      if (posAbsolute == null || z == null) {
+        try {
+          var st = (node.ownerDocument && node.ownerDocument.defaultView || window).getComputedStyle(node);
+          if (st) {
+            if (posAbsolute == null) posAbsolute = (st.position === 'absolute' || st.position === 'fixed');
+            if (z == null) {
+              var zr = st.zIndex;
+              if (zr !== 'auto' && zr !== '') { var zi = parseInt(zr, 10); if (isFinite(zi) && zi > 0) z = zi; }
+            }
+          }
+        } catch (_) { /* geometry must never break the identity */ }
+      }
+      var dist = m.dist;
+      var area = m.area;
+      if (dist == null || area == null) {
+        try {
+          var r2 = node.getBoundingClientRect();
+          if (r2) {
+            if (area == null && r2.width > 0 && r2.height > 0) area = Math.round(r2.width * r2.height);
+            if (dist == null && typeof ox === 'number' && isFinite(ox)) {
+              var dx = (r2.left + r2.width / 2) - ox;
+              var dy = (r2.top + r2.height / 2) - oy;
+              dist = Math.round(Math.sqrt(dx * dx + dy * dy));
+            }
+          }
+        } catch (_) { /* geometry must never break the identity */ }
+      }
+      var obClass = typeof node.className === 'string'
+        ? node.className.replace(/\s+/g, ' ').trim() : '';
+      return {
+        tag: node.tagName,
+        role: (node.getAttribute('role') || '').slice(0, 80),
+        ariaLabel: (node.getAttribute('aria-label') || '').slice(0, 80),
+        id: (node.id || '').slice(0, 80),
+        classHead: obClass.slice(0, 120),
+        source: m.source != null ? m.source : null,
+        posAbsolute: (posAbsolute == null) ? null : posAbsolute,
+        z: (z == null) ? null : z,
+        dist: (dist == null) ? null : dist,
+        area: (area == null) ? null : area,
+        wonTicks: (m.wonTicks == null) ? null : m.wonTicks,
+        lastSeenDwellMs: (m.lastDwellMs == null) ? null : m.lastDwellMs
+      };
+    } catch (_) { return null; }
+  }
+
   async function domHover(selOrEl, popoverSel, opts) {
     if (!selOrEl) throw new Error('$hover requires an anchor selector or element');
     // Sixth-log followup: per-anchor phase timings. Run 1 of the 2026-09-01
@@ -2341,6 +2404,10 @@
     var lastPopSample = null;
     var lastBestEl = null;
     var lastBestSample = null;
+    // Thirty-sixth log: the element a SUCCESSFUL capture took htmlSnippet
+    // from (path (a) explicit match or path (b) auto-discovered best).
+    // Drives the success-path observedPopover identity.
+    var capturedEl = null;
 
     var addedNodes = [];
     var observedBest = null;
@@ -2490,6 +2557,7 @@
           if (hasContent && differsFromBaseline && popStable) {
             htmlSnippet = popHtml;
             matchedSel = popoverSel;
+            capturedEl = popEl;
             break;
           }
           // Gates failed. Fall through to path (b).
@@ -2828,6 +2896,7 @@
           htmlSnippet = bestHtml;
           matchedSel = '[auto-discovered popover]';
           autoDiscovered = true;
+          capturedEl = bestEl;
         }
         // Sixth-log followup (2026-09-01): remember the best candidate the
         // cascade has seen even when it never stabilizes into a capture. A
@@ -2954,25 +3023,23 @@
     // popoverSelector survived two consecutive runs. Attach the observed
     // element's structural identity so the selector can be rewritten from
     // evidence (role/aria/id/class), never re-guessed.
-    if (!htmlSnippet && observedBest && observedBest.node && typeof observedBest.node.getAttribute === 'function') {
-      try {
-        var obClass = typeof observedBest.node.className === 'string'
-          ? observedBest.node.className.replace(/\s+/g, ' ').trim() : '';
-        result.observedPopover = {
-          tag: observedBest.node.tagName,
-          role: (observedBest.node.getAttribute('role') || '').slice(0, 80),
-          ariaLabel: (observedBest.node.getAttribute('aria-label') || '').slice(0, 80),
-          id: (observedBest.node.id || '').slice(0, 80),
-          classHead: obClass.slice(0, 120),
-          source: observedBest.source,
-          posAbsolute: observedBest.posAbsolute,
-          z: observedBest.z,
-          dist: observedBest.dist,
-          area: observedBest.area,
-          wonTicks: observedBest.wonTicks,
-          lastSeenDwellMs: observedBest.lastDwellMs
-        };
-      } catch (_) { /* evidence must never break the hover path */ }
+    //
+    // Thirty-sixth log: observedPopover used to ride ONLY the failure path
+    // — htmlSnippet alone signaled success. But callers gate harvests on
+    // "a popover was observed AND captured" (`h.observedPopover &&
+    // h.htmlSnippet`), a natural reading that was structurally impossible:
+    // the field was populated exactly when htmlSnippet was null (enforced
+    // again at the probe relay). Whole sessions shipped hovercards:[] while
+    // the hover layer worked end to end. Attach the identity on SUCCESS too
+    // — naming the element the snippet was captured from (same fields, same
+    // caps).
+    if (capturedEl) {
+      var capturedMeta = (autoDiscovered && observedBest && observedBest.node === capturedEl)
+        ? observedBest
+        : { source: 'explicit-selector' };
+      result.observedPopover = popoverIdentityOf(capturedEl, capturedMeta, x, y);
+    } else if (!htmlSnippet && observedBest && observedBest.node && typeof observedBest.node.getAttribute === 'function') {
+      result.observedPopover = popoverIdentityOf(observedBest.node, observedBest, x, y);
     }
     // Twenty-fourth log: no visible popover captured, but the hover DID mount
     // nodes whose text was readable through the visual filter's rejects. A

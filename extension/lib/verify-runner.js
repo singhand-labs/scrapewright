@@ -89,6 +89,26 @@
   // machine identifiers — the opaqueToken junk heuristic must not fire on
   // them even when the value shape matches a random token.
   const IDISH_FIELD = /(id|hash|token|key|guid|uuid|slug|nonce|signature|checksum|ref)$/i;
+  // Thirty-sixth log RC-D: fields that must hold a QUANTITY. When such a
+  // field holds a pure-alphabetic string ("Like", "Comment", "赞"), the
+  // extractor read the interactive control's own label (aria-label/title
+  // of the button) instead of the number it renders — a non-empty value
+  // that passes every empty/partial detector while carrying no data.
+  const COUNTISH_FIELD = /\b(count|counts|number|num|total|qty|quantity|likes|like|shares|share|comments|comment|replies|reply|views|view|reactions|reaction|votes|vote|stars|star|rating|score)\b/i;
+
+  // Label shape: letters (any script) + separators only, no digits, short
+  // enough to be a control label rather than prose.
+  function isControlLabel(v) {
+    if (typeof v !== 'string') return false;
+    const t = v.trim();
+    if (!t || t.length > 40) return false;
+    if (/\d/.test(t)) return false;
+    return /^[\p{L}][\p{L}\s·|,，、]*$/u.test(t);
+  }
+
+  // camelCase field names ("likeCount") carry no \b boundary before
+  // "Count" — split the case transition so \bcount\b can match.
+  const splitFieldName = (k) => String(k).replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase();
 
   function isQueryBlob(v) {
     return typeof v === 'string' && v.length > 3 && /^\?[^=]+=/.test(v);
@@ -162,6 +182,7 @@
       let dataJunk = 0; let dataTotal = 0;
       let dumps = 0; let dumpSample = '';
       let opaque = 0; let opaqueSample = '';
+      let labelish = 0; let labelSample = '';
       for (const r of recs) {
         const v = r[rk];
         if (typeof v === 'string') {
@@ -170,6 +191,7 @@
           if (isOpaqueToken(v) && !isIdishName(rk, idishHints) && !isUrlishName(rk, urlishHints) && !isRawishName(rk, rawishHints)) {
             opaque += 1; if (!opaqueSample) opaqueSample = v;
           }
+          if (COUNTISH_FIELD.test(splitFieldName(rk)) && isControlLabel(v)) { labelish += 1; if (!labelSample) labelSample = v; }
         } else if (Array.isArray(v)) {
           for (const x of v) {
             if (typeof x !== 'string') continue;
@@ -182,6 +204,7 @@
       if (opaque) fields.push({ field: fieldPath + '.' + rk, kind: 'opaqueToken', count: opaque, sample: capSample(opaqueSample) });
       if (dataJunk && isUrlishName(rk, urlishHints)) fields.push({ field: fieldPath + '.' + rk, kind: 'dataUri', junkCount: dataJunk, total: dataTotal });
       if (dumps) fields.push({ field: fieldPath + '.' + rk, kind: 'markupDump', count: dumps, sample: capSample(dumpSample) });
+      if (labelish) fields.push({ field: fieldPath + '.' + rk, kind: 'controlLabel', count: labelish, sample: capSample(labelSample) });
     }
   }
 
@@ -217,7 +240,7 @@
     return {
       fields: fields,
       note: 'JUNK VALUES: ' + fields.map((f) => f.field + '(' + f.kind + ')').join(', ') +
-        '. Structurally green but these values are junk: bare query strings ("?a=b…") are redirect/tracking href fragments, data: URIs inside url/media arrays are inline UI icons, markup dumps are raw HTML leaking into a data field, and long single-token opaque strings (random alphanumerics, no spaces, no vowel structure) are anti-scrape DECOYS leaking through a raw textContent read — the real value usually lives in the elements an ARIA reference points at, so re-read the field with the fieldMap labelledby:true option (or $labelledby) instead of textContent. Fix the selector to read the real value, filter arrays in the step script (keep http(s) entries), or renegotiate the contract with io.confirm to drop/redefine the field. A green score with junk-valued fields is NOT a finished service.'
+        '. Structurally green but these values are junk: bare query strings ("?a=b…") are redirect/tracking href fragments, data: URIs inside url/media arrays are inline UI icons, markup dumps are raw HTML leaking into a data field, long single-token opaque strings (random alphanumerics, no spaces, no vowel structure) are anti-scrape DECOYS leaking through a raw textContent read — the real value usually lives in the elements an ARIA reference points at, so re-read the field with the fieldMap labelledby:true option (or $labelledby) instead of textContent — and a count/quantity-typed field holding a pure-alphabetic value ("Like", "Comment", "赞") captured the control label — the interactive button\'s aria-label/title, not the number it renders: the count lives in the element (or attribute) that renders the digit — often a sibling node, an aria-label containing the count ("Liked by 12"), or a title attribute; a label-only control usually means the count is zero. Fix the selector to read the real value, filter arrays in the step script (keep http(s) entries), or renegotiate the contract with io.confirm to drop/redefine the field. A green score with junk-valued fields is NOT a finished service.'
     };
   }
 
