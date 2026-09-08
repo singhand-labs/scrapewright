@@ -87,7 +87,9 @@ describe('$ API doc lines carry explicit return shapes (RC-C)', () => {
   it('the session-tools $labelledby line names the object return and the .text assignment', () => {
     const line = SESSION_TOOLS.split('\n').find((l) => l.includes('$labelledby(sel'));
     assert.ok(line, '$labelledby $ API line exists');
-    assert.match(line, /→ \{text, attr, refCount, missingIds\?, note\?\}/);
+    // Forty-third log: viaDescendant? joins the return shape (descendant
+    // fallback disclosure) — both docs must teach the same envelope.
+    assert.match(line, /→ \{text, attr, refCount, missingIds\?, note\?, viaDescendant\?\}/);
     assert.match(line, /\.text\b/, 'the line shows which key carries the value');
   });
 
@@ -101,7 +103,7 @@ describe('$ API doc lines carry explicit return shapes (RC-C)', () => {
     const i = WIZARD_UTILS.indexOf('$labelledby(selector');
     assert.ok(i > -1, 'guide line exists');
     const chunk = WIZARD_UTILS.slice(i, i + 700);
-    assert.match(chunk, /\{text, attr, refCount, missingIds\?, note\?\}/);
+    assert.match(chunk, /\{text, attr, refCount, missingIds\?, note\?, viaDescendant\?\}/);
     assert.match(chunk, /\.text\b/);
   });
 });

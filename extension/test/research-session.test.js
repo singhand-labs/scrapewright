@@ -465,6 +465,53 @@ describe('budgets and breakers', () => {
     assert.match(report.stopped.detail, /LAST VERIFY FAILED/);
   });
 
+  it('RED verify with partial-empty detectors enumerates the empty fields in BOTH stop paths (forty-third log)', async () => {
+    // Production shape 2026-09-08: six RED verifies at a constant score with
+    // postTime/location/mediaUrls 4/4 empty; the finish detail said only
+    // "shipped best-effort" — the field list the model needed (renegotiate
+    // or bind a source per field) stayed invisible at the stop moment.
+    const failingVerify = () => ({
+      ok: false,
+      error: { message: 'REQUIRED_FIELD_EMPTY: posts.postTime 4/4' },
+      detectors: { partialEmptyFields: [
+        { field: 'postTime', path: 'posts.postTime', emptyCount: 4, totalCount: 4, emptyRatio: 1 },
+        { field: 'location', path: 'posts.location', emptyCount: 4, totalCount: 4, emptyRatio: 1 }
+      ] },
+      events: ['PARTIAL_EMPTY_FIELDS', 'REQUIRED_FIELD_EMPTY']
+    });
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('verify.run', {})),
+        reply(toolTurn)
+      ], []),
+      tools: {
+        'verify.run': failingVerify,
+        'probe.count': async () => ({ count: 1 })
+      },
+      budgets: { maxTurns: 2 }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'maxTurns');
+    assert.match(report.stopped.detail, /LAST VERIFY FAILED/);
+    assert.match(report.stopped.detail, /postTime 4\/4 empty/);
+    assert.match(report.stopped.detail, /location 4\/4 empty/);
+
+    const session2 = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('verify.run', {})),
+        reply(finishEnvelope('Built and verified (v6)'))
+      ], []),
+      tools: { 'verify.run': failingVerify }
+    });
+    const report2 = await session2.run();
+    assert.equal(report2.stopped.reason, 'completed');
+    assert.match(report2.stopped.detail, /LAST VERIFY FAILED/);
+    assert.match(report2.stopped.detail, /postTime 4\/4 empty/, 'the finish path enumerates too');
+    assert.match(report2.stopped.detail, /location 4\/4 empty/);
+  });
+
   it('maxTurns after updates landed post-verify discloses CURRENT ARTIFACT UNVERIFIED too (twenty-eighth log)', async () => {
     // Production shape 2026-09-06: verify3 red against v3 → v4 (turn 59) →
     // v5 (turn 60) → budget stop. The stop detail carried only

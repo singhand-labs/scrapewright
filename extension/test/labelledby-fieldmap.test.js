@@ -117,7 +117,11 @@ describe('fieldMap labelledby resolution — lib path', () => {
 
   it('empty selector + labelledby resolves on the container itself', () => {
     const recs = LIB.extractListRecords(cards, { self: { labelledby: true } }, { allowEmpty: true });
-    assert.equal(recs[0].self, ''); // container has no aria-labelledby
+    // Forty-third log: the container carries no reference attribute, but its
+    // descendant .ts does — descent resolves through it (own attrs first,
+    // descendant carrier as fallback). Pre-descent this was ''.
+    assert.equal(recs[0].self, 'June 25 at 3:42 PM');
+    assert.equal(recs[1].self, ''); // card2: no attr anywhere in the subtree
     const dom2 = new JSDOM(`<!DOCTYPE html><div class="c" aria-labelledby="x1"><i>decoy</i></div><span id="x1">container-level truth</span>`);
     global.document = dom2.window.document;
     const recs2 = LIB.extractListRecords([dom2.window.document.querySelector('.c')], { self: { labelledby: true } }, { allowEmpty: true });

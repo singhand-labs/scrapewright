@@ -258,7 +258,13 @@
     function verifyStopSuffix() {
       let ladder = '';
       if (state.lastVerifyOk === false) {
-        ladder = ' [LAST VERIFY FAILED — the budget ran out before the failing run could be fixed; Resume to continue]';
+        // Forty-third log: six RED verifies at a constant score and the
+        // stop detail named the failure but not the fields — the list the
+        // model needed to renegotiate (io.confirm) or bind sources for.
+        const ef = state.lastVerifyEmptyFields
+          ? '; confirmed field(s) empty in every record: ' + state.lastVerifyEmptyFields.join(', ')
+          : '';
+        ladder = ' [LAST VERIFY FAILED — the budget ran out before the failing run could be fixed' + ef + '; Resume to continue]';
       } else if (state.lastVerifySchemaBlind) {
         ladder = ' [VERIFY SCHEMA-BLIND — outputSchema declares no fields, so the last green is unverifiable. Renegotiate the contract with io.confirm (fielded properties + required), service.update the artifact to match, and re-verify]';
       } else if (state.lastVerifyEmptyFields) {
@@ -791,8 +797,12 @@
             // plain 'completed' — an honest ship note must not read as green.
             let detail = turn.finish.summary || null;
             if (state.lastVerifyOk === false) {
+              const ef = state.lastVerifyEmptyFields
+                ? '; confirmed field(s) empty in every record: ' + state.lastVerifyEmptyFields.join(', ') +
+                  ' — renegotiate the contract (io.confirm) or bind a source for each before shipping'
+                : '';
               detail = (detail ? detail + ' ' : '') +
-                '[LAST VERIFY FAILED — shipped best-effort; the review panel shows the failing run]';
+                '[LAST VERIFY FAILED — shipped best-effort; the review panel shows the failing run' + ef + ']';
             } else if (state.lastVerifySchemaBlind) {
               // Seventeenth log: a fieldless outputSchema made every
               // schema-reading check blind — the last verify came back GREEN

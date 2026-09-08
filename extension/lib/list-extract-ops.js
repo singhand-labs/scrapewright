@@ -49,6 +49,31 @@ function resolveAriaReference(el, attr) {
   let raw = '';
   try { raw = el.getAttribute(out.attr) || ''; } catch (err) { raw = ''; }
   if (!raw.trim()) {
+    // Forty-third log (mirrors content-script.js resolveLabelledbyText):
+    // when the matched element carries NEITHER reference attribute, resolve
+    // via its first descendant that carries either one. Own attributes
+    // always win — an explicit attr request against an element bearing only
+    // the sibling stays an honest absent-note.
+    let ownSibling = '';
+    try {
+      ownSibling = (out.attr === ARIA_REFERENCE_DEFAULT)
+        ? (el.getAttribute('aria-describedby') || '')
+        : (el.getAttribute(ARIA_REFERENCE_DEFAULT) || '');
+    } catch (err) { ownSibling = ''; }
+    if (!ownSibling.trim() && typeof el.querySelector === 'function') {
+      let carrier = null;
+      try { carrier = el.querySelector('[aria-labelledby],[aria-describedby]'); } catch (err) { carrier = null; }
+      if (carrier) {
+        let carrierAttr = '';
+        try { carrierAttr = carrier.getAttribute(out.attr) || ''; } catch (err) { carrierAttr = ''; }
+        const resolvedAttr = carrierAttr.trim() ? out.attr
+          : (out.attr === ARIA_REFERENCE_DEFAULT ? 'aria-describedby' : ARIA_REFERENCE_DEFAULT);
+        const via = resolveAriaReference(carrier, resolvedAttr);
+        via.viaDescendant = carrier.tagName ? String(carrier.tagName).toLowerCase() : 'descendant';
+        via.note = (via.note ? via.note + ' ' : '') + '(resolved via descendant <' + via.viaDescendant + '> — the matched element itself carries no reference attribute)';
+        return via;
+      }
+    }
     out.note = 'element matched but ' + out.attr + ' is absent';
     return out;
   }

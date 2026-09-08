@@ -20,13 +20,13 @@ AVAILABLE API FUNCTIONS:
 - $click(selector, timeoutMs?): Find element, wait for it up to timeoutMs (default 10000ms), click it. Returns true.
 - $type(selector, text, timeoutMs?): Find element, wait for it up to timeoutMs (default 10000ms), set value, dispatch input/change events. Works on INPUT, TEXTAREA, and contenteditable elements. If selector matches a container, searches inside for an inputtable child. Returns true.
 - $extract(selector, attribute?, timeoutMs?): Get textContent (or attribute if specified). Returns string. IMPORTANT: $extract waits only up to timeoutMs (default 5000ms, NOT 30s) for the element — if the selector is wrong it fails fast instead of burning the step's whole timeout. Prefer this over $() for reading known content; pass a longer timeoutMs only when you genuinely need to wait for content to render.
-- $labelledby(selector, attr?, timeoutMs?): Resolve an ARIA REFERENCE attribute on the first match (default 'aria-labelledby'; pass 'aria-describedby' for the description refs) and return the resolved object {text, attr, refCount, missingIds?, note?} — the attribute holds a whitespace-separated id list, each id is looked up in the document; .text carries the CONCATENATED text of the referenced element(s) — postTime = (await $labelledby(sel)).text. probe.labelledby returns this SAME object shape. Empty paths keep the object shape and carry their falsification reason in .note ('' text when the attr is absent, ids unresolvable, or refs carry no text). This is where tooltip/hovercard full values usually live: the referenced span is often HIDDEN but readable (reads are not visibility-gated), so when a hover popover never visibly renders, bind the field with $labelledby on the anchor instead of re-hovering.
+- $labelledby(selector, attr?, timeoutMs?): Resolve an ARIA REFERENCE attribute on the first match (default 'aria-labelledby'; pass 'aria-describedby' for the description refs) and return the resolved object {text, attr, refCount, missingIds?, note?, viaDescendant?} — the attribute holds a whitespace-separated id list, each id is looked up in the document; .text carries the CONCATENATED text of the referenced element(s) — postTime = (await $labelledby(sel)).text. When the matched element carries NEITHER reference attribute, resolution DESCENDS to its first descendant that carries one (disclosed as viaDescendant + note; own attributes always win) — pages routinely hang the value on a child span of the anchor you select. probe.labelledby returns this SAME object shape. Empty paths keep the object shape and carry their falsification reason in .note ('' text when the attr is absent, ids unresolvable, or refs carry no text). This is where tooltip/hovercard full values usually live: the referenced span is often HIDDEN but readable (reads are not visibility-gated), so when a hover popover never visibly renders, bind the field with $labelledby on the anchor instead of re-hovering.
 - $wait(selector, delayMs?): Wait for element (up to 30s via MutationObserver), then optional extra delay. Returns true. The selector is REQUIRED. If you only need a delay without waiting for an element, use 'await new Promise(r => setTimeout(r, ms))' instead. THROWS ELEMENT_NOT_FOUND if the selector never appears within the cap — never $wait on a selector whose ABSENCE is your poll condition (content still loading); $count it and return { done: false } so maxIterations drives the wait.
 - $check(selector, property): Read element property (e.g., 'checked', 'disabled'). Returns value.
 - $openTab(url, functionBody): Open new tab at the given URL, wait for page load, then execute the function body (a string of JavaScript statements) in the new tab context. Returns whatever the function body returns. Use to scrape detail pages. Example: await $openTab(href, \`const title = await $extract('h1'); return { title };\`)
 - $count(selector): Count elements matching selector (main document + same-origin iframes). Returns number. Do NOT use with :nth-child() to iterate — use $list() instead.
 - $list(selector): Get ALL matching elements across main document + same-origin iframes. Returns array of { tagName, id, className, textContent, value, href, src, checked, disabled }. Use this for iterating multiple elements. Same data-object limitation as $().
-- $extractList(containerSel, fieldMap, opts?): Extract a list of records in ONE call. fieldMap is { subField: subSelector | { selector, attr?, labelledby? } }; labelledby:true (or an attr name like aria-describedby) resolves the ARIA reference on each match and returns the referenced elements' concatenated text — the read for anti-scrambled pages where the visible textContent is decoy junk (the clean value lives in the hidden elements the reference points at; same resolution as $labelledby). each sub-selector is evaluated INSIDE each container element and returns the FIRST match per container. Returns an array of objects in container order. Prefers this over $list-per-field for multi-field lists (avoids field-misalignment when fields are missing on some items). Throws 'empty list' if no container matches; set opts.allowEmpty=true to return [] instead.
+- $extractList(containerSel, fieldMap, opts?): Extract a list of records in ONE call. fieldMap is { subField: subSelector | { selector, attr?, labelledby? } }; labelledby:true (or an attr name like aria-describedby) resolves the ARIA reference on each match and returns the referenced elements' concatenated text — the read for anti-scrambled pages where the visible textContent is decoy junk (the clean value lives in the hidden elements the reference points at; same resolution as $labelledby, INCLUDING its descendant fallback: when the matched element carries no reference attribute, resolution descends to the first descendant that carries one, so the sub-selector may point at the ANCHOR while a child span holds the aria-labelledby). each sub-selector is evaluated INSIDE each container element and returns the FIRST match per container. Returns an array of objects in container order. Prefers this over $list-per-field for multi-field lists (avoids field-misalignment when fields are missing on some items). Throws 'empty list' if no container matches; set opts.allowEmpty=true to return [] instead.
 - $extractListMulti(containerSel, fieldMap, opts?): Like $extractList, but EACH FIELD VALUE IS AN ARRAY of ALL matches per container (in document order, as textContent/attr strings — NOT element objects), regardless of the field name. Use $extractList (single-value) by default; reach for $extractListMulti ONLY when CSS alone cannot disambiguate which match is the right one — e.g. a[role="link"] inside a post matches BOTH the author link (1st) AND the timestamp link (2nd). With $extractList you'd get only the author; with $extractListMulti you get both and can pick in JS by text/attribute regex. attr may be 'outerHTML' or 'innerHTML' to read raw HTML.
   CRITICAL — every field value is Array<string|null>. Calling .trim(), .match(), .includes(), .replace() etc. DIRECTLY on a field value crashes with "X.trim is not a function" (Array has no such method). Always index into the array first, even when the field name is singular (author, content, timestamp):
   // WRONG — r.author is an array; (r.author || '') short-circuits to the array (truthy), then .trim() crashes:
@@ -4233,6 +4233,41 @@ function emptyFieldDiagnostics(partialEmpty, steps, events) {
         seen.push(key);
         crumbs.push(Object.assign({ stepId: st.id, stepName: st.name || null }, crumb));
         if (crumbs.length >= 2) break;
+      }
+      // Forty-third log: assembly renames (fieldMap key `timeLbl` renamed to
+      // output `postTime` in the step's later .map) left renamed fields
+      // crumb-less — the script names the OUTPUT field so the mention gate
+      // passed, but falsificationCrumb's perField lookup keys on the output
+      // name and found nothing, so every verify reported
+      // emptyFieldDiagnostics:null while the failing crumb sat one key over.
+      // When the exact-name pass came up empty, lift this step's FAILING
+      // perField entries under their own names, marked asField. Healthy
+      // entries are never lifted — no speculation about fields that resolve.
+      if (!crumbs.length && mentioned) {
+        let renameDone = false;
+        for (const d of lastDiags) {
+          if (!d || !Array.isArray(d.perField) || renameDone) continue;
+          for (const f of d.perField) {
+            if (!f || String(f.field) === field) continue;
+            const failing = (f.subSelector && f.matchCount === 0) ||
+              (f.labelledby && f.matchCount > 0 && f.refResolved === 0);
+            if (!failing) continue;
+            const crumb = falsificationCrumb(d, String(f.field));
+            if (!crumb) continue;
+            const key = String(st.id) + '|renamed|' + crumb.api + '|' + String(crumb.selector);
+            if (seen.indexOf(key) !== -1) continue;
+            seen.push(key);
+            crumbs.push(Object.assign(
+              { stepId: st.id, stepName: st.name || null, asField: field },
+              crumb,
+              {
+                note: crumb.note + ' — extracted under fieldMap key "' + String(f.field) +
+                  '", renamed to "' + field + '" at assembly'
+              }
+            ));
+            if (crumbs.length >= 2) { renameDone = true; break; }
+          }
+        }
       }
       if (crumbs.length >= 2) break;
     }

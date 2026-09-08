@@ -1639,6 +1639,33 @@
     let raw = '';
     try { raw = el.getAttribute(attr) || ''; } catch (err) { raw = ''; }
     if (!raw.trim()) {
+      // Forty-third log: pages hang the machine-readable value on a
+      // DESCENDANT of the matched element (time anchor a > span[aria-
+      // labelledby] → hidden #id span mounted lazily elsewhere). When the
+      // matched element carries NEITHER reference attribute, resolve via
+      // its first descendant that carries either one. Own attributes
+      // always win — descent is a fallback, and the sibling-attr check
+      // below keeps an explicit aria-describedby request honest.
+      let ownSibling = '';
+      try {
+        ownSibling = (attr === 'aria-labelledby')
+          ? (el.getAttribute('aria-describedby') || '')
+          : (el.getAttribute('aria-labelledby') || '');
+      } catch (err) { ownSibling = ''; }
+      if (!ownSibling.trim() && typeof el.querySelector === 'function') {
+        let carrier = null;
+        try { carrier = el.querySelector('[aria-labelledby],[aria-describedby]'); } catch (err) { carrier = null; }
+        if (carrier) {
+          let carrierAttr = '';
+          try { carrierAttr = carrier.getAttribute(out.attr) || ''; } catch (err) { carrierAttr = ''; }
+          const resolvedAttr = carrierAttr.trim() ? out.attr
+            : (out.attr === 'aria-labelledby' ? 'aria-describedby' : 'aria-labelledby');
+          const via = resolveLabelledbyText(carrier, resolvedAttr);
+          via.viaDescendant = carrier.tagName ? String(carrier.tagName).toLowerCase() : 'descendant';
+          via.note = (via.note ? via.note + ' ' : '') + '(resolved via descendant <' + via.viaDescendant + '> — the matched element itself carries no reference attribute)';
+          return via;
+        }
+      }
       out.note = 'element matched but ' + out.attr + ' is absent — check the sibling reference attrs (aria-describedby, aria-label) or read textContent directly';
       return out;
     }
@@ -1676,6 +1703,12 @@
       textLength: resolved.text.length
     };
     if (resolved.note) _diagnostics.note = resolved.note;
+    // Forty-third log: disclose when the resolution went through a
+    // descendant carrier (the matched element had no reference attribute).
+    if (typeof resolved.viaDescendant === 'string') {
+      _diagnostics.viaDescendant = resolved.viaDescendant;
+      _diagnostics.resolvedAttr = resolved.attr;
+    }
     // Thirty-second log RC-C: the DSL used to flatten this to the bare text
     // string while probe.labelledby showed the {text, ...} object — the probe
     // is empirical evidence and beat the prose doc, so step scripts copied
@@ -2327,7 +2360,21 @@
         return { text: resolved.text.slice(0, 1000), attr: attrs[i], note: null };
       }
     }
-    if (!firstWithAttr) return { text: '', attr: null, note: null };
+    if (!firstWithAttr) {
+      // Forty-third log: the anchor itself carries no reference attribute —
+      // the value may hang on a descendant carrier (the resolver descends
+      // when the element has neither attr). Quiet only when nothing exists
+      // anywhere in the subtree.
+      var descended = resolveLabelledbyText(el, 'aria-labelledby');
+      if (descended.text) {
+        return {
+          text: descended.text.slice(0, 1000),
+          attr: descended.attr,
+          note: (typeof descended.viaDescendant === 'string') ? (descended.note || null) : null
+        };
+      }
+      return { text: '', attr: null, note: null };
+    }
     var fallback = resolveLabelledbyText(el, firstWithAttr);
     return { text: '', attr: firstWithAttr, note: fallback.note || null };
   }
