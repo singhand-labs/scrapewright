@@ -817,11 +817,11 @@ describe('Anthropic Messages protocol (auto-prefer + fallback + agent identity)'
     assert.ok(!('response_format' in seen[0].body), 'no OpenAI response_format on the Messages path');
   });
 
-  it('base without /v1 (Zhipu coding lane) appends /v1/messages', async () => {
+  it('base without /v1 (custom bridge) appends /v1/messages', async () => {
     let url = '';
     global.fetch = async (u) => { url = String(u); return mockResponse({ body: anthropicBody() }); };
-    await clientAt('https://open.bigmodel.cn/api/coding/paas/v4').chat([{ role: 'user', content: 'hi' }], { maxRetries: 1 });
-    assert.equal(url, 'https://open.bigmodel.cn/api/coding/paas/v4/v1/messages');
+    await clientAt('https://bridge.example/api/anthropic').chat([{ role: 'user', content: 'hi' }], { maxRetries: 1 });
+    assert.equal(url, 'https://bridge.example/api/anthropic/v1/messages');
   });
 
   it('empty content + stop_reason max_tokens maps to the RC55 non-retryable length error with the budget', async () => {
@@ -924,6 +924,103 @@ describe('Anthropic Messages protocol (auto-prefer + fallback + agent identity)'
         return true;
       }
     );
+  });
+});
+
+describe('Documented chat-only lanes + Messages URL hygiene (thirty-seventh log)', () => {
+  // User report: auto + the GLM Coding Plan preset assembled
+  // https://open.bigmodel.cn/api/coding/paas/v4/v1/messages — a path that
+  // does not exist. The b9818bc probe design assumed coding-plan bases were
+  // bare prefixes serving an appended /v1/messages; Zhipu's official doc
+  // (pinned in 18f512b) says the coding lane serves ONLY OpenAI
+  // chat/completions and the Anthropic-compatible lane is a DIFFERENT base
+  // (https://open.bigmodel.cn/api/anthropic). Deterministic knowledge, so no
+  // doomed probe: auto resolves straight to OpenAI for documented chat-only
+  // bases; a pinned anthropic config fails fast with lane guidance before
+  // any request.
+  let consoleStub;
+  const originalConsoleLog = console.log;
+  const originalConsoleError = console.error;
+  const originalConsoleWarn = console.warn;
+
+  beforeEach(() => {
+    consoleStub = [];
+    console.log = (...args) => consoleStub.push(['log', ...args]);
+    console.error = (...args) => consoleStub.push(['error', ...args]);
+    console.warn = (...args) => consoleStub.push(['warn', ...args]);
+  });
+  afterEach(() => {
+    global.fetch = originalFetch;
+    console.log = originalConsoleLog;
+    console.error = originalConsoleError;
+    console.warn = originalConsoleWarn;
+  });
+
+  function anthropicBody({ text = 'ok', stop_reason = 'end_turn' } = {}) {
+    return {
+      id: 'msg_1', type: 'message', role: 'assistant', model: 'test-model',
+      content: [{ type: 'text', text }],
+      stop_reason, stop_sequence: null,
+      usage: { input_tokens: 5, output_tokens: 2 }
+    };
+  }
+  function clientAt(base, extraConfig = {}) {
+    return new LLMClient(Object.assign({
+      provider: 'glm', model: 'test-model', apiKey: 'test-key', apiBaseUrl: base
+    }, extraConfig));
+  }
+
+  it('auto + the documented coding lane goes straight to chat/completions — no /v1/messages probe', async () => {
+    const urls = [];
+    global.fetch = async (u) => { urls.push(String(u)); return mockResponse({ body: successBody('lane-ok') }); };
+    const client = clientAt('https://open.bigmodel.cn/api/coding/paas/v4');
+    assert.equal(await client.chat([{ role: 'user', content: 'hi' }], { maxRetries: 1 }), 'lane-ok');
+    assert.deepEqual(urls, ['https://open.bigmodel.cn/api/coding/paas/v4/chat/completions'],
+      'exactly one request, the documented lane endpoint — the doomed .../v4/v1/messages probe never fires');
+    assert.equal(await client.chat([{ role: 'user', content: 'hi' }], { maxRetries: 1 }), 'lane-ok');
+    assert.equal(urls.length, 2, 'second call also skips the Messages path');
+  });
+
+  it('auto + the same provider repointed at the Anthropic lane still probes Messages (set does not over-match)', async () => {
+    const urls = [];
+    global.fetch = async (u) => { urls.push(String(u)); return mockResponse({ body: anthropicBody({ text: 'anthropic-lane-ok' }) }); };
+    const client = clientAt('https://open.bigmodel.cn/api/anthropic');
+    assert.equal(await client.chat([{ role: 'user', content: 'hi' }], { maxRetries: 1 }), 'anthropic-lane-ok');
+    assert.deepEqual(urls, ['https://open.bigmodel.cn/api/anthropic/v1/messages'],
+      'the documented Anthropic-compatible lane gets the Messages probe — keying is by base, not provider');
+  });
+
+  it('pinned anthropic + documented coding lane fails fast BEFORE any request, naming the correct lane', async () => {
+    const urls = [];
+    global.fetch = async (u) => { urls.push(String(u)); return mockResponse({ body: successBody('never') }); };
+    await assert.rejects(
+      clientAt('https://open.bigmodel.cn/api/coding/paas/v4', { apiProtocol: 'anthropic' }).chat([{ role: 'user', content: 'hi' }], { maxRetries: 1 }),
+      (err) => {
+        assert.equal(err.retryable, false, 'deterministic misconfiguration — no retry');
+        assert.match(err.message, /Anthropic Messages/i);
+        assert.match(err.message, /https:\/\/open\.bigmodel\.cn\/api\/anthropic/, 'names the Anthropic-compatible lane');
+        assert.match(err.message, /chat\/completions|openai/i, 'names the working protocol on the configured base');
+        return true;
+      }
+    );
+    assert.equal(urls.length, 0, 'the nonexistent .../v4/v1/messages path is never requested');
+  });
+
+  it('Base URL already ending in /v1/messages is used as-is (no double append)', async () => {
+    const urls = [];
+    global.fetch = async (u) => { urls.push(String(u)); return mockResponse({ body: anthropicBody({ text: 'full-endpoint-ok' }) }); };
+    const client = clientAt('https://full.example/v1/messages');
+    assert.equal(await client.chat([{ role: 'user', content: 'hi' }], { maxRetries: 1 }), 'full-endpoint-ok');
+    assert.deepEqual(urls, ['https://full.example/v1/messages'],
+      'pasting the full endpoint into Base URL must not become .../v1/messages/v1/messages');
+  });
+
+  it('pinned anthropic + a custom bridge base still works through the append path', async () => {
+    const urls = [];
+    global.fetch = async (u) => { urls.push(String(u)); return mockResponse({ body: anthropicBody({ text: 'bridge-pin-ok' }) }); };
+    const client = clientAt('https://bridge.example/api', { apiProtocol: 'anthropic' });
+    assert.equal(await client.chat([{ role: 'user', content: 'hi' }], { maxRetries: 1 }), 'bridge-pin-ok');
+    assert.deepEqual(urls, ['https://bridge.example/api/v1/messages']);
   });
 });
 

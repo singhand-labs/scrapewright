@@ -29,6 +29,21 @@ const ANTHROPIC_VERSION = '2023-06-01';
 const CLAUDE_CLI_USER_AGENT = 'claude-cli/2.1.6 (external, cli)';
 const anthropicCapableByBase = new Map();
 
+// Thirty-seventh log (user report): auto + the GLM Coding Plan preset
+// assembled https://open.bigmodel.cn/api/coding/paas/v4/v1/messages — a path
+// that does not exist. The b9818bc probe design assumed coding-plan bases
+// were bare prefixes serving an appended /v1/messages; Zhipu's official doc
+// (pinned in 18f512b) documents the coding lane as OpenAI
+// chat/completions-ONLY, with the Anthropic-compatible lane on a DIFFERENT
+// base (https://open.bigmodel.cn/api/anthropic). These bases are known
+// incapable by documentation, not by probing: auto mode resolves straight to
+// OpenAI (no doomed request), and a PINNED anthropic config fails fast with
+// lane guidance before any fetch. Keyed by base, not provider — repointing
+// the same provider at a Messages-capable base restores normal probing.
+const ANTHROPIC_INCAPABLE_BASES = new Set([
+  'https://open.bigmodel.cn/api/coding/paas/v4'
+]);
+
 // Thirty-second log (user directive): the 300-char response preview hid the
 // model's think + tool-call — exported logs could not show WHAT the model
 // decided, only that it replied. Chunk the full content across console lines
@@ -81,11 +96,15 @@ function normalizeBase(url) {
   return String(url || '').replace(/\/+$/, '');
 }
 
-// The Messages API path depends on the base convention: Anthropic-native
-// bases already end in /v1 (.../v1/messages); coding-plan bases are bare
-// prefixes and take the appended /v1/messages (.../v4/v1/messages).
+// The Messages API path depends on the base convention: a base that already
+// ends in /messages IS the endpoint (users paste the full URL — appending
+// again would double the path); Anthropic-native bases end in /v1 and take
+// /messages; anything else is a bare prefix and takes /v1/messages. Note a
+// bare chat-completions prefix does not magically serve /v1/messages — see
+// ANTHROPIC_INCAPABLE_BASES for bases where that derivation is known wrong.
 function anthropicMessagesUrl(base) {
   const b = normalizeBase(base);
+  if (/\/messages$/i.test(b)) return b;
   return /\/v1$/i.test(b) ? b + '/messages' : b + '/v1/messages';
 }
 
@@ -135,6 +154,7 @@ class LLMClient {
 
   _resolveProtocol() {
     if (this.apiProtocol !== 'auto') return this.apiProtocol;
+    if (ANTHROPIC_INCAPABLE_BASES.has(normalizeBase(this.apiBaseUrl))) return 'openai';
     const cached = anthropicCapableByBase.get(normalizeBase(this.apiBaseUrl));
     if (cached === false) return 'openai';
     return 'anthropic';
@@ -344,6 +364,17 @@ class LLMClient {
   }
 
   async _chatAnthropic(messages, options = {}) {
+    // Pinned-anthropic on a documented chat-only lane is deterministic
+    // misconfiguration — fail fast with the lane guidance instead of
+    // burning requests on a path that cannot exist. (Auto mode never
+    // reaches here for these bases — _resolveProtocol already picked
+    // OpenAI.)
+    if (ANTHROPIC_INCAPABLE_BASES.has(normalizeBase(this.apiBaseUrl))) {
+      throw new LLMError(
+        `The Anthropic Messages protocol is not served on ${normalizeBase(this.apiBaseUrl)} — that Base URL is a documented chat/completions-only lane. Point Base URL at the Anthropic-compatible lane (Zhipu: https://open.bigmodel.cn/api/anthropic) or set the API protocol selector to auto/openai.`,
+        { retryable: false }
+      );
+    }
     const url = anthropicMessagesUrl(this.apiBaseUrl);
     const body = {
       model: this.model,
