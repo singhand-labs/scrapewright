@@ -218,7 +218,7 @@ class LLMClient {
     // the budget on deterministic failures). Fail fast with the remedy.
     if (BALANCE_EXHAUSTED_RE.test(detail)) {
       throw new LLMError(
-        `LLM provider reports an account billing condition (status ${response.status}): ${detail} This is deterministic — no retry was attempted because identical retries cannot fix it. Recharge the provider account (or claim/activate a resource package covering model ${this.model}), or switch provider/model in Settings. If your key rides a coding-plan subscription (GLM Coding Plan and similar), its quota is only honored on the plan's dedicated Base URL — e.g. point Settings → Base URL at https://open.bigmodel.cn/api/coding/paas/v4 for Zhipu coding plans.`,
+        `LLM provider reports an account billing condition (status ${response.status}): ${detail} This is deterministic — no retry was attempted because identical retries cannot fix it.${this._balanceRemedyTail()}`,
         { retryable: false, status: response.status }
       );
     }
@@ -229,6 +229,44 @@ class LLMClient {
       throw new LLMError(`LLM API auth failed (${response.status}). Check your API key. Detail: ${detail}`, { retryable: false, status: response.status });
     }
     throw new LLMError(`LLM API error (${response.status}): ${detail}`, { retryable: RETRYABLE_STATUS.has(response.status), status: response.status });
+  }
+
+  _balanceRemedyTail() {
+    return ` Recharge the provider account (or claim/activate a resource package covering model ${this.model}), or switch provider/model in Settings. If your key rides a coding-plan subscription (GLM Coding Plan and similar), its quota is only honored on the plan's dedicated Base URL — e.g. point Settings → Base URL at https://open.bigmodel.cn/api/coding/paas/v4 for Zhipu coding plans.`;
+  }
+
+  // Thirty-fifth log: some gateways (bigmodel.cn observed live) wrap upstream
+  // failures in an HTTP-200 envelope {code, msg, success:false}. Status-based
+  // classification never fires on those, and the generic "unexpected format"
+  // throw buries the gateway's own diagnosis — the observed msg was
+  // "404 NOT_FOUND", i.e. the requested API path does not exist on that Base
+  // URL for that protocol. Decode the envelope; its body carries the real
+  // classification.
+  _gatewayEnvelope(data) {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+    if (Array.isArray(data.content) || Array.isArray(data.choices)) return null;
+    if (typeof data.code !== 'number' || typeof data.msg !== 'string' || !data.msg) return null;
+    return { code: data.code, msg: data.msg };
+  }
+
+  _throwGatewayError(envelope, url, protocolLabel) {
+    console.error('[LLMClient] Gateway error envelope on HTTP 200:', JSON.stringify(envelope));
+    if (BALANCE_EXHAUSTED_RE.test(envelope.msg)) {
+      throw new LLMError(
+        `LLM provider reports an account billing condition (HTTP 200 envelope, code ${envelope.code}): ${envelope.msg} This is deterministic — no retry was attempted because identical retries cannot fix it.${this._balanceRemedyTail()}`,
+        { retryable: false }
+      );
+    }
+    if (/404|not[_ -]?found/i.test(envelope.msg)) {
+      throw new LLMError(
+        `LLM gateway answered HTTP 200 but reported the API path missing (code ${envelope.code}): ${envelope.msg} — the ${protocolLabel} endpoint does not exist on this Base URL. Check Settings → Base URL and the API protocol selector (Zhipu lanes: coding https://open.bigmodel.cn/api/coding/paas/v4, Anthropic-compatible https://open.bigmodel.cn/api/anthropic). URL: ${url}`,
+        { retryable: false }
+      );
+    }
+    throw new LLMError(
+      `LLM gateway error inside an HTTP 200 envelope (code ${envelope.code}): ${envelope.msg}. URL: ${url}`,
+      { retryable: RETRYABLE_STATUS.has(envelope.code) }
+    );
   }
 
   // Shared post-response pipeline: logging, empty-content classification
@@ -395,6 +433,23 @@ class LLMClient {
       return this._parseOpenAISuccess(data, options);
     }
 
+    // Neither completion shape. A gateway error envelope is NOT a shape
+    // sniff: a 404-flavored msg means the Messages path does not exist on
+    // this base (same capability miss as HTTP 404/405 — fall back in auto
+    // mode); any other envelope is a provider-side error — decode it and
+    // fail WITHOUT marking the base, so a transient gateway error cannot
+    // permanently mis-pin the protocol.
+    const envelope = this._gatewayEnvelope(data);
+    if (envelope && /404|not[_ -]?found/i.test(envelope.msg)) {
+      if (this.apiProtocol === 'auto') {
+        this._markProtocol(false);
+        console.warn(`[LLMClient] ${url} reports the Messages path missing (HTTP 200 envelope: ${envelope.msg}) — falling back to OpenAI chat/completions for this base URL.`);
+        return this._chatOpenAI(messages, options);
+      }
+      this._throwGatewayError(envelope, url, 'Anthropic Messages');
+    }
+    if (envelope) this._throwGatewayError(envelope, url, 'Anthropic Messages');
+
     if (this.apiProtocol === 'auto') {
       this._markProtocol(false);
       console.warn(`[LLMClient] Unrecognized response shape on ${url} — falling back to OpenAI chat/completions for this base URL.`);
@@ -457,6 +512,13 @@ class LLMClient {
 
   _parseOpenAISuccess(data, options = {}) {
     if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+      // Thirty-fifth log: gateways wrapping errors in HTTP-200 {code,msg}
+      // envelopes land here with no choices — decode before the generic
+      // unexpected-format throw buries the gateway's diagnosis.
+      const envelope = this._gatewayEnvelope(data);
+      if (envelope) {
+        this._throwGatewayError(envelope, `${normalizeBase(this.apiBaseUrl)}/chat/completions`, 'OpenAI chat/completions');
+      }
       console.error('[LLMClient] Unexpected response structure:', JSON.stringify(data, null, 2).slice(0, 500));
       throw new LLMError(`LLM API returned unexpected format. Expected data.choices[0].message.content, got: ${JSON.stringify(data).slice(0, 200)}`, { retryable: false });
     }

@@ -926,3 +926,105 @@ describe('Anthropic Messages protocol (auto-prefer + fallback + agent identity)'
     );
   });
 });
+
+describe('Gateway error envelopes on HTTP 200 (thirty-fifth log)', () => {
+  let consoleStub;
+  const originalConsoleLog = console.log;
+  const originalConsoleError = console.error;
+  const originalConsoleWarn = console.warn;
+
+  beforeEach(() => {
+    consoleStub = [];
+    console.log = (...args) => consoleStub.push(['log', ...args]);
+    console.error = (...args) => consoleStub.push(['error', ...args]);
+    console.warn = (...args) => consoleStub.push(['warn', ...args]);
+  });
+  afterEach(() => {
+    global.fetch = originalFetch;
+    console.log = originalConsoleLog;
+    console.error = originalConsoleError;
+    console.warn = originalConsoleWarn;
+  });
+
+  // The exact shape bigmodel.cn returned live: HTTP 200 wrapping
+  // {"code": 500, "msg": "404 NOT_FOUND", "success": false} — the requested
+  // OpenAI path does not exist on that base URL.
+  function envelopeBody(code, msg) {
+    return { code, msg, success: false };
+  }
+  function clientAt(base, extraConfig = {}) {
+    return new LLMClient(Object.assign({
+      provider: 'glm', model: 'test-model', apiKey: 'test-key', apiBaseUrl: base
+    }, extraConfig));
+  }
+
+  it('OpenAI path: 200-wrapped {code,msg} envelope decodes to a non-retryable endpoint-missing error with Base URL guidance', async () => {
+    const urls = [];
+    global.fetch = async (u) => {
+      urls.push(String(u));
+      return mockResponse({ body: envelopeBody(500, '404 NOT_FOUND') });
+    };
+    await assert.rejects(
+      clientAt('http://gw1.test/v1', { apiProtocol: 'openai' }).chat([{ role: 'user', content: 'hi' }], { maxRetries: 3 }),
+      (err) => {
+        assert.equal(err.retryable, false, 'endpoint-missing is deterministic');
+        assert.match(err.message, /404 NOT_FOUND/, 'the gateway msg is surfaced verbatim');
+        assert.match(err.message, /Base URL/, 'Base URL guidance');
+        return true;
+      }
+    );
+    assert.equal(urls.length, 1, 'non-retryable — exactly one request, no retry burn');
+  });
+
+  it('auto: a 404 envelope on the Messages probe is a capability miss — falls back to OpenAI; the final error still names the gateway msg', async () => {
+    const urls = [];
+    global.fetch = async (u) => {
+      urls.push(String(u));
+      return mockResponse({ body: envelopeBody(500, '404 NOT_FOUND') });
+    };
+    await assert.rejects(
+      clientAt('http://gw2.test/v1').chat([{ role: 'user', content: 'hi' }], { maxRetries: 3 }),
+      (err) => {
+        assert.equal(err.retryable, false);
+        assert.match(err.message, /404 NOT_FOUND/);
+        return true;
+      }
+    );
+    assert.deepEqual(urls, ['http://gw2.test/v1/messages', 'http://gw2.test/v1/chat/completions'], 'probe, then fallback');
+  });
+
+  it('pinned anthropic: non-404 gateway envelope on 200 throws the decoded error, stays on the Messages path', async () => {
+    const urls = [];
+    global.fetch = async (u) => {
+      urls.push(String(u));
+      return mockResponse({ body: envelopeBody(500, 'internal gateway error') });
+    };
+    await assert.rejects(
+      clientAt('http://gw3.test/v1', { apiProtocol: 'anthropic' }).chat([{ role: 'user', content: 'hi' }], { maxRetries: 0 }),
+      (err) => {
+        assert.equal(err.retryable, true, 'code 500 stays retryable');
+        assert.match(err.message, /internal gateway error/);
+        assert.match(err.message, /code 500/);
+        return true;
+      }
+    );
+    assert.deepEqual(urls, ['http://gw3.test/v1/messages'], 'no silent protocol switch');
+  });
+
+  it('balance-semantics envelope on HTTP 200 routes to the balance remedy (coding-plan Base URL)', async () => {
+    const urls = [];
+    global.fetch = async (u) => {
+      urls.push(String(u));
+      return mockResponse({ body: envelopeBody(1113, 'Insufficient balance or no resource package. Please recharge.') });
+    };
+    await assert.rejects(
+      clientAt('http://gw4.test/v1', { apiProtocol: 'openai' }).chat([{ role: 'user', content: 'hi' }], { maxRetries: 3 }),
+      (err) => {
+        assert.equal(err.retryable, false);
+        assert.match(err.message, /coding\/paas\/v4/, 'dedicated lane named');
+        return true;
+      }
+    );
+    assert.equal(urls.length, 1, 'billing condition — exactly one request');
+  });
+});
