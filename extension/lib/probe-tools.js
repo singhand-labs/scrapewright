@@ -360,6 +360,101 @@
       return { scrolled: !!r.scrolled, prevY: r.prevY, newY: r.newY };
     }
 
+    // Thirty-ninth log: "scroll until there are N items" could only be
+    // expressed as repeated probe.scroll + probe.count turns, and with a
+    // selector whose count was structurally frozen the loop degraded to
+    // scroll-until-budget — 6+ scroll rounds with the count pinned at 4
+    // while the feed itself kept growing. Bound the loop IN the tool: one
+    // call scrolls one viewport, settles, re-counts, and stops the moment
+    // the population reaches the requirement count. The per-round trace
+    // also carries the frozen-count diagnosis (page height grows while the
+    // sel count never moves = the selector matches static page chrome, not
+    // the growing population) as a single note instead of ten turns of
+    // contradictory evidence the model had to correlate by hand.
+    async function scrollUntil(args0) {
+      const a = args0 && typeof args0 === 'object' ? args0 : {};
+      const sel = (typeof a.sel === 'string' && a.sel.trim()) ? a.sel.trim() : null;
+      if (!sel) return { error: 'sel required (the population selector counted every round)' };
+      const targetCount = (typeof a.targetCount === 'number' && a.targetCount > 0) ? Math.floor(a.targetCount) : null;
+      if (!targetCount) return { error: 'targetCount (positive integer) required — the requirement count the scroll loop is bounded by' };
+      const scrollSel = (typeof a.scrollSel === 'string' && a.scrollSel.trim()) ? a.scrollSel.trim() : null;
+      const maxRounds = Math.max(1, Math.min(25, (typeof a.maxRounds === 'number' && a.maxRounds > 0) ? Math.floor(a.maxRounds) : 8));
+      const settleMs = Math.max(100, Math.min(5000, (typeof a.settleMs === 'number' && a.settleMs > 0) ? Math.floor(a.settleMs) : 1200));
+      const by = (typeof a.by === 'number' && a.by > 0) ? Math.floor(a.by) : 800;
+      const receiptSelectors = [sel].concat(scrollSel ? [scrollSel] : []);
+
+      const r0 = await runSnippet('return $count(' + JSON.stringify(sel) + ');');
+      if (r0 && typeof r0.error === 'string') return r0;
+      let count = typeof r0 === 'number' ? r0 : 0;
+      if (count >= targetCount) {
+        if (observationLog) {
+          observationLog.record({
+            tool: 'probe.scrollUntil',
+            selectors: receiptSelectors,
+            summary: 'scrollUntil 0 rounds — already ' + count + '/' + targetCount
+          });
+        }
+        return { satisfied: true, finalCount: count, targetCount: targetCount, rounds: 0, trace: [{ count: count, y: null, h: null }], reason: 'target_reached' };
+      }
+
+      const heightSel = scrollSel || 'html';
+      const roundSnippet =
+        'const __c0 = await $count(' + JSON.stringify(sel) + ');\n' +
+        'const __s = await $scrollBy(' + by + (scrollSel ? ', ' + JSON.stringify(scrollSel) : '') + ');\n' +
+        'await new Promise(r => setTimeout(r, ' + settleMs + '));\n' +
+        'const __c1 = await $count(' + JSON.stringify(sel) + ');\n' +
+        'const __h = await $check(' + JSON.stringify(heightSel) + ', "scrollHeight");\n' +
+        'return { c0: __c0, c1: __c1, scrolled: __s.scrolled, y: __s.newY, h: __h };';
+
+      const initialCount = count;
+      const trace = [];
+      let heightEverGrew = false;
+      let prevH = null;
+      let stillRounds = 0;
+      let reason = 'max_rounds';
+      for (let i = 0; i < maxRounds; i++) {
+        const r = await runSnippet(roundSnippet);
+        if (r && typeof r.error === 'string') return r;
+        if (!r || typeof r !== 'object') return { error: 'unexpected scrollUntil round result shape' };
+        const h = typeof r.h === 'number' ? r.h : null;
+        const grew = prevH !== null && h !== null && h > prevH;
+        if (grew) heightEverGrew = true;
+        const moved = !!r.scrolled || grew;
+        stillRounds = moved ? 0 : stillRounds + 1;
+        prevH = h;
+        count = typeof r.c1 === 'number' ? r.c1 : count;
+        trace.push({ count: count, y: (typeof r.y === 'number' ? r.y : null), h: h });
+        if (count >= targetCount) { reason = 'target_reached'; break; }
+        if (stillRounds >= 2) { reason = 'at_bottom'; break; }
+      }
+
+      const satisfied = count >= targetCount;
+      if (!satisfied && count === initialCount && heightEverGrew) reason = 'count_frozen';
+      const out = {
+        satisfied: satisfied,
+        finalCount: count,
+        targetCount: targetCount,
+        rounds: trace.length,
+        trace: trace,
+        reason: reason
+      };
+      if (reason === 'count_frozen') {
+        out.note = 'page height grew across ' + trace.length + ' scroll round(s) but the sel count never changed from ' + initialCount + ' — sel matches static page chrome, not the growing population (wrong selector, not missing data). Census what actually grows between scrolls (probe.count candidate containers before/after one probe.scroll) and re-target sel; scrolling further cannot raise this count.';
+      } else if (reason === 'at_bottom') {
+        out.note = 'scroll position and page height both stopped changing — the feed is exhausted at ' + count + ' item(s) under this selector (target ' + targetCount + '); the visible data is all there is.';
+      } else if (reason === 'max_rounds') {
+        out.note = 'reached the ' + maxRounds + '-round cap at ' + count + '/' + targetCount + ' — the population was still growing; re-run scrollUntil to continue from the current position, or raise maxRounds.';
+      }
+      if (observationLog) {
+        observationLog.record({
+          tool: 'probe.scrollUntil',
+          selectors: receiptSelectors,
+          summary: 'scrollUntil ' + count + '/' + targetCount + ' reason=' + reason
+        });
+      }
+      return out;
+    }
+
     // Sixth-live-log I2b: auto-discovery SEES the real popover but the
     // observation receipt carried only the anchor selector — a popoverSel the
     // model rewrites from the evidence could never match a receipt, so the
@@ -519,7 +614,7 @@
       return out;
     }
 
-    return { count, text, attrStats, labelledby, sample, hover, scroll, extract };
+    return { count, text, attrStats, labelledby, sample, hover, scroll, scrollUntil, extract };
   }
 
   const api = { createProbeTools };

@@ -368,6 +368,125 @@ describe('probe.scroll receipt entry', () => {
   });
 });
 
+// Thirty-ninth log: the model emulated "scroll until N items" as repeated
+// probe.scroll + probe.count turns — with a selector whose count was
+// structurally frozen the loop degraded to scroll-until-budget (6+ scroll
+// rounds, count pinned at 4 while the feed itself grew 30→53 items).
+describe('probe.scrollUntil (bounded scroll + frozen-count diagnosis)', () => {
+  // Executor mock: initial count snippet is a bare $count; each round snippet
+  // contains __c0 and pulls its scripted per-round behavior from a queue.
+  function roundExecutor(initialCount, rounds) {
+    const snippets = [];
+    let roundIdx = 0;
+    return {
+      snippets,
+      impl: async (snippet) => {
+        snippets.push(snippet);
+        if (snippet.includes('__c0')) {
+          const r = rounds[Math.min(roundIdx, rounds.length - 1)];
+          roundIdx += 1;
+          return { c0: r.c0, c1: r.c1, scrolled: r.scrolled, y: r.y, h: r.h };
+        }
+        return initialCount;
+      }
+    };
+  }
+
+  it('scrolls-settle-counts per round and stops the moment the target is reached', async () => {
+    const ex = roundExecutor(5, [
+      { c0: 5, c1: 12, scrolled: true, y: 800, h: 23030 },
+      { c0: 12, c1: 20, scrolled: true, y: 1600, h: 27000 }
+    ]);
+    const { tools, observationLog } = makeTools(ex.impl);
+    const r = await tools.scrollUntil({ sel: "div[role='feed'] > div", targetCount: 20, settleMs: 100 });
+    assert.equal(r.satisfied, true);
+    assert.equal(r.finalCount, 20);
+    assert.equal(r.reason, 'target_reached');
+    assert.equal(r.rounds, 2, 'stops exactly at the satisfying round');
+    assert.deepEqual(r.trace.map(t => t.count), [12, 20]);
+    // the round snippet composes count → scroll → settle → re-count → height
+    const round = ex.snippets[1];
+    assert.ok(round.includes('$count('), 'counts the population before and after the scroll');
+    assert.ok(round.includes('$scrollBy(800'), 'scrolls one viewport increment');
+    assert.ok(/setTimeout\(r,\s*100\)/.test(round), 'settles between scroll and re-count');
+    assert.ok(round.includes('$check("html", "scrollHeight")'), 'witnesses page-height growth');
+    assert.ok(observationLog.covers("div[role='feed'] > div"), 'population selector recorded as receipt');
+  });
+
+  it('diagnoses count_frozen: page grows while the selector count never moves', async () => {
+    const ex = roundExecutor(4, [
+      { c0: 4, c1: 4, scrolled: true, y: 5850, h: 23137 },
+      { c0: 4, c1: 4, scrolled: true, y: 14714, h: 27307 },
+      { c0: 4, c1: 4, scrolled: true, y: 20791, h: 31686 }
+    ]);
+    const { tools } = makeTools(ex.impl);
+    const r = await tools.scrollUntil({ sel: "div[role='feed'] div[role='article']", targetCount: 20, maxRounds: 3, settleMs: 100 });
+    assert.equal(r.satisfied, false);
+    assert.equal(r.finalCount, 4);
+    assert.equal(r.reason, 'count_frozen');
+    assert.ok(/static page chrome/.test(r.note), 'note names the wrong-selector diagnosis');
+    assert.ok(/wrong selector, not missing data/.test(r.note));
+  });
+
+  it('stops early with at_bottom when position and height both stop changing', async () => {
+    const ex = roundExecutor(2, [
+      { c0: 2, c1: 3, scrolled: true, y: 800, h: 9000 },
+      { c0: 3, c1: 3, scrolled: false, y: 9000, h: 9000 },
+      { c0: 3, c1: 3, scrolled: false, y: 9000, h: 9000 },
+      { c0: 3, c1: 3, scrolled: false, y: 9000, h: 9000 }
+    ]);
+    const { tools } = makeTools(ex.impl);
+    const r = await tools.scrollUntil({ sel: '.items', targetCount: 10, settleMs: 100 });
+    assert.equal(r.satisfied, false);
+    assert.equal(r.reason, 'at_bottom');
+    assert.equal(r.rounds, 3, 'two consecutive no-move rounds end the loop early');
+    assert.ok(/exhausted/.test(r.note));
+  });
+
+  it('reports max_rounds when the population grows but the cap hits first', async () => {
+    const ex = roundExecutor(0, [
+      { c0: 0, c1: 5, scrolled: true, y: 800, h: 9000 },
+      { c0: 5, c1: 9, scrolled: true, y: 1600, h: 9500 }
+    ]);
+    const { tools } = makeTools(ex.impl);
+    const r = await tools.scrollUntil({ sel: '.cards', targetCount: 50, maxRounds: 2, settleMs: 100 });
+    assert.equal(r.satisfied, false);
+    assert.equal(r.reason, 'max_rounds');
+    assert.equal(r.finalCount, 9);
+    assert.ok(/still growing/.test(r.note), 'note says the population was still growing');
+  });
+
+  it('satisfies with 0 rounds when the population already meets the target', async () => {
+    const ex = roundExecutor(25, []);
+    const { tools, observationLog } = makeTools(ex.impl);
+    const r = await tools.scrollUntil({ sel: '.done', targetCount: 20, settleMs: 100 });
+    assert.equal(r.satisfied, true);
+    assert.equal(r.rounds, 0);
+    assert.equal(r.reason, 'target_reached');
+    assert.equal(ex.snippets.filter(s => s.includes('__c0')).length, 0, 'no scroll round is spent');
+    assert.equal(observationLog.size(), 1);
+  });
+
+  it('scrollSel composes into both the scroll and the height witness', async () => {
+    const ex = roundExecutor(1, [{ c0: 1, c1: 6, scrolled: true, y: 500, h: 4000 }]);
+    const { tools } = makeTools(ex.impl);
+    const r = await tools.scrollUntil({ sel: '.row', targetCount: 5, scrollSel: "div[role='feed']", settleMs: 100, by: 500 });
+    assert.equal(r.satisfied, true);
+    const round = ex.snippets[1];
+    assert.ok(round.includes("$scrollBy(500, \"div[role='feed']\")"), 'scroll targets the container');
+    assert.ok(round.includes("$check(\"div[role='feed']\", \"scrollHeight\")"), 'height is witnessed ON the container');
+  });
+
+  it('validates args and propagates executor errors without a receipt', async () => {
+    const { tools, observationLog } = makeTools(async () => { throw new Error('SYNTAX_ERR'); });
+    assert.ok(/sel required/.test((await tools.scrollUntil({ targetCount: 5 })).error));
+    assert.ok(/targetCount/.test((await tools.scrollUntil({ sel: '.x' })).error));
+    const r = await tools.scrollUntil({ sel: '.x', targetCount: 5 });
+    assert.equal(r.error, 'SYNTAX_ERR');
+    assert.equal(observationLog.size(), 0, 'a failed scrollUntil is not an observation');
+  });
+});
+
 describe('probe.hover canonical popover receipt (sixth-live-log turns 17-24 deadlock)', () => {
   it('derives the canonical selector from the htmlSnippet opening tag, returns it, and records the receipt', async () => {
     const { tools, observationLog } = makeTools(async () => ({

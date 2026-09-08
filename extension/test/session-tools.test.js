@@ -72,6 +72,30 @@ describe('createSessionTools', () => {
     assert.deepEqual(r, { count: 7 });
   });
 
+  // Thirty-ninth log: repeated scroll→count turns degraded to
+  // scroll-until-budget under a frozen count selector.
+  it('wires probe.scrollUntil + teaches requirement-bounded scrolling and the frozen-count rule', async () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    assert.equal(typeof t.tools['probe.scrollUntil'], 'function', 'scrollUntil wired into the tool bag');
+    assert.ok(t.toolSpecs.some(s => s.name === 'probe.scrollUntil'), 'scrollUntil in the spec list');
+    const p = t.systemPromptBase;
+    assert.ok(/probe\.scrollUntil/.test(p), 'rule 7 names the bounded scroll tool');
+    assert.ok(/targetCount/.test(p), 'teaches the target-count bound');
+    assert.ok(/count NEVER changes while page height grows|never changes while page height grows|never moved while page height grew/i.test(p),
+      'teaches the count-frozen = wrong-selector diagnosis');
+    assert.ok(/bounded by that count|BOUNDED by that count/i.test(p), 'teaches that a count requirement bounds the scroll loop');
+  });
+
+  it('probe.scrollUntil flows through rail.executeDsl (already-satisfied path)', async () => {
+    const { deps } = makeDeps({ rail: Object.assign(makeDeps().deps.rail, { executeDsl: async (s) => 30 }) });
+    const t = createSessionTools(deps);
+    const r = await t.tools['probe.scrollUntil']({ sel: "div[role='feed'] > div", targetCount: 20 });
+    assert.equal(r.satisfied, true);
+    assert.equal(r.rounds, 0);
+    assert.equal(r.reason, 'target_reached');
+  });
+
   it('bindEngine connects the late-bound observation log so probes record receipts', async () => {
     const { deps } = makeDeps();
     const t = createSessionTools(deps);
