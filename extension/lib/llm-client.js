@@ -122,6 +122,13 @@ class LLMClient {
       case 'kimi': return 'https://api.moonshot.cn/v1';
       case 'anthropic': return 'https://api.anthropic.com/v1';
       case 'glm': return 'https://open.bigmodel.cn/api/paas/v4';
+      // Zhipu's official coding-plan doc: plan quota is honored ONLY on the
+      // plan's dedicated endpoints, and a key pointed elsewhere (e.g. the
+      // pay-as-you-go /api/paas/v4 lane above) cannot spend it at all. The
+      // preset keeps coding-plan keys off that silent-quota-loss trap; the
+      // Anthropic-compatible lane (https://open.bigmodel.cn/api/anthropic) is
+      // the other plan endpoint and stays a manual Base URL choice.
+      case 'glm-coding': return 'https://open.bigmodel.cn/api/coding/paas/v4';
       default: throw new Error(`Unknown provider: ${this.provider}`);
     }
   }
@@ -232,7 +239,7 @@ class LLMClient {
   }
 
   _balanceRemedyTail() {
-    return ` Recharge the provider account (or claim/activate a resource package covering model ${this.model}), or switch provider/model in Settings. If your key rides a coding-plan subscription (GLM Coding Plan and similar), its quota is only honored on the plan's dedicated Base URL — e.g. point Settings → Base URL at https://open.bigmodel.cn/api/coding/paas/v4 for Zhipu coding plans.`;
+    return ` Recharge the provider account (or claim/activate a resource package covering model ${this.model}), or switch provider/model in Settings. If your key rides a coding-plan subscription (GLM Coding Plan and similar), its quota is only honored on the plan's dedicated Base URL — pick the GLM Coding Plan provider in Settings (Base URL https://open.bigmodel.cn/api/coding/paas/v4) or point Base URL at https://open.bigmodel.cn/api/anthropic for the Anthropic-compatible lane.`;
   }
 
   // Thirty-fifth log: some gateways (bigmodel.cn observed live) wrap upstream
@@ -259,7 +266,7 @@ class LLMClient {
     }
     if (/404|not[_ -]?found/i.test(envelope.msg)) {
       throw new LLMError(
-        `LLM gateway answered HTTP 200 but reported the API path missing (code ${envelope.code}): ${envelope.msg} — the ${protocolLabel} endpoint does not exist on this Base URL. Check Settings → Base URL and the API protocol selector (Zhipu lanes: coding https://open.bigmodel.cn/api/coding/paas/v4, Anthropic-compatible https://open.bigmodel.cn/api/anthropic). URL: ${url}`,
+        `LLM gateway answered HTTP 200 but reported the API path missing (code ${envelope.code}): ${envelope.msg} — the ${protocolLabel} endpoint does not exist on this Base URL. Check Settings → Base URL and the API protocol selector (Zhipu lanes: the GLM Coding Plan provider → https://open.bigmodel.cn/api/coding/paas/v4, or Anthropic-compatible https://open.bigmodel.cn/api/anthropic). URL: ${url}`,
         { retryable: false }
       );
     }

@@ -1028,3 +1028,35 @@ describe('Gateway error envelopes on HTTP 200 (thirty-fifth log)', () => {
     assert.equal(urls.length, 1, 'billing condition — exactly one request');
   });
 });
+
+describe('Provider default Base URLs (official Zhipu coding-plan lanes)', () => {
+  // Zhipu's official coding-plan doc pins three endpoints; the plan quota is
+  // honored only on them and "错误配置端点将导致无法使用套餐额度". The preset
+  // table must keep mapping every provider to its documented lane.
+  const expectedLanes = {
+    openai: 'https://api.openai.com/v1',
+    moonshot: 'https://api.moonshot.cn/v1',
+    kimi: 'https://api.moonshot.cn/v1',
+    anthropic: 'https://api.anthropic.com/v1',
+    glm: 'https://open.bigmodel.cn/api/paas/v4',
+    'glm-coding': 'https://open.bigmodel.cn/api/coding/paas/v4'
+  };
+
+  for (const [provider, lane] of Object.entries(expectedLanes)) {
+    it(`${provider}: default Base URL is the documented lane`, () => {
+      const client = new LLMClient({ provider, model: 'm', apiKey: 'k' });
+      assert.equal(client.apiBaseUrl, lane);
+    });
+  }
+
+  it('unknown provider still throws (preset table is closed)', () => {
+    assert.throws(() => new LLMClient({ provider: 'nope', model: 'm', apiKey: 'k' }), /Unknown provider/);
+  });
+
+  it('balance remedy names the coding-plan lane AND the provider preset', () => {
+    const client = new LLMClient({ provider: 'glm', model: 'glm-5.2', apiKey: 'k' });
+    const tail = client._balanceRemedyTail();
+    assert.match(tail, /coding\/paas\/v4/);
+    assert.match(tail, /GLM Coding Plan provider/, 'names the Settings preset, not just the plan name');
+  });
+});
