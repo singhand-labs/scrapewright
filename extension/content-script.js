@@ -246,6 +246,26 @@
           }
           records[i].hovercards = hovercards;
         }
+        // Forty-fourth log (inline mirror of lib/list-extract-ops.js): field
+        // extraction ran BEFORE the hover batch, but on a cold tab the batch
+        // is exactly what hydrates lazily-mounted ARIA label chains. Re-read
+        // labelledby fields whose pre-hover read came back empty; fill from
+        // the post-hover DOM. Non-empty values are never overwritten and
+        // non-labelledby fields are never re-read.
+        for (var ri = 0; ri < containers.length; ri++) {
+          for (var fk in fieldMap) {
+            var specR = fieldMap[fk];
+            var lbR = (specR && typeof specR === 'object') ? specR.labelledby : undefined;
+            var refAttrR = lbR === true ? 'aria-labelledby'
+              : (typeof lbR === 'string' && lbR.trim() ? lbR.trim() : null);
+            if (!refAttrR) continue;
+            var curR = records[ri][fk];
+            if (curR !== undefined && curR !== null && String(curR) !== '') continue;
+            var vR;
+            try { vR = readField(containers[ri], specR); } catch (_) { continue; }
+            if (typeof vR === 'string' && vR) records[ri][fk] = vR;
+          }
+        }
         return records;
       })();
     }
@@ -1629,6 +1649,31 @@
       ' no elements for the base selector itself, so this is a population/input question, not your filter clauses.';
   }
 
+  // Forty-fourth log: the zero-match paths attach a selector differential,
+  // but a PARTIAL population loss was invisible — a verify container whose
+  // trailing :has() exclusion removed 2 of 6 base matches shipped a census
+  // with no clause-cost evidence, so the model had no way to audit its own
+  // exclusion clause's polarity. On a populated container with strippable
+  // trailing clauses, attach the clause-by-clause counts to the census; note
+  // only when the clauses actually removed something (else it's noise).
+  function attachClauseCostCensus(diagnostics, containerSel) {
+    if (!diagnostics || typeof containerSel !== 'string') return diagnostics;
+    const diff = computeSelectorDifferential(containerSel);
+    if (!diff || diff.length < 2) return diagnostics;
+    diagnostics.selectorDifferential = diff;
+    const base = diff[0].count;
+    const kept = diff[diff.length - 1].count;
+    if (kept < base) {
+      diagnostics.note = 'SELECTOR DIFFERENTIAL (clause cost on a POPULATED container): ' +
+        diff.map((st) => st.sel + ' → ' + st.count).join('; ') +
+        ' — trailing clause(s) removed ' + (base - kept) + ' of ' + base + ' base matches.' +
+        ' Verify each exclusion clause against sampled matches: an attr-NAME-based exclusion' +
+        ' (data-* design-system attributes) often matches organic items too — check polarity,' +
+        ' not just presence.';
+    }
+    return diagnostics;
+  }
+
   // Twenty-fourth log root fix (hidden-risk follow-up): tooltip and card-name
   // payloads frequently live ONLY in the hidden-but-readable element an ARIA
   // reference attribute points at (aria-labelledby="id1 id2"). Resolves the
@@ -1863,6 +1908,7 @@
     const _diagnostics = ops && ops.computeExtractListDiagnostics
       ? ops.computeExtractListDiagnostics(containers, fieldMap, containerSel)
       : { api: 'extractList', containerSelector: containerSel, containerMatches: containers.length, perField: [] };
+    attachClauseCostCensus(_diagnostics, containerSel);
     notifyBackgroundDiagnostic('extractList_entry', {
       containerSelector: containerSel,
       containerMatches: containers.length,
@@ -1940,6 +1986,7 @@
       ? ops.computeExtractListDiagnostics(containers, fieldMap, containerSel, true)
       : { api: 'extractList', containerSelector: containerSel, containerMatches: containers.length, perField: [] };
     if (_diagnostics && _diagnostics.api === 'extractList') _diagnostics.api = 'extractListMulti';
+    attachClauseCostCensus(_diagnostics, containerSel);
     notifyBackgroundDiagnostic('extractListMulti_entry', {
       containerSelector: containerSel,
       containerMatches: containers.length,
@@ -2373,7 +2420,13 @@
           note: (typeof descended.viaDescendant === 'string') ? (descended.note || null) : null
         };
       }
-      return { text: '', attr: null, note: null };
+      // Forty-fourth log: on a cold tab the whole chain can be unmounted or
+      // carry stale ids — a silent {text:'', attr:null, note:null} is
+      // indistinguishable from "no label exists" and shipped postingTime ""
+      // 4/4 with zero falsification receipts. Keep the resolver's note
+      // (absent-attr / resolve-to-nothing / descent disclosure) and the
+      // probed attr name so the empty is auditable.
+      return { text: '', attr: descended.attr || null, note: descended.note || null };
     }
     var fallback = resolveLabelledbyText(el, firstWithAttr);
     return { text: '', attr: firstWithAttr, note: fallback.note || null };
@@ -3321,6 +3374,7 @@
       : { api: 'extractWithHover', containerSelector: containerSel, containerMatches: processed.length, perField: [] };
     _diagnostics.api = 'extractWithHover';
     _diagnostics.processedContainers = processed.length;
+    attachClauseCostCensus(_diagnostics, containerSel);
     var anchorsFound = 0;
     var hovercardsCaptured = 0;
     var hoverFailures = 0;

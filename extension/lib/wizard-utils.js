@@ -373,12 +373,18 @@ Returned records (one per processed container, in document order):
       hovercards: [
         { hovered: bool, htmlSnippet: string|null, popoverSelector: string|null,
           autoDiscovered: bool, reason: string|null, anchorIndex: number,
-          anchorHref: string, anchorText: string },
+          anchorHref: string, anchorText: string,
+          labelledbyText: string|null, labelledbyAttr: string|null,
+          labelledbyNote: string|null },
         // one entry per anchor inside THIS container, in document order.
         // anchorHref is the raw href attribute of the hovered anchor
         // (empty string when absent) — the primary signal for classifying
         // which kind of entity the hovercard describes. anchorText is the
-        // trimmed anchor text (capped at 120 chars).
+        // trimmed anchor text (capped at 120 chars). labelledbyText is the
+        // anchor's accessible label resolved from its aria-labelledby/
+        // aria-describedby reference chain (harvested at dwell time, also
+        // present on failed entries); labelledbyNote carries the
+        // falsification reason when it resolved to nothing.
       ]
     }
   ]
@@ -447,6 +453,14 @@ RULES:
   actual HTML before committing.
 - Field extraction and hover enrichment happen atomically per container
   in one call. There is no inter-step DOM drift.
+- LABELLED-BY FIELDS RESOLVE ACROSS THE HOVER BATCH: on a cold tab the
+  hover pass is what mounts the lazily-hydrated aria-labelledby chain, so
+  a fieldMap field with { labelledby: true } that read empty BEFORE the
+  hover is re-read from the post-hover DOM automatically — you do not need
+  assembly gymnastics to copy labelledbyText into it (though the hovercard
+  copy remains available). If it is STILL empty after the call, read the
+  matching card's labelledbyNote — it names the reason (absent attribute /
+  stale ids / nothing in the subtree) before you conclude unverifiable.
 - Fields are SCALAR (one value per field per container, same as
   \$extractList). If you need array-valued fields (e.g. all tag links
   in a record), call \$extractListMulti separately on the same containers

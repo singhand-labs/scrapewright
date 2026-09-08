@@ -413,6 +413,24 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
     }
     records[i].hovercards = hovercards;
   }
+  // Forty-fourth log: the field extraction above ran BEFORE the hover batch,
+  // but on a cold tab the batch is exactly what hydrates lazily-mounted ARIA
+  // label chains — postingTime shipped "" in 4/4 records while the SAME
+  // resolution recomputed after the loop (the diagnostics census) resolved
+  // fine. Re-read labelledby fields whose pre-hover read came back empty;
+  // fill from the post-hover DOM. Non-empty values are never overwritten and
+  // non-labelledby fields are never re-read (attr/text reads don't hydrate).
+  for (let i = 0; i < containers.length; i++) {
+    for (const [field, spec] of Object.entries(fieldMap)) {
+      const refAttr = normalizeLabelledby(typeof spec === 'string' ? null : spec);
+      if (!refAttr) continue;
+      const cur = records[i][field];
+      if (cur !== undefined && cur !== null && String(cur) !== '') continue;
+      let v;
+      try { v = readField(containers[i], spec); } catch (_) { continue; }
+      if (typeof v === 'string' && v) records[i][field] = v;
+    }
+  }
   return records;
 }
 

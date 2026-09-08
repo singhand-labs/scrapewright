@@ -196,13 +196,34 @@ describe('F1: harvestAnchorLabel descends (forty-second-log harvest works on thi
     assert.ok(/descendant/i.test(String(out.note || '')), 'harvest note must disclose the descent: ' + out.note);
   });
 
-  it('anchor with nothing to find stays quiet (no attrs, no carrier)', () => {
+  // Forty-fourth log: on a cold verify tab the whole reference chain can be
+  // unmounted (no carrier at all) or mounted with stale ids (dead refs).
+  // A silent {text:'', attr:null, note:null} indistinguishable from "the
+  // anchor label simply doesn't exist" is what let postingTime ship "" 4/4
+  // across four verifies with zero labelledbyNote receipts. The quiet path
+  // now keeps the resolver's falsification note (and the probed attr) so
+  // the harvest discloses WHY it is empty.
+  it('anchor with nothing to find discloses the absent-attr probe instead of a bare empty', () => {
     const dom = descentDom();
     const fn = loadHarvestFn(dom);
     const out = fn(dom.window.document.querySelector('#card2 a.time'));
     assert.equal(out.text, '');
-    assert.equal(out.attr, null);
-    assert.equal(out.note, null);
+    assert.equal(out.attr, 'aria-labelledby', 'attr names the reference attribute the harvest probed');
+    assert.match(out.note || '', /absent/);
+  });
+
+  it('dead-refs carrier on a cold tab: text stays empty but the falsification note + probed attr survive', () => {
+    const dom = new JSDOM(`<!DOCTYPE html><html><body>
+      <a class="time" href="?__cft__[0]=jkl012">
+        <span aria-labelledby="_r_91_">stale label chain</span>
+      </a>
+    </body></html>`);
+    const fn = loadHarvestFn(dom);
+    const out = fn(dom.window.document.querySelector('a.time'));
+    assert.equal(out.text, '');
+    assert.equal(out.attr, 'aria-labelledby');
+    assert.match(out.note || '', /resolve to nothing/, 'stale/dynamic ids get the resolve-to-nothing note');
+    assert.match(out.note || '', /descendant/, 'the descent disclosure survives too');
   });
 
   it('anchor own attrs still win inside the harvest', () => {

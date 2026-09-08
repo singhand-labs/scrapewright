@@ -155,13 +155,18 @@ describe('forty-second log: harvestAnchorLabel resolver (sliced from content-scr
     assert.match(out.note || '', /resolve to nothing/);
   });
 
-  it('an anchor with no reference attribute returns an empty quiet result', () => {
+  // Forty-fourth log: the no-attr quiet result used to be
+  // {text:'', attr:null, note:null} — silent. On a cold verify tab that
+  // silence was indistinguishable from "no label exists", so cold-tab
+  // failures shipped with zero labelledbyNote receipts. The quiet path now
+  // keeps the resolver's absent-attr note and the probed attr name.
+  it('an anchor with no reference attribute returns the absent-attr falsification note', () => {
     const dom = setupDOM('<a id="anchor" href="/x">x</a>');
     const fn = loadHarvestFn(dom);
     const out = fn(dom.window.document.getElementById('anchor'));
     assert.equal(out.text, '');
-    assert.equal(out.attr, null);
-    assert.equal(out.note, null);
+    assert.equal(out.attr, 'aria-labelledby');
+    assert.match(out.note || '', /absent/);
   });
 });
 
