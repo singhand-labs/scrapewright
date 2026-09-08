@@ -221,7 +221,12 @@
                 observedPopover: (r && r.observedPopover) || null,
                 anchorIndex: j,
                 anchorHref: anchorHref,
-                anchorText: anchorText
+                anchorText: anchorText,
+                // Forty-second log (inline mirror of lib/list-extract-ops.js):
+                // anchor-label harvest forwarding, failed entries included.
+                labelledbyText: (r && typeof r.labelledbyText === 'string' && r.labelledbyText) ? r.labelledbyText : null,
+                labelledbyAttr: (r && typeof r.labelledbyAttr === 'string' && r.labelledbyAttr) ? r.labelledbyAttr : null,
+                labelledbyNote: (r && typeof r.labelledbyNote === 'string' && r.labelledbyNote) ? r.labelledbyNote : null
               });
             } catch (err) {
               hovercards.push({
@@ -232,7 +237,10 @@
                 reason: 'hover_error: ' + (err && err.message || String(err)),
                 anchorIndex: j,
                 anchorHref: anchorHref,
-                anchorText: anchorText
+                anchorText: anchorText,
+                labelledbyText: null,
+                labelledbyAttr: null,
+                labelledbyNote: null
               });
             }
           }
@@ -2295,6 +2303,35 @@
     } catch (_) { return null; }
   }
 
+  // Forty-second log: resolve an anchor's accessible label — the text its
+  // aria-labelledby (or aria-describedby, fallback) referenced elements
+  // carry. Timestamps, icon buttons, and compact labels routinely hold their
+  // FULL value only in those hidden-but-readable references, which the page
+  // mounts lazily (often only once the anchor has been hovered). Runs at
+  // harvest time inside domHover, BEFORE the dismiss: the same mouseout that
+  // closes the popover can unmount the referenced text (24th-log lesson,
+  // applied to the anchor's own label). Returns {text, attr, note}; a quiet
+  // {text:'', attr:null, note:null} when the anchor carries no reference
+  // attribute at all (nothing to harvest — not an error).
+  function harvestAnchorLabel(el) {
+    if (!el || typeof el.getAttribute !== 'function') return { text: '', attr: null, note: null };
+    var firstWithAttr = null;
+    var attrs = ['aria-labelledby', 'aria-describedby'];
+    for (var i = 0; i < attrs.length; i++) {
+      var raw = '';
+      try { raw = String(el.getAttribute(attrs[i]) || ''); } catch (_) { raw = ''; }
+      if (!raw.trim()) continue;
+      if (!firstWithAttr) firstWithAttr = attrs[i];
+      var resolved = resolveLabelledbyText(el, attrs[i]);
+      if (resolved.text) {
+        return { text: resolved.text.slice(0, 1000), attr: attrs[i], note: null };
+      }
+    }
+    if (!firstWithAttr) return { text: '', attr: null, note: null };
+    var fallback = resolveLabelledbyText(el, firstWithAttr);
+    return { text: '', attr: firstWithAttr, note: fallback.note || null };
+  }
+
   async function domHover(selOrEl, popoverSel, opts) {
     if (!selOrEl) throw new Error('$hover requires an anchor selector or element');
     // Sixth-log followup: per-anchor phase timings. Run 1 of the 2026-09-01
@@ -2976,6 +3013,16 @@
     // the payload the visual picker could not see (zero-height/hidden).
     var rejectedAddedTexts = collectRejectedAddedTexts(rejectedAddedNodes);
 
+    // Forty-second log (user design directive: dynamic content triggered by
+    // a simulated action must be read back into THIS tool in the SAME
+    // operation, before later actions can wash it away): resolve the
+    // ANCHOR's accessible label here, while the hover dwell has the tooltip
+    // scaffolding mounted. This runs on every path — visible popover
+    // captured, popover_timeout, no_hover_signal early exit — because label
+    // text frequently needs no visible popover at all.
+    var anchorLabel = null;
+    try { anchorLabel = harvestAnchorLabel(anchor); } catch (_) { anchorLabel = null; }
+
     // Dismiss: move the trusted cursor to (1,1) so hover handlers fire
     // mouseout/mouseleave and the popover closes. Best-effort — failure here
     // doesn't affect the htmlSnippet already captured.
@@ -3013,6 +3060,19 @@
       hoverDispatched: !!(hoverResp && hoverResp.dispatched),
       hoverReason: hoverResp ? hoverResp.reason : null
     };
+    // Forty-second log: attach the anchor-label harvest. Success shape
+    // (text + attr) and falsification shape (attr present, note why it
+    // resolved nothing) — the model reads the value without regexing the
+    // htmlSnippet, and a partial/failed label has its reason on-channel.
+    if (anchorLabel) {
+      if (anchorLabel.text) {
+        result.labelledbyText = anchorLabel.text;
+        result.labelledbyAttr = anchorLabel.attr;
+      } else if (anchorLabel.note) {
+        result.labelledbyAttr = anchorLabel.attr;
+        result.labelledbyNote = anchorLabel.note;
+      }
+    }
     if (earlyExited) {
       result.reason = 'no_hover_signal_early_exit';
     } else if (!htmlSnippet && (popoverSel || observer)) {

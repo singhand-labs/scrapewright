@@ -145,7 +145,7 @@
       '- $labelledby(sel, attr?, timeoutMs?) → {text, attr, refCount, missingIds?, note?} — resolves the ARIA reference attr (default aria-labelledby; pass "aria-describedby") on the first match; .text carries the CONCATENATED text of the referenced element(s) (id list looked up by id) — postTime = (await $labelledby(sel)).text. probe.labelledby returns this SAME object shape. Tooltip/timestamp full values usually live there — the referenced span is often hidden but readable, so use this instead of re-hovering when the popover never visibly renders',
       '- $extractList(containerSel, fieldMap, opts?) — one record per container; fieldMap {field:{selector,attr?,labelledby?}}; labelledby:true (or the attr name, e.g. aria-describedby) resolves the ARIA reference on the match and returns the referenced elements\' concatenated text — the read for anti-scrambled textContent (the visible text is decoy junk; the clean value lives in the hidden elements the reference points at; same resolution as $labelledby); opts.allowEmpty keeps empty-string fields (return every record, never filter to []); attr:"outerHTML"/"innerHTML" values are capped at 50000 chars with a TRUNCATED disclosure suffix — anchor htmlSnippet-style fields to the SEMANTIC sub-element, not the whole card (whole-card DOM is class/style/SVG noise; verify flags such fields OUTPUT_FIELD_SIZE)',
       '- $extractListMulti(containerSel, fieldMap, opts?) — array-valued fields (labelledby fields resolve every match)',
-      '- $extractWithHover(containerSel, fieldMap, {hover:{anchorSel, popoverSel?}}) — hover-enriched extraction; anchorSel is evaluated INSIDE each container and may be a comma-UNION to hover several anchors per card (e.g. the author link AND the timestamp element — each lands as its own entry). Each record carries its hover results in `hovercards[]`, ONE ENTRY PER matched anchor: {hovered, htmlSnippet, popoverSelector, reason, observedPopover, anchorIndex, anchorHref, anchorText} — probe.hover shows this same envelope for a single anchor. Build the output hover-card fields from r.hovercards (htmlSnippet is the captured popover DOM; anchorHref/anchorText tell you WHICH anchor produced it); there is no popoverHtml or __popover field',
+      '- $extractWithHover(containerSel, fieldMap, {hover:{anchorSel, popoverSel?}}) — hover-enriched extraction; anchorSel is evaluated INSIDE each container and may be a comma-UNION to hover several anchors per card (e.g. the author link AND the timestamp element — each lands as its own entry). Each record carries its hover results in `hovercards[]`, ONE ENTRY PER matched anchor: {hovered, htmlSnippet, popoverSelector, reason, observedPopover, anchorIndex, anchorHref, anchorText, labelledbyText, labelledbyAttr} — probe.hover shows this same envelope for a single anchor. Build the output hover-card fields from r.hovercards (htmlSnippet is the captured popover DOM; anchorHref/anchorText tell you WHICH anchor produced it). labelledbyText is the anchor\'s ACCESSIBLE LABEL, harvested in the same operation at dwell time: the full text its aria-labelledby/aria-describedby references carry (hidden-but-readable tooltip spans — timestamps hold their FULL value there) — present on FAILED entries too (a label needs no visible popover), so a label-anchor entry (timestamp, icon, compact field) is exactly where to take a field\'s value from, NOT something to filter out of the assembly; there is no popoverHtml or __popover field',
       '- $hover(anchorSel, popoverSel?, opts?) — one-off trusted hover (opts.index picks the Nth anchor); for hover-enriched record extraction prefer $extractWithHover',
       '- $waitForStable(sel, opts?) — resolves true once the element\'s sampled content stops changing (streaming content); prefer over setTimeout guessing',
       '- $click(sel), $type(sel, text), $check(sel, prop)',
@@ -681,8 +681,20 @@
       // Verify stayed green (a literal satisfies shape checks) and only the
       // user noticed. Name the pattern at landing time, same advisory-only
       // contract as the un-awaited-$ lint above.
+      // Forty-second log: use VERIFY's schema precedence — artifact first,
+      // confirmed contract as fallback. A resumed service carries its full
+      // schema on the artifact while the session confirms nothing, and the
+      // lint read only the confirmed contract: verify's partial-empty census
+      // enumerated posts.location from the artifact schema while the lint
+      // stayed blind to the very `location:''` literal it exists to name. A
+      // DEGRADED artifact schema (no .properties — the pre-confirmation
+      // placeholder) must not shadow a rich confirmed contract, so only a
+      // properties-bearing artifact schema takes precedence.
+      const lintArtifactSchema = (typeof d.getOutputSchema === 'function') ? d.getOutputSchema() : null;
+      const lintArtifactUsable = !!(lintArtifactSchema && lintArtifactSchema.properties && typeof lintArtifactSchema.properties === 'object' && !Array.isArray(lintArtifactSchema.properties));
       const lintSchema = (a.outputSchema != null) ? a.outputSchema
-        : ((ioConfirmedSchemas || ledgerConfirmedSchemas(ctx) || {}).outputSchema) || null;
+        : ((lintArtifactUsable ? lintArtifactSchema : null)
+          || (ioConfirmedSchemas || ledgerConfirmedSchemas(ctx) || {}).outputSchema) || null;
       if (lintSchema && typeof WU.detectNeverExtractedFields === 'function') {
         for (const f of WU.detectNeverExtractedFields(steps, lintSchema)) {
           staticLint.push('schema field "' + f.path + '" appears ONLY as hardcoded string literal(s) in the step scripts — no step extracts it (no fieldMap entry, no assignment). A literal verifies green while carrying no data: bind the field in a fieldMap or compute it, or renegotiate the contract with io.confirm if the page genuinely lacks it.');
@@ -699,7 +711,7 @@
         const src = String((s && s.script) || '');
         if (src.indexOf('$extractWithHover') !== -1 && /(\.popoverHtml\b|__popover\b)/.test(src)) {
           return {
-            error: 'EXTRACT_WITH_HOVER_FIELD_MISS: step "' + ((s && s.name) || String(s && s.id)) + '" reads `.popoverHtml`/`__popover` off an $extractWithHover record — no such field exists, so the hover-card output is structurally ALWAYS empty (popovers can mount perfectly and the record still carries nothing). $extractWithHover returns one record per container; each record carries its hover results in `hovercards[]`, one entry per matched anchor: {hovered, htmlSnippet, popoverSelector, reason, observedPopover, anchorIndex, anchorHref, anchorText}. Build the output hover-card fields from r.hovercards — htmlSnippet is the captured popover DOM, and anchorHref/anchorText tell you WHICH anchor produced it.'
+            error: 'EXTRACT_WITH_HOVER_FIELD_MISS: step "' + ((s && s.name) || String(s && s.id)) + '" reads `.popoverHtml`/`__popover` off an $extractWithHover record — no such field exists, so the hover-card output is structurally ALWAYS empty (popovers can mount perfectly and the record still carries nothing). $extractWithHover returns one record per container; each record carries its hover results in `hovercards[]`, one entry per matched anchor: {hovered, htmlSnippet, popoverSelector, reason, observedPopover, anchorIndex, anchorHref, anchorText, labelledbyText, labelledbyAttr}. Build the output hover-card fields from r.hovercards — htmlSnippet is the captured popover DOM, anchorHref/anchorText tell you WHICH anchor produced it, and labelledbyText is the anchor\'s accessible label (aria-labelledby/aria-describedby referenced text, harvested at dwell time — the full tooltip value for label anchors like timestamps).'
           };
         }
       }

@@ -171,7 +171,10 @@ describe('RC51: inline fallback parity (drift guard per RC35)', () => {
     const body = inline.slice(hoverStart, bodyEnd);
     const errIdx = body.indexOf('hover_error');
     assert.ok(errIdx > -1, 'inline error branch must exist');
-    const errBranch = body.slice(errIdx - 400, errIdx);
+    // 1000-char lookback: the forty-second log's labelledby forwarding on
+    // the success push (~390 chars) sits between the success anchorHref
+    // lines and the catch preamble — the window is scoping, not size.
+    const errBranch = body.slice(errIdx - 1000, errIdx);
     assert.ok(/anchorHref\s*:/.test(errBranch),
       'inline fallback error branch must push anchorHref');
     assert.ok(/anchorText\s*:/.test(errBranch),

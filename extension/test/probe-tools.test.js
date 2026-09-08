@@ -632,6 +632,28 @@ describe('probe.hover', () => {
     assert.deepEqual(r.rejectedAddedTexts, ['June 11', 'Group · 1.2K members']);
     assert.match(r.rejectedAddedNote, /READ out/);
   });
+
+  it('forwards the anchor-label harvest labelledbyText/labelledbyAttr/labelledbyNote (forty-second log: hover-layer evidence must survive the probe layer)', async () => {
+    const { tools } = makeTools(async () => ({
+      hovered: false,
+      reason: 'no_hover_signal_early_exit',
+      htmlSnippet: null,
+      labelledbyText: 'June 21, 2024 at 3:15 PM',
+      labelledbyAttr: 'aria-labelledby'
+    }));
+    const r = await tools.hover({ anchorSel: 'a.timestamp' });
+    assert.equal(r.labelledbyText, 'June 21, 2024 at 3:15 PM',
+      'the anchor\'s accessible label — harvested at dwell time — survives the probe whitelist');
+    assert.equal(r.labelledbyAttr, 'aria-labelledby');
+    const { tools: t2 } = makeTools(async () => ({
+      hovered: true,
+      htmlSnippet: '<div></div>',
+      labelledbyNote: 'aria-labelledby references id(s) that resolve to nothing in this document (dynamic/stale ids): _r_9v_'
+    }));
+    const r2 = await t2.hover({ anchorSel: 'a.timestamp' });
+    assert.match(r2.labelledbyNote, /resolve to nothing/, 'the falsification note survives too');
+    assert.equal(r2.labelledbyText, undefined, 'no text path stays quiet rather than empty-string');
+  });
 });
 
 describe('audit C10: canonical popover selector accepts a single stable class token', () => {

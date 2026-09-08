@@ -212,6 +212,33 @@ describe('createSessionTools', () => {
     assert.ok(!/posts\.content/.test(out2.staticLint.join('\n')), 'a computed/assigned mention keeps the field quiet');
   });
 
+  // Forty-second log: the live session hardcoded `location:''` into the
+  // assembly while the ARTIFACT carried a full schema (resumed service —
+  // verify's partial-empty census enumerated posts.location from it), yet
+  // the lint stayed silent: it read ONLY the confirmed-contract schema
+  // (absent in that session), skipping the artifact schema verify actually
+  // scores against. The lint must use verify's precedence — artifact first,
+  // confirmed contract as fallback.
+  it('service.update lint reads the ARTIFACT schema (verify\'s precedence) when the confirmed contract is looser (forty-second log)', async () => {
+    const artifactSchema = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object', required: ['content'], properties: {
+      content: { type: 'string' }, location: { type: 'string' }
+    } } } } };
+    const { deps } = makeDeps({ getOutputSchema: () => artifactSchema });
+    const t = createSessionTools(deps);
+    // The live shape: the confirmed contract enumerates no item fields
+    // (loose items) while the RESUMED artifact carries the full schema
+    // verify's partial-empty census actually reads.
+    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } });
+    const out = await t.tools['service.update'](
+      { steps: [
+        { id: 's1', name: 'assemble', script: "const recs = await $extractList('div.post', { content: { selector: 'span.txt' } });\nreturn { posts: recs.map(r => ({ content: r.content, location: '' })) };", onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }
+      ] },
+      { session: { state: () => ({ session: { artifactVersions: [] } }) } });
+    assert.equal(out.updated, true, 'advisory stays non-blocking');
+    assert.match(out.staticLint.join('\n'), /posts\.location/, 'the artifact schema — the one verify scores against — drives the hardcoded-literal lint even when the confirmed contract is looser');
+    assert.ok(!/posts\.content/.test(out.staticLint.join('\n')), 'extracted fields stay quiet');
+  });
+
   // Fortieth log: two sessions in a row hand-wrote
   // `r.popoverHtml || r.__popover.html` off $extractWithHover records — a
   // field that never existed — and shipped hoverCards:[] while the

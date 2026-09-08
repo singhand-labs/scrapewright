@@ -10,7 +10,8 @@
 // tags): COUNT_SHORTFALL, EMPTY_EXTRACTION, EMPTY_FIELDS, POPOVER_TIMEOUT,
 // HOVER_NO_SIGNAL, COUNTER_FROZEN, DUPLICATE_RECORDS, SELECTOR_ZERO_MATCH,
 // FIELD_COLLISION, SCRIPT_TIMEOUT, CARD_POLICY, POLL_EXHAUSTED, SCHEMA_BLIND,
-// AD_MARKER_SELECTOR, SELECTOR_OVERFILTERED, OUTPUT_FIELD_SIZE.
+// AD_MARKER_SELECTOR, SELECTOR_OVERFILTERED, OUTPUT_FIELD_SIZE,
+// PARTIAL_EMPTY_FIELDS.
 //
 // Write path: sessions PROPOSE units; the user approves; the universality
 // guard test runs on every change to this file.
@@ -110,6 +111,13 @@
       matchEvents: ['OUTPUT_FIELD_SIZE'],
       origin: '2026-09-08 forty-first live log; whole-card htmlSnippet at 82396-99278 chars each',
       body: 'A field spec like {selector:"", attr:"outerHTML"} on the card container serializes the ENTIRE card DOM — class names, inline styles, SVG paths, nested reaction bars — tens of thousands of characters per record where the consumer wanted the one meaningful fragment. The read layer caps element-HTML at 50000 chars with a TRUNCATED disclosure suffix, but the right fix is upstream: point the field selector at the semantic sub-element (the text block, the link, the quoted region) so the snippet IS the payload. "Snippet" means a fragment. If the confirmed contract genuinely wants the full card DOM, keep it and accept the size — the verify census is report-only; otherwise tighten the anchor or renegotiate the contract with io.confirm.'
+    },
+    {
+      id: 'hover-label-harvest',
+      title: 'Label-anchor hovercards carry the field value in labelledbyText — harvest it, never filter it out of the assembly',
+      matchEvents: ['PARTIAL_EMPTY_FIELDS'],
+      origin: '2026-09-08 forty-second live log; postTime partial ("June 21") while the tooltip\'s full text was captured then discarded',
+      body: 'Compact fields (timestamps, icon labels, truncated text) often hold their FULL value only in the hidden-but-readable spans an aria-labelledby/aria-describedby reference points at, and the page mounts those spans lazily — sometimes only once the anchor has been hovered. Every hovercard entry now carries labelledbyText: the anchor\'s accessible label resolved AT DWELL TIME, in the same operation that triggered the mount (immune to later actions washing the page state away), present on FAILED entries too (a label needs no visible popover). When a field reads partial or empty from a direct labelledby/text read: (1) include the field\'s label anchors in the $extractWithHover anchorSel union, (2) take the value from the matching hovercard entry\'s labelledbyText, (3) do NOT discard label-anchor entries in the assembly — a timestamp anchor\'s href is often a junk query string, so classify entries by what they ARE (label anchor vs entity link), never by link shape alone.'
     }
   ];
 

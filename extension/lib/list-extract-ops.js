@@ -361,7 +361,14 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
           observedPopover: (r && r.observedPopover) || null,
           anchorIndex: j,
           anchorHref: anchorHref,
-          anchorText: anchorText
+          anchorText: anchorText,
+          // Forty-second log: the anchor-label harvest the hover layer took
+          // at dwell time (before the dismiss could unmount the referenced
+          // text). Carried on FAILED entries too — label text routinely
+          // needs no visible popover.
+          labelledbyText: (r && typeof r.labelledbyText === 'string' && r.labelledbyText) ? r.labelledbyText : null,
+          labelledbyAttr: (r && typeof r.labelledbyAttr === 'string' && r.labelledbyAttr) ? r.labelledbyAttr : null,
+          labelledbyNote: (r && typeof r.labelledbyNote === 'string' && r.labelledbyNote) ? r.labelledbyNote : null
         });
       } catch (err) {
         hovercards.push({
@@ -372,7 +379,10 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
           reason: 'hover_error: ' + (err && err.message || String(err)),
           anchorIndex: j,
           anchorHref: anchorHref,
-          anchorText: anchorText
+          anchorText: anchorText,
+          labelledbyText: null,
+          labelledbyAttr: null,
+          labelledbyNote: null
         });
       }
     }

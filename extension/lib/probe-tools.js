@@ -606,6 +606,17 @@
         out.rejectedAddedTexts = r.rejectedAddedTexts;
         if (typeof r.rejectedAddedNote === 'string' && r.rejectedAddedNote) out.rejectedAddedNote = r.rejectedAddedNote;
       }
+      // Forty-second log: the anchor-label harvest taken at dwell time
+      // (before the dismiss). Same contract as the fields above — hover-layer
+      // evidence must survive the probe layer, or the teaching that names it
+      // is a promise the plumbing never delivers.
+      if (typeof r.labelledbyText === 'string' && r.labelledbyText) {
+        out.labelledbyText = r.labelledbyText;
+        if (typeof r.labelledbyAttr === 'string' && r.labelledbyAttr) out.labelledbyAttr = r.labelledbyAttr;
+      }
+      if (typeof r.labelledbyNote === 'string' && r.labelledbyNote) {
+        out.labelledbyNote = r.labelledbyNote;
+      }
       if (canonical) {
         out.popoverSelectorNote = 'canonical popoverSelector derived from the observed popover — an observation receipt was recorded for THIS EXACT STRING. If you configure popoverSel in a step, copy it VERBATIM; an embellished variant (e.g. adding [aria-modal=\'true\']) is a new string the grounding gate must reject.';
       } else if (out.htmlSnippet) {
