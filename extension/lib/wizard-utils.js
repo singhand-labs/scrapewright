@@ -2270,6 +2270,89 @@ function detectDuplicateRecords(data, outputSchema, options) {
   return result;
 }
 
+// Fortieth log: ENTITY-level duplication. A container selector like
+// `div[feed] div[virtualized]:has([story])` matches the SAME card at TWO
+// nesting levels (:has() qualifies EVERY ancestor; a union list qualifies
+// wrapper AND card), so each entity ships twice — IDENTICAL data fields,
+// DIFFERING wrapper htmlSnippet — and slips past detectDuplicateRecords
+// (whose all-identical signature includes the wrapper field, splitting
+// the pairs). The entity fingerprint below EXCLUDES bookkeeping fields
+// (index/serial/position) and raw-wrapper fields (htmlSnippet-class), so
+// same-entity captures collide no matter which depth produced them.
+// Fires when the largest entity group holds ≥2 records and ≥minRatio
+// (default 0.5) of the array — the double-count lie-class, where "N
+// records" is announced while fewer distinct entities exist.
+//
+// UNIVERSALITY: not site-specific — any nested-match container on any
+// feed/list produces this signature.
+const ENTITY_BOOKKEEPING_FIELD = /^(index|idx|sn|serial|position|order|seq|sequence)$/i;
+const ENTITY_RAWISH_FIELD = /(html|markup|snippet|raw|source|embedded|dom)/i;
+
+function detectDuplicateEntities(data, outputSchema, options) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return [];
+  if (!outputSchema || typeof outputSchema !== 'object') return [];
+  const opts = options || {};
+  const minRatio = typeof opts.minRatio === 'number' ? opts.minRatio : 0.5;
+  const isEmptyValue = (v) =>
+    v === '' || v === null || v === undefined ||
+    (Array.isArray(v) && v.length === 0) ||
+    (typeof v === 'string' && v.trim() === '');
+  const splitCamel = (k) => String(k).replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase();
+  const props = outputSchema.properties && typeof outputSchema.properties === 'object'
+    ? outputSchema.properties
+    : {};
+  const result = [];
+  for (const key of Object.keys(props)) {
+    const prop = props[key];
+    const fieldKeys = schemaArrayItemFieldKeys(prop);
+    if (!fieldKeys) continue;
+    const arr = data[key];
+    if (!Array.isArray(arr) || arr.length < 2) continue;
+    const sigKeys = fieldKeys.filter((fk) => {
+      const sp = splitCamel(fk);
+      if (ENTITY_BOOKKEEPING_FIELD.test(sp)) return false;
+      if (ENTITY_RAWISH_FIELD.test(fk) || ENTITY_RAWISH_FIELD.test(sp)) return false;
+      return true;
+    });
+    // Nothing semantic left to compare: with only bookkeeping + wrapper
+    // fields declared, every collision would be a meaningless one (all
+    // records share '' on those once excluded) — skip instead of firing.
+    if (!sigKeys.length) continue;
+    const sigCounts = new Map();
+    let maxCount = 0;
+    let maxSig = null;
+    for (const rec of arr) {
+      if (!rec || typeof rec !== 'object' || Array.isArray(rec)) continue;
+      const normVals = sigKeys.map((fk) => {
+        const v = rec[fk];
+        if (isEmptyValue(v)) return '';
+        return typeof v === 'string' ? v : JSON.stringify(v);
+      });
+      // Nineteenth-log guard: a record whose every entity field is empty
+      // carries NO entity — its all-'' signature collides with every other
+      // empty record, which is emptiness (the partial-empty census owns
+      // that signal), not duplication. Skip it from the entity count.
+      if (normVals.every((nv) => nv === '')) continue;
+      const sig = sigKeys.map((fk, i) => fk + ':' + normVals[i]).join('||');
+      const c = (sigCounts.get(sig) || 0) + 1;
+      sigCounts.set(sig, c);
+      if (c > maxCount) { maxCount = c; maxSig = sig; }
+    }
+    if (!maxSig || maxCount < 2) continue;
+    const ratio = maxCount / arr.length;
+    if (ratio < minRatio) continue;
+    result.push({
+      field: key,
+      totalRecords: arr.length,
+      duplicateCount: maxCount,
+      distinctEntities: sigCounts.size,
+      duplicateRatio: ratio,
+      signatureFields: sigKeys.slice(0, 6)
+    });
+  }
+  return result;
+}
+
 // detectCountShortfall(data, inputValues, outputSchema, options) → null | {field, requested, extracted}
 //
 // Seventh-log survey (2026-09-01): a search-posts service declared input
@@ -4234,7 +4317,7 @@ function detectNeverExtractedFields(steps, outputSchema) {
 
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectCountShortfall, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+  module.exports = { parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectCountShortfall, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.hoverAwareTimeoutMs = hoverAwareTimeoutMs;
@@ -4264,6 +4347,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.detectEmptyOutputFieldsByRatio = detectEmptyOutputFieldsByRatio;
   window.formatEmptyOutputFieldsSignal = formatEmptyOutputFieldsSignal;
   window.detectDuplicateRecords = detectDuplicateRecords;
+  window.detectDuplicateEntities = detectDuplicateEntities;
   window.formatDuplicateRecordsSignal = formatDuplicateRecordsSignal;
     window.getOutputFieldOptions = getOutputFieldOptions;
   window.truncateSnapshotForLLM = truncateSnapshotForLLM;
@@ -4321,6 +4405,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.detectEmptyOutputFieldsByRatio = detectEmptyOutputFieldsByRatio;
   self.formatEmptyOutputFieldsSignal = formatEmptyOutputFieldsSignal;
   self.detectDuplicateRecords = detectDuplicateRecords;
+  self.detectDuplicateEntities = detectDuplicateEntities;
   self.formatDuplicateRecordsSignal = formatDuplicateRecordsSignal;
     self.getOutputFieldOptions = getOutputFieldOptions;
   self.truncateSnapshotForLLM = truncateSnapshotForLLM;

@@ -212,6 +212,44 @@ describe('createSessionTools', () => {
     assert.ok(!/posts\.content/.test(out2.staticLint.join('\n')), 'a computed/assigned mention keeps the field quiet');
   });
 
+  // Fortieth log: two sessions in a row hand-wrote
+  // `r.popoverHtml || r.__popover.html` off $extractWithHover records — a
+  // field that never existed — and shipped hoverCards:[] while the
+  // popovers mounted fine (the user SAW them). The envelope was never
+  // documented in the DSL line, so the invented name is understandable but
+  // categorically empty.
+  it('service.update rejects $extractWithHover scripts reading popoverHtml/__popover — the envelope is hovercards[]', async () => {
+    const { deps, state } = makeDeps();
+    const t = createSessionTools(deps);
+    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } });
+    const ctx = { session: { state: () => ({ session: { artifactVersions: [] } }) } };
+    const bad = await t.tools['service.update'](
+      { steps: [
+        { id: 's1', name: 'extract', script: "const recs = await $extractWithHover('div.post', {c:{selector:'.t'}}, {hover:{anchorSel:'a.author'}});\nconst ph = recs[0].popoverHtml || (recs[0].__popover && recs[0].__popover.html) || '';\nreturn {cards: [ph]};", onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }
+      ] }, ctx);
+    assert.match(bad.error, /EXTRACT_WITH_HOVER_FIELD_MISS/);
+    assert.match(bad.error, /hovercards\[\]/, 'the real envelope is named');
+    assert.match(bad.error, /anchorHref/, 'entry fields spelled out');
+    assert.equal(state.applied.length, 0, 'the artifact does NOT land');
+    const good = await t.tools['service.update'](
+      { steps: [
+        { id: 's1', name: 'extract', script: "const recs = await $extractWithHover('div.post', {c:{selector:'.t'}}, {hover:{anchorSel:'a.author, a.timestamp'}});\nreturn recs.map(r => ({ cards: (r.hovercards || []).map(h => h.htmlSnippet), anchors: (r.hovercards || []).map(h => h.anchorHref) }));", onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }
+      ] }, ctx);
+    assert.equal(good.updated, true, 'correct hovercards[] reads pass untouched');
+  });
+
+  it('session prompt documents the $extractWithHover record envelope (fortieth log: invented popoverHtml shipped empty hoverCards)', () => {
+    const { deps } = makeDeps();
+    const t = createSessionTools(deps);
+    const p = t.systemPromptBase;
+    const line = (p.match(/\$extractWithHover\([^\n]*/g) || []).join('\n');
+    assert.ok(line, 'the $extractWithHover DSL line exists');
+    assert.match(line, /hovercards\[\]/, 'names the per-record hover envelope');
+    assert.match(line, /anchorHref/, 'names anchorHref');
+    assert.match(line, /anchorText/, 'names anchorText');
+    assert.match(p, /comma-UNION|comma union/i, 'teaches multi-anchor anchorSel as a union');
+  });
+
   it('service.update rejects natural-language schemas with a teaching error; JSON-Schema shapes pass (fourth-live-log G1)', async () => {
     const { deps, state } = makeDeps();
     const t = createSessionTools(deps);

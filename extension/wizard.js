@@ -2938,7 +2938,13 @@ async function sendSessionFeedback() {
   st.budgetAdvisories = [];
   st.elapsedMs = 0;
   if (!Array.isArray(st.transcript)) st.transcript = [];
-  st.transcript.push({ kind: 'system', text: 'USER FEEDBACK (fix request): ' + text + ' — continue: the research tab was closed when the session ended, so page.open the target (with a concrete sample input) first; probe the live page to diagnose the reported problem, fix the artifact via service.update, then verify.run again before finishing.' });
+  // Fortieth log: the resumed session re-verified, went green, and finished
+  // with EVERY reported problem still unfixed (structurally-empty hover-card
+  // fields, "Leave a comment" junk, duplicate records from a nested
+  // container match). The old note taught resume mechanics but never
+  // required the finish to CLOSE each named problem — a green verify.run
+  // alone passed shape-only checks while the complaint stayed untouched.
+  st.transcript.push({ kind: 'system', text: 'USER FEEDBACK (fix request): ' + text + ' — continue: the research tab was closed when the session ended, so page.open the target (with a concrete sample input) first, probe the live page to diagnose the reported problem, fix the artifact via service.update, then verify.run again before finishing. Before finishing you must close EACH named problem: state per reported problem whether it is now fixed, quoting field values from the verify output as evidence, and a problem you could not fix must be disclosed in the finish summary naming what was tried. A green verify.run alone does not close user feedback — empty fields, UI-label junk values, and duplicate records can all pass a shape-only verify, so re-read the complaint and check the actual extracted values.' });
   try {
     await wizardPersistence.save({ session: st, observation: persisted.observation, ledger: persisted.ledger });
     await wizardPersistence.flush();

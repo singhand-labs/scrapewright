@@ -50,6 +50,7 @@ const path = require('node:path');
 
 const {
   detectDuplicateRecords,
+  detectDuplicateEntities,
   formatDuplicateRecordsSignal
 } = require('../lib/wizard-utils');
 
@@ -175,6 +176,106 @@ describe('detectDuplicateRecords — flags the all-identical-records antipattern
       detectDuplicateRecords({ tags: ['a', 'a', 'a'] }, scalarSchema),
       []
     );
+  });
+});
+
+// Fortieth log: 4 records shipped as "4 posts" while the page had 2 — the
+// container selector `div[feed] div[virtualized]:has([story_message])`
+// matched the SAME card at two nesting levels (:has() matches every
+// qualifying ancestor), so each post arrived twice with IDENTICAL data
+// fields and DIFFERING wrapper htmlSnippet. detectDuplicateRecords (all-
+// identical threshold, wrapper fields included in the signature) cannot
+// see pairs; the entity fingerprint below excludes bookkeeping + wrapper
+// fields so same-entity captures collide.
+describe('detectDuplicateEntities — nested-container double-match (fortieth log)', () => {
+  const ESCHEMA = {
+    type: 'object',
+    required: ['posts'],
+    properties: {
+      posts: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            index: { type: 'integer' },
+            postId: { type: 'string' },
+            postTime: { type: 'string' },
+            content: { type: 'string' },
+            htmlSnippet: { type: 'string' }
+          }
+        }
+      }
+    }
+  };
+
+  // Exact incident shape: 2 entities × 2 nesting levels.
+  const NESTED_PAIRS = { posts: [
+    { index: 1, postId: '1312691617719487', postTime: 'June 11', content: 'first post body', htmlSnippet: '<div class="outer"><div>card A</div></div>' },
+    { index: 2, postId: '1312691617719487', postTime: 'June 11', content: 'first post body', htmlSnippet: '<div class="inner">card A</div>' },
+    { index: 3, postId: '10239314043541358', postTime: 'August 6', content: 'second post body', htmlSnippet: '<div class="outer"><div>card B</div></div>' },
+    { index: 4, postId: '10239314043541358', postTime: 'August 6', content: 'second post body', htmlSnippet: '<div class="inner">card B</div>' }
+  ] };
+
+  it('two pairs with identical data fields but DIFFERING wrapper html collide (4 records / 2 entities)', () => {
+    const out = detectDuplicateEntities(NESTED_PAIRS, ESCHEMA);
+    assert.equal(out.length, 1, 'one array flagged: ' + JSON.stringify(out));
+    assert.equal(out[0].field, 'posts');
+    assert.equal(out[0].totalRecords, 4);
+    assert.equal(out[0].duplicateCount, 2, 'the largest entity group has 2 captures');
+    assert.equal(out[0].distinctEntities, 2);
+    assert.ok(out[0].duplicateRatio >= 0.5);
+    assert.ok(out[0].signatureFields.indexOf('postId') !== -1, 'signature covers the data fields');
+    assert.ok(out[0].signatureFields.indexOf('htmlSnippet') === -1, 'wrapper html EXCLUDED from the signature');
+    assert.ok(out[0].signatureFields.indexOf('index') === -1, 'bookkeeping index EXCLUDED from the signature');
+  });
+
+  it('all-distinct entities stay quiet', () => {
+    const data = { posts: [
+      { index: 1, postId: 'a', postTime: 't1', content: 'x', htmlSnippet: '<div>1</div>' },
+      { index: 2, postId: 'b', postTime: 't2', content: 'y', htmlSnippet: '<div>2</div>' },
+      { index: 3, postId: 'c', postTime: 't3', content: 'z', htmlSnippet: '<div>3</div>' }
+    ] };
+    assert.deepEqual(detectDuplicateEntities(data, ESCHEMA), []);
+  });
+
+  it('records differing ONLY in index collide (bookkeeping excluded)', () => {
+    const data = { posts: [
+      { index: 1, postId: 'a', postTime: 't', content: 'x', htmlSnippet: '' },
+      { index: 2, postId: 'a', postTime: 't', content: 'x', htmlSnippet: '' }
+    ] };
+    const out = detectDuplicateEntities(data, ESCHEMA);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].duplicateCount, 2);
+  });
+
+  it('a single stray duplicate among many distinct (ratio < 0.5) stays quiet by default', () => {
+    const data = { posts: [
+      { index: 1, postId: 'a', postTime: 't1', content: 'x', htmlSnippet: '' },
+      { index: 2, postId: 'a', postTime: 't1', content: 'x', htmlSnippet: '' },
+      { index: 3, postId: 'b', postTime: 't2', content: 'y', htmlSnippet: '' },
+      { index: 4, postId: 'c', postTime: 't3', content: 'z', htmlSnippet: '' },
+      { index: 5, postId: 'd', postTime: 't4', content: 'w', htmlSnippet: '' }
+    ] };
+    assert.deepEqual(detectDuplicateEntities(data, ESCHEMA), [], '2/5 = 0.4 < 0.5 — advisory-quiet at the default ratio');
+  });
+
+  it('schema whose only fields are bookkeeping + wrappers → no comparison (meaningless-collision guard)', () => {
+    const thinSchema = { type: 'object', required: ['cards'], properties: { cards: { type: 'array', items: { type: 'object', properties: {
+      index: { type: 'integer' }, htmlSnippet: { type: 'string' }
+    } } } } };
+    const data = { cards: [
+      { index: 1, htmlSnippet: '<div>a</div>' },
+      { index: 2, htmlSnippet: '<div>b</div>' }
+    ] };
+    assert.deepEqual(detectDuplicateEntities(data, thinSchema), []);
+  });
+
+  it('is robust to non-array / missing schema / scalar arrays (returns [])', () => {
+    assert.deepEqual(detectDuplicateEntities(null, ESCHEMA), []);
+    assert.deepEqual(detectDuplicateEntities({}, ESCHEMA), []);
+    assert.deepEqual(detectDuplicateEntities({ posts: 'nope' }, ESCHEMA), []);
+    const scalarSchema = { type: 'object', properties: { tags: { type: 'array', items: { type: 'string' } } } };
+    assert.deepEqual(detectDuplicateEntities({ tags: ['a', 'a'] }, scalarSchema), []);
   });
 });
 

@@ -739,6 +739,108 @@ describe('verify-runner junkValues detector (tenth-log N2: structurally green, j
   });
 });
 
+// Fortieth log: posts.comments shipped "Leave a comment" (the comment
+// BUTTON's aria-label) in 4/4 records through a GREEN verify — the
+// controlLabel junk detection existed but was advisory-only, so the
+// artifact published with the user's reported problem unfixed. A
+// schema-declared field whose EVERY value is a bare UI control label
+// carries zero data — the same lie-class as REQUIRED_FIELD_EMPTY.
+describe('verify-runner junk-dominated field gate (fortieth log: "Leave a comment" shipped green)', () => {
+  const SCHEMA = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object', required: ['postId'], properties: {
+    postId: { type: 'string' }, content: { type: 'string' }, comments: { type: 'string' }, likes: { type: 'string' }
+  } } } } };
+
+  it('100% controlLabel on a declared field flips the run red with both exits taught', async () => {
+    const posts = [
+      { postId: '1', content: 'hello world one', comments: 'Leave a comment', likes: '19' },
+      { postId: '2', content: 'hello world two', comments: 'Leave a comment', likes: '' }
+    ];
+    const orch = async () => ({ finalResult: { posts }, steps: [{ stepId: 's1', stepName: 'extract', result: { done: true } }], pages: [] });
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: SCHEMA });
+    assert.equal(out.report.ok, false, 'a field that is 100% button label is not data');
+    assert.match(out.report.error.message, /JUNK_DOMINATED_FIELD: posts\.comments/);
+    assert.match(out.report.error.message, /Leave a comment/);
+    assert.match(out.report.error.message, /digit/, 'teaches the digit-bearing-source signal');
+    assert.match(out.report.error.message, /io\.confirm/, 'names the renegotiation exit');
+    assert.ok(out.report.events.indexOf('JUNK_DOMINATED') !== -1, 'tag rides report.events');
+    assert.ok(out.report.detectors.junkValues, 'underlying census still present');
+  });
+
+  it('partial label junk (some records carry a real count) stays green and advisory', async () => {
+    const posts = [
+      { postId: '1', content: 'one', comments: '4 comments', likes: '1' },
+      { postId: '2', content: 'two', comments: 'Leave a comment', likes: '2' }
+    ];
+    const orch = async () => ({ finalResult: { posts }, steps: [], pages: [] });
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: SCHEMA });
+    assert.equal(out.report.ok, true, '1/2 junk is variation, not domination');
+    const jv = out.report.detectors.junkValues;
+    assert.ok(jv && jv.fields.some((f) => f.kind === 'controlLabel' && f.field === 'posts.comments' && f.count === 1 && f.total === 2), 'census carries count + total');
+    assert.equal(out.report.events.indexOf('JUNK_DOMINATED'), -1);
+  });
+
+  it('label junk in an UNdeclared field stays advisory (the schema is the gate)', async () => {
+    const posts = [
+      { postId: '1', content: 'one', comments: 'Leave a comment' },
+      { postId: '2', content: 'two', comments: 'Leave a comment' }
+    ];
+    const thin = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object', required: ['postId'], properties: {
+      postId: { type: 'string' }, content: { type: 'string' }
+    } } } } };
+    const orch = async () => ({ finalResult: { posts }, steps: [], pages: [] });
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: thin });
+    assert.equal(out.report.ok, true, 'undeclared extras are the census\'s business, not the gate\'s');
+    assert.ok(out.report.detectors.junkValues);
+  });
+});
+
+// Fortieth log: the container selector matched the same card at two DOM
+// nesting levels (a :has() selector matches EVERY qualifying ancestor), so
+// 4 records shipped for 2 posts — identical data fields, differing wrapper
+// htmlSnippet — through a green verify (item count 4 scored as success).
+describe('verify-runner duplicateEntities gate (fortieth log: 4 records = 2 posts shipped green)', () => {
+  const SCHEMA = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object', required: ['postId', 'content'], properties: {
+    index: { type: 'integer' }, postId: { type: 'string' }, postTime: { type: 'string' }, content: { type: 'string' }, htmlSnippet: { type: 'string' }
+  } } } } };
+
+  it('nested double-match flips red with the nesting + dedup teaching', async () => {
+    const posts = [
+      { index: 1, postId: '1312691617719487', postTime: 'June 11', content: 'first post body', htmlSnippet: '<div class="outer">A</div>' },
+      { index: 2, postId: '1312691617719487', postTime: 'June 11', content: 'first post body', htmlSnippet: '<div class="inner">A</div>' },
+      { index: 3, postId: '10239314043541358', postTime: 'August 6', content: 'second post body', htmlSnippet: '<div class="outer">B</div>' },
+      { index: 4, postId: '10239314043541358', postTime: 'August 6', content: 'second post body', htmlSnippet: '<div class="inner">B</div>' }
+    ];
+    const orch = async () => ({ finalResult: { posts }, steps: [{ stepId: 's1', stepName: 'extract', result: { done: true } }], pages: [] });
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: SCHEMA });
+    assert.equal(out.report.ok, false, 'double-counted entities must not verify green');
+    assert.match(out.report.error.message, /DUPLICATE_ENTITIES: posts/);
+    assert.match(out.report.error.message, /2 of 4|4 records/, 'counts named');
+    assert.match(out.report.error.message, /NESTED/i);
+    assert.match(out.report.error.message, /:has\(\)/, 'names the ancestor-matching :has() hazard');
+    assert.match(out.report.error.message, /dedup/i, 'assembly-dedup exit taught');
+    assert.match(out.report.error.message, /probe\.count/, 'live cross-check taught');
+    assert.ok(out.report.events.indexOf('DUPLICATE_ENTITIES') !== -1, 'tag rides report.events');
+    assert.ok(out.report.detectors.duplicateEntities, 'detector block present');
+  });
+
+  it('distinct entities stay green (no false fire on real diversity)', async () => {
+    const posts = [
+      { index: 1, postId: 'a', postTime: 't1', content: 'x', htmlSnippet: '<div>1</div>' },
+      { index: 2, postId: 'b', postTime: 't2', content: 'y', htmlSnippet: '<div>2</div>' },
+      { index: 3, postId: 'c', postTime: 't3', content: 'z', htmlSnippet: '<div>3</div>' }
+    ];
+    const orch = async () => ({ finalResult: { posts }, steps: [], pages: [] });
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: SCHEMA });
+    assert.equal(out.report.ok, true);
+    assert.equal(out.report.detectors.duplicateEntities, null);
+  });
+});
+
 describe('verify-runner partialEmptyFields detector (sixteenth log: green verify, confirmed fields empty)', () => {
   const SCHEMA = {
     type: 'object', required: ['posts'],

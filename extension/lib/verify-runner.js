@@ -49,6 +49,7 @@
       findEmptyExtractionFields: w.findEmptyExtractionFields,
       findUpstreamExtractionStepId: w.findUpstreamExtractionStepId,
       detectDuplicateRecords: w.detectDuplicateRecords,
+      detectDuplicateEntities: w.detectDuplicateEntities,
       detectCountShortfall: w.detectCountShortfall,
       validateOutputAgainstSchema: w.validateOutputAgainstSchema,
       scoreAttemptResult: w.scoreAttemptResult,
@@ -204,7 +205,7 @@
       if (opaque) fields.push({ field: fieldPath + '.' + rk, kind: 'opaqueToken', count: opaque, sample: capSample(opaqueSample) });
       if (dataJunk && isUrlishName(rk, urlishHints)) fields.push({ field: fieldPath + '.' + rk, kind: 'dataUri', junkCount: dataJunk, total: dataTotal });
       if (dumps) fields.push({ field: fieldPath + '.' + rk, kind: 'markupDump', count: dumps, sample: capSample(dumpSample) });
-      if (labelish) fields.push({ field: fieldPath + '.' + rk, kind: 'controlLabel', count: labelish, sample: capSample(labelSample) });
+      if (labelish) fields.push({ field: fieldPath + '.' + rk, kind: 'controlLabel', count: labelish, total: recs.length, sample: capSample(labelSample) });
     }
   }
 
@@ -467,7 +468,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], countShortfall: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, zeroMatchFields: null, containerZero: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null };
+      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, zeroMatchFields: null, containerZero: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -637,6 +638,25 @@
               { duplicateFields: duplicateFields, snapshot: (lastStepEntry && lastStepEntry.snapshot) || null });
           }
         }
+        if (!error && typeof WU.detectDuplicateEntities === 'function') {
+          // Fortieth log: 4 records shipped as "4 posts" while the page held
+          // 2 — the container selector matched the SAME card at two nesting
+          // levels (:has() matches every qualifying ancestor), so each post
+          // arrived twice with identical data fields and differing wrapper
+          // htmlSnippet. detectDuplicateRecords (all-identical threshold,
+          // wrapper fields in the signature) cannot see such pairs; the
+          // entity fingerprint below excludes bookkeeping + wrapper fields.
+          const dupEnt = WU.detectDuplicateEntities(finalData, outputSchema) || [];
+          if (dupEnt.length > 0) {
+            const nominalStepId = lastStepEntry && lastStepEntry.stepId;
+            detectors.duplicateEntities = dupEnt;
+            const summary = dupEnt.map((x) => x.field + ' (' + x.duplicateCount + ' of ' + x.totalRecords + ' records share one entity signature over [' + x.signatureFields.join(', ') + ']; ' + x.distinctEntities + ' distinct entities)').join('; ');
+            error = toError(
+              'DUPLICATE_ENTITIES: ' + summary + ' — the page has fewer real entities than the record count. Classic cause: a NESTED container selector — \':has()\' matches EVERY qualifying ancestor and union selector lists match both wrapper and card, so each card is captured at 2+ nesting levels (data fields identical, wrapper fields like htmlSnippet differ). Fixes: probe.count a card-only selector on the research tab to cross-check the real card count; make the container selector match exactly ONE level (direct-child combinator `>` or a card-type attribute the wrapper lacks); or dedup by the entity signature when assembling the output. If the doubled capture is intentional, renegotiate the contract with io.confirm adding a distinguishing field.',
+              walkBack(nominalStepId),
+              { duplicateEntities: dupEnt, snapshot: (lastStepEntry && lastStepEntry.snapshot) || null });
+          }
+        }
         if (!error && typeof WU.detectCountShortfall === 'function') {
           // Report-only: forcing retries toward an unreachable count is the
           // ZERO-TRAP deadlock; surface it and let the human/LLM judge.
@@ -653,6 +673,39 @@
           // Report-only (tenth-log N2): the human may have confirmed a
           // contract that wants these values — surface, teach, never block.
           detectors.junkValues = detectJunkValues(finalData, outputSchema);
+        }
+        if (!error && detectors.junkValues && Array.isArray(detectors.junkValues.fields) && outputSchema && outputSchema.properties) {
+          // Fortieth log: "Leave a comment" (the composer button label) shipped
+          // as posts.comments for ALL 4 records on a green verify — the
+          // controlLabel census flagged it 4/4 but stayed advisory, and the
+          // session finished with the user-reported junk field intact. A
+          // count-ish field whose EVERY value is a digit-less UI label is not
+          // a contract nuance, it is a mis-anchored selector: block it. Below
+          // 100% (or on undeclared pass-through fields) the census stays
+          // report-only exactly as before.
+          for (const f of detectors.junkValues.fields) {
+            if (!f || f.kind !== 'controlLabel') continue;
+            // Declared at the ITEM level (field shape is '<arrayField>.<subField>'):
+            // an undeclared pass-through extra stays the census's business —
+            // the confirmed contract is what promotes the signal to a block.
+            const segs = String(f.field || '').split('.');
+            if (segs.length < 2) continue;
+            const rootProp = outputSchema.properties[segs[0]];
+            const itemProps = rootProp && rootProp.items && typeof rootProp.items.properties === 'object'
+              ? rootProp.items.properties
+              : null;
+            if (!itemProps || !itemProps[segs[segs.length - 1]]) continue;
+            if (typeof f.total === 'number' && f.total >= 2 && f.count >= f.total) {
+              error = new Error(
+                'JUNK_DOMINATED_FIELD: ' + f.field + ' is a bare UI control label ("' + f.sample + '") in ' + f.count + '/' + f.total +
+                ' records — the sub-selector grabbed page chrome (a button label / placeholder / aria text), not data. Count-like fields ' +
+                'come from engagement counters and carry digits; a digit-less constant across every record is a mis-anchored selector. ' +
+                'Fix the sub-selector against the live card (probe / record HTML), or when the field genuinely never exists on this card ' +
+                'type renegotiate the contract with io.confirm.'
+              );
+              break;
+            }
+          }
         }
         // Report-only (eighteenth log): ad/sponsored markers in step
         // selectors — include-usage inverts an exclusion requirement.
@@ -774,6 +827,8 @@
         if (detectors.zeroMatchFields) add('FIELD_MATCH_ZERO');
         if (detectors.containerZero && !/SELECTOR_OVERFILTERED/.test(msg)) add('INPUT_VALUE_SUSPECT');
         if (/DUPLICATE_RECORDS/.test(msg)) add('DUPLICATE_RECORDS');
+        if (/DUPLICATE_ENTITIES/.test(msg)) add('DUPLICATE_ENTITIES');
+        if (/JUNK_DOMINATED_FIELD/.test(msg)) add('JUNK_DOMINATED');
         if (/SCRIPT_TIMEOUT/.test(msg)) add('SCRIPT_TIMEOUT');
         if (/HOVER_ANCHORS_BLIND/.test(msg)) add('HOVER_NO_SIGNAL');
         if (detectors.emptyFields.length) add('EMPTY_FIELDS');
