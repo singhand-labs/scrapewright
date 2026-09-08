@@ -1,6 +1,18 @@
 (function() {
   'use strict';
 
+  // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
+  // 82396-99278 chars each (result.json: 332KB for 3 posts). ElementData caps
+  // textContent at 50000 — element-HTML property reads get the same budget,
+  // with an in-value disclosure comment so consumers know the value was cut.
+  // Self-contained on purpose: domExtract and createInlineListExtractOps both
+  // call it, and the test harness slices it out of source to pin behavior.
+  function capElementHtmlRead(value) {
+    const cap = 50000;
+    if (typeof value !== 'string' || value.length <= cap) return value;
+    return value.slice(0, cap) + '<!--TRUNCATED: element HTML capped at ' + cap + ' of ' + value.length + ' chars-->';
+  }
+
   // lib/list-extract-ops.js (loaded as an earlier content script) attaches its
   // API as `window.ListExtractOps`. Inside this strict-mode IIFE, a free
   // identifier reference does NOT resolve to a `window` property — it must be
@@ -45,7 +57,7 @@
       if (!sel) {
         if (refAttr) return resolveLabelledbyText(container, refAttr).text;
         if (attr) {
-          if (DOM_PROPERTY_READS.has(attr)) return container[attr];
+          if (DOM_PROPERTY_READS.has(attr)) return capElementHtmlRead(container[attr]);
           return container.getAttribute(attr);
         }
         return (container.textContent || '').trim();
@@ -54,7 +66,7 @@
       if (!el) return undefined;
       if (refAttr) return resolveLabelledbyText(el, refAttr).text;
       if (attr) {
-        if (DOM_PROPERTY_READS.has(attr)) return el[attr];
+        if (DOM_PROPERTY_READS.has(attr)) return capElementHtmlRead(el[attr]);
         return el.getAttribute(attr);
       }
       return (el.textContent || '').trim();
@@ -70,7 +82,7 @@
         if (refAttr) return [resolveLabelledbyText(container, refAttr).text];
         let val;
         if (attr) {
-          if (DOM_PROPERTY_READS.has(attr)) val = container[attr];
+          if (DOM_PROPERTY_READS.has(attr)) val = capElementHtmlRead(container[attr]);
           else val = container.getAttribute(attr);
         } else {
           val = (container.textContent || '').trim();
@@ -84,7 +96,7 @@
         if (refAttr) {
           out.push(resolveLabelledbyText(el, refAttr).text);
         } else if (attr) {
-          if (DOM_PROPERTY_READS.has(attr)) out.push(el[attr]);
+          if (DOM_PROPERTY_READS.has(attr)) out.push(capElementHtmlRead(el[attr]));
           else out.push(el.getAttribute(attr));
         } else {
           out.push((el.textContent || '').trim());
@@ -1386,7 +1398,7 @@
     // null, silently breaking the domHtml field in extraction outputs.
     let result;
     if (attr === 'outerHTML' || attr === 'innerHTML') {
-      result = el[attr];
+      result = capElementHtmlRead(el[attr]);
     } else if (attr) {
       result = el.getAttribute(attr);
     } else {

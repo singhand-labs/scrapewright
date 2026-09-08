@@ -261,3 +261,60 @@ describe('extractListMultiRecords', () => {
     assert.match(records[1].html[0], /^<div class="post"><p>World<\/p><\/div>$/);
   });
 });
+
+// Forty-first log: whole-card `attr: 'outerHTML'` fields came back 82396-99278
+// chars each — result.json hit 332KB for 3 posts. ElementData caps textContent
+// at 50000; element-HTML property reads now get the same budget with an
+// in-value disclosure comment so consumers know the value was cut.
+describe('element-HTML read cap (forty-first log)', () => {
+  beforeEach(() => {
+    setupDOM('<!DOCTYPE html><html><body></body></html>');
+  });
+
+  it('caps container outerHTML field reads at 50000 with a disclosure suffix', () => {
+    document.body.innerHTML = '<div class="post"><span class="filler">' + 'x'.repeat(60000) + '</span></div>';
+    const containers = Array.from(document.querySelectorAll('.post'));
+    const records = extractListRecords(containers, { html: { selector: '', attr: 'outerHTML' } });
+    const v = records[0].html;
+    assert.ok(typeof v === 'string', 'outerHTML read stays a string');
+    assert.ok(v.length <= 50200, 'capped near 50000, got ' + v.length);
+    assert.match(v, /<!--TRUNCATED: element HTML capped at 50000 of \d+ chars-->$/);
+    assert.ok(v.startsWith('<div class="post"'), 'head of the HTML is preserved');
+  });
+
+  it('caps sub-selector innerHTML reads', () => {
+    document.body.innerHTML = '<div class="post"><p class="filler">' + 'x'.repeat(60000) + '</p></div>';
+    const containers = Array.from(document.querySelectorAll('.post'));
+    const records = extractListRecords(containers, { inner: { selector: '.filler', attr: 'innerHTML' } });
+    assert.match(records[0].inner, /<!--TRUNCATED: element HTML capped at 50000 of \d+ chars-->$/);
+  });
+
+  it('leaves small element-HTML reads untouched (no disclosure suffix)', () => {
+    document.body.innerHTML = '<div class="post"><p>Hello</p></div>';
+    const containers = Array.from(document.querySelectorAll('.post'));
+    const records = extractListRecords(containers, { html: { selector: '', attr: 'outerHTML' } });
+    assert.ok(!/TRUNCATED/.test(records[0].html));
+    assert.match(records[0].html, /^<div class="post"><p>Hello<\/p><\/div>$/);
+  });
+
+  it('does not cap textContent or ordinary attribute reads', () => {
+    document.body.innerHTML = '<div class="post" data-x="' + 'y'.repeat(60000) + '"><p>text</p></div>';
+    const containers = Array.from(document.querySelectorAll('.post'));
+    const records = extractListRecords(containers, { x: { selector: '', attr: 'data-x' }, t: 'p' });
+    assert.equal(records[0].x.length, 60000, 'plain attributes are not capped');
+    assert.equal(records[0].t, 'text');
+  });
+
+  it('caps every element-HTML value on the multi-match path (both sites)', () => {
+    const filler = 'x'.repeat(60000);
+    document.body.innerHTML = '<div class="post"><p class="filler">' + filler + '</p><p class="filler">' + filler + '</p></div>';
+    const containers = Array.from(document.querySelectorAll('.post'));
+    const records = extractListMultiRecords(containers, {
+      inner: { selector: '.filler', attr: 'innerHTML' },
+      own: { selector: '', attr: 'outerHTML' }
+    });
+    assert.equal(records[0].inner.length, 2);
+    for (const v of records[0].inner) assert.match(v, /<!--TRUNCATED: element HTML capped at 50000 of \d+ chars-->$/);
+    assert.match(records[0].own[0], /<!--TRUNCATED: element HTML capped at 50000 of \d+ chars-->$/);
+  });
+});

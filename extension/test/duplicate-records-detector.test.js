@@ -51,6 +51,7 @@ const path = require('node:path');
 const {
   detectDuplicateRecords,
   detectDuplicateEntities,
+  detectOversizedFields,
   formatDuplicateRecordsSignal
 } = require('../lib/wizard-utils');
 
@@ -359,5 +360,54 @@ describe('SCRIPT_DSL_GUIDE — Rule for per-record sub-selector scoping', () => 
       /\$extractListMulti/.test(guide) && /querySelector/.test(guide),
       'guide must show $extractListMulti and element.querySelector as the RIGHT scoping mechanisms'
     );
+  });
+});
+
+// Forty-first log: whole-card `attr:'outerHTML'` fields came back 82396-99278
+// chars each (result.json: 332KB for 3 posts). The element-HTML read cap puts
+// a 50000 ceiling + disclosure suffix on the VALUE, but a census is still
+// needed so the research loop sees which fields carry page-DOM bloat and can
+// tighten anchors to the semantic sub-element.
+describe('detectOversizedFields — output field size census (forty-first log)', () => {
+  it('flags string fields whose values exceed 20000 chars with count/total/maxLen/avgLen', () => {
+    const out = detectOversizedFields({
+      posts: [
+        { title: 'a', htmlSnippet: 'x'.repeat(60000) },
+        { title: 'b', htmlSnippet: 'y'.repeat(30000) },
+        { title: 'c', htmlSnippet: 'short' }
+      ]
+    }, {});
+    assert.equal(out.length, 1);
+    assert.equal(out[0].field, 'posts.htmlSnippet');
+    assert.equal(out[0].count, 2, 'two of three values exceed the threshold');
+    assert.equal(out[0].total, 3);
+    assert.equal(out[0].maxLen, 60000);
+    assert.ok(out[0].avgLen > 30000 && out[0].avgLen < 40000);
+  });
+
+  it('values at the post-cap size (50000 + disclosure suffix) still register', () => {
+    const capped = 'x'.repeat(50000) + '<!--TRUNCATED: element HTML capped at 50000 of 60000 chars-->';
+    const out = detectOversizedFields({ posts: [{ h: capped }, { h: capped }] }, {});
+    assert.equal(out.length, 1);
+    assert.equal(out[0].count, 2, 'the read cap alone does not silence the census');
+  });
+
+  it('flags oversized root scalar string fields', () => {
+    const out = detectOversizedFields({ pageHtml: 'z'.repeat(50000) }, {});
+    assert.equal(out.length, 1);
+    assert.equal(out[0].field, 'pageHtml');
+    assert.equal(out[0].count, 1);
+    assert.equal(out[0].total, 1);
+  });
+
+  it('does not flag normal-sized fields', () => {
+    assert.deepEqual(detectOversizedFields({ posts: [{ a: 'xx', b: 42 }, { a: 'yy', b: 7 }] }, {}), []);
+  });
+
+  it('is robust to non-array / missing / non-record data (returns [])', () => {
+    assert.deepEqual(detectOversizedFields(null, {}), []);
+    assert.deepEqual(detectOversizedFields({}, {}), []);
+    assert.deepEqual(detectOversizedFields({ posts: 'not-array' }, {}), []);
+    assert.deepEqual(detectOversizedFields({ posts: ['scalar', 'array'] }, {}), []);
   });
 });

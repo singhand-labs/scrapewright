@@ -69,7 +69,7 @@ describe('StepOrchestrator', () => {
       ],
       config: {}
     };
-    const deps = makeMockDeps({ executeScript: async () => results[i++] });
+    const deps = makeMockDeps({ executeScript: async (tabId, script) => /__scrapewrightScrubSandbox/.test(script) ? { sandboxScrubbed: true } : results[i++] });
     const result = await StepOrchestrator.execute(service, {}, deps);
     assert.deepEqual(result.steps.map(s => s.stepId), ['wait', 'wait', 'wait', 'extract']);
     // RC16: StepOrchestrator now stamps sourcePageId on flat-object finalResults.
@@ -159,7 +159,7 @@ describe('StepOrchestrator', () => {
       ],
       config: {}
     };
-    const deps = makeMockDeps({ executeScript: async () => returns[i++] });
+    const deps = makeMockDeps({ executeScript: async (tabId, script) => /__scrapewrightScrubSandbox/.test(script) ? { sandboxScrubbed: true } : returns[i++] });
     await assert.rejects(
       () => StepOrchestrator.execute(service, {}, deps),
       (err) => err.code === 'POLL_EXHAUSTED' &&
@@ -220,7 +220,7 @@ describe('StepOrchestrator', () => {
       ],
       config: {}
     };
-    const deps = makeMockDeps({ executeScript: async () => results[i++] });
+    const deps = makeMockDeps({ executeScript: async (tabId, script) => /__scrapewrightScrubSandbox/.test(script) ? { sandboxScrubbed: true } : results[i++] });
     const result = await StepOrchestrator.execute(service, {}, deps);
     assert.deepEqual(result.steps.map(s => s.stepId), ['a', 'b', 'c'], 'null/empty error must not branch to onFailure');
   });
@@ -296,7 +296,8 @@ describe('StepOrchestrator', () => {
       config: {}
     };
     const deps = makeMockDeps({
-      executeScript: async () => {
+      executeScript: async (tabId, script) => {
+        if (/__scrapewrightScrubSandbox/.test(script)) return { sandboxScrubbed: true };
         calls++;
         if (calls === 1) return { done: false };
         throw new Error('boom');
@@ -435,7 +436,9 @@ describe('StepOrchestrator', () => {
 
     assert.equal(result.steps.length, 3, 'all 3 appended steps should execute');
     assert.deepEqual(result.steps.map(s => s.stepId), ['1', '2', '3']);
-    assert.deepEqual(executedScripts, ['return 1;', 'return 2;', 'return 3;']);
+    // Forty-first log: execute() prepends one run-boundary sandbox-scrub call.
+    assert.match(executedScripts[0], /__scrapewrightScrubSandbox/, 'scrub call comes first');
+    assert.deepEqual(executedScripts.slice(1), ['return 1;', 'return 2;', 'return 3;']);
     assert.equal(steps[0].onSuccess, '2', 'appendStepWithChainLink relinked step 1 -> step 2');
     assert.equal(steps[1].onSuccess, '3', 'appendStepWithChainLink relinked step 2 -> step 3');
     assert.equal(steps[2].onSuccess, 'TERMINATE', 'final step remains the terminator');
@@ -760,5 +763,52 @@ describe('StepOrchestrator — RC16 post-load visibility-keepalive re-injection'
     } finally {
       if (original) global.injectVisibilityKeepalive = original;
     }
+  });
+});
+
+// Forty-first log: v2's verify parked `globalThis.__stall = 6` in the shared
+// sandbox iframe; v4's verify (different tab, different service version) read
+// the stale counter, exited its scroll after ONE iteration, and lied "feed
+// exhausted". Run boundaries belong to the orchestrator: execute() must scrub
+// the sandbox's non-framework globals before the run's first step.
+describe('sandbox global scrub at run boundary (forty-first log)', () => {
+  it('execute() sends the sandbox scrub script as the FIRST executeScript call', async () => {
+    const calls = [];
+    const deps = makeMockDeps({
+      executeScript: async (tabId, script, input, timeoutMs) => {
+        calls.push({ script, input, timeoutMs });
+        return { done: true };
+      }
+    });
+    const service = {
+      targetUrl: 'http://example.com',
+      steps: [{ id: 'a', name: 'A', script: 'return 1;', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }],
+      config: {}
+    };
+    const result = await StepOrchestrator.execute(service, {}, deps);
+    assert.equal(result.steps.length, 1, 'the run itself still works');
+    assert.ok(calls.length >= 2, 'scrub call + step call');
+    assert.match(calls[0].script, /__scrapewrightScrubSandbox/, 'first call is the scrub');
+    assert.equal(calls[1].script, 'return 1;', 'step scripts follow unchanged');
+    // The scrub result is discarded — a failed/odd scrub return must not be
+    // treated as step data.
+    assert.equal(result.steps[0].stepId, 'a');
+  });
+
+  it('a scrub execution failure never kills the run (best-effort)', async () => {
+    let first = true;
+    const deps = makeMockDeps({
+      executeScript: async () => {
+        if (first) { first = false; throw new Error('offscreen cold'); }
+        return { done: true };
+      }
+    });
+    const service = {
+      targetUrl: 'http://example.com',
+      steps: [{ id: 'a', name: 'A', script: 'return 1;', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }],
+      config: {}
+    };
+    const result = await StepOrchestrator.execute(service, {}, deps);
+    assert.equal(result.steps.length, 1, 'run proceeds despite scrub failure');
   });
 });

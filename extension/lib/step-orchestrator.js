@@ -122,6 +122,21 @@ class StepOrchestrator {
     const enteredStepIds = new Set();
 
     try {
+      // Forty-first log: step scripts execute in the sandbox iframe's SHARED
+      // global scope — a script that parks state on globalThis (a scroll-stall
+      // counter) leaves it for the NEXT orchestration run, and a later
+      // unrelated verify run read the stale counter and declared "feed
+      // exhausted" after one iteration. Scrub non-framework globals at every
+      // run boundary (best-effort). Within-run poll-step persistence is
+      // untouched: this runs once per execute(), not per step iteration.
+      try {
+        await deps.executeScript(tabId,
+          'if (typeof globalThis.__scrapewrightScrubSandbox === "function") { try { globalThis.__scrapewrightScrubSandbox(); } catch (e) {} }\nreturn { sandboxScrubbed: true };',
+          {}, 10000);
+        debugLogger.log('info', 'step-orchestrator', 'Sandbox globals scrubbed for run', { tabId });
+      } catch (e) {
+        debugLogger.log('warn', 'step-orchestrator', 'Sandbox scrub best-effort failed', { tabId, error: e && e.message });
+      }
       await deps.waitForTabLoad(tabId);
       debugLogger.log('info', 'step-orchestrator', 'Tab loaded', { tabId });
       // RC16 (console.log 2026-07-27 16:44): re-inject visibility-keepalive

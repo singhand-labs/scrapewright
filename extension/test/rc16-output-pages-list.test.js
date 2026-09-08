@@ -952,7 +952,10 @@ describe('RC16 integration — FB-shaped scroll+extract scenario', () => {
     const deps = {
       createTab: async (url) => ({ id: 1, url }),
       waitForTabLoad: async () => {},
-      executeScript: async () => {
+      executeScript: async (tabId, script) => {
+        // Forty-first log: execute() prepends one run-boundary sandbox-scrub
+        // call — skip it so the sequence indices stay aligned.
+        if (/__scrapewrightScrubSandbox/.test(script)) return { result: { sandboxScrubbed: true } };
         // First 4 calls are scroll-step iterations (returns readySequence),
         // 5th call is extract-step (returns extractResult).
         if (readyIdx < readySequence.length) {

@@ -50,6 +50,7 @@
       findUpstreamExtractionStepId: w.findUpstreamExtractionStepId,
       detectDuplicateRecords: w.detectDuplicateRecords,
       detectDuplicateEntities: w.detectDuplicateEntities,
+      detectOversizedFields: w.detectOversizedFields,
       detectCountShortfall: w.detectCountShortfall,
       validateOutputAgainstSchema: w.validateOutputAgainstSchema,
       scoreAttemptResult: w.scoreAttemptResult,
@@ -468,7 +469,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, zeroMatchFields: null, containerZero: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null };
+      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -674,6 +675,17 @@
           // contract that wants these values — surface, teach, never block.
           detectors.junkValues = detectJunkValues(finalData, outputSchema);
         }
+        if (!error && typeof WU.detectOversizedFields === 'function') {
+          // Report-only (forty-first log): htmlSnippet fields read whole-card
+          // outerHTML at 82396-99278 chars each (result.json: 332KB for 3
+          // posts). The read layer caps element-HTML at 50000, but a
+          // multi-myriad-char field still means the selector grabbed
+          // whole-card DOM where a semantic sub-element was available —
+          // surface the census, teach tighter anchoring, never block (the
+          // confirmed contract may honestly want the blob).
+          const oversizedCensus = WU.detectOversizedFields(finalData, outputSchema) || [];
+          detectors.oversizedFields = oversizedCensus.length ? oversizedCensus : null;
+        }
         if (!error && detectors.junkValues && Array.isArray(detectors.junkValues.fields) && outputSchema && outputSchema.properties) {
           // Fortieth log: "Leave a comment" (the composer button label) shipped
           // as posts.comments for ALL 4 records on a green verify — the
@@ -836,6 +848,7 @@
         if (detectors.shapeDistribution) add('CARD_POLICY');
         if (detectors.stepNoReturn) add('STEP_NO_RETURN');
         if (detectors.junkValues) add('JUNK_VALUES');
+        if (detectors.oversizedFields) add('OUTPUT_FIELD_SIZE');
         if (detectors.partialEmptyFields) add('PARTIAL_EMPTY_FIELDS');
         if (schemaBlindNote(outputSchema)) add('SCHEMA_BLIND');
         if (detectors.adMarkerSelectors) add('AD_MARKER_SELECTOR');

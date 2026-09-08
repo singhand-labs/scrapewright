@@ -266,6 +266,27 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
   }
 
   sendDebugLog('info', 'sandbox', 'Sandbox initialized, sending SANDBOX_READY');
+
+  // Forty-first log: sandbox global cross-run leak. Step scripts execute in
+  // this iframe's SHARED global scope via new Function — a script that parks
+  // state on globalThis (a scroll-stall counter `globalThis.__stall = 6`)
+  // leaves it there for the NEXT orchestration run: a later, unrelated verify
+  // run (different tab, different service version) read the stale counter,
+  // exited its scroll after one iteration, and lied "feed exhausted". The
+  // scrub below deletes every own global that did not exist at load; the base
+  // snapshot (taken AFTER this function is assigned, so it includes itself)
+  // protects the framework's load-time $ APIs. Run boundaries are owned by
+  // StepOrchestrator, which invokes this before a run's first step — within a
+  // run, poll-step counters keep their globalThis persistence by design.
+  globalThis.__scrapewrightScrubSandbox = function () {
+    const names = Object.getOwnPropertyNames(globalThis);
+    for (const name of names) {
+      if (SANDBOX_BASE_KEYS.has(name)) continue;
+      try { delete globalThis[name]; } catch (_) { /* non-configurable */ }
+    }
+  };
+  const SANDBOX_BASE_KEYS = new Set(Object.getOwnPropertyNames(globalThis));
+
   try {
     parent.postMessage({ type: 'SANDBOX_READY' }, '*');
     sendDebugLog('info', 'sandbox', 'SANDBOX_READY sent successfully');

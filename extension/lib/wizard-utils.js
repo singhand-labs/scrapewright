@@ -2353,6 +2353,48 @@ function detectDuplicateEntities(data, outputSchema, options) {
   return result;
 }
 
+// detectOversizedFields(data, outputSchema) → [{field, count, total, maxLen, avgLen}]
+//
+// Forty-first log: whole-card `attr:'outerHTML'` fields came back
+// 82396-99278 chars each (result.json: 332KB for 3 posts). The read layer now
+// caps element-HTML property reads at 50000 with a disclosure suffix, but a
+// capped-or-uncapped multi-myriad-char field still means the selector grabbed
+// whole-card DOM (class names + inline styles + SVG paths) where a semantic
+// sub-element was available. This census REPORTS such fields — it never
+// blocks, because a big field can be the confirmed contract's honest shape.
+// UNIVERSALITY: pure data shape check, no site specifics.
+const OVERSIZED_FIELD_THRESHOLD = 20000;
+function detectOversizedFields(data, outputSchema) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return [];
+  const out = [];
+  for (const key of Object.keys(data)) {
+    const value = data[key];
+    if (Array.isArray(value)) {
+      const recs = value.filter((r) => r && typeof r === 'object' && !Array.isArray(r));
+      if (!recs.length) continue;
+      const fieldNames = new Set();
+      for (const r of recs) for (const k of Object.keys(r)) fieldNames.add(k);
+      for (const f of fieldNames) {
+        let count = 0, totalLen = 0, maxLen = 0, n = 0;
+        for (const r of recs) {
+          const v = r[f];
+          if (typeof v === 'string') {
+            n++; totalLen += v.length;
+            if (v.length > maxLen) maxLen = v.length;
+            if (v.length > OVERSIZED_FIELD_THRESHOLD) count++;
+          }
+        }
+        if (count > 0) {
+          out.push({ field: key + '.' + f, count, total: recs.length, maxLen, avgLen: n ? Math.round(totalLen / n) : 0 });
+        }
+      }
+    } else if (typeof value === 'string' && value.length > OVERSIZED_FIELD_THRESHOLD) {
+      out.push({ field: key, count: 1, total: 1, maxLen: value.length, avgLen: value.length });
+    }
+  }
+  return out;
+}
+
 // detectCountShortfall(data, inputValues, outputSchema, options) → null | {field, requested, extracted}
 //
 // Seventh-log survey (2026-09-01): a search-posts service declared input
@@ -4317,7 +4359,7 @@ function detectNeverExtractedFields(steps, outputSchema) {
 
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectCountShortfall, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+  module.exports = { parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 } else if (typeof window !== 'undefined') {
   window.buildTimeoutGuidance = buildTimeoutGuidance;
   window.hoverAwareTimeoutMs = hoverAwareTimeoutMs;
@@ -4348,6 +4390,7 @@ if (typeof module !== 'undefined' && module.exports) {
   window.formatEmptyOutputFieldsSignal = formatEmptyOutputFieldsSignal;
   window.detectDuplicateRecords = detectDuplicateRecords;
   window.detectDuplicateEntities = detectDuplicateEntities;
+  window.detectOversizedFields = detectOversizedFields;
   window.formatDuplicateRecordsSignal = formatDuplicateRecordsSignal;
     window.getOutputFieldOptions = getOutputFieldOptions;
   window.truncateSnapshotForLLM = truncateSnapshotForLLM;
@@ -4406,6 +4449,7 @@ if (typeof self !== 'undefined' && typeof window === 'undefined') {
   self.formatEmptyOutputFieldsSignal = formatEmptyOutputFieldsSignal;
   self.detectDuplicateRecords = detectDuplicateRecords;
   self.detectDuplicateEntities = detectDuplicateEntities;
+  self.detectOversizedFields = detectOversizedFields;
   self.formatDuplicateRecordsSignal = formatDuplicateRecordsSignal;
     self.getOutputFieldOptions = getOutputFieldOptions;
   self.truncateSnapshotForLLM = truncateSnapshotForLLM;

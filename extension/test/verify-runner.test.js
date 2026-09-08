@@ -1226,3 +1226,44 @@ describe('twenty-seventh log: ELEMENT_NOT_FOUND on a $wait-using step teaches th
     assert.match(line, /done: false/, 'entry must point at the poll-condition alternative');
   });
 });
+
+// Forty-first log: htmlSnippet fields (whole-card attr:'outerHTML') came back
+// 82396-99278 chars each — result.json hit 332KB for 3 posts. The size census
+// is REPORT-ONLY (a big field can be the confirmed contract's honest shape);
+// it teaches tighter anchoring instead of blocking.
+describe('OUTPUT_FIELD_SIZE — oversized output field census (forty-first log)', () => {
+  it('oversized fields → report-only detector + OUTPUT_FIELD_SIZE tag, ok stays true', async () => {
+    const big = 'x'.repeat(60000);
+    const orch = async () => ({
+      finalResult: { posts: [{ a: 1, html: big }, { a: 2, html: big }] },
+      steps: [], pages: []
+    });
+    const { runner } = makeRunner(orch);
+    const out = await runner({
+      service: SERVICE, input: {},
+      outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array' } } }
+    });
+    assert.equal(out.report.ok, true, 'advisory never blocks');
+    const of = out.report.detectors.oversizedFields;
+    assert.ok(Array.isArray(of) && of.length === 1, 'census surfaced on report.detectors');
+    assert.equal(of[0].field, 'posts.html');
+    assert.equal(of[0].count, 2);
+    assert.equal(of[0].maxLen, 60000);
+    assert.ok(out.report.events.indexOf('OUTPUT_FIELD_SIZE') !== -1, 'tag rides report.events');
+  });
+
+  it('normal-sized output → no detector, no tag', async () => {
+    const orch = async () => ({
+      finalResult: { posts: [{ a: 'small' }, { a: 'tiny' }] },
+      steps: [], pages: []
+    });
+    const { runner } = makeRunner(orch);
+    const out = await runner({
+      service: SERVICE, input: {},
+      outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array' } } }
+    });
+    assert.equal(out.report.ok, true);
+    assert.equal(out.report.detectors.oversizedFields, null);
+    assert.equal(out.report.events.indexOf('OUTPUT_FIELD_SIZE'), -1);
+  });
+});

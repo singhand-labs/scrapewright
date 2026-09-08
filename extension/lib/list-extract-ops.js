@@ -18,6 +18,16 @@
 // field in extraction outputs.
 const DOM_PROPERTY_READS = new Set(['outerHTML', 'innerHTML']);
 
+// Forty-first log: whole-card `attr: 'outerHTML'` fields came back 82396-99278
+// chars each (result.json: 332KB for 3 posts). ElementData caps textContent at
+// 50000 — element-HTML property reads get the same budget, with an in-value
+// disclosure comment so downstream consumers know the value was cut.
+function capElementHtmlRead(value) {
+  const cap = 50000;
+  if (typeof value !== 'string' || value.length <= cap) return value;
+  return value.slice(0, cap) + '<!--TRUNCATED: element HTML capped at ' + cap + ' of ' + value.length + ' chars-->';
+}
+
 const ARIA_REFERENCE_DEFAULT = 'aria-labelledby';
 
 // spec.labelledby: true → resolve the default reference attr; a non-empty
@@ -72,7 +82,7 @@ function readField(container, spec) {
     // Empty selector → the container itself.
     if (refAttr) return resolveAriaReference(container, refAttr).text;
     if (attr) {
-      if (DOM_PROPERTY_READS.has(attr)) return container[attr];
+      if (DOM_PROPERTY_READS.has(attr)) return capElementHtmlRead(container[attr]);
       return container.getAttribute(attr);
     }
     return (container.textContent || '').trim();
@@ -81,7 +91,7 @@ function readField(container, spec) {
   if (!el) return undefined;
   if (refAttr) return resolveAriaReference(el, refAttr).text;
   if (attr) {
-    if (DOM_PROPERTY_READS.has(attr)) return el[attr];
+    if (DOM_PROPERTY_READS.has(attr)) return capElementHtmlRead(el[attr]);
     return el.getAttribute(attr);
   }
   return (el.textContent || '').trim();
@@ -107,7 +117,7 @@ function readFieldAll(container, spec) {
     if (refAttr) return [resolveAriaReference(container, refAttr).text];
     let val;
     if (attr) {
-      if (DOM_PROPERTY_READS.has(attr)) val = container[attr];
+      if (DOM_PROPERTY_READS.has(attr)) val = capElementHtmlRead(container[attr]);
       else val = container.getAttribute(attr);
     } else {
       val = (container.textContent || '').trim();
@@ -121,7 +131,7 @@ function readFieldAll(container, spec) {
     if (refAttr) {
       out.push(resolveAriaReference(el, refAttr).text);
     } else if (attr) {
-      if (DOM_PROPERTY_READS.has(attr)) out.push(el[attr]);
+      if (DOM_PROPERTY_READS.has(attr)) out.push(capElementHtmlRead(el[attr]));
       else out.push(el.getAttribute(attr));
     } else {
       out.push((el.textContent || '').trim());

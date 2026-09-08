@@ -10,7 +10,7 @@
 // tags): COUNT_SHORTFALL, EMPTY_EXTRACTION, EMPTY_FIELDS, POPOVER_TIMEOUT,
 // HOVER_NO_SIGNAL, COUNTER_FROZEN, DUPLICATE_RECORDS, SELECTOR_ZERO_MATCH,
 // FIELD_COLLISION, SCRIPT_TIMEOUT, CARD_POLICY, POLL_EXHAUSTED, SCHEMA_BLIND,
-// AD_MARKER_SELECTOR, SELECTOR_OVERFILTERED.
+// AD_MARKER_SELECTOR, SELECTOR_OVERFILTERED, OUTPUT_FIELD_SIZE.
 //
 // Write path: sessions PROPOSE units; the user approves; the universality
 // guard test runs on every change to this file.
@@ -103,6 +103,13 @@
       matchEvents: ['FIELD_COLLISION', 'EMPTY_FIELDS'],
       origin: 'FIELD COLLISION ON GENERALIZATION rule, 2026-07 era',
       body: 'When generalizing a selector that worked on one record type to all records, two different fields often start matching the SAME first leaf (e.g. likeCount and commentCount both grabbing the first action button). Differentiate by the attribute wording you observed (aria-label substrings), by ordinal within a scoped parent, or by role — and verify the pair extracts DIFFERENT elements on the same record before shipping.'
+    },
+    {
+      id: 'semantic-subelement-html',
+      title: 'HTML-snippet output fields anchor to the semantic sub-element, never the whole card',
+      matchEvents: ['OUTPUT_FIELD_SIZE'],
+      origin: '2026-09-08 forty-first live log; whole-card htmlSnippet at 82396-99278 chars each',
+      body: 'A field spec like {selector:"", attr:"outerHTML"} on the card container serializes the ENTIRE card DOM — class names, inline styles, SVG paths, nested reaction bars — tens of thousands of characters per record where the consumer wanted the one meaningful fragment. The read layer caps element-HTML at 50000 chars with a TRUNCATED disclosure suffix, but the right fix is upstream: point the field selector at the semantic sub-element (the text block, the link, the quoted region) so the snippet IS the payload. "Snippet" means a fragment. If the confirmed contract genuinely wants the full card DOM, keep it and accept the size — the verify census is report-only; otherwise tighten the anchor or renegotiate the contract with io.confirm.'
     }
   ];
 
