@@ -123,7 +123,7 @@ describe('KnowledgeBase', () => {
       'HOVER_NO_SIGNAL', 'COUNTER_FROZEN', 'DUPLICATE_RECORDS', 'SELECTOR_ZERO_MATCH',
       'FIELD_COLLISION', 'SCRIPT_TIMEOUT', 'CARD_POLICY', 'POLL_EXHAUSTED', 'SCHEMA_BLIND',
       'AD_MARKER_SELECTOR', 'SELECTOR_OVERFILTERED', 'OUTPUT_FIELD_SIZE', 'PARTIAL_EMPTY_FIELDS',
-      'RELATIVE_TIMESTAMP', 'HTML_FIELD_NO_MARKUP']);
+      'RELATIVE_TIMESTAMP', 'HTML_FIELD_NO_MARKUP', 'CLICK_CONTAINERS_TRANSIENT']);
     for (const u of KNOWLEDGE_UNITS) {
       for (const ev of u.matchEvents) {
         assert.ok(VOCAB.has(ev), u.id + ' has out-of-vocabulary event: ' + ev);

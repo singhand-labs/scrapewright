@@ -11,7 +11,7 @@
 // HOVER_NO_SIGNAL, COUNTER_FROZEN, DUPLICATE_RECORDS, SELECTOR_ZERO_MATCH,
 // FIELD_COLLISION, SCRIPT_TIMEOUT, CARD_POLICY, POLL_EXHAUSTED, SCHEMA_BLIND,
 // AD_MARKER_SELECTOR, SELECTOR_OVERFILTERED, OUTPUT_FIELD_SIZE,
-// PARTIAL_EMPTY_FIELDS, RELATIVE_TIMESTAMP.
+// PARTIAL_EMPTY_FIELDS, RELATIVE_TIMESTAMP, CLICK_CONTAINERS_TRANSIENT.
 //
 // Write path: sessions PROPOSE units; the user approves; the universality
 // guard test runs on every change to this file.
@@ -132,6 +132,13 @@
       matchEvents: ['HTML_FIELD_NO_MARKUP'],
       origin: '2026-09-09 forty-seventh live log; posts.htmlSnippet shipped content.slice(0,500) on a green verify (score 133)',
       body: 'Fields named html/markup/htmlSnippet are DOM-capture fields: their value comes from an element HTML read (outerHTML/innerHTML cap at 50000 chars with a TRUNCATED suffix) or from a hovercard entry htmlSnippet. A non-empty value containing zero "<" characters is not captured DOM — it is text copied from another field of the same record (the verify census names the copied-from sibling when a prefix match proves it) or invented outright. Copying a sibling satisfies every shape check and verifies green while carrying zero new information: the consumer asked for the DOM and got a duplicate column. When the HTML_FIELD_NO_MARKUP detector fires: (1) bind the field to a real DOM read — a fieldMap entry with attr "outerHTML"/"innerHTML" anchored at a semantic sub-element, or the captured hovercard markup — instead of assembling it from record text; (2) if the contract genuinely wants plain text there, rename the field (summary/excerpt/text) or renegotiate with io.confirm so the name stops promising markup. Nested record arrays are censused too — the same rule applies to per-card markup fields inside hoverCards[].'
+    },
+    {
+      id: 'container-zero-corroboration',
+      title: 'A zero-match click container corroborated later in the same run is mount timing — gate on readiness, do not rewrite the selector',
+      matchEvents: ['CLICK_CONTAINERS_TRANSIENT'],
+      origin: '2026-09-09 forty-eighth live log; the expand step clicked before the feed mounted while the same run\'s extract step matched the same container 4x, and CLICK_CONTAINERS_EMPTY vetoed a completed run',
+      body: 'A $clickInList step whose container selector matches 0 does not always mean the selector is wrong: on mount-lazy feeds the click step can simply run before the content mounts. The verify corroboration check scans the SAME run\'s later steps — when a later container-scoped call ($extractList/$extractWithHover/etc.) matches the IDENTICAL container selector, the zero-match is reclassified as a mount-timing transient (CLICK_CONTAINERS_TRANSIENT, advisory) and the run is not vetoed. When the advisory fires: (1) do NOT touch the container selector — later steps prove it is right; (2) gate the clicking step on readiness instead: a count poll ($count(containerSel) + return {done:false} under maxIterations>1), or $wait on the container, so the click runs only after the list exists; (3) keep the click step\'s onFailure edge honest (skip-and-continue or terminate, per the requirement) rather than relying on the extract step to mask a no-op click. An UNcorroborated zero (no later step ever matches the selector) stays a red CLICK_CONTAINERS_EMPTY: that is a genuinely wrong selector, and the same-run corroboration is precisely the evidence that separates the two.'
     }
   ];
 

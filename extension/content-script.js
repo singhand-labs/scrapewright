@@ -44,6 +44,13 @@
     const DOM_PROPERTY_READS = new Set(['outerHTML', 'innerHTML']);
 
     function readField(container, spec) {
+      // Forty-eighth log (inline mirror of lib/list-extract-ops.js): a
+      // multi:true spec reads ALL matches — probe.extract {multi:true}
+      // parity, so a fieldMap dry-runned through a multi probe keeps its
+      // array envelope when pasted into a step.
+      if (spec && typeof spec === 'object' && spec.multi === true) {
+        return readFieldAll(container, spec);
+      }
       const sel = typeof spec === 'string' ? spec : spec.selector;
       const attr = typeof spec === 'string' ? null : spec.attr;
       // Thirty-third log D1 (mirrors lib/list-extract-ops.js): labelledby
@@ -260,6 +267,20 @@
               : (typeof lbR === 'string' && lbR.trim() ? lbR.trim() : null);
             if (!refAttrR) continue;
             var curR = records[ri][fk];
+            // Forty-eighth log (inline mirror): multi:true fields arrive as
+            // arrays — heal only when EVERY match resolved empty, and refill
+            // through the multi read so the envelope stays an array.
+            if (Array.isArray(curR)) {
+              var anyR = curR.some(function (x) { return typeof x === 'string' && x; });
+              if (anyR) continue;
+              try {
+                var arrV = readField(containers[ri], specR);
+                if (Array.isArray(arrV) && arrV.some(function (x) { return typeof x === 'string' && x; })) {
+                  records[ri][fk] = arrV;
+                }
+              } catch (_) {}
+              continue;
+            }
             if (curR !== undefined && curR !== null && String(curR) !== '') continue;
             var vR;
             try { vR = readField(containers[ri], specR); } catch (_) { continue; }
@@ -303,6 +324,8 @@
         const lb = (spec && typeof spec === 'object') ? spec.labelledby : undefined;
         const refAttr = lb === true ? 'aria-labelledby'
           : (typeof lb === 'string' && lb.trim() ? lb.trim() : null);
+        // Forty-eighth log (inline mirror): field-level multi:true census
+        const fieldMulti = !!(spec && typeof spec === 'object' && spec.multi === true);
         const sampleTexts = [];
         const sampleHrefs = [];
         const sampleValues = [];
@@ -332,7 +355,7 @@
           }
           if (v != null && String(v).length > 0) sampleValues.push(String(v).slice(0, 160));
         };
-        if (multiMode && containerArr.length > 0) {
+        if ((multiMode || fieldMulti) && containerArr.length > 0) {
           for (const c of containerArr) {
             let el;
             try { el = c.querySelector(subSelector); } catch (_) { el = null; }
@@ -358,7 +381,10 @@
             }
           }
         }
-        return { field, subSelector, attr, labelledby: refAttr, matchCount, refResolved, missingIds: missingIds || [], sampleTexts, sampleHrefs, sampleValues };
+        return Object.assign(
+          { field, subSelector, attr, labelledby: refAttr, matchCount, refResolved, missingIds: missingIds || [], sampleTexts, sampleHrefs, sampleValues },
+          fieldMulti ? { multi: true } : null
+        );
       });
       // Mirror lib/list-extract-ops.js RC13 + RC59: capture ~2000 chars of
       // the first container outerHTML with a head+tail split. WITHOUT this,

@@ -40,6 +40,7 @@
       FROZEN_ZERO_MIN_ELAPSED_MS: w.FROZEN_ZERO_MIN_ELAPSED_MS || 60000,
       detectClickInListTotalFailure: w.detectClickInListTotalFailure,
       detectClickInListEmptyContainers: w.detectClickInListEmptyContainers,
+      corroborateContainerZero: w.corroborateContainerZero,
       detectHoverAnchorsBlind: w.detectHoverAnchorsBlind,
       detectCountSelectorBlind: w.detectCountSelectorBlind,
       detectFrozenZeroCounter: w.detectFrozenZeroCounter,
@@ -472,7 +473,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null };
+      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -539,12 +540,34 @@
           const containersEmpty = WU.detectClickInListEmptyContainers(events);
           if (containersEmpty) {
             const stepDefCE = stepsDefs.find((s) => String(s.id) === String(containersEmpty.stepId));
-            error = toError(
-              'CLICK_CONTAINERS_EMPTY: step "' + (stepDefCE ? stepDefCE.name : containersEmpty.stepId) + '" called $clickInList' +
-              (containersEmpty.containerSelector ? ' with container selector ' + JSON.stringify(containersEmpty.containerSelector) : '') +
-              ' — that container selector matched 0 element(s) on every call (' + containersEmpty.calls + ' call(s)), so the click action never had anything to operate on. ' +
-              'Fix the container selector (check SELECTOR DIAGNOSTICS and the page HTML for the real list structure — prefer descendant selectors over rigid child-combinator chains), and propagate the same fix to every step that references this list.',
-              containersEmpty.stepId);
+            // Forty-eighth log: v6's expand step clicked before the feed
+            // mounted (container matched 0) while the SAME run's extract
+            // step matched the SAME container selector on every call — a
+            // mount-timing transient flipped a completed run red. A later
+            // same-run container-scoped match on the identical selector
+            // proves the selector is right and the page was just late;
+            // downgrade to an advisory instead of vetoing the run.
+            let corroboratedBy = null;
+            if (typeof WU.corroborateContainerZero === 'function') {
+              corroboratedBy = WU.corroborateContainerZero(events, containersEmpty);
+            }
+            if (corroboratedBy) {
+              detectors.clickContainersTransient = Object.assign({}, containersEmpty, {
+                corroborated: true,
+                corroboratedBy,
+                note: 'The container selector matched 0 when this step clicked but ' +
+                  JSON.stringify(containersEmpty.containerSelector) + ' matched again later in the SAME run (' +
+                  corroboratedBy.map((c) => c.stepId + ': ' + c.containerMatches).join(', ') +
+                  ') — mount timing, not a wrong selector. Gate the clicking step on readiness (a count poll with {done:false} under maxIterations>1, or $wait on the container) instead of rewriting the selector.'
+              });
+            } else {
+              error = toError(
+                'CLICK_CONTAINERS_EMPTY: step "' + (stepDefCE ? stepDefCE.name : containersEmpty.stepId) + '" called $clickInList' +
+                (containersEmpty.containerSelector ? ' with container selector ' + JSON.stringify(containersEmpty.containerSelector) : '') +
+                ' — that container selector matched 0 element(s) on every call (' + containersEmpty.calls + ' call(s)), and no later step in this run ever matched it either, so the click action never had anything to operate on. ' +
+                'Fix the container selector (check SELECTOR DIAGNOSTICS and the page HTML for the real list structure — prefer descendant selectors over rigid child-combinator chains), and propagate the same fix to every step that references this list.',
+                containersEmpty.stepId);
+            }
           }
         }
         if (!error && typeof WU.detectHoverAnchorsBlind === 'function') {
@@ -661,12 +684,18 @@
               { duplicateEntities: dupEnt, snapshot: (lastStepEntry && lastStepEntry.snapshot) || null });
           }
         }
-        if (!error && typeof WU.detectCountShortfall === 'function') {
+        // Forty-eighth log: every report-only census below used to sit behind
+        // !error, so the round a gate flipped red was exactly the round that
+        // produced NO field evidence at all (v6: CLICK_CONTAINERS_EMPTY red
+        // with partialEmptyFields null — the postId 2/4 census the model
+        // needed most never ran). Censuses are evidence, not verdicts: they
+        // run on red runs too. Only the error-SETTING gates keep !error.
+        if (typeof WU.detectCountShortfall === 'function') {
           // Report-only: forcing retries toward an unreachable count is the
           // ZERO-TRAP deadlock; surface it and let the human/LLM judge.
           detectors.countShortfall = WU.detectCountShortfall(finalData, input, outputSchema) || null;
         }
-        if (!error && typeof WU.detectRelativeTimestamps === 'function') {
+        if (typeof WU.detectRelativeTimestamps === 'function') {
           // Forty-sixth log: report-only. A time-like field whose values are
           // relative ages ("a day ago") is the rendered age label, not the
           // absolute timestamp the contract describes — rebind (datetime
@@ -674,19 +703,19 @@
           const relTs = WU.detectRelativeTimestamps(finalData, outputSchema);
           if (relTs && relTs.length) detectors.relativeTimestamps = relTs;
         }
-        if (!error && RSD && typeof RSD.formatShapeDistributionFromData === 'function') {
+        if (RSD && typeof RSD.formatShapeDistributionFromData === 'function') {
           // Report-only: 2+ field-population signatures across the extracted
           // records mean the selector kept mixed card types — a card-policy
           // signal, not an error. The CARD_POLICY tag auto-attaches the
           // card-type-heterogeneity / card-polarity knowledge units.
           detectors.shapeDistribution = RSD.formatShapeDistributionFromData(finalData, outputSchema) || null;
         }
-        if (!error) {
+        {
           // Report-only (tenth-log N2): the human may have confirmed a
           // contract that wants these values — surface, teach, never block.
           detectors.junkValues = detectJunkValues(finalData, outputSchema);
         }
-        if (!error && typeof WU.detectHtmlFieldsWithoutTags === 'function') {
+        if (typeof WU.detectHtmlFieldsWithoutTags === 'function') {
           // Report-only (forty-seventh log): posts.htmlSnippet shipped
           // content.slice(0,500) — text under a markup-named field on a
           // green verify. A captured DOM region always contains tags;
@@ -694,7 +723,7 @@
           const hm = WU.detectHtmlFieldsWithoutTags(finalData) || [];
           detectors.htmlNoMarkup = hm.length ? hm : null;
         }
-        if (!error && typeof WU.detectOversizedFields === 'function') {
+        if (typeof WU.detectOversizedFields === 'function') {
           // Report-only (forty-first log): htmlSnippet fields read whole-card
           // outerHTML at 82396-99278 chars each (result.json: 332KB for 3
           // posts). The read layer caps element-HTML at 50000, but a
@@ -745,7 +774,7 @@
         // the twenty-fifth session errored, so the detector never ran while
         // every shipped script carried data-ad-* markers).
         detectors.adMarkerSelectors = detectAdMarkerSelectors(stepsDefs);
-        if (!error && typeof WU.detectEmptyOutputFieldsByRatio === 'function') {
+        if (typeof WU.detectEmptyOutputFieldsByRatio === 'function') {
           // Report-only (sixteenth log): findEmptyExtractionFields fires only
           // when EVERY value of EVERY record is empty, so time:""/location:""
           // beside a populated content field sailed through a green verify
@@ -793,14 +822,27 @@
             itemRequired = prop && prop.items && Array.isArray(prop.items.required) ? prop.items.required : null;
           }
           if (itemRequired && itemRequired.indexOf(pe.field) !== -1) {
+            // Forty-eighth log: 'postId 2/4' across five verifies never said
+            // WHICH records — the model blind-rewrote the regex five times
+            // without re-probing. Name the empty record ordinals with a
+            // content fingerprint each, so record #2 can be matched to the
+            // photo post and probed directly.
+            let whereNote = '';
+            if (Array.isArray(pe.emptyRecordSamples) && pe.emptyRecordSamples.length) {
+              const idx = pe.emptyRecordSamples.slice(0, 3)
+                .map((s) => '#' + (s.index || (s.parentIndex + '.' + s.subIndex))).join(', ');
+              const hints = pe.emptyRecordSamples.slice(0, 2)
+                .map((s) => '"' + String(s.hint || '').slice(0, 40) + '"').join(' / ');
+              whereNote = ' Empty record(s): ' + idx + (hints ? ' (contexts: ' + hints + ')' : '') + '.';
+            }
             error = new Error(
               'REQUIRED_FIELD_EMPTY: ' + pe.path + ' is empty in ' + pe.emptyCount + '/' + pe.totalCount +
-              ' records but the confirmed contract lists it as REQUIRED for every record. Either fix the extraction ' +
+              ' records' + whereNote + ' but the confirmed contract lists it as REQUIRED for every record. ' +
+              'Match the named record(s) against steps[].resultPreview in THIS report to see which step lost the value, ' +
+              'then probe THOSE records on the research tab before touching the selector. Either fix the extraction ' +
               '(the field is contractually demanded — ground a selector for it, re-check the fieldMap anchor and the ' +
               'record assembly), or renegotiate the contract with io.confirm (move the field out of required / drop it) ' +
-              'when it genuinely never exists on these cards. Optional-field emptiness stays advisory; a required one does not.' +
-              ' Before re-probing the research tab, read steps[].resultPreview in THIS report — it shows each step\'s last ' +
-              'return from the verify tab itself, so you can see which step lost the value (extraction vs resolution vs assembly).'
+              'when it genuinely never exists on these cards. Optional-field emptiness stays advisory; a required one does not.'
             );
             break;
           }
@@ -883,6 +925,7 @@
         if (detectors.oversizedFields) add('OUTPUT_FIELD_SIZE');
         if (detectors.htmlNoMarkup) add('HTML_FIELD_NO_MARKUP');
         if (detectors.partialEmptyFields) add('PARTIAL_EMPTY_FIELDS');
+        if (detectors.clickContainersTransient) add('CLICK_CONTAINERS_TRANSIENT');
         if (schemaBlindNote(outputSchema)) add('SCHEMA_BLIND');
         if (detectors.adMarkerSelectors) add('AD_MARKER_SELECTOR');
         for (const evt of events) {

@@ -97,7 +97,17 @@ function resolveAriaReference(el, attr) {
 }
 
 function readField(container, spec) {
-  // spec is either a string ('.author') or { selector, attr?, labelledby? }
+  // spec is either a string ('.author') or { selector, attr?, labelledby?, multi? }
+  // Forty-eighth log: probe.extract {multi:true} returns all-matches arrays
+  // while this path was first-match scalar — a fieldMap dry-runned through a
+  // multi probe silently degraded to one value when pasted into a step, and
+  // `for (const h of hrefs)` over the scalar string iterated CHARACTERS
+  // (silent dead code across three artifact versions while verify said
+  // 2/4 forever). spec.multi:true routes through readFieldAll so the probe
+  // envelope and the service DSL stay the same shape.
+  if (spec && typeof spec === 'object' && spec.multi === true) {
+    return readFieldAll(container, spec);
+  }
   const sel = typeof spec === 'string' ? spec : spec.selector;
   const attr = typeof spec === 'string' ? null : spec.attr;
   // labelledby takes precedence over attr when both are present: reading the
@@ -122,7 +132,7 @@ function readField(container, spec) {
   return (el.textContent || '').trim();
 }
 // Needed when CSS alone can't disambiguate which match is the right one —
-// e.g. a[role=link] inside a Facebook post matches both the author link and
+// e.g. a[role=link] inside a feed post matches both the author link and
 // the timestamp link. $extractList picks first-only; the LLM needs ALL matches
 // so it can filter in JS by text/attribute regex.
 //
@@ -425,6 +435,20 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
       const refAttr = normalizeLabelledby(typeof spec === 'string' ? null : spec);
       if (!refAttr) continue;
       const cur = records[i][field];
+      // Forty-eighth log: multi:true fields arrive here as arrays. Heal only
+      // when EVERY match resolved empty (a partially-populated array was
+      // never hydration-starved); refill via the same multi read so the
+      // healed value keeps the array envelope.
+      if (Array.isArray(cur)) {
+        const anyVal = cur.some((x) => typeof x === 'string' && x);
+        if (anyVal) continue;
+        let av;
+        try { av = readField(containers[i], spec); } catch (_) { continue; }
+        if (Array.isArray(av) && av.some((x) => typeof x === 'string' && x)) {
+          records[i][field] = av;
+        }
+        continue;
+      }
       if (cur !== undefined && cur !== null && String(cur) !== '') continue;
       let v;
       try { v = readField(containers[i], spec); } catch (_) { continue; }
@@ -470,6 +494,11 @@ function computeExtractListDiagnostics(containers, fieldMap, containerSelector, 
     const subSelector = typeof spec === 'string' ? spec : (spec && spec.selector);
     const attr = typeof spec === 'string' ? null : (spec && spec.attr) || null;
     const refAttr = typeof spec === 'string' ? null : normalizeLabelledby(spec);
+    // Forty-eighth log: a field-level multi:true spec reads ALL matches —
+    // census it like the call-level multiMode (sample every match of the
+    // first container), and disclose multi:true so the report distinguishes
+    // an all-matches field from a first-match one.
+    const fieldMulti = !!(spec && typeof spec === 'object' && spec.multi === true);
     const sampleTexts = [];
     const sampleHrefs = [];
     const sampleValues = [];
@@ -503,9 +532,10 @@ function computeExtractListDiagnostics(containers, fieldMap, containerSelector, 
       }
       if (v != null && String(v).length > 0) sampleValues.push(String(v).slice(0, 160));
     };
-    if (multiMode && containerArr.length > 0) {
-      // Multi: count containers with ≥1 match, but sample every match inside
-      // the first container — the full value shape distribution.
+    if ((multiMode || fieldMulti) && containerArr.length > 0) {
+      // Multi (call-level or field-level): count containers with ≥1 match,
+      // but sample every match inside the first container — the full value
+      // shape distribution.
       for (const c of containerArr) {
         let el;
         try { el = c.querySelector(subSelector); } catch (_) { el = null; }
@@ -531,7 +561,10 @@ function computeExtractListDiagnostics(containers, fieldMap, containerSelector, 
         }
       }
     }
-    return { field, subSelector, attr, labelledby: refAttr, matchCount, refResolved, missingIds: missingIds || [], sampleTexts, sampleHrefs, sampleValues };
+    return Object.assign(
+      { field, subSelector, attr, labelledby: refAttr, matchCount, refResolved, missingIds: missingIds || [], sampleTexts, sampleHrefs, sampleValues },
+      fieldMulti ? { multi: true } : null
+    );
   });
   // Capture up to ~8000 chars of the first container's outerHTML, head+tail
   // split. The cap is per-call: if there are multiple $extractList calls in one

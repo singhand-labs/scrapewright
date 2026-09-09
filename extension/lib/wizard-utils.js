@@ -901,6 +901,50 @@ function detectClickInListEmptyContainers(events) {
   return null;
 }
 
+// Forty-eighth log: v6's verify was vetoed by CLICK_CONTAINERS_EMPTY — the
+// expand step's $clickInList ran before the feed mounted (container matched
+// 0) while the SAME run's extract step matched the SAME container selector
+// on every call — a mount-timing transient flipped a completed run red. A
+// zero-match clickInList container is only a REAL selector failure when the
+// rest of the run agrees the container never appears; a later same-run
+// container-scoped match on the identical selector proves mount timing and
+// downgrades the gate to an advisory.
+function corroborateContainerZero(events, agg) {
+  if (!Array.isArray(events) || !agg || !agg.containerSelector) return null;
+  const target = agg.containerSelector;
+  let flat = 0;
+  let zeroPos = -1;
+  const later = [];
+  for (const evt of events) {
+    if (!evt || evt.type !== 'STEP_ITERATION') continue;
+    const diags = Array.isArray(evt.selectorDiagnostics) ? evt.selectorDiagnostics : [];
+    for (const d of diags) {
+      if (d) {
+        if (d.api === 'clickInList') {
+          if (zeroPos === -1 && d.containerSelector === target && (d.containerMatches || 0) === 0) zeroPos = flat;
+        } else {
+          const n = typeof d.containerMatches === 'number' ? d.containerMatches : 0;
+          later.push({ pos: flat, stepId: evt.stepId, api: d.api, matches: n, sel: d.containerSelector });
+        }
+      }
+      flat += 1;
+    }
+  }
+  if (zeroPos === -1) return null;
+  const matches = [];
+  const seen = new Set();
+  for (const m of later) {
+    if (m.pos <= zeroPos) continue;
+    if (m.sel !== target || m.matches <= 0) continue;
+    const key = m.stepId + '|' + m.api + '|' + m.matches;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    matches.push({ stepId: m.stepId, api: m.api, containerMatches: m.matches });
+    if (matches.length >= 3) break;
+  }
+  return matches.length ? matches : null;
+}
+
 // console.log 2026-08-23 14:44-14:48 (second session): step 2 polled 20
 // iterations at {done:false, uniqueCount:0} while its $list counting selector
 // matched 0 elements on EVERY iteration — the page visibly filled with posts
@@ -2006,6 +2050,24 @@ function detectEmptyOutputFieldsByRatio(data, outputSchema, options) {
     (Array.isArray(v) && v.length === 0) ||
     (typeof v === 'string' && v.trim() === '');
 
+  // Forty-eighth log: partialEmptyFields named a WORKING sample but never
+  // WHICH records were empty M-bM-^@M-^T five verifies said postId 2/4 and the
+  // model blind-rewrote the regex five times without ever re-probing. Each
+  // census entry now fingerprints the empty records (1-based ordinal + the
+  // record's longest other string, so record #2 can be matched to the photo
+  // post by its content alone).
+  const HINT_CAP = 60;
+  const contentHint = (rec, excludeField) => {
+    if (!rec || typeof rec !== 'object' || Array.isArray(rec)) return '';
+    let best = '';
+    for (const k of Object.keys(rec)) {
+      if (k === excludeField) continue;
+      const v = rec[k];
+      if (typeof v === 'string' && v.trim() && v.trim().length > best.length) best = v.trim();
+    }
+    return best.slice(0, HINT_CAP);
+  };
+
   const props = outputSchema.properties && typeof outputSchema.properties === 'object'
     ? outputSchema.properties
     : {};
@@ -2020,11 +2082,18 @@ function detectEmptyOutputFieldsByRatio(data, outputSchema, options) {
     for (const fk of fieldKeys) {
       let emptyCount = 0;
       const samples = [];
-      for (const rec of arr) {
-        if (!rec || typeof rec !== 'object') { emptyCount += 1; continue; }
+      const emptyRecordSamples = [];
+      for (let ri = 0; ri < arr.length; ri++) {
+        const rec = arr[ri];
+        if (!rec || typeof rec !== 'object' || Array.isArray(rec)) {
+          emptyCount += 1;
+          if (emptyRecordSamples.length < maxSamples) emptyRecordSamples.push({ index: ri + 1, hint: '' });
+          continue;
+        }
         const v = rec[fk];
         if (isEmptyValue(v)) {
           emptyCount += 1;
+          if (emptyRecordSamples.length < maxSamples) emptyRecordSamples.push({ index: ri + 1, hint: contentHint(rec, fk) });
         } else if (samples.length < maxSamples) {
           samples.push(typeof v === 'string' ? v.slice(0, 80) : v);
         }
@@ -2037,7 +2106,8 @@ function detectEmptyOutputFieldsByRatio(data, outputSchema, options) {
         emptyCount,
         totalCount: arr.length,
         emptyRatio,
-        sampleNonEmpty: samples
+        sampleNonEmpty: samples,
+        emptyRecordSamples
       });
     }
     // Forty-seventh log: nested record arrays were scalar leaves here — a
@@ -2054,14 +2124,15 @@ function detectEmptyOutputFieldsByRatio(data, outputSchema, options) {
       const nestedDecl = itemProps ? itemProps[fk] : null;
       const nestedRecs = [];
       let parentsWithRecords = 0;
-      for (const rec of arr) {
+      for (let pi = 0; pi < arr.length; pi++) {
+        const rec = arr[pi];
         if (!rec || typeof rec !== 'object' || Array.isArray(rec)) continue;
         const v = rec[fk];
         if (!Array.isArray(v)) continue;
         const objs = v.filter((c) => c && typeof c === 'object' && !Array.isArray(c));
         if (!objs.length) continue;
         parentsWithRecords += 1;
-        for (const c of objs) nestedRecs.push(c);
+        objs.forEach((c, oi) => nestedRecs.push({ rec: c, parent: rec, parentIndex: pi + 1, subIndex: oi + 1 }));
       }
       if (!nestedRecs.length || nestedRecs.length < minRecords) continue;
       const nestedItemsProps = (nestedDecl && nestedDecl.type === 'array' && nestedDecl.items && typeof nestedDecl.items === 'object' && nestedDecl.items.properties && typeof nestedDecl.items.properties === 'object' && !Array.isArray(nestedDecl.items.properties))
@@ -2071,16 +2142,23 @@ function detectEmptyOutputFieldsByRatio(data, outputSchema, options) {
       if (nestedItemsProps) {
         for (const sk of Object.keys(nestedItemsProps)) { if (!seenSub[sk]) { seenSub[sk] = 1; subKeys.push(sk); } }
       }
-      for (const c of nestedRecs) {
-        for (const sk of Object.keys(c)) { if (!seenSub[sk]) { seenSub[sk] = 1; subKeys.push(sk); } }
+      for (const nr of nestedRecs) {
+        for (const sk of Object.keys(nr.rec)) { if (!seenSub[sk]) { seenSub[sk] = 1; subKeys.push(sk); } }
       }
       for (const sk of subKeys) {
         let nestedEmpty = 0;
         const nestedSamples = [];
-        for (const c of nestedRecs) {
-          const v = c[sk];
-          if (isEmptyValue(v)) nestedEmpty += 1;
-          else if (nestedSamples.length < maxSamples) nestedSamples.push(typeof v === 'string' ? v.slice(0, 80) : v);
+        const nestedEmptySamples = [];
+        for (const nr of nestedRecs) {
+          const v = nr.rec[sk];
+          if (isEmptyValue(v)) {
+            nestedEmpty += 1;
+            if (nestedEmptySamples.length < maxSamples) {
+              nestedEmptySamples.push({ parentIndex: nr.parentIndex, subIndex: nr.subIndex, hint: contentHint(nr.parent, null) });
+            }
+          } else if (nestedSamples.length < maxSamples) {
+            nestedSamples.push(typeof v === 'string' ? v.slice(0, 80) : v);
+          }
         }
         const nestedRatio = nestedEmpty / nestedRecs.length;
         if (nestedRatio < threshold) continue;
@@ -2092,7 +2170,8 @@ function detectEmptyOutputFieldsByRatio(data, outputSchema, options) {
           emptyCount: nestedEmpty,
           totalCount: nestedRecs.length,
           emptyRatio: nestedRatio,
-          sampleNonEmpty: nestedSamples
+          sampleNonEmpty: nestedSamples,
+          emptyRecordSamples: nestedEmptySamples
         });
       }
     }
@@ -4676,7 +4755,7 @@ function detectNeverExtractedFields(steps, outputSchema) {
 // direct property access keeps working. test/forty-sixth-log-followups.test.js
 // pins marker-bag keys === module.exports keys so a future export cannot
 // land on one surface only (the inline-fallback drift class, RC8/RC35).
-var WU_EXPORT_BAG = { parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+var WU_EXPORT_BAG = { parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = WU_EXPORT_BAG;
