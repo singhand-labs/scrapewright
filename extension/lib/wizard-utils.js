@@ -1137,11 +1137,22 @@ function detectFrozenScrollCount(events) {
     }
     if (evt.stepId == null) continue;
     const s = String(evt.resultPreview || '');
-    if (!/"done"\s*:\s*false/.test(s)) continue;
-    for (const pair of parsePositiveCounterValues(s)) {
+    const pairs = parsePositiveCounterValues(s);
+    if (!pairs.length) continue;
+    // Fiftieth log: done:false previews build the streak, but EVERY mention of
+    // the counter (done:true included) updates lastMention — a later mention at
+    // a different value, or a done:true at any value, proves the freeze
+    // RESOLVED itself (the feed mounts in bursts; a poll can sit at 2 for six
+    // iterations then jump to 5 and succeed). Tagging a resolved freeze on a
+    // green run trains the model to ignore the tag.
+    const doneTrue = /"done"\s*:\s*true/.test(s);
+    const doneFalse = /"done"\s*:\s*false/.test(s);
+    for (const pair of pairs) {
       const key = evt.stepId + '.' + pair[0];
-      if (!perField.has(key)) perField.set(key, { stepId: evt.stepId, field: pair[0], values: [] });
-      perField.get(key).values.push(pair[1]);
+      if (!perField.has(key)) perField.set(key, { stepId: evt.stepId, field: pair[0], values: [], lastMention: { value: pair[1], done: doneTrue } });
+      const agg = perField.get(key);
+      agg.lastMention = { value: pair[1], done: doneTrue };
+      if (doneFalse) agg.values.push(pair[1]);
     }
   }
   // No scroll API anywhere in the run → a frozen poll is the
@@ -1153,6 +1164,9 @@ function detectFrozenScrollCount(events) {
     if (vals.length < FROZEN_NONZERO_STREAK_THRESHOLD) continue;
     const last = vals[vals.length - 1];
     if (!(last > 0)) continue;
+    // Fiftieth log: the freeze must be TERMINAL — the last time this counter
+    // was mentioned it equaled the frozen value AND was still not-ready.
+    if (agg.lastMention.done || agg.lastMention.value !== last) continue;
     let streak = 0;
     for (let i = vals.length - 1; i >= 0; i--) {
       if (vals[i] === last) streak++; else break;
@@ -1213,6 +1227,67 @@ function detectDuplicateIdValues(data, schema) {
   }
   return out;
 }
+// Fiftieth log: likes read empty on every record while shares extracted real
+// values from the SAME action-bar family — the family demonstrably renders
+// counts, so the empty field's value lives outside textContent (an aria-label
+// attribute or an aria-labelledby-referenced hidden span, the mechanism
+// timestamp anchors use). No census contrasted sibling count fields, so the
+// model shipped empty after two textContent probes. Report-only: the
+// populated sibling is the proof that "unextractable" was premature.
+const COUNT_LIKE_SUFFIX_RE = /(?:count|total|tally|num(?:ber)?)$/i;
+const COUNT_LIKE_WORD_RE = /^(likes?|comments?|shares?|replies|views?|votes?|reposts?|retweets?|forwards?|favorites?|favourites?|upvotes?|downvotes?|downloads?|plays|subscribers?|followers)$/i;
+function isCountLikeFieldName(name) {
+  const n = String(name || '');
+  return COUNT_LIKE_SUFFIX_RE.test(n) || COUNT_LIKE_WORD_RE.test(n);
+}
+
+function detectSiblingCountContrast(data, schema) {
+  const out = [];
+  if (!data || typeof data !== 'object') return out;
+  const props = (schema && schema.properties) || {};
+  for (const arrField of Object.keys(props)) {
+    const prop = props[arrField];
+    if (!prop || prop.type !== 'array' || !prop.items || prop.items.type !== 'object') continue;
+    const records = data[arrField];
+    if (!Array.isArray(records) || records.length < 2) continue;
+    const itemProps = (prop.items && prop.items.properties) || {};
+    const countFields = Object.keys(itemProps).filter(isCountLikeFieldName);
+    if (countFields.length < 2) continue; // no sibling to contrast against
+    const stats = new Map();
+    for (const f of countFields) {
+      let empty = 0;
+      let sample = null;
+      for (const r of records) {
+        const v = r ? r[f] : undefined;
+        const str = (typeof v === 'string') ? v.trim() : (v == null ? '' : String(v));
+        if (!str) empty++;
+        else if (sample == null) sample = str.slice(0, 40);
+      }
+      stats.set(f, { empty: empty, ratio: empty / records.length, sample: sample });
+    }
+    for (const f of countFields) {
+      const me = stats.get(f);
+      if (!(me.ratio >= 0.6)) continue;
+      let sib = null;
+      for (const g of countFields) {
+        if (g === f) continue;
+        const st = stats.get(g);
+        if (st.ratio <= 0.4 && st.sample != null) { sib = { field: g, sample: st.sample }; break; }
+      }
+      if (!sib) continue;
+      out.push({
+        field: f,
+        path: arrField + '.' + f,
+        emptyRatio: Math.round(me.ratio * 100) / 100,
+        populatedSibling: sib.field,
+        siblingSample: sib.sample,
+        note: 'sibling count field ' + sib.field + ' extracts real values (e.g. ' + JSON.stringify(sib.sample) + ') from the same record family while this one reads empty — the family DOES render counts, so the empty value typically lives OUTSIDE textContent: read the aria-label ATTRIBUTE (probe.attrStats {containerSel, attr:"aria-label"} over the element family) or the aria-labelledby reference (probe.labelledby on the empty field\'s element — the same hidden-span mechanism timestamp anchors use), then bind the field spec {attr:"aria-label"} or {labelledby:true}; renegotiate the field away only after both routes falsify'
+      });
+    }
+  }
+  return out;
+}
+
 
 // console.log 2026-08-23 16:13-16:15 (third session): the session ran green
 // end-to-end, but every record had hovercards:[] — and a user-feedback
@@ -1227,6 +1302,7 @@ function detectDuplicateIdValues(data, schema) {
 // anchor (matched-anywhere ⇒ not blind). Calls with processedContainers===0
 // are excluded from the blind judgment (container-empty is the
 // CLICK_CONTAINERS_EMPTY failure class with a different remedy).
+
 function detectHoverAnchorsBlind(events) {
   if (!Array.isArray(events)) return null;
   const perStep = new Map();
@@ -4869,7 +4945,7 @@ function detectNeverExtractedFields(steps, outputSchema) {
 // direct property access keeps working. test/forty-sixth-log-followups.test.js
 // pins marker-bag keys === module.exports keys so a future export cannot
 // land on one surface only (the inline-fallback drift class, RC8/RC35).
-var WU_EXPORT_BAG = { parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectDuplicateIdValues, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+var WU_EXPORT_BAG = { parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = WU_EXPORT_BAG;

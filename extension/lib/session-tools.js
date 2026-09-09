@@ -847,14 +847,33 @@
           if (merged.inputSchema == null && confirmedNow.inputSchema) { merged.inputSchema = confirmedNow.inputSchema; attached = true; }
           if (merged.outputSchema == null && confirmedNow.outputSchema) { merged.outputSchema = confirmedNow.outputSchema; attached = true; }
         }
+        // Fiftieth log: the confirmed TEST VALUES must land too. When the
+        // contract was confirmed before any artifact existed,
+        // attachConfirmedTestInput deferred with "service.update attaches on
+        // landing" — but the landing merge filled only schemas, so the
+        // artifact shipped without testInput and the first verify.run (no
+        // override) died on "Missing URL template parameter". Same merge
+        // precedent as the schemas: fill it when the update omits it.
+        let attachedTestInput = false;
+        if (merged.testInput == null) {
+          const confirmedTI = ioConfirmedTestInput || ledgerConfirmedTestInput(ctx);
+          const currentTI = (typeof d.getTestInput === 'function') ? d.getTestInput() : null;
+          if (confirmedTI && testInputKey(currentTI) !== testInputKey(confirmedTI)) {
+            merged.testInput = confirmedTI;
+            attachedTestInput = true;
+          }
+        }
         d.applyArtifact(merged);
         if (lastVerify) lastVerify.staleArtifact = true;
-        if (attached) {
+        if (attached || attachedTestInput) {
           const st = ctx && ctx.session ? ctx.session.state() : null;
           const version = (st && st.session && Array.isArray(st.session.artifactVersions))
             ? st.session.artifactVersions.length + 1
             : 1;
-          return Object.assign({ updated: true, version: version, schemasAttached: true, note: 'the confirmed I/O contract was attached (your update omitted schemas) — verify.run now scores against it' }, staticLint.length ? { staticLint: staticLint } : {});
+          const parts = [];
+          if (attached) parts.push('the confirmed I/O contract was attached (your update omitted schemas) — verify.run now scores against it');
+          if (attachedTestInput) parts.push('the confirmed test request values were attached (your update omitted testInput) — verify.run WITHOUT an override now runs them');
+          return Object.assign({ updated: true, version: version, schemasAttached: attached, testInputAttached: attachedTestInput, note: parts.join('; ') }, staticLint.length ? { staticLint: staticLint } : {});
         }
       } catch (e) {
         return { error: 'artifact apply failed: ' + String((e && e.message) || e) };

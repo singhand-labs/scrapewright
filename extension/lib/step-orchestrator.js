@@ -428,7 +428,27 @@ class StepOrchestrator {
                 const trajNote = traj.length
                   ? '; last not-ready return(s): ' + traj.join(' -> ')
                   : '';
-                const err = new Error(`POLL_EXHAUSTED: Step "${step.name || step.id}" exhausted after ${stepIterations} attempt(s) without producing a ready result${trajNote}`);
+                // Fiftieth log: the trajectory alone cannot distinguish "the
+                // feed is exhausted" from "the poll never gave the page time
+                // to load" — the red verify burned 15 iterations in 1.1s
+                // (avg ~74ms/attempt: a scrollBy resolves in tens of ms while
+                // lazy-load needs ~1s to mount more cards) and the model had
+                // to GUESS the missing-settle fix. Pacing is computable right
+                // here from the step's own output timestamps.
+                let pacingNote = '';
+                const stepTimes = [];
+                for (const so of stepOutputs) {
+                  if (so && String(so.stepId) === String(step.id) && typeof so.timestamp === 'number') stepTimes.push(so.timestamp);
+                }
+                if (stepTimes.length >= 3) {
+                  const elapsedMs = stepTimes[stepTimes.length - 1] - stepTimes[0];
+                  const avgMs = elapsedMs / (stepTimes.length - 1);
+                  pacingNote = `; paced ${stepTimes.length} attempt(s) over ${Math.round(elapsedMs)}ms (avg ${Math.round(avgMs)}ms/attempt)`;
+                  if (avgMs < 300) {
+                    pacingNote += ' — attempts ran back-to-back with NO settle between them: scroll/dispatch calls resolve in tens of ms while lazy-load mounting needs ~1s, so the counter cannot grow no matter how many iterations you add. Await a settle ($wait(sel, 1200) or setTimeout ~1000-1500ms) inside the not-ready branch before returning, then re-verify';
+                  }
+                }
+                const err = new Error(`POLL_EXHAUSTED: Step "${step.name || step.id}" exhausted after ${stepIterations} attempt(s) without producing a ready result${trajNote}${pacingNote}`);
                 err.code = 'POLL_EXHAUSTED';
                 err.stepId = step.id;
                 err.steps = stepOutputs;

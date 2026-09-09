@@ -45,6 +45,7 @@
       detectCountSelectorBlind: w.detectCountSelectorBlind,
       detectFrozenZeroCounter: w.detectFrozenZeroCounter,
       detectFrozenScrollCount: w.detectFrozenScrollCount,
+      detectSiblingCountContrast: w.detectSiblingCountContrast,
       detectDuplicateIdValues: w.detectDuplicateIdValues,
       detectFieldMatchZero: w.detectFieldMatchZero,
       detectContainerMatchZero: w.detectContainerMatchZero,
@@ -475,7 +476,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null };
+      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, siblingCountContrast: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -490,6 +491,16 @@
 
       if (error) {
         augmentError(error, stepsDefs, events);
+        // Fiftieth log: the whole census block hangs off `else if (result)` —
+        // an orchestrationError run (POLL_EXHAUSTED, SCRIPT_TIMEOUT, ...)
+        // produced ZERO censuses while the terminal frozen counter rode the
+        // events all along: the red run that most needed the freeze evidence
+        // was the one that got none. Events-only censuses run here too;
+        // data-based ones still need a result.
+        if (typeof WU.detectFrozenScrollCount === 'function') {
+          const fscRed = WU.detectFrozenScrollCount(events) || [];
+          if (fscRed.length) detectors.scrollCountFrozen = fscRed;
+        }
       } else if (result) {
         const toError = (msg, stepId, extra) => {
           const e = new Error(msg);
@@ -716,6 +727,16 @@
           const fsc = WU.detectFrozenScrollCount(events) || [];
           if (fsc.length) detectors.scrollCountFrozen = fsc;
         }
+        if (typeof WU.detectSiblingCountContrast === 'function') {
+          // Fiftieth log: report-only. A count-named field empty on most
+          // records while a SIBLING count field extracts real values from the
+          // same family proves the family renders counts — the empty value
+          // lives in an aria-label attribute / aria-labelledby reference, not
+          // textContent. Renegotiating the field away before probing those
+          // routes was premature (likes 5/5 empty vs shares 5/5 populated).
+          const scc = WU.detectSiblingCountContrast(finalData, outputSchema) || [];
+          if (scc.length) detectors.siblingCountContrast = scc;
+        }
         if (typeof WU.detectDuplicateIdValues === 'function') {
           // Forty-ninth log: report-only. An id-like value shared by several
           // records means the extractor fell back to a container-level
@@ -941,6 +962,7 @@
         if (detectors.countShortfall && detectors.countShortfall.severe) add('COUNT_SHORTFALL');
         if (detectors.relativeTimestamps) add('RELATIVE_TIMESTAMP');
         if (detectors.scrollCountFrozen) add('SCROLL_COUNT_FROZEN');
+        if (detectors.siblingCountContrast) add('COUNT_FIELD_HIDDEN_VALUE');
         if (detectors.duplicateIdValues) add('DUPLICATE_ID_VALUES');
         if (detectors.shapeDistribution) add('CARD_POLICY');
         if (detectors.stepNoReturn) add('STEP_NO_RETURN');

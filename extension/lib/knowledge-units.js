@@ -153,6 +153,13 @@
       matchEvents: ['DUPLICATE_ID_VALUES'],
       origin: '2026-09-09 forty-ninth live log; three of eight records shipped the shared owner/page id as postId on a green verify while the per-record ids lived one attr up inside each card',
       body: 'An id-like field (postId, videoId, ...) whose value repeats across records almost never means the records are duplicates — it means the extractor read a value every record SHARES (the list owner id, the container permalink) instead of a per-record identifier. The census names the duplicated value and the record ordinals. Re-probe one of the listed records and look one level deeper: per-record ids live on per-record elements — the record link href, a data attr on the card — never on the shared container. Combine with the empty-ratio census: records with an EMPTY id and records with the SHARED id usually fail for the same reason (two link shapes, one selector).'
+    },
+    {
+      id: 'count-field-hidden-value',
+      title: 'Empty count field with a populated sibling count — the value hides in an aria attribute or reference',
+      matchEvents: ['COUNT_FIELD_HIDDEN_VALUE'],
+      origin: '2026-09-09 fiftieth live log; likes read empty on every record and comments on 3/5 while shares extracted real values from the same action-bar family — the model shipped empty after two textContent probes',
+      body: 'A count-named field (likes/comments/shares/replies/views/votes and *count/total names) reading empty on most records while a SIBLING count field extracts real values from the same record family is NOT an unextractable field: the family demonstrably renders counts, so the empty one\'s value typically lives outside textContent — in the element\'s aria-label ATTRIBUTE or in an aria-labelledby-referenced hidden span (the same mechanism timestamp anchors use). Route order: probe.attrStats {containerSel, attr:"aria-label"} over the element family to see attribute-shaped numbers; probe.labelledby on the empty field\'s element to resolve the hidden-span reference; then bind the extract field spec {attr:"aria-label"} or {labelledby:true}. Renegotiate the field away via io.confirm only after BOTH routes falsify — textContent emptiness proves nothing.'
     }
   ];
 
