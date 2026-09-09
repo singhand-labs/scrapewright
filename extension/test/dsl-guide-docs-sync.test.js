@@ -14,10 +14,11 @@ const WP_EN = fs.readFileSync(path.join(ROOT, 'docs', 'technical-whitepaper.en.m
 const PRIMITIVES = [
   '$(', '$click', '$type', '$extract', '$wait', '$check', '$exists', '$count', '$list',
   '$openTab', '$scrollBy', '$scrollToBottom', '$scrollIntoView', '$hover',
-  '$extractList', '$extractListMulti', '$clickInList', '$extractWithHover', '$waitForStable'
+  '$extractList', '$extractListMulti', '$clickInList', '$extractWithHover', '$waitForStable',
+  '$labelledby'
 ];
 
-describe('B6: CLAUDE.md DSL section lists all 19 primitives', () => {
+describe('B6: CLAUDE.md DSL section lists all 20 primitives', () => {
   it('every primitive appears in the Script DSL section', () => {
     const m = CLAUDE_MD.match(/### Script DSL \(\$ API\)[\s\S]*?(?=\n### |\n## )/);
     assert.ok(m, 'Script DSL section found');

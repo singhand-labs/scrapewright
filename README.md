@@ -5,6 +5,7 @@
 **English** | [简体中文](./README.zh-CN.md)
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](./LICENSE)
+![Version](https://img.shields.io/badge/version-0.2.0-blue)
 ![Node](https://img.shields.io/badge/Node.js-%3E%3E18-green)
 ![Chrome](https://img.shields.io/badge/Chrome-MV3-brightgreen)
 ![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
@@ -74,13 +75,13 @@ Scrapewright's approach: **let AI configure the scrape inside a real browser, an
 - **AI-driven** — describe the need in natural language; the LLM analyzes the page, writes the script, and self-repairs on failure
 - **Real browser** — a Chrome extension running in your daily browser, reusing logins, cookies, and fingerprint as-is
 - **Uniform interface** — JSON Schema on both input and output; the external shape never changes
-- **Visual wizard** — a 5-phase flow from description to deployment; non-technical users can do it
+- **Visual wizard** — a three-stage research-first flow (Requirements → AI Research → Review & Deploy); non-technical users can do it
 
 ## System Requirements
 
 - Chrome browser (latest stable)
 - Node.js >= 18
-- An API key for any LLM: OpenAI / Moonshot Kimi / Anthropic / GLM (or any OpenAI-compatible endpoint); a long-context model is recommended (e.g. GLM 5.2)
+- An API key for any supported LLM provider: OpenAI / Moonshot / Kimi / Anthropic / GLM (pay-as-you-go) / GLM Coding Plan — or any OpenAI-compatible endpoint. The client speaks both the native Anthropic Messages protocol and the OpenAI chat/completions protocol (auto-detected per base URL); a long-context model is recommended (e.g. GLM 5.2)
 
 ## Quick Start
 
@@ -110,40 +111,39 @@ Then open the Scrapewright Chrome extension → **Options** → **Server Configu
 
 1. Extension icon → **Options** → **Settings** (top-right)
 2. Under **LLM Configuration**, fill in:
-   - **Provider / Model / API Key** — any of OpenAI, Moonshot / Kimi, Anthropic, GLM
+   - **Provider / Model / API Key** — OpenAI, Moonshot / Kimi, Anthropic, GLM (pay-as-you-go), or GLM Coding Plan (a same-company preset that defaults to the coding-plan Base URL, where plan quota is honored)
    - **Base URL** (optional) — custom or OpenAI-compatible gateway; must include the path prefix (e.g. `https://api.openai.com/v1`)
+   - **Protocol** (`auto` / `anthropic` / `openai`, default `auto`) — auto prefers the native Anthropic Messages protocol and falls back to OpenAI chat/completions when the endpoint doesn't speak it
    - **Max output tokens** (default 16384) — raise for reasoning models that burn "thinking" tokens and truncate output
    - **Timeout** (default 300s) — raise for slow models or very long prompts
 3. Click **Save**
 
 ### Create a Scraping Service
 
-On the Options page click **+ New Service** to enter the 5-phase AI wizard:
+On the Options page click **+ New Service** to enter the research-first AI wizard. You see three stages; the AI works in a live research session behind them:
 
-| Phase | What you do |
+| Stage | What you do |
 |-------|-------------|
-| **1. Target & requirements** | Enter the target URL + the requirements (input parameters, page operations, which fields to return). Click **Research**; the AI opens the page, analyzes it, and drafts the service |
-| **2. Name & steps** | Name the service; review/edit the AI-generated steps (each step is a script you can tweak) |
-| **3. Interface definition** | Confirm input/output JSON Schemas and the test input |
-| **4. Test run** | Watch the live step-by-step execution: open page → each step → success/failure |
-| **5. Results** | Inspect the extracted data. Not happy? Hit **Auto-Fix** and let the AI repair it; once satisfied, click deploy and the service starts serving |
+| **1 · Requirements** | Enter the target URL + the requirement in natural language (input parameters, page operations, which fields to return). Confirm a plain-language restatement of your requirement, answer any clarifying questions, then click **Research** |
+| **2 · AI Research** | Watch the live session: the AI opens the page, probes its structure with real reads, discovers and verifies selectors, agrees with you on the I/O contract, generates the step scripts, and test-runs them to green — revising on every honest failure. You can step in at any point (annotations, feedback, contract revisions) |
+| **3 · Review & Deploy** | Inspect the verified result (you can re-run tests, tweak steps/schemas, or describe problems in your own words). Click deploy and the service starts serving |
 
 <p align="center">
-  <img src="docs/phase1.png" width="72%" alt="Wizard phase 1: describe target and requirements">
+  <img src="docs/phase1.png" width="72%" alt="Wizard: describe target and requirements">
 </p>
 <p align="center">
-  <em>Phase 1: describe the requirement in natural language; the AI analyzes the page and drafts the service</em>
+  <em>Requirements stage: describe the requirement in natural language; the AI takes it from there</em>
 </p>
 
-During Research the AI works in rounds: explore the page structure, discover candidate selectors, confirm each one against real element HTML, then generate the step scripts — each round builds on the previous round's verified results. If the page needs a login or other human action, the wizard surfaces a banner with the matching button.
+**What the research session actually does.** This is not a one-shot generation: the wizard runs an auditable loop — observe (DOM probes, element annotation, selector diagnostics) → hypothesize (candidate selectors and field mappings) → verify (a real test run scored against your requirement) → confirm (the I/O contract is shown to you for approval before anything is committed). Every claim the AI makes must be grounded in something it actually read on the page; when a verification fails, the session reports the failure honestly and keeps revising rather than shipping a best-effort guess. If the page needs a login or other human action, the wizard surfaces a banner with the matching button.
 
-When a test fails, **Auto-Fix** kicks in: the AI gets the error, the DOM snapshot, and diagnostics data, rewrites the script, and retests; the best-scoring attempt across the loop is kept. In phase 5 you can also describe the problem in your own words (e.g. "publish date is missing") and the AI fixes accordingly. See [Whitepaper §5](docs/technical-whitepaper.en.md) for how it works.
+When the result isn't what you want, describe the problem in your own words (e.g. "publish date is missing") and the session continues from where it stopped — your feedback is folded into the same research loop, not a from-scratch redo. See [Whitepaper §5](docs/technical-whitepaper.en.md) for how it works.
 
 <p align="center">
-  <img src="docs/phase5.png" width="72%" alt="Wizard phase 5: results and auto-fix">
+  <img src="docs/phase5.png" width="72%" alt="Wizard: review verified results and deploy">
 </p>
 <p align="center">
-  <em>Phase 5: inspect the extracted data; Auto-Fix repairs issues when needed</em>
+  <em>Review & Deploy stage: inspect the verified data, give feedback if needed, then deploy</em>
 </p>
 
 ### Manage Services
@@ -325,6 +325,7 @@ Also enable **Enhanced Scraping Mode** under Options → Settings (dispatches re
 
 - **Configure once, reuse forever** — the scrape logic becomes a service, not a script you rewrite each time; schemas on both ends mean callers never care what the target site looks like
 - **Zero-cost login state** — reuses your logged-in browser session; the hardest thing for server-side tools to replicate
+- **Research-first, honest by construction** — the wizard's AI researches the page before writing anything, confirms the I/O contract with you, and reports test failures as failures instead of shipping best-effort guesses
 - **Self-healing** — auto-fix analyzes failures and rewrites scripts at config time and at runtime; after a redesign, repair beats rewrite
 - **Data stays local** — self-hosted; the LLM only sees page structure at configuration time (never needed at run time)
 - **No token burn at run time** — the LLM is only used at configuration time to research the page and generate the script; once deployed, the script never calls the LLM again — no token cost, fast and cheap
@@ -332,7 +333,7 @@ Also enable **Enhanced Scraping Mode** under Options → Settings (dispatches re
 - **More than scraping** — the same step-graph engine works as lightweight web test automation (click, type, wait, assert, branch)
 - **Scalable** — multi-instance parallel deployment (Docker/K8s) when you need more throughput (see [Whitepaper §12](docs/technical-whitepaper.en.md))
 
-Under the hood: cross-iframe scraping, per-item detail-page drill-down (`$openTab`), hovercard field enrichment (`$extractWithHover`), streaming-content completion detection (`$waitForStable`), obfuscation-resistant stable selectors, and prompt-size guards. The script DSL has 19 primitives — all AI-generated and hand-editable; see [Whitepaper §7](docs/technical-whitepaper.en.md).
+Under the hood: cross-iframe scraping, per-item detail-page drill-down (`$openTab`), hovercard field enrichment with hidden-label resolution (`$extractWithHover` + ARIA `labelledby` chains), streaming-content completion detection (`$waitForStable`), obfuscation-resistant stable selectors, live selector differentials that audit over-filtering, a five-layer stack that keeps background-tab lazy-load working (trusted wheel events + sticky tab activation), and prompt-size guards. The script DSL has 20 primitives — all AI-generated and hand-editable; see [Whitepaper §7](docs/technical-whitepaper.en.md).
 
 ### Comparison
 

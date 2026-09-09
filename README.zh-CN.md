@@ -5,6 +5,7 @@
 [English](./README.md) | **简体中文**
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](./LICENSE)
+![Version](https://img.shields.io/badge/version-0.2.0-blue)
 ![Node](https://img.shields.io/badge/Node.js-%3E%3D18-green)
 ![Chrome](https://img.shields.io/badge/Chrome-MV3-brightgreen)
 ![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
@@ -74,13 +75,13 @@ Scrapewright 的方案是：**让 AI 在真实浏览器里替你配置采集，�
 - **AI 驱动** — 自然语言描述需求，LLM 分析页面、生成脚本、失败自动修复
 - **真实浏览器** — Chrome 扩展运行在你日常的浏览器里，登录态、Cookie、指纹原样复用
 - **标准接口** — 每个服务的输入输出都有 JSON Schema 约束，对外形状永远一致
-- **可视化向导** — 5 阶段向导从描述到部署全程可见，非技术人员也能上手
+- **可视化向导** — 三阶段研究优先流程（Requirements → AI Research → Review & Deploy）从描述到部署全程可见，非技术人员也能上手
 
 ## 系统要求
 
 - Chrome 浏览器（最新稳定版）
 - Node.js >= 18
-- 任一 LLM 服务的 API Key：OpenAI / Moonshot Kimi / Anthropic / GLM 智谱（或任何 OpenAI 兼容接口），推荐使用上下文窗口长的模型（如GLM 5.2）
+- 任一受支持 LLM 服务的 API Key：OpenAI / Moonshot / Kimi / Anthropic / GLM 智谱（按量通道）/ GLM Coding Plan（编码套餐通道）——或任何 OpenAI 兼容接口。客户端同时支持原生 Anthropic Messages 协议与 OpenAI chat/completions 协议（按 Base URL 自动探测），推荐使用上下文窗口长的模型（如 GLM 5.2）
 
 ## 快速开始
 
@@ -110,40 +111,39 @@ Scrapewright 的方案是：**让 AI 在真实浏览器里替你配置采集，�
 
 1. 扩展图标 → **Options** → 右上角 **Settings**
 2. 在 **LLM Configuration** 区域填写：
-   - **Provider / Model / API Key** — 任选一家：OpenAI、Moonshot / Kimi、Anthropic、GLM
+   - **Provider / Model / API Key** — 任选一家：OpenAI、Moonshot / Kimi、Anthropic、GLM 智谱（按量通道）或 GLM Coding Plan（同厂第二预设，默认指向编码套餐专用 Base URL——套餐额度只在该通道认）
    - **Base URL**（可选）— 自定义或兼容 OpenAI 格式的中转地址，需含路径前缀（如 `https://api.openai.com/v1`）
-   - **Max output tokens**（默认 8192）— 推理模型会先消耗"思考" token，输出被截断时调高
-   - **Timeout**（默认 120 秒）— 模型或提示词较慢时调高
+   - **Protocol**（`auto` / `anthropic` / `openai`，默认 `auto`）— auto 优先使用原生 Anthropic Messages 协议，端点不支持时自动回落 OpenAI chat/completions
+   - **Max output tokens**（默认 16384）— 推理模型会先消耗"思考" token，输出被截断时调高
+   - **Timeout**（默认 300 秒）— 模型或提示词较慢时调高
 3. 点击 **Save**
 
 ### 创建采集服务
 
-在 Options 页点击 **+ New Service**，进入 5 阶段 AI 向导：
+在 Options 页点击 **+ New Service**，进入研究优先的 AI 向导。全程三个阶段，背后是一场实时可见的 AI 研究会话：
 
 | 阶段 | 你做什么 |
 |------|---------|
-| **1. 目标与需求** | 填目标网址 + 需求（输入参数、页面操作步骤、要返回哪些字段）。点 **Research**，AI 打开页面分析并生成草稿 |
-| **2. 名称与步骤** | 给服务命名，查看/编辑 AI 生成的步骤（每步一段脚本，可手动微调） |
-| **3. 接口定义** | 确认输入/输出的 JSON Schema 和测试数据 |
-| **4. 执行测试** | 实时观看逐步执行过程：打开页面 → 每一步 → 成功/失败 |
-| **5. 结果** | 检查提取的数据。不满意就点 **Auto-Fix** 让 AI 修，直到满意后点击部署，便可对外提供服务 |
+| **1 · Requirements（需求）** | 填目标网址 + 自然语言需求（输入参数、页面操作步骤、要返回哪些字段）。确认 AI 对需求的同语种复述、回答澄清问题，然后点 **Research** |
+| **2 · AI Research（研究）** | 实时观看研究会话：AI 打开页面、用真实读取探测页面结构、发现并验证选择器、与你确认输入/输出合同、生成步骤脚本并试跑到绿——每次诚实的失败都驱动一轮修订。你可以随时介入（元素标注、反馈、合同修订） |
+| **3 · Review & Deploy（审阅与部署）** | 检查已验证的结果（可重跑测试、微调步骤/Schema，或用自己的话描述问题）。点击部署，服务即开始对外提供 |
 
 <p align="center">
-  <img src="docs/phase1.png" width="72%" alt="向导阶段 1：描述目标与需求">
+  <img src="docs/phase1.png" width="72%" alt="向导：描述目标与需求">
 </p>
 <p align="center">
-  <em>阶段 1：用自然语言描述采集需求，AI 分析页面并生成草稿</em>
+  <em>Requirements 阶段：用自然语言描述采集需求，剩下的交给 AI</em>
 </p>
 
-Research 期间 AI 会经历多个轮次：探索页面结构、发现候选选择器、用真实元素 HTML 逐一确认、最后生成步骤脚本——每轮都以上一轮的验证结果为输入。如果页面需要登录、验证码等人工操作，向导会弹出提示并给出对应按钮。
+**研究会话实际在做什么。** 这不是一次性生成：向导运行一个可审计的循环——观察（DOM 探针、元素标注、选择器诊断）→ 假设（候选选择器与字段映射）→ 验证（按你的需求打分的真实试跑）→ 确认（任何东西落库之前，I/O 合同先呈给你批准）。AI 的每个断言都必须锚定在页面上真实读到的内容；验证失败时会诚实上报失败并持续修订，而不是带着"尽力而为"的猜测硬闯。如果页面需要登录、验证码等人工操作，向导会弹出提示并给出对应按钮。
 
-测试失败时 **Auto-Fix** 自动介入：AI 拿到错误信息、DOM 快照与诊断数据，重写脚本并重新测试；多次尝试中得分最高的版本会被保留。你还可以在阶段 5 的输入框里用自然语言告诉它问题所在（如"缺少发布时间"），AI 会据此修复。原理详见[白皮书 §5](docs/technical-whitepaper.md)。
+结果不符合预期时，用自己的话描述问题（如"缺少发布时间"），会话会从停下的地方继续——你的反馈进入同一个研究循环，而不是从头再来一遍。原理详见[白皮书 §5](docs/technical-whitepaper.md)。
 
 <p align="center">
-  <img src="docs/phase5.png" width="72%" alt="向导阶段 5：结果与自动修复">
+  <img src="docs/phase5.png" width="72%" alt="向导：审阅验证结果并部署">
 </p>
 <p align="center">
-  <em>阶段 5：检查提取结果，必要时使用 Auto-Fix 修复</em>
+  <em>Review & Deploy 阶段：检查验证过的数据，必要时反馈，然后部署</em>
 </p>
 
 ### 管理服务
@@ -325,6 +325,7 @@ tail -f ~/.cache/scrapewright/host.log            # Linux
 
 - **配置一次，长期复用** — 采集逻辑沉淀为服务，不是每次现写脚本；输入输出有 Schema 约束，调用方无需关心目标网站长什么样
 - **登录态零成本** — 复用你已登录的浏览器会话，这是服务器端方案最难复制的能力
+- **研究优先、构造性诚实** — 向导里的 AI 先研究页面再动手，I/O 合同与你确认后才落地；测试失败就如实报失败，不带"尽力而为"的猜测硬闯
 - **自愈** — auto-fix 在配置期和运行时都会分析失败原因并重写脚本；网站改版后修复成本远低于重写
 - **数据不出本机** — 自部署，LLM 只在配置期接触页面结构（执行期不需要 LLM）
 - **运行时不烧Token** — LLM只在配置服务时用于研究页面和生成脚本，脚本部署后不再调用LLM，不烧Token，速度快、成本低
@@ -332,7 +333,7 @@ tail -f ~/.cache/scrapewright/host.log            # Linux
 - **一专多能** — 同一步骤图引擎也可用作轻量 Web 测试自动化（点击、输入、等待、断言、分支）
 - **可扩展** — 需要更高吞吐时支持多实例并行部署（Docker/K8s，见[白皮书 §12](docs/technical-whitepaper.md)）
 
-底层能力一览：跨 iframe 采集、详情页逐条下钻（`$openTab`）、悬浮卡片字段增强（`$extractWithHover`）、流式内容完成检测（`$waitForStable`）、抗混淆稳定选择器、提示词体积防护。脚本 DSL 共 19 个原语，全部由 AI 生成、可手动编辑，详见[白皮书 §7](docs/technical-whitepaper.md)。
+底层能力一览：跨 iframe 采集、详情页逐条下钻（`$openTab`）、悬浮卡片字段增强 + 隐藏标签解析（`$extractWithHover` + ARIA `labelledby` 引用链）、流式内容完成检测（`$waitForStable`）、抗混淆稳定选择器、审计过度过滤的活体选择器差分、保后台标签页懒加载的五层抗节流栈（可信滚轮事件 + 粘性标签页激活）、提示词体积防护。脚本 DSL 共 20 个原语，全部由 AI 生成、可手动编辑，详见[白皮书 §7](docs/technical-whitepaper.md)。
 
 ### 与其他方案对比
 
