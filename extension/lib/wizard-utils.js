@@ -1100,6 +1100,120 @@ function detectFrozenZeroCounter(events) {
   return null;
 }
 
+// Forty-ninth log (2026-09-09): the frozen-NONZERO scroll stall had no
+// detector — detectFrozenZeroCounter owns the all-zero trap (fourth log),
+// while the verify's feed count froze at 2 for seven iterations, jumped to
+// 8, then froze for ten more and the model rewrote the scroll step seven
+// times with no evidence. The trailing-streak shape distinguishes "growth
+// stopped mid-run" (grewFrom set — the page DID load more once) from
+// "never moved".
+function parsePositiveCounterValues(resultPreview) {
+  const out = [];
+  const s = String(resultPreview || '');
+  if (!s) return out;
+  const re = /"([A-Za-z_$][A-Za-z0-9_$]*)"\s*:\s*(-?\d+(?:\.\d+)?)/g;
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    const name = m[1];
+    const isCounter = /count$/i.test(name) || /^(total|matched|found|loaded)$/i.test(name);
+    if (!isCounter) continue;
+    const val = Number(m[2]);
+    if (val > 0) out.push([name, val]);
+  }
+  return out;
+}
+
+const FROZEN_NONZERO_STREAK_THRESHOLD = 4;
+
+function detectFrozenScrollCount(events) {
+  if (!Array.isArray(events)) return [];
+  let anyScrollApi = false;
+  const perField = new Map();
+  for (const evt of events) {
+    if (!evt || evt.type !== 'STEP_ITERATION') continue;
+    const diags = Array.isArray(evt.selectorDiagnostics) ? evt.selectorDiagnostics : [];
+    for (const d of diags) {
+      if (d && d.api && /scroll/i.test(String(d.api))) anyScrollApi = true;
+    }
+    if (evt.stepId == null) continue;
+    const s = String(evt.resultPreview || '');
+    if (!/"done"\s*:\s*false/.test(s)) continue;
+    for (const pair of parsePositiveCounterValues(s)) {
+      const key = evt.stepId + '.' + pair[0];
+      if (!perField.has(key)) perField.set(key, { stepId: evt.stepId, field: pair[0], values: [] });
+      perField.get(key).values.push(pair[1]);
+    }
+  }
+  // No scroll API anywhere in the run → a frozen poll is the
+  // poll-exhaustion class (seventeenth log), not a scroll stall.
+  if (!anyScrollApi) return [];
+  const out = [];
+  for (const agg of perField.values()) {
+    const vals = agg.values;
+    if (vals.length < FROZEN_NONZERO_STREAK_THRESHOLD) continue;
+    const last = vals[vals.length - 1];
+    if (!(last > 0)) continue;
+    let streak = 0;
+    for (let i = vals.length - 1; i >= 0; i--) {
+      if (vals[i] === last) streak++; else break;
+    }
+    if (streak < FROZEN_NONZERO_STREAK_THRESHOLD) continue;
+    const prevIdx = vals.length - streak - 1;
+    const grewFrom = (prevIdx >= 0 && vals[prevIdx] !== last) ? vals[prevIdx] : null;
+    out.push({
+      stepId: agg.stepId,
+      field: agg.field,
+      frozenCount: last,
+      streak: streak,
+      iterations: vals.length,
+      grewFrom: grewFrom
+    });
+  }
+  return out;
+}
+
+// Forty-ninth log: the green v7 shipped the SAME owner id as postId on three
+// records (plus two empty) — repeated identity values are the fingerprint of
+// an extractor that fell back to a value every record shares instead of a
+// per-record identifier. Report-only: names the duplicated value and the
+// record ordinals so the failing records can be re-probed directly.
+function detectDuplicateIdValues(data, schema) {
+  const out = [];
+  if (!data || typeof data !== 'object') return out;
+  const props = (schema && schema.properties) || {};
+  for (const arrField of Object.keys(props)) {
+    const prop = props[arrField];
+    if (!prop || prop.type !== 'array' || !prop.items || prop.items.type !== 'object') continue;
+    const records = data[arrField];
+    if (!Array.isArray(records) || records.length < 2) continue;
+    const itemProps = (prop.items && prop.items.properties) || {};
+    for (const field of Object.keys(itemProps)) {
+      if (!/id$/i.test(field)) continue; // identity-semantic names only
+      const seen = new Map();
+      for (let i = 0; i < records.length; i++) {
+        const v = records[i] ? records[i][field] : null;
+        if (typeof v !== 'string' || !v) continue; // empties belong to the empty-ratio census
+        if (!seen.has(v)) seen.set(v, []);
+        seen.get(v).push(i + 1);
+      }
+      for (const value of seen.keys()) {
+        const indices = seen.get(value);
+        if (indices.length < 2) continue;
+        out.push({
+          path: arrField + '.' + field,
+          field: field,
+          value: value.length > 80 ? value.slice(0, 80) + '…' : value,
+          count: indices.length,
+          totalRecords: records.length,
+          indices: indices.slice(0, 6),
+          note: 'an id-like value shared by ' + indices.length + ' of ' + records.length + ' records usually means the extractor fell back to a container-level shared value (e.g. the list owner id) instead of a per-record identifier — re-probe the listed records; per-record ids live on per-record elements (links/attrs inside each card), not on the shared container'
+        });
+      }
+    }
+  }
+  return out;
+}
+
 // console.log 2026-08-23 16:13-16:15 (third session): the session ran green
 // end-to-end, but every record had hovercards:[] — and a user-feedback
 // autoFix round could not repair it because the true cause was invisible.
@@ -4755,7 +4869,7 @@ function detectNeverExtractedFields(steps, outputSchema) {
 // direct property access keeps working. test/forty-sixth-log-followups.test.js
 // pins marker-bag keys === module.exports keys so a future export cannot
 // land on one surface only (the inline-fallback drift class, RC8/RC35).
-var WU_EXPORT_BAG = { parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+var WU_EXPORT_BAG = { parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectDuplicateIdValues, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = WU_EXPORT_BAG;

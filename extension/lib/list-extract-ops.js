@@ -375,7 +375,20 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
       // dismisses) yet every result had hovercards:[] because the entry shape
       // omitted the href and the classification regex read undefined.
       let anchorHref = '';
-      try { anchorHref = anchorEl.getAttribute('href') || ''; } catch (_) {}
+      try {
+        anchorHref = anchorEl.getAttribute('href') || '';
+        // Forty-ninth log: anchorSel routinely matches the label span INSIDE
+        // the link rather than the <a> itself — the span has no own href, and
+        // hovercards[].anchorHref shipped '' on every record while the hover
+        // layer worked perfectly, sinking every downstream link-based
+        // classification. Walk up to the nearest enclosing link (the same
+        // read-where-the-value-lives pattern as the labelledby descendant
+        // descent, forty-third log).
+        if (!anchorHref && typeof anchorEl.closest === 'function') {
+          const enclosing = anchorEl.closest('a[href]');
+          if (enclosing) anchorHref = enclosing.getAttribute('href') || '';
+        }
+      } catch (_) {}
       let anchorText = '';
       try { anchorText = (anchorEl.textContent || '').trim().slice(0, 120); } catch (_) {}
       try {

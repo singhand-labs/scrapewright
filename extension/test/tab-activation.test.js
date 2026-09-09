@@ -89,6 +89,11 @@ function loadModule(sandboxOverrides) {
         calls.windowsGetLastFocused.push(focusedWindowId);
         return Promise.resolve({ id: focusedWindowId });
       },
+      get: (windowId) => {
+        const w = windowsById.get(windowId);
+        if (!w) return Promise.reject(new Error('No window ' + windowId));
+        return Promise.resolve(w);
+      },
       update: (windowId, props) => {
         calls.windowsUpdate.push({ windowId, props });
         return Promise.resolve({ id: windowId });
@@ -190,22 +195,26 @@ describe('lib/tab-activation.js — requestActivation', () => {
     assert.equal(ctx.tabsById.get(100).active, false);
   });
 
-  it('cross-window scrape tab activates WITHIN its window (no window focus steal) — thirteenth log Mode A: refusal starved the verify tab of frames forever', async () => {
+  it('cross-window scrape tab: tab activated AND window raised — forty-ninth-log user authorization (execution priority over manual focus) supersedes the thirteenth-log within-window-only design', async () => {
     const ctx = loadModule();
-    // Scrape tab in window 2, user's focus is on window 1
-    ctx.setFocusedWindow(1);
-    ctx.tabsById.set(101, { id: 101, windowId: 2, active: false });
-    ctx.tabsById.set(200, { id: 200, windowId: 1, active: true });
+    // Scrape tab in window 1, user's focus is on window 2
+    ctx.setFocusedWindow(2);
+    ctx.tabsById.set(101, { id: 101, windowId: 1, active: false });
+    ctx.tabsById.set(200, { id: 200, windowId: 2, active: true });
+    ctx.windowsById.set(1, { id: 1, state: 'normal' });
     const result = await ctx.api.requestActivation(101);
     assert.equal(result.ok, true, 'activation proceeds — refusal guaranteed a 169px unrendered shell');
     assert.equal(result.activated, true);
-    assert.equal(result.crossWindow, true, 'marker explains a possibly still-starved page in diagnostics');
+    assert.equal(result.crossWindow, true, 'marker explains focus movement in diagnostics');
+    assert.equal(result.focusedWindow, true, 'the window is raised too — a tab active inside an unfocused window still produces no compositor frames');
     // The tab WAS activated inside its own window
     assert.equal(ctx.calls.tabsUpdate.length, 1);
     assert.equal(ctx.calls.tabsUpdate[0].tabId, 101);
     assert.equal(ctx.tabsById.get(101).active, true);
-    // The window is NOT raised/focused — the user's OS focus is untouched
-    assert.equal(ctx.calls.windowsUpdate.length, 0);
+    // The window focus was re-asserted on the scrape window
+    assert.equal(ctx.calls.windowsUpdate.length, 1);
+    assert.equal(ctx.calls.windowsUpdate[0].windowId, 1);
+    assert.equal(ctx.calls.windowsUpdate[0].props.focused, true);
     // The other window's active tab is untouched
     assert.equal(ctx.tabsById.get(200).active, true);
   });

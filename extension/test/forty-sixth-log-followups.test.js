@@ -346,10 +346,16 @@ function frozenRoot(y0) {
 }
 
 describe('forty-sixth log F2 — $scrollBy inner-container fallback + honest at_bottom', () => {
+  // Forty-ninth log: domScrollBy now wraps in withTabActivation and returns
+  // {result, _diagnostics} like every other DOM op (scroll used to be the
+  // only family with no diagnostics). The stubs keep these 46th-log
+  // behavioral tests on the inner-container contract.
   function makeScrollDeps(root, inner, findCalls) {
     return {
       resolveScrollTarget: () => null,
       sendDebugLog: () => {},
+      withTabActivation: (label, fn) => fn(),
+      attachScrollEvidence: async (r) => r,
       getScrollOps: () => ({
         findScrollableContainer: () => { if (findCalls) findCalls.n++; return inner; }
       }),
@@ -362,7 +368,9 @@ describe('forty-sixth log F2 — $scrollBy inner-container fallback + honest at_
     const deps = makeScrollDeps(movingRoot(0), null, findCalls);
     const domScrollBy = buildCsFn('domScrollBy', deps);
     const r = await domScrollBy(null, 900);
-    assert.deepEqual(r, { scrolled: true, prevY: 0, newY: 900 });
+    assert.deepEqual(r.result, { scrolled: true, prevY: 0, newY: 900 });
+    assert.equal(r._diagnostics.api, 'scrollBy');
+    assert.equal(r._diagnostics.moved, true);
     assert.equal(findCalls.n, 0, 'no probe when the primary root scrolled');
   });
 
@@ -373,36 +381,36 @@ describe('forty-sixth log F2 — $scrollBy inner-container fallback + honest at_
     const domScrollBy = buildCsFn('domScrollBy', deps);
     const r = await domScrollBy(null, 900);
     assert.equal(findCalls.n, 1);
-    assert.equal(r.scrolled, true);
-    assert.equal(r.fallback, 'inner-container');
-    assert.deepEqual([r.prevY, r.newY], [1478, 2378], 'coordinates switch to the root that actually scrolled');
-    assert.equal(r.rootY, 1478, 'window coordinate preserved for diagnostics');
+    assert.equal(r.result.scrolled, true);
+    assert.equal(r.result.fallback, 'inner-container');
+    assert.deepEqual([r.result.prevY, r.result.newY], [1478, 2378], 'coordinates switch to the root that actually scrolled');
+    assert.equal(r.result.rootY, 1478, 'window coordinate preserved for diagnostics');
     assert.equal(inner.scrollTop, 2378);
   });
 
   it('primary frozen + finder returns nothing (or the root itself) → plain scrolled:false, no fallback key', async () => {
     const deps1 = makeScrollDeps(frozenRoot(500), null, { n: 0 });
     const r1 = await buildCsFn('domScrollBy', deps1)(null, 300);
-    assert.deepEqual(r1, { scrolled: false, prevY: 500, newY: 500 });
+    assert.deepEqual(r1.result, { scrolled: false, prevY: 500, newY: 500 });
     const root = frozenRoot(500);
     const deps2 = makeScrollDeps(root, root, { n: 0 });
     const r2 = await buildCsFn('domScrollBy', deps2)(null, 300);
-    assert.equal(r2.scrolled, false);
-    assert.equal(r2.fallback, undefined);
+    assert.equal(r2.result.scrolled, false);
+    assert.equal(r2.result.fallback, undefined);
   });
 
   it('fallback fires but the inner container is also at its bottom → scrolled:false WITH the fallback disclosure', async () => {
     const deps = makeScrollDeps(frozenRoot(100), frozenRoot(880), { n: 0 });
     const r = await buildCsFn('domScrollBy', deps)(null, 300);
-    assert.equal(r.scrolled, false);
-    assert.equal(r.fallback, 'inner-container', 'the disclosure is the evidence the infra tried the inner path');
+    assert.equal(r.result.scrolled, false);
+    assert.equal(r.result.fallback, 'inner-container', 'the disclosure is the evidence the infra tried the inner path');
   });
 
   it('delta 0 short-circuits before any probe', async () => {
     const findCalls = { n: 0 };
     const deps = makeScrollDeps(frozenRoot(0), movingRoot(0), findCalls);
     const r = await buildCsFn('domScrollBy', deps)(null, 0);
-    assert.deepEqual(r, { scrolled: false, prevY: 0, newY: 0 });
+    assert.deepEqual(r.result, { scrolled: false, prevY: 0, newY: 0 });
     assert.equal(findCalls.n, 0);
   });
 

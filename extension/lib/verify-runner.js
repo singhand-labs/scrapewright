@@ -44,6 +44,8 @@
       detectHoverAnchorsBlind: w.detectHoverAnchorsBlind,
       detectCountSelectorBlind: w.detectCountSelectorBlind,
       detectFrozenZeroCounter: w.detectFrozenZeroCounter,
+      detectFrozenScrollCount: w.detectFrozenScrollCount,
+      detectDuplicateIdValues: w.detectDuplicateIdValues,
       detectFieldMatchZero: w.detectFieldMatchZero,
       detectContainerMatchZero: w.detectContainerMatchZero,
       detectEmptyOutputFieldsByRatio: w.detectEmptyOutputFieldsByRatio,
@@ -473,7 +475,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null };
+      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -703,6 +705,25 @@
           const relTs = WU.detectRelativeTimestamps(finalData, outputSchema);
           if (relTs && relTs.length) detectors.relativeTimestamps = relTs;
         }
+        if (typeof WU.detectFrozenScrollCount === 'function') {
+          // Forty-ninth log: report-only. A counter frozen at a NONZERO value
+          // across a trailing streak of scroll iterations is either a
+          // renderer-gated lazy-load (page hidden/unfocused — activation and
+          // window focus are re-asserted by every scroll op now; check the
+          // scroll diagnostics' pageState/frameSample) or a genuinely
+          // exhausted feed (accept the count or renegotiate via io.confirm).
+          // The frozen-zero trap stays the fourth-log detector's class.
+          const fsc = WU.detectFrozenScrollCount(events) || [];
+          if (fsc.length) detectors.scrollCountFrozen = fsc;
+        }
+        if (typeof WU.detectDuplicateIdValues === 'function') {
+          // Forty-ninth log: report-only. An id-like value shared by several
+          // records means the extractor fell back to a container-level
+          // shared value instead of a per-record identifier — the census
+          // names the value and the record ordinals to re-probe.
+          const dupIds = WU.detectDuplicateIdValues(finalData, outputSchema) || [];
+          if (dupIds.length) detectors.duplicateIdValues = dupIds;
+        }
         if (RSD && typeof RSD.formatShapeDistributionFromData === 'function') {
           // Report-only: 2+ field-population signatures across the extracted
           // records mean the selector kept mixed card types — a card-policy
@@ -919,6 +940,8 @@
         // nagged — the report and the finish ladder disclose the rest.
         if (detectors.countShortfall && detectors.countShortfall.severe) add('COUNT_SHORTFALL');
         if (detectors.relativeTimestamps) add('RELATIVE_TIMESTAMP');
+        if (detectors.scrollCountFrozen) add('SCROLL_COUNT_FROZEN');
+        if (detectors.duplicateIdValues) add('DUPLICATE_ID_VALUES');
         if (detectors.shapeDistribution) add('CARD_POLICY');
         if (detectors.stepNoReturn) add('STEP_NO_RETURN');
         if (detectors.junkValues) add('JUNK_VALUES');

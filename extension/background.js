@@ -1295,10 +1295,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     (async () => {
       try {
-        const result = await TabActivation.requestActivation(tabId);
+        // Forty-ninth log: the content script's isolated-world evidence
+        // (page reports itself hidden/unfocused) must reach the lib even when
+        // Chrome's window APIs cannot see the occlusion/other-app focus.
+        const result = await TabActivation.requestActivation(tabId, {
+          forceWindowFocus: !!(message && message.needsWindowFocus)
+        });
         debugLogger.log('info', 'background', 'Tab activation request', {
           tabId, ok: result.ok, activated: result.activated,
-          crossWindow: result.crossWindow, reason: result.reason
+          crossWindow: result.crossWindow, focusedWindow: result.focusedWindow,
+          reason: result.reason
         });
         sendResponse(result);
       } catch (e) {

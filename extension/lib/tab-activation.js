@@ -5,6 +5,13 @@
 //
 // New model:
 //   - requestActivation switches to the scrape tab and KEEPS it active.
+//   - Forty-ninth log: it ALSO re-asserts WINDOW focus (raising the window,
+//     un-minimizing it) when the window lost OS focus — the user authorized
+//     execution priority over manual focus, because scroll lazy-load froze
+//     on active-but-unfocused-window tabs. The content script's
+//     needsWindowFocus evidence (real visibilityState/hasFocus from the
+//     isolated world) triggers this even when Chrome's getLastFocused
+//     cannot see the occlusion/other-app focus.
 //   - The user's last manually-clicked tab is tracked via
 //     chrome.tabs.onActivated; our own programmatic activations are
 //     distinguished by a suppression set (tabIds of pending tabs.update)
@@ -30,6 +37,29 @@
   function hasWindowsApi() {
     return typeof chrome !== 'undefined' && chrome.windows &&
       typeof chrome.windows.getLastFocused === 'function';
+  }
+
+  // Forty-ninth log (2026-09-09): focus the scrape WINDOW. A tab can be the
+  // active tab of its window and still produce zero compositor frames —
+  // the window lost OS focus (the user is working elsewhere) or is
+  // minimized/occluded, and scroll-driven lazy-load froze exactly there
+  // while every activation request answered "already active". The user
+  // explicitly authorized execution priority over manual focus: switch to
+  // the tab automatically whenever the work needs it. Focus alone does NOT
+  // restore a minimized window, so state:'normal' rides along.
+  async function focusScrapeWindow(windowId) {
+    if (typeof chrome === 'undefined' || !chrome.windows ||
+        typeof chrome.windows.update !== 'function') return null;
+    let win = null;
+    if (typeof chrome.windows.get === 'function') {
+      try { win = await chrome.windows.get(windowId); } catch (e) { win = null; }
+    }
+    const props = { focused: true };
+    if (win && win.state === 'minimized') props.state = 'normal';
+    try {
+      await chrome.windows.update(windowId, props);
+      return props;
+    } catch (e) { return null; }
   }
   function hasStorageSession() {
     return typeof chrome !== 'undefined' && chrome.storage &&
@@ -116,15 +146,13 @@
     }
   }
 
-  async function requestActivation(tabId) {
+  async function requestActivation(tabId, opts) {
     if (!hasTabsApi()) return { ok: false, reason: 'chrome.tabs unavailable' };
     if (typeof tabId !== 'number' || tabId <= 0) return { ok: false, reason: 'invalid tabId' };
 
     let scrapeTab;
     try { scrapeTab = await chrome.tabs.get(tabId); }
     catch (e) { return { ok: false, reason: 'tabs.get failed: ' + (e && e.message || String(e)) }; }
-
-    if (scrapeTab.active) return { ok: true, activated: false, reason: 'already active' };
 
     let crossWindow = false;
     if (hasWindowsApi()) {
@@ -135,31 +163,71 @@
         // window lost focus could NEVER render — the old refusal returned
         // before activating, so the tab got zero compositor frames (page
         // stayed a 169px shell) and every downstream op failed empty.
-        // Instead activate the tab WITHIN its own window: tabs.update does
-        // NOT raise or focus the window, so the user's OS focus stays where
-        // it is. Frame production then depends on window visibility (and the
-        // layer-3 launch flags) instead of on guaranteed starvation. The
-        // crossWindow marker lets diagnostics explain a still-starved page.
+        // Activation proceeds within the window; the forty-ninth log adds
+        // the missing half below (raising the window too).
         crossWindow = true;
       }
     }
 
-    // Suppression set: onActivated fires for our own tabs.update too.
-    suppressTabs.add(tabId);
-    const oldTimer = suppressTimers.get(tabId);
-    if (oldTimer) clearTimeout(oldTimer);
-    suppressTimers.set(tabId, setTimeout(function () {
-      suppressTabs.delete(tabId); suppressTimers.delete(tabId);
-    }, 1000)); // safety: update no-op'd / event never arrived
+    // Forty-ninth log: the content script can see what Chrome's window APIs
+    // cannot — document.visibilityState / document.hasFocus() read from the
+    // ISOLATED world report the REAL page state (the MAIN-world
+    // visibility-keepalive override cannot touch that side), so an occluded
+    // window or an OS focus held by another application surfaces here as
+    // forceWindowFocus even when getLastFocused still names the scrape window.
+    const forceWindowFocus = !!(opts && opts.forceWindowFocus);
+    let focusedProps = null;
 
-    try { await chrome.tabs.update(tabId, { active: true }); }
-    catch (e) {
-      suppressTabs.delete(tabId);
-      const t = suppressTimers.get(tabId);
-      if (t) { clearTimeout(t); suppressTimers.delete(tabId); }
-      return { ok: false, reason: 'tabs.update failed: ' + (e && e.message || String(e)) };
+    if (!scrapeTab.active) {
+      // Suppression set: onActivated fires for our own tabs.update too.
+      suppressTabs.add(tabId);
+      const oldTimer = suppressTimers.get(tabId);
+      if (oldTimer) clearTimeout(oldTimer);
+      suppressTimers.set(tabId, setTimeout(function () {
+        suppressTabs.delete(tabId); suppressTimers.delete(tabId);
+      }, 1000)); // safety: update no-op'd / event never arrived
+
+      try { await chrome.tabs.update(tabId, { active: true }); }
+      catch (e) {
+        suppressTabs.delete(tabId);
+        const t = suppressTimers.get(tabId);
+        if (t) { clearTimeout(t); suppressTimers.delete(tabId); }
+        return { ok: false, reason: 'tabs.update failed: ' + (e && e.message || String(e)) };
+      }
+      // Cross-window used to deliberately NOT raise the window (thirteenth
+      // log: within-window activation only, user OS focus untouched). The
+      // forty-ninth log supersedes that: frame production requires the
+      // focused window, and the user explicitly authorized focus priority
+      // for correct execution over manual focus.
+      if (crossWindow || forceWindowFocus) {
+        focusedProps = await focusScrapeWindow(scrapeTab.windowId);
+      }
+      return {
+        ok: true, activated: true, // sticky: no restore
+        crossWindow: crossWindow || undefined,
+        focusedWindow: focusedProps ? true : undefined
+      };
     }
-    return { ok: true, activated: true, crossWindow: crossWindow || undefined }; // sticky: no restore
+
+    // Tab already active in its window. Forty-ninth log: this used to return
+    // "already active" unconditionally — but a tab whose WINDOW lost OS
+    // focus produces no frames either; the forty-ninth-log hover ops kept
+    // answering "already active" while the feed froze at count 2 then 8.
+    // Re-assert window focus when the evidence says the page is not
+    // visible/focused.
+    if (crossWindow || forceWindowFocus) {
+      focusedProps = await focusScrapeWindow(scrapeTab.windowId);
+      return {
+        ok: true, activated: false,
+        focusedWindow: focusedProps ? true : undefined,
+        reason: focusedWindowReason(focusedProps)
+      };
+    }
+    return { ok: true, activated: false, reason: 'already active' };
+  }
+
+  function focusedWindowReason(focusedProps) {
+    return focusedProps ? 'window focus re-asserted' : 'already active';
   }
 
   const api = {

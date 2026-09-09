@@ -139,6 +139,20 @@
       matchEvents: ['CLICK_CONTAINERS_TRANSIENT'],
       origin: '2026-09-09 forty-eighth live log; the expand step clicked before the feed mounted while the same run\'s extract step matched the same container 4x, and CLICK_CONTAINERS_EMPTY vetoed a completed run',
       body: 'A $clickInList step whose container selector matches 0 does not always mean the selector is wrong: on mount-lazy feeds the click step can simply run before the content mounts. The verify corroboration check scans the SAME run\'s later steps — when a later container-scoped call ($extractList/$extractWithHover/etc.) matches the IDENTICAL container selector, the zero-match is reclassified as a mount-timing transient (CLICK_CONTAINERS_TRANSIENT, advisory) and the run is not vetoed. When the advisory fires: (1) do NOT touch the container selector — later steps prove it is right; (2) gate the clicking step on readiness instead: a count poll ($count(containerSel) + return {done:false} under maxIterations>1), or $wait on the container, so the click runs only after the list exists; (3) keep the click step\'s onFailure edge honest (skip-and-continue or terminate, per the requirement) rather than relying on the extract step to mask a no-op click. An UNcorroborated zero (no later step ever matches the selector) stays a red CLICK_CONTAINERS_EMPTY: that is a genuinely wrong selector, and the same-run corroboration is precisely the evidence that separates the two.'
+    },
+    {
+      id: 'scroll-count-frozen',
+      title: 'A feed count frozen at a nonzero value across scroll iterations is renderer gating or genuine exhaustion — read the evidence before rewriting the step',
+      matchEvents: ['SCROLL_COUNT_FROZEN'],
+      origin: '2026-09-09 forty-ninth live log; the verify count froze at 2 for 7 iterations, jumped to 8, froze for 10 more, and the scroll step was rewritten seven times with no visibility evidence',
+      body: 'When a scroll loop reports the same nonzero item count across a trailing streak of iterations, two very different causes produce the identical symptom, and the evidence picks the branch: (1) RENDERER GATING — the page reports itself hidden or unfocused (pageState in the scroll diagnostics) and the rAF frame sample shows ~0 ticks, meaning the browser stopped producing frames for the tab and lazy-load callbacks cannot fire. Every scroll op now re-asserts tab activation AND window focus automatically, so re-run before concluding anything; if pageState stays gated check `scrapewright throttle on` (occluded-window launch flags). (2) GENUINE EXHAUSTION — frames flow and the count is simply all the feed had; accept the achieved count or renegotiate the contract with io.confirm. Do NOT rewrite the container selector or reshape the scroll step first: a frozen count says nothing about selectors (the same selectors matched N items fine). grewFrom in the census entry shows the count DID grow earlier in the run — growth that stops mid-run is the gating fingerprint, not a selector regression.'
+    },
+    {
+      id: 'duplicate-id-fallback',
+      title: 'The same id value across several records is a container-level fallback, not duplicate content',
+      matchEvents: ['DUPLICATE_ID_VALUES'],
+      origin: '2026-09-09 forty-ninth live log; three of eight records shipped the shared owner/page id as postId on a green verify while the per-record ids lived one attr up inside each card',
+      body: 'An id-like field (postId, videoId, ...) whose value repeats across records almost never means the records are duplicates — it means the extractor read a value every record SHARES (the list owner id, the container permalink) instead of a per-record identifier. The census names the duplicated value and the record ordinals. Re-probe one of the listed records and look one level deeper: per-record ids live on per-record elements — the record link href, a data attr on the card — never on the shared container. Combine with the empty-ratio census: records with an EMPTY id and records with the SHARED id usually fail for the same reason (two link shapes, one selector).'
     }
   ];
 

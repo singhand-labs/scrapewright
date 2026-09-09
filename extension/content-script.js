@@ -209,7 +209,16 @@
           for (var j = 0; j < anchors.length; j++) {
             var anchorEl = anchors[j];
             var anchorHref = '';
-            try { anchorHref = anchorEl.getAttribute('href') || ''; } catch (_) {}
+            try {
+              anchorHref = anchorEl.getAttribute('href') || '';
+              // Forty-ninth log: mirrors lib/list-extract-ops.js — the anchor
+              // is often the label span inside the link; harvest the enclosing
+              // link's href when the match carries none of its own.
+              if (!anchorHref && typeof anchorEl.closest === 'function') {
+                const enclosing = anchorEl.closest('a[href]');
+                if (enclosing) anchorHref = enclosing.getAttribute('href') || '';
+              }
+            } catch (_) {}
             var anchorText = '';
             try { anchorText = (anchorEl.textContent || '').trim().slice(0, 120); } catch (_) {}
             try {
@@ -939,22 +948,94 @@
   // cross-window refusals, missing chrome.tabs, etc.). Errors in the message
   // channel do NOT abort `fn`.
   async function withTabActivation(label, fn) {
+    // Forty-ninth log: real page focus evidence, read from THIS (isolated)
+    // world — the MAIN-world visibility-keepalive override cannot lie on
+    // this side. A page that reports itself hidden/unfocused cannot produce
+    // compositor frames regardless of tab-active state (the window lost OS
+    // focus, is occluded, or another app holds focus), so the background
+    // must re-assert window focus even when Chrome's own window APIs
+    // believe everything is fine.
+    let needsWindowFocus = false;
     try {
-      const req = await chrome.runtime.sendMessage({ type: 'TAB_ACTIVATION_REQUEST' });
+      const vis = (typeof document !== 'undefined' && document.visibilityState) || '';
+      const focused = (typeof document !== 'undefined' && typeof document.hasFocus === 'function')
+        ? document.hasFocus() : true;
+      needsWindowFocus = !!(vis && vis !== 'visible') || focused === false;
+    } catch (_) { /* evidence is best-effort */ }
+    let req = null;
+    try {
+      req = await chrome.runtime.sendMessage({ type: 'TAB_ACTIVATION_REQUEST', needsWindowFocus: needsWindowFocus });
       notifyBackgroundDiagnostic('tabActivation_request', {
         label: label,
         ok: !!(req && req.ok),
         activated: !!(req && req.ok && req.activated),
         crossWindow: !!(req && req.crossWindow),
+        focusedWindow: !!(req && req.focusedWindow),
+        needsWindowFocus: needsWindowFocus,
         reason: (req && req.reason) || null
       });
     } catch (e) {
       notifyBackgroundDiagnostic('tabActivation_request', {
-        label: label, ok: false,
+        label: label, ok: false, needsWindowFocus: needsWindowFocus,
         reason: 'sendMessage error: ' + (e && e.message || String(e))
       });
     }
     return await fn(); // RC56 sticky: activation persists, no release message
+  }
+
+  // Forty-ninth log: the two pieces of evidence that explain a scroll that
+  // moves nothing and loads nothing. Both read REAL values from the isolated
+  // world — the visibility-keepalive MAIN-world override cannot touch them.
+  function readPageFrameState() {
+    const st = { visibilityState: null, hasFocus: null };
+    try { st.visibilityState = document.visibilityState || null; } catch (_) {}
+    try {
+      if (typeof document.hasFocus === 'function') st.hasFocus = document.hasFocus();
+    } catch (_) {}
+    return st;
+  }
+
+  // rAF ticks over a short window: an active visible tab fires ~60/s; a
+  // throttled/frozen renderer fires ~0. This distinguishes "genuinely
+  // exhausted feed" (frames flowing, count stable) from "renderer gated"
+  // (no frames, lazy-load callbacks cannot fire) — the forty-ninth-log
+  // model guessed seven scroll shapes across v1-v7 because nothing told it
+  // which of the two it was facing.
+  function sampleFrameProduction(sampleMs) {
+    const ms = typeof sampleMs === 'number' && sampleMs > 0 ? sampleMs : 300;
+    const t0 = Date.now();
+    let ticks = 0;
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        resolve({ rAFTicks: ticks, sampleMs: Date.now() - t0 });
+      };
+      try {
+        if (typeof window.requestAnimationFrame !== 'function') { finish(); return; }
+        const tick = () => { ticks++; if (!done) window.requestAnimationFrame(tick); };
+        window.requestAnimationFrame(tick);
+        setTimeout(finish, ms);
+      } catch (_) { finish(); }
+    });
+  }
+
+  // No-progress scroll results carry the page state (always) and an rAF
+  // sample + teaching note when the state looks gated. Progress means
+  // frames exist — evidence is only wanted when the scroll stalls.
+  async function attachScrollEvidence(result) {
+    if (!result || result.scrolled !== false) return result;
+    const pageState = readPageFrameState();
+    result.pageState = pageState;
+    const gated = (pageState.visibilityState && pageState.visibilityState !== 'visible') ||
+                  pageState.hasFocus === false;
+    if (gated) {
+      result.frameSample = await sampleFrameProduction(300);
+      result.throttleNote = 'page reports ' + JSON.stringify(pageState) +
+        ' while the scroll made no progress — the renderer is not producing frames for this tab, so lazy-load callbacks cannot fire. Window focus is re-asserted automatically by every scroll op; if this persists check `scrapewright throttle on` (occluded-window launch flags).';
+    }
+    return result;
   }
 
   sendDebugLog('info', 'content-script', 'Content script loaded', { url: location.href, readyState: document.readyState });
@@ -1188,7 +1269,9 @@
         }
         case 'waitForStable': {
           const __t0 = Date.now();
-          result = await domWaitForStable(data.selector, data.args && data.args[0]);
+          const __r = await domWaitForStable(data.selector, data.args && data.args[0]);
+          result = __r.result;
+          _diagnostics = __r._diagnostics;
           recordDomActivity('$waitForStable', data.selector, result ? 1 : 0, Date.now() - __t0);
           break;
         }
@@ -1226,7 +1309,9 @@
         }
         case 'scrollBy': {
           const __t0 = Date.now();
-          result = await domScrollBy(data.selector, data.args && data.args[0]);
+          const __r = await domScrollBy(data.selector, data.args && data.args[0]);
+          result = __r.result;
+          _diagnostics = __r._diagnostics;
           recordDomActivity('$scrollBy', data.selector, result && result.scrolled ? 1 : 0, Date.now() - __t0);
           break;
         }
@@ -1238,7 +1323,9 @@
         }
         case 'scrollIntoView': {
           const __t0 = Date.now();
-          result = await domScrollIntoView(data.selector);
+          const __r = await domScrollIntoView(data.selector);
+          result = __r.result;
+          _diagnostics = __r._diagnostics;
           recordDomActivity('$scrollIntoView', data.selector, result && result.found ? 1 : 0, Date.now() - __t0);
           break;
         }
@@ -1812,34 +1899,54 @@
   // consecutive checks — a content-stability completion signal for streaming
   // content (AI answers, live feeds). Returns false on timeout (not stable).
   async function domWaitForStable(sel, opts) {
-    opts = opts || {};
-    const attr = opts.attr || null;
-    const interval = opts.interval || 1500;
-    const stableChecks = opts.stableChecks || 2;
-    const maxMs = opts.maxMs || 20000;
-    const deadline = Date.now() + maxMs;
-    let lastVal = null;
-    let stableCount = 0;
-    while (Date.now() < deadline) {
-      const found = querySelectorDeep(sel);
-      let val = null;
-      if (found && found.element) {
-        val = attr ? found.element.getAttribute(attr) : (found.element.textContent || '').trim();
-      }
-      if (val && val.length > 0 && val === lastVal) {
-        stableCount++;
-        if (stableCount >= stableChecks) {
-          sendDebugLog('info', 'content-script', 'domWaitForStable stable', { selector: sel, stableCount });
-          return true;
+    // Forty-ninth log: activation coverage — waiting for streaming content
+    // to settle is waiting on rendering, which a throttled tab never does.
+    return await withTabActivation('waitForStable', async () => {
+      opts = opts || {};
+      const attr = opts.attr || null;
+      const interval = opts.interval || 1500;
+      const stableChecks = opts.stableChecks || 2;
+      const maxMs = opts.maxMs || 20000;
+      const deadline = Date.now() + maxMs;
+      let lastVal = null;
+      let stableCount = 0;
+      let stable = false;
+      while (Date.now() < deadline) {
+        const found = querySelectorDeep(sel);
+        let val = null;
+        if (found && found.element) {
+          val = attr ? found.element.getAttribute(attr) : (found.element.textContent || '').trim();
         }
-      } else {
-        stableCount = 0;
-        lastVal = val;
+        if (val && val.length > 0 && val === lastVal) {
+          stableCount++;
+          if (stableCount >= stableChecks) {
+            stable = true;
+            break;
+          }
+        } else {
+          stableCount = 0;
+          lastVal = val;
+        }
+        await new Promise(r => setTimeout(r, interval));
       }
-      await new Promise(r => setTimeout(r, interval));
-    }
-    sendDebugLog('info', 'content-script', 'domWaitForStable not stable within maxMs', { selector: sel, maxMs });
-    return false;
+      const diag = {
+        api: 'waitForStable',
+        selector: sel || null,
+        stable: stable,
+        stableCount: stableCount
+      };
+      if (!stable) {
+        // Forty-ninth log: a not-stable timeout on a page that is hidden or
+        // unfocused is a throttle diagnosis, not a content diagnosis — the
+        // streaming content may simply never have been allowed to arrive.
+        const pageState = readPageFrameState();
+        diag.pageState = pageState;
+        sendDebugLog('info', 'content-script', 'domWaitForStable not stable within maxMs', { selector: sel, maxMs, pageState });
+      } else {
+        sendDebugLog('info', 'content-script', 'domWaitForStable stable', { selector: sel, stableCount });
+      }
+      return { result: stable, _diagnostics: diag };
+    });
   }
 
   function domCount(sel) {
@@ -2028,46 +2135,51 @@
     if (!subSel || typeof subSel !== 'string') {
       throw new Error('$clickInList subSel must be a non-empty string');
     }
-    let containers;
-    try {
-      containers = querySelectorAllDeep(containerSel);
-    } catch (err) {
-      throw new Error('$clickInList container selector invalid: ' + (err.message || err));
-    }
-    sendDebugLog('info', 'content-script', 'domClickInList resolved containers', {
-      selector: containerSel,
-      count: containers.length,
-      subSelector: subSel
+    // Forty-ninth log: activation coverage — the expand-click's lazy
+    // hydration after each click needs compositor frames like every other
+    // rendering-dependent op.
+    return await withTabActivation('clickInList', async () => {
+      let containers;
+      try {
+        containers = querySelectorAllDeep(containerSel);
+      } catch (err) {
+        throw new Error('$clickInList container selector invalid: ' + (err.message || err));
+      }
+      sendDebugLog('info', 'content-script', 'domClickInList resolved containers', {
+        selector: containerSel,
+        count: containers.length,
+        subSelector: subSel
+      });
+      const delayMs = (opts && typeof opts.delayMs === 'number') ? opts.delayMs : 500;
+      const ops = getListExtractOps();
+      if (!ops) {
+        throw new Error('$clickInList runtime missing: lib/list-extract-ops.js did not attach window.ListExtractOps. Reload the extension and refresh the target tab.');
+      }
+      const clickResult = ops.clickInListItems(
+        containers,
+        subSel,
+        (el) => { el.click(); },
+        delayMs
+      );
+      // The pure helper is synchronous; per-click spacing is approximated by a single
+      // post-batch sleep. For long lists requiring strict per-click timing, split across
+      // orchestrator iterations (see DSL guide's EXPAND-THEN-EXTRACT block).
+      if (delayMs > 0 && clickResult.clicked > 1) {
+        await new Promise(r => setTimeout(r, Math.min(delayMs, 500)));
+      }
+      sendDebugLog('info', 'content-script', 'domClickInList done', {
+        selector: containerSel,
+        clicked: clickResult.clicked,
+        errors: clickResult.errors.length
+      });
+      // console.log 2026-08-23: total clickInList failure (0 clicked, all
+      // containers 'subSel not found') was invisible to autoFix — instrumented
+      // like the extractList family so the evidence rides the DOM_RESPONSE.
+      const _diagnostics = (typeof ops.computeClickInListDiagnostics === 'function')
+        ? ops.computeClickInListDiagnostics(containers, subSel, containerSel, clickResult)
+        : null;
+      return { result: { clicked: clickResult.clicked, errors: clickResult.errors }, _diagnostics };
     });
-    const delayMs = (opts && typeof opts.delayMs === 'number') ? opts.delayMs : 500;
-    const ops = getListExtractOps();
-    if (!ops) {
-      throw new Error('$clickInList runtime missing: lib/list-extract-ops.js did not attach window.ListExtractOps. Reload the extension and refresh the target tab.');
-    }
-    const clickResult = ops.clickInListItems(
-      containers,
-      subSel,
-      (el) => { el.click(); },
-      delayMs
-    );
-    // The pure helper is synchronous; per-click spacing is approximated by a single
-    // post-batch sleep. For long lists requiring strict per-click timing, split across
-    // orchestrator iterations (see DSL guide's EXPAND-THEN-EXTRACT block).
-    if (delayMs > 0 && clickResult.clicked > 1) {
-      await new Promise(r => setTimeout(r, Math.min(delayMs, 500)));
-    }
-    sendDebugLog('info', 'content-script', 'domClickInList done', {
-      selector: containerSel,
-      clicked: clickResult.clicked,
-      errors: clickResult.errors.length
-    });
-    // console.log 2026-08-23: total clickInList failure (0 clicked, all
-    // containers 'subSel not found') was invisible to autoFix — instrumented
-    // like the extractList family so the evidence rides the DOM_RESPONSE.
-    const _diagnostics = (typeof ops.computeClickInListDiagnostics === 'function')
-      ? ops.computeClickInListDiagnostics(containers, subSel, containerSel, clickResult)
-      : null;
-    return { result: { clicked: clickResult.clicked, errors: clickResult.errors }, _diagnostics };
   }
 
   // ===== Scroll APIs =====
@@ -2088,67 +2200,76 @@
   }
 
   async function domScrollBy(sel, deltaY) {
-    const target = resolveScrollTarget(sel);
-    const root = target || document.scrollingElement || document.documentElement;
-    const prevY = root.scrollTop || 0;
-    const delta = typeof deltaY === 'number' && isFinite(deltaY) ? Math.trunc(deltaY) : 0;
-    if (delta === 0) {
-      return { scrolled: false, prevY, newY: prevY };
-    }
-    root.scrollBy ? root.scrollBy(0, delta) : (root.scrollTop = prevY + delta);
-    const newY = root.scrollTop || 0;
-    if (newY !== prevY) {
-      sendDebugLog('info', 'content-script', 'domScrollBy', {
-        selector: sel || '(window)',
-        deltaY: delta,
-        prevY,
-        newY
-      });
-      return { scrolled: true, prevY, newY };
-    }
-    // Forty-sixth log: a frozen WINDOW root is not a frozen page. The feed
-    // may scroll inside an inner overflow container — the window sits at its
-    // bottom while the feed has more, and $scrollBy loops reported
-    // scrolled:false forever (scrollUntil then declared the feed exhausted
-    // on window evidence alone). Mirror domScrollToBottom's inner-container
-    // fallback: when the primary root made NO position change, probe for a
-    // real scrollable element and scroll THAT. Coordinates switch to the
-    // root that actually scrolled so no-progress loops still terminate
-    // correctly; the window coordinate survives as rootY and the fallback
-    // key discloses the path.
-    const ops = getScrollOps();
-    const inner = (ops && typeof ops.findScrollableContainer === 'function')
-      ? ops.findScrollableContainer(document)
-      : null;
-    if (inner && inner !== root) {
-      const innerPrev = inner.scrollTop || 0;
-      inner.scrollBy ? inner.scrollBy(0, delta) : (inner.scrollTop = innerPrev + delta);
-      const innerNew = inner.scrollTop || 0;
-      sendDebugLog('info', 'content-script', 'domScrollBy', {
-        selector: sel || '(window)',
-        deltaY: delta,
-        prevY,
-        newY,
-        fallback: 'inner-container',
-        innerTag: inner.tagName,
-        innerPrevY: innerPrev,
-        innerNewY: innerNew
-      });
-      return {
-        scrolled: innerNew !== innerPrev,
-        prevY: innerPrev,
-        newY: innerNew,
-        rootY: newY,
-        fallback: 'inner-container'
+    // Forty-ninth log: scroll-driven lazy-load needs compositor frames
+    // exactly like the trusted-wheel path — domScrollToBottom has been
+    // wrapped since RC20 while scrollBy/scrollIntoView/waitForStable/
+    // clickInList were the uncovered remainder, so a user switching away
+    // froze the feed (count stuck at 2 then 8 across 18 iterations) with no
+    // re-activation ever attempted.
+    return await withTabActivation('scrollBy', async () => {
+      const target = resolveScrollTarget(sel);
+      const root = target || document.scrollingElement || document.documentElement;
+      const prevY = root.scrollTop || 0;
+      const delta = typeof deltaY === 'number' && isFinite(deltaY) ? Math.trunc(deltaY) : 0;
+      const finish = async (r) => {
+        await attachScrollEvidence(r);
+        sendDebugLog('info', 'content-script', 'domScrollBy', {
+          selector: sel || '(window)',
+          deltaY: delta,
+          prevY: r.prevY,
+          newY: r.newY,
+          scrolled: r.scrolled,
+          pageState: r.pageState || null,
+          frameSample: r.frameSample || null
+        });
+        return {
+          result: r,
+          _diagnostics: {
+            api: 'scrollBy',
+            selector: sel || null,
+            moved: !!r.scrolled,
+            pageState: r.pageState || null,
+            frameSample: r.frameSample || null,
+            throttleNote: r.throttleNote || null
+          }
+        };
       };
-    }
-    sendDebugLog('info', 'content-script', 'domScrollBy', {
-      selector: sel || '(window)',
-      deltaY: delta,
-      prevY,
-      newY
+      if (delta === 0) {
+        return finish({ scrolled: false, prevY, newY: prevY });
+      }
+      root.scrollBy ? root.scrollBy(0, delta) : (root.scrollTop = prevY + delta);
+      const newY = root.scrollTop || 0;
+      if (newY !== prevY) {
+        return finish({ scrolled: true, prevY, newY });
+      }
+      // Forty-sixth log: a frozen WINDOW root is not a frozen page. The feed
+      // may scroll inside an inner overflow container — the window sits at its
+      // bottom while the feed has more, and $scrollBy loops reported
+      // scrolled:false forever (scrollUntil then declared the feed exhausted
+      // on window evidence alone). Mirror domScrollToBottom's inner-container
+      // fallback: when the primary root made NO position change, probe for a
+      // real scrollable element and scroll THAT. Coordinates switch to the
+      // root that actually scrolled so no-progress loops still terminate
+      // correctly; the window coordinate survives as rootY and the fallback
+      // key discloses the path.
+      const ops = getScrollOps();
+      const inner = (ops && typeof ops.findScrollableContainer === 'function')
+        ? ops.findScrollableContainer(document)
+        : null;
+      if (inner && inner !== root) {
+        const innerPrev = inner.scrollTop || 0;
+        inner.scrollBy ? inner.scrollBy(0, delta) : (inner.scrollTop = innerPrev + delta);
+        const innerNew = inner.scrollTop || 0;
+        return finish({
+          scrolled: innerNew !== innerPrev,
+          prevY: innerPrev,
+          newY: innerNew,
+          rootY: newY,
+          fallback: 'inner-container'
+        });
+      }
+      return finish({ scrolled: false, prevY, newY });
     });
-    return { scrolled: false, prevY, newY };
   }
 
   async function domScrollToBottom(sel) {
@@ -2357,19 +2478,26 @@
   }
 
   async function domScrollIntoView(sel) {
-    if (!sel) throw new Error('$scrollIntoView requires a selector');
-    const found = querySelectorDeep(sel);
-    if (!found) throw new Error('ELEMENT_NOT_FOUND: ' + sel);
-    const el = found.element;
-    if (typeof el.scrollIntoView === 'function') {
-      // behavior:'instant' avoids the smooth-scroll animation so subsequent
-      // $extract calls land on the final layout. Older browsers ignore the
-      // options arg and fall back to the default (block:'start' equivalent).
-      try { el.scrollIntoView({ block: 'start', behavior: 'instant' }); }
-      catch { el.scrollIntoView(); }
-    }
-    sendDebugLog('info', 'content-script', 'domScrollIntoView', { selector: sel });
-    return { found: true };
+    // Forty-ninth log: same activation coverage as the rest of the scroll
+    // family — scrolling a lazy-load feed into view needs frames.
+    return await withTabActivation('scrollIntoView', async () => {
+      if (!sel) throw new Error('$scrollIntoView requires a selector');
+      const found = querySelectorDeep(sel);
+      if (!found) throw new Error('ELEMENT_NOT_FOUND: ' + sel);
+      const el = found.element;
+      if (typeof el.scrollIntoView === 'function') {
+        // behavior:'instant' avoids the smooth-scroll animation so subsequent
+        // $extract calls land on the final layout. Older browsers ignore the
+        // options arg and fall back to the default (block:'start' equivalent).
+        try { el.scrollIntoView({ block: 'start', behavior: 'instant' }); }
+        catch { el.scrollIntoView(); }
+      }
+      sendDebugLog('info', 'content-script', 'domScrollIntoView', { selector: sel });
+      return {
+        result: { found: true },
+        _diagnostics: { api: 'scrollIntoView', selector: sel || null }
+      };
+    });
   }
 
   // $hover DSL primitive: dispatch a trusted mouseMoved at the anchor's
