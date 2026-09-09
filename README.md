@@ -10,16 +10,15 @@
 ![Chrome](https://img.shields.io/badge/Chrome-MV3-brightgreen)
 ![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
-Scrapewright is an **LLM-powered intelligent web data scraping platform**: describe "what you want to scrape" in natural language, and the LLM analyzes the target page, generates the scraping script, and deploys it as a long-running service. With Scrapewright you build and deploy scraping/extraction services without learning a framework, without writing CSS selectors, and without fighting anti-bot measures — and maintenance after a site redesign becomes almost effortless.
+Scrapewright is an **LLM-powered intelligent web data scraping platform**: describe "what you want to scrape" in natural language, and an AI research session analyzes the target page, writes the scraping step graph, verifies it end-to-end, and deploys it as a long-running service. You build and deploy scraping/extraction services without learning a framework, without writing CSS selectors, and without fighting anti-bot measures — and maintenance after a site redesign becomes almost effortless.
 
-**Scrapewright uses AI to build web scraping services**: in the wizard you describe the requirement in natural language; the AI opens the target page, analyzes its structure, generates the scraping script, and test-runs it on the spot. Once verified, it becomes a standard HTTP endpoint for programs, scripts, or AI agents to call. At run time the deployed service **no longer calls the LLM** and consumes no tokens — far cheaper and faster than agent-driven browser control. When a script fails, the AI analyzes the DOM snapshot and repairs it automatically; the same mechanism applies after a site redesign. Every service can also export a Markdown API doc for other AI agents to consume.
+**Scrapewright uses AI to build web scraping services**: in the wizard you describe the requirement in natural language; the AI opens the target page in a live research session, probes its structure with real reads, agrees with you on the I/O contract, generates the step scripts, and test-runs them to green — revising on every honest failure. Once verified, the service becomes a standard HTTP endpoint for programs, scripts, or AI agents to call. At run time the deployed service **no longer calls the LLM** and consumes no tokens — far cheaper and faster than agent-driven browser control. When a script fails, the AI analyzes the DOM snapshot and repairs it automatically; the same mechanism applies after a site redesign. Every service can also export a Markdown API doc for other AI agents to consume.
 
 It runs as a Chrome extension inside the **browser you already use**, which gives it three inherent advantages:
 
 - **Login state reused as-is** — scrape sites you are already logged into, without cookie configuration or scripted logins
 - **Full page fidelity** — anything visible in the browser is extractable: JS-rendered content, nested iframes, pagination, hover popups, lazy-rendered content, throttling restrictions, and per-item detail pages
 - **No automation fingerprint** — no headless-browser markers; requests come from a genuine browser
-
 
 > **60-second start**
 >
@@ -46,11 +45,12 @@ The `examples/` directory ships ready-to-use scraping script samples you can imp
 
 Beyond scraping, the project itself doubles as a lightweight **web test automation** / browser automation tool: click, type, wait, assert, branch — declarative, replayable, self-healing.
 
-For internals, see the [Technical Whitepaper](docs/technical-whitepaper.en.md) (architecture, modules, customization guide).
+For internals, see the [Technical Whitepaper](docs/technical-whitepaper.en.md) (architecture, modules, customization guide) and the [assistant memory digest](docs/assistant-memory.md) (design principles, 50-round incident-driven evolution).
 
 ## Table of Contents
 
 - [Background](#background)
+- [Architecture at a Glance](#architecture-at-a-glance)
 - [System Requirements](#system-requirements)
 - [Quick Start](#quick-start) — [Installation](#installation) · [Create a Scraping Service](#create-a-scraping-service) · [Manage Services](#manage-services) · [Call a Service](#call-a-service)
 - [scrapewright CLI Reference](#scrapewright-cli-reference)
@@ -70,12 +70,33 @@ Traditional tools for extracting web data (Scrapy, Selenium, Puppeteer/Playwrigh
 | **Not reusable** | The spider you wrote for site A won't help with structurally similar site B |
 | **No uniform interface** | Every job has its own I/O shape; orchestration goes nowhere |
 
-Scrapewright's approach: **let AI configure the scrape inside a real browser, and standardize the result as an HTTP service.**
+Scrapewright's approach: **let AI research the scrape inside a real browser, and standardize the result as an HTTP service.**
 
-- **AI-driven** — describe the need in natural language; the LLM analyzes the page, writes the script, and self-repairs on failure
+- **AI-driven** — describe the need in natural language; the research session writes the script and self-repairs on failure
 - **Real browser** — a Chrome extension running in your daily browser, reusing logins, cookies, and fingerprint as-is
-- **Uniform interface** — JSON Schema on both input and output; the external shape never changes
+- **Uniform interface** — JSON Schema on both input and output (confirmed by you before deployment); the external shape never changes
 - **Visual wizard** — a three-stage research-first flow (Requirements → AI Research → Review & Deploy); non-technical users can do it
+
+## Architecture at a Glance
+
+```
+External program ──HTTP──▶ Node.js host (OS service) ──HTTP long-poll──▶ Chrome extension (MV3)
+                                                                        │
+                                              ┌─────────────────────────┤
+                                              │ Service Worker: job queue, step orchestrator,
+                                              │ LLM client, auto-fix, tab activation
+                                              │
+                                              │ Offscreen document (sandbox) ── runs step scripts
+                                              │        │  $ API relay
+                                              ▼        ▼
+                                              Content script in the scrape tab (real DOM)
+```
+
+- **Two processes:** a lightweight Node.js HTTP host (installed as a systemd/launchd/scheduled-task service) bridges external callers to the extension over stateless HTTP long-polling — no fragile native-messaging connections, curl-debuggable, identical protocol for local and distributed deployment.
+- **Step graphs, not scripts:** a service is a small state machine of named steps (`onSuccess`/`onFailure` edges, polling via `maxIterations`) executed in a sandboxed iframe against the real page — see [Whitepaper §4](docs/technical-whitepaper.en.md).
+- **20-primitive scraping DSL** (`$extractList`, `$extractWithHover`, `$openTab`, `$scrollToBottom`, …) — AI-generated and hand-editable; see [Whitepaper §7](docs/technical-whitepaper.en.md).
+- **Research session engine:** the wizard's AI is driven through a tool protocol (page/probe/verify/confirm tools) with a grounding gate — no selector enters the service without an observation receipt; see [Whitepaper §5](docs/technical-whitepaper.en.md).
+- **Five-layer anti-throttle stack** keeps background-tab lazy-load working (visibility keepalive → trusted-input mode → Chrome launch flags → trusted wheel events → sticky tab + window focus); see [Whitepaper §9](docs/technical-whitepaper.en.md).
 
 ## System Requirements
 
@@ -111,7 +132,7 @@ Then open the Scrapewright Chrome extension → **Options** → **Server Configu
 
 1. Extension icon → **Options** → **Settings** (top-right)
 2. Under **LLM Configuration**, fill in:
-   - **Provider / Model / API Key** — OpenAI, Moonshot / Kimi, Anthropic, GLM (pay-as-you-go), or GLM Coding Plan (a same-company preset that defaults to the coding-plan Base URL, where plan quota is honored)
+   - **Provider / Model / API Key** — OpenAI, Moonshot / Kimi, Anthropic, GLM (pay-as-you-go), or GLM Coding Plan (a same-company preset that defaults to the coding-plan Base URL, where plan quota is honored; the native-Anthropic lane is routed automatically when you pick it)
    - **Base URL** (optional) — custom or OpenAI-compatible gateway; must include the path prefix (e.g. `https://api.openai.com/v1`)
    - **Protocol** (`auto` / `anthropic` / `openai`, default `auto`) — auto prefers the native Anthropic Messages protocol and falls back to OpenAI chat/completions when the endpoint doesn't speak it
    - **Max output tokens** (default 16384) — raise for reasoning models that burn "thinking" tokens and truncate output
@@ -125,7 +146,7 @@ On the Options page click **+ New Service** to enter the research-first AI wizar
 | Stage | What you do |
 |-------|-------------|
 | **1 · Requirements** | Enter the target URL + the requirement in natural language (input parameters, page operations, which fields to return). Confirm a plain-language restatement of your requirement, answer any clarifying questions, then click **Research** |
-| **2 · AI Research** | Watch the live session: the AI opens the page, probes its structure with real reads, discovers and verifies selectors, agrees with you on the I/O contract **and the test request values** (the concrete inputs every test run sends — you can edit them in the same panel), generates the step scripts, and test-runs them to green — revising on every honest failure. You can step in at any point (annotations, feedback, contract revisions) |
+| **2 · AI Research** | Watch the live session: the AI opens the page, probes its structure with real reads, discovers and verifies selectors, agrees with you on the I/O contract **and the test request values** (the concrete inputs every test run sends — you can edit them in the same panel), generates the step scripts, and test-runs them to green — revising on every honest failure. You can step in at any point (annotations, feedback, contract revisions); a turn-budget knob lets long research sessions run longer |
 | **3 · Review & Deploy** | Inspect the verified result (you can re-run tests, tweak steps/schemas, or describe problems in your own words). Click deploy and the service starts serving |
 
 <p align="center">
@@ -135,9 +156,9 @@ On the Options page click **+ New Service** to enter the research-first AI wizar
   <em>Requirements stage: describe the requirement in natural language; the AI takes it from there</em>
 </p>
 
-**What the research session actually does.** This is not a one-shot generation: the wizard runs an auditable loop — observe (DOM probes, element annotation, selector diagnostics) → hypothesize (candidate selectors and field mappings) → verify (a real test run scored against your requirement) → confirm (the I/O contract **and the test request values** are shown to you for approval before anything is committed). Every claim the AI makes must be grounded in something it actually read on the page; when a verification fails, the session reports the failure honestly and keeps revising rather than shipping a best-effort guess. If the page needs a login or other human action, the wizard surfaces a banner with the matching button.
+**What the research session actually does.** This is not a one-shot generation: the wizard runs an auditable loop — **observe** (DOM probes, element annotation, selector diagnostics) → **hypothesize** (candidate selectors and field mappings) → **verify** (a real test run on a fresh tab, scored against your requirement and layered with ~25 data-driven field detectors: empty-field fingerprints naming exactly which records are empty, duplicate-id and junk-value censuses, relative-timestamp detection, oversized fields, hidden-value hints for count fields) → **confirm** (the I/O contract and the test request values are shown to you for approval before anything is committed — with a readable diff of what changed). Every claim the AI makes must be grounded in something it actually read on the page (a grounding gate rejects artifacts whose selectors were never observed); when a verification fails, the session reports the failure honestly — with per-field evidence — and keeps revising rather than shipping a best-effort guess. Hard-won page lessons from past incidents live in a retrievable knowledge base and attach themselves automatically when the detectors see a matching failure pattern. If the page needs a login or other human action, the wizard surfaces a banner with the matching button.
 
-When the result isn't what you want, describe the problem in your own words (e.g. "publish date is missing") and the session continues from where it stopped — your feedback is folded into the same research loop, not a from-scratch redo. See [Whitepaper §5](docs/technical-whitepaper.en.md) for how it works.
+When the result isn't what you want, describe the problem in your own words (e.g. "publish date is missing") and the session continues from where it stopped — your feedback is folded into the same research loop, not a from-scratch redo. A session stopped by the turn budget can be resumed (raise the knob and continue). See [Whitepaper §5](docs/technical-whitepaper.en.md) for the engine internals.
 
 <p align="center">
   <img src="docs/phase5.png" width="72%" alt="Wizard: review verified results and deploy">
@@ -183,7 +204,7 @@ Full interface details (parameters, states, error codes, page records): see [Scr
 
 | Command | Purpose |
 |---------|---------|
-| `install [--port=N]` | Install the host as an OS background service and start it |
+| `install [--port=N] [--no-autostart]` | Install the host as an OS background service and start it |
 | `status` | Service state + `/health` + port match |
 | `doctor` | Full diagnostics (service, port, path drift, leftover artifacts) |
 | `start` / `stop` / `restart` | Service control |
@@ -245,7 +266,7 @@ Response once the job finishes (abridged):
 ```
 
 - `result` — the structured data, shaped by the service's outputSchema
-- `pages[]` — every page seen during the scrape (URL, title, cleaned HTML), for verifying where data came from
+- `pages[]` — every page seen during the scrape (URL, title, cleaned HTML; deduplicated by URL+content, byte-budgeted), for verifying where data came from
 - `sourcePageId` — stamped on every extracted record, linking it to its source page
 
 ### Other endpoints
@@ -273,6 +294,7 @@ Response once the job finishes (abridged):
 |-------|---------|
 | `ELEMENT_NOT_FOUND` / `SCRIPT_ERROR` | Element missing / script error — the AI attempts auto-repair |
 | `SCRIPT_TIMEOUT` | Script timed out (default 60s) |
+| `POLL_EXHAUSTED` | A polling step exhausted its retries; the message embeds the last returns and their pacing so the AI can tell "page has no more" from "polling too fast" |
 | `LOGIN_REQUIRED` | Target site needs login; log in and retry |
 | `Extension timeout` | Host can't reach the extension — check it's loaded and ports match |
 
@@ -304,7 +326,7 @@ The full stack trace of a boot crash lands in `startup-error.log` next to `host.
 
 ### Lazy-load / infinite-scroll sites under-scrape
 
-Background tabs are throttled by Chrome, so `IntersectionObserver` lazy-loading (social feeds, infinite-scroll lists) may never trigger. Two measures:
+Chrome throttles work in background/occluded tabs, so `IntersectionObserver` lazy-loading (social feeds, infinite-scroll lists) can stall even though the extension auto-activates the scrape tab while scrolling. If a feed still freezes at a fixed count:
 
 ```bash
 ./bin/scrapewright throttle on    # write anti-throttling flags into the Chrome launcher
@@ -312,7 +334,7 @@ Background tabs are throttled by Chrome, so `IntersectionObserver` lazy-loading 
 ./bin/scrapewright throttle status  # verify; throttle off undoes it
 ```
 
-Also enable **Enhanced Scraping Mode** under Options → Settings (dispatches real wheel events when scrolling stalls). How the five-layer anti-throttle stack works: [Whitepaper §9](docs/technical-whitepaper.en.md).
+Also enable **Enhanced Scraping Mode** under Options → Settings (dispatches real wheel events when scrolling stalls). How the five-layer anti-throttle stack works (including per-op tab activation and window-focus re-assertion): [Whitepaper §9](docs/technical-whitepaper.en.md).
 
 ### Code changes not taking effect
 
@@ -325,7 +347,7 @@ Also enable **Enhanced Scraping Mode** under Options → Settings (dispatches re
 
 - **Configure once, reuse forever** — the scrape logic becomes a service, not a script you rewrite each time; schemas on both ends mean callers never care what the target site looks like
 - **Zero-cost login state** — reuses your logged-in browser session; the hardest thing for server-side tools to replicate
-- **Research-first, honest by construction** — the wizard's AI researches the page before writing anything, confirms the I/O contract with you, and reports test failures as failures instead of shipping best-effort guesses
+- **Research-first, honest by construction** — the wizard's AI researches the page before writing anything, confirms the I/O contract with you, and reports test failures as failures (with per-field evidence) instead of shipping best-effort guesses
 - **Self-healing** — auto-fix analyzes failures and rewrites scripts at config time and at runtime; after a redesign, repair beats rewrite
 - **Data stays local** — self-hosted; the LLM only sees page structure at configuration time (never needed at run time)
 - **No token burn at run time** — the LLM is only used at configuration time to research the page and generate the script; once deployed, the script never calls the LLM again — no token cost, fast and cheap
@@ -333,7 +355,7 @@ Also enable **Enhanced Scraping Mode** under Options → Settings (dispatches re
 - **More than scraping** — the same step-graph engine works as lightweight web test automation (click, type, wait, assert, branch)
 - **Scalable** — multi-instance parallel deployment (Docker/K8s) when you need more throughput (see [Whitepaper §12](docs/technical-whitepaper.en.md))
 
-Under the hood: cross-iframe scraping, per-item detail-page drill-down (`$openTab`), hovercard field enrichment with hidden-label resolution (`$extractWithHover` + ARIA `labelledby` chains), streaming-content completion detection (`$waitForStable`), obfuscation-resistant stable selectors, live selector differentials that audit over-filtering, a five-layer stack that keeps background-tab lazy-load working (trusted wheel events + sticky tab activation), and prompt-size guards. The script DSL has 20 primitives — all AI-generated and hand-editable; see [Whitepaper §7](docs/technical-whitepaper.en.md).
+Under the hood: cross-iframe scraping, per-item detail-page drill-down (`$openTab`), hovercard field enrichment with hidden-label resolution (`$extractWithHover` + ARIA `labelledby` chains), streaming-content completion detection (`$waitForStable`), obfuscation-resistant stable selectors, live selector differentials that audit over-filtering, a five-layer stack that keeps background-tab lazy-load working (trusted wheel events + sticky tab activation + window-focus enforcement), scroll evidence (page visibility + frame sampling) that distinguishes renderer throttling from genuine feed exhaustion, and prompt-size guards. The script DSL has 20 primitives — all AI-generated and hand-editable; see [Whitepaper §7](docs/technical-whitepaper.en.md).
 
 ### Comparison
 
@@ -355,7 +377,7 @@ Differences vs sibling products:
 | [Skyvern](https://www.skyvern.com/) / [Browser-use](https://browser-use.com/) | We configure once into a repeatable service (vs interactive driving every time) |
 | [AgentQL](https://agentql.com/) | We provide full multi-step orchestration + auto-fix (vs single-point selector intelligence) |
 
-**Well suited to:** login-required scraping (intranets / paid content / SaaS dashboards), non-technical users customizing scrapes, low-frequency high-value queries (AI answers, people/org lookups, knowledge graphs), complex pages (iframes, dynamic loading, streaming output).
+**Well suited to:** login-required scraping (intranets / paid content / SaaS dashboards), non-technical users customizing scrapes, low-frequency high-value queries (AI answers, people/org lookups, knowledge graphs), complex pages (iframes, dynamic loading, streaming output, hover-only fields, throttled lazy-load feeds).
 
 **Not suited to:** 10k+ URL high-concurrency scraping (single-browser bottleneck — use server-side tools), 24×7 unattended operation (depends on the local Chrome running), network-layer intercept / mock (use Playwright / CDP).
 
@@ -367,6 +389,7 @@ Differences vs sibling products:
 - **AI answer collection** — send identical prompts to multiple AI chatbots, gather answers for evals or knowledge bases
 - **List + detail pages** — search results / product lists with per-item detail drill-down for complete fields
 - **Portal / government sites** — announcements buried in nested iframes
+- **Hover-only fields** — account/group preview cards and full timestamps that exist only in hover popovers or ARIA-hidden spans
 - **Intelligence & knowledge graphs** — low-frequency high-value lookups on people, orgs, topics
 - **Web test automation** — step graphs as "click → type → assert" regression tests
 
