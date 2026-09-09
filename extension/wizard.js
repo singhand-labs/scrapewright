@@ -2193,6 +2193,26 @@ function createWizardIoBridge() {
         if (inEl) inEl.textContent = JSON.stringify(r.inputSchema || {}, null, 2);
         const outEl = document.getElementById('ioConfirmOutput');
         if (outEl) outEl.textContent = JSON.stringify(r.outputSchema || {}, null, 2);
+        // Forty-sixth log (user request): the TEST REQUEST PARAMETERS are
+        // part of what the user blesses — render an EDITABLE block prefilled
+        // with the proposal (the session prefills it with the artifact's
+        // current values when the model omits testInput). Hidden for
+        // parameterless services (no input properties, no values).
+        const tiRow = document.getElementById('ioConfirmTestInputRow');
+        const tiEl = document.getElementById('ioConfirmTestInput');
+        const tiErrEl = document.getElementById('ioConfirmTestInputError');
+        if (tiErrEl) { tiErrEl.textContent = ''; tiErrEl.classList.add('hidden'); }
+        if (tiRow && tiEl) {
+          const inProps = (r.inputSchema && r.inputSchema.properties && typeof r.inputSchema.properties === 'object') ? r.inputSchema.properties : {};
+          const ti = (r.testInput && typeof r.testInput === 'object' && !Array.isArray(r.testInput)) ? r.testInput : {};
+          const hasValues = Object.keys(ti).length > 0;
+          if (Object.keys(inProps).length > 0 || hasValues) {
+            tiEl.value = JSON.stringify(ti, null, 2);
+            tiRow.classList.remove('hidden');
+          } else {
+            tiRow.classList.add('hidden');
+          }
+        }
         const fbEl = document.getElementById('ioConfirmFeedback');
         if (fbEl) fbEl.value = '';
         const panel = document.getElementById('ioConfirmPanel');
@@ -2205,9 +2225,34 @@ function createWizardIoBridge() {
     },
     confirm() {
       const r = pendingResolve;
+      if (!r) { hidePanel(); return; }
+      // Forty-sixth log: the user's (possibly edited) test parameter values
+      // ride the confirmation back to the session. Invalid JSON keeps the
+      // panel OPEN and the promise pending — a typo must not silently bless
+      // an empty object.
+      const tiRow = document.getElementById('ioConfirmTestInputRow');
+      const tiEl = document.getElementById('ioConfirmTestInput');
+      if (tiRow && tiEl && !tiRow.classList.contains('hidden')) {
+        let parsed;
+        try { parsed = JSON.parse(tiEl.value || '{}'); } catch (e) { parsed = undefined; }
+        if (parsed === undefined || parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          const tiErrEl = document.getElementById('ioConfirmTestInputError');
+          if (tiErrEl) {
+            tiErrEl.textContent = 'Test parameters are not a valid JSON object — fix them (or clear the box to {}) before confirming.';
+            tiErrEl.classList.remove('hidden');
+          }
+          return;
+        }
+        pendingResolve = null;
+        hidePanel();
+        appendLog('I/O contract confirmed by the user (test parameters: ' + JSON.stringify(parsed) + ').', 'success');
+        r({ confirmed: true, testInput: parsed });
+        return;
+      }
       pendingResolve = null;
       hidePanel();
-      if (r) { appendLog('I/O contract confirmed by the user.', 'success'); r({ confirmed: true }); }
+      appendLog('I/O contract confirmed by the user.', 'success');
+      r({ confirmed: true });
     },
     revise(text) {
       const r = pendingResolve;

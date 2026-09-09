@@ -441,7 +441,7 @@
       if (reason === 'count_frozen') {
         out.note = 'page height grew across ' + trace.length + ' scroll round(s) but the sel count never changed from ' + initialCount + ' — sel matches static page chrome, not the growing population (wrong selector, not missing data). Census what actually grows between scrolls (probe.count candidate containers before/after one probe.scroll) and re-target sel; scrolling further cannot raise this count.';
       } else if (reason === 'at_bottom') {
-        out.note = 'scroll position and page height both stopped changing — the feed is exhausted at ' + count + ' item(s) under this selector (target ' + targetCount + '); the visible data is all there is.';
+        out.note = 'scroll position and page height both stopped changing under the scroll root tested — the population reachable by THIS scroll path is exhausted at ' + count + ' item(s) under this selector (target ' + targetCount + '). This proves the tested root is at its bottom, NOT that the page has no more data: when the site scrolls its feed inside an INNER overflow container the window sits still while the feed has more. If the $scrollBy rounds carried fallback:"inner-container" the infra already found and scrolled one (keep scrolling); otherwise retry with scrollSel set to the feed\'s own scrollable container (an overflow:auto/scroll ancestor of the items) before concluding the data is all there is.';
       } else if (reason === 'max_rounds') {
         out.note = 'reached the ' + maxRounds + '-round cap at ' + count + '/' + targetCount + ' — the population was still growing; re-run scrollUntil to continue from the current position, or raise maxRounds.';
       }

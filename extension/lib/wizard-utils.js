@@ -2409,7 +2409,7 @@ function detectOversizedFields(data, outputSchema) {
   return out;
 }
 
-// detectCountShortfall(data, inputValues, outputSchema, options) → null | {field, requested, extracted}
+// detectCountShortfall(data, inputValues, outputSchema, options) → null | {field, requested, extracted, ratio, severe}
 //
 // Seventh-log survey (2026-09-01): a search-posts service declared input
 // count:10 and every "SUCCESS" run returned posts:[1 record] — an ad card
@@ -2420,7 +2420,11 @@ function detectOversizedFields(data, outputSchema) {
 // reports it; it deliberately does NOT force retries — a selector that keeps
 // only a tiny card subset cannot be fixed by scrolling harder, and pushing
 // the scroll loop toward an unreachable count is the ZERO-TRAP deadlock.
-// Severe-only (extracted < half of requested) so a 9/10 run is not nagged.
+// Forty-sixth log: the severe-only gate (extracted >= half → silent) hid the
+// log's own 3-of-5 ship — the user asked for five, the report said nothing.
+// Now EVERY shortfall under the request is reported with a `severe` flag
+// (<0.5); the COUNT_SHORTFALL tag/knowledge attach stays severe-only so a
+// 9/10 run is not nagged, but the report and the finish ladder disclose all.
 function detectCountShortfall(data, inputValues, outputSchema, options) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
   if (!inputValues || typeof inputValues !== 'object') return null;
@@ -2464,12 +2468,79 @@ function detectCountShortfall(data, inputValues, outputSchema, options) {
     if (!prop || prop.type !== 'array') continue;
     const arr = data[key];
     const extracted = Array.isArray(arr) ? arr.length : 0;
-    if (extracted >= requested * severeRatio) continue;
+    if (extracted >= requested) continue;
     if (!worst || extracted > worst.extracted) {
       worst = { field: key, requested: requested, extracted: extracted };
     }
   }
+  if (!worst) return null;
+  worst.ratio = requested > 0 ? (worst.extracted / requested) : 0;
+  // Inclusive boundary: delivering at most half the requested count is severe
+  // (5/10 must not slip under a strict <).
+  worst.severe = worst.ratio <= severeRatio;
   return worst;
+}
+
+// detectRelativeTimestamps(data, outputSchema) → [] | [{field, path, sampleValue, relativeCount, totalRecords}]
+//
+// Forty-sixth log: postTime shipped "a day ago" / "August 27 at 9:01 PM"
+// while the schema note described the field as the absolute timestamp read
+// from the tooltip — a string is a string, so every shape check passed and
+// the green verify blessed relative ages as the contracted value. A time-like
+// field whose values are RELATIVE ages (EN "a day ago"/"yesterday", ZH
+// "3天前"/"昨天") is almost always the rendered age label, not the underlying
+// timestamp: the absolute value typically lives in the element's datetime
+// attribute, the tooltip/labelledby reference, or the hovercard. Report-only
+// — the fix is a rebind or a contract renegotiation, never a silent ship.
+function detectRelativeTimestamps(data, outputSchema) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return [];
+  if (!outputSchema || typeof outputSchema !== 'object') return [];
+  const props = outputSchema.properties && typeof outputSchema.properties === 'object'
+    ? outputSchema.properties
+    : {};
+  const TIME_FIELD = /time|date|时间|日期|发布|created|updated|published/i;
+  // EN: "just now", "5 min ago", "a day ago", "yesterday", "last week"…
+  // ZH: 刚刚 / 3分钟前 / 5小时前 / 3天前 / 2周前 / 6个月前 / 昨天 / 前天 / 上周 / 去年…
+  const RELATIVE_VALUE = /^\s*(just now|moments? ago|(a|an|few|several|\d+(?:\.\d+)?)\s*(s|sec|secs|second|seconds|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|wk|week|weeks|mo|month|months|y|yr|year|years)\s+ago|yesterday|today|tomorrow|last\s+(night|week|month|year|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|刚刚|刚才|几[秒分小天周月年]前|\d+\s*(秒|分钟|分|小?时|天|日|周|星期|礼拜|个?月|年)前|今天|昨天|前天|大前天|明天|上周|上个月|上月|去年|前年)\s*$/i;
+  const isRelative = (v) => typeof v === 'string' && v.trim() && RELATIVE_VALUE.test(v);
+
+  const out = [];
+  for (const key of Object.keys(props)) {
+    const prop = props[key];
+    if (!prop || typeof prop !== 'object') continue;
+    if (prop.type === 'array') {
+      const arr = data[key];
+      if (!Array.isArray(arr) || !arr.length) continue;
+      const itemProps = (prop.items && prop.items.properties && typeof prop.items.properties === 'object')
+        ? prop.items.properties
+        : null;
+      if (!itemProps) continue;
+      for (const f of Object.keys(itemProps)) {
+        if (!TIME_FIELD.test(f)) continue;
+        let relativeCount = 0;
+        let total = 0;
+        let sample = null;
+        for (const rec of arr) {
+          if (!rec || typeof rec !== 'object') continue;
+          total += 1;
+          const v = rec[f];
+          if (isRelative(v)) {
+            relativeCount += 1;
+            if (!sample) sample = v;
+          }
+        }
+        if (relativeCount > 0) {
+          out.push({ field: f, path: key + '.' + f, sampleValue: sample, relativeCount: relativeCount, totalRecords: total });
+        }
+      }
+    } else if (prop.type === 'string' && TIME_FIELD.test(key)) {
+      const v = data[key];
+      if (isRelative(v)) {
+        out.push({ field: key, path: key, sampleValue: v, relativeCount: 1, totalRecords: 1 });
+      }
+    }
+  }
+  return out;
 }
 
 // formatDuplicateRecordsSignal(dupes) → string
@@ -4407,122 +4478,27 @@ function detectNeverExtractedFields(steps, outputSchema) {
 
 
 
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
-} else if (typeof window !== 'undefined') {
-  window.buildTimeoutGuidance = buildTimeoutGuidance;
-  window.hoverAwareTimeoutMs = hoverAwareTimeoutMs;
-  window.detectClickInListTotalFailure = detectClickInListTotalFailure;
-  window.detectClickInListEmptyContainers = detectClickInListEmptyContainers;
-  window.detectCountSelectorBlind = detectCountSelectorBlind;
-  window.detectHoverAnchorsBlind = detectHoverAnchorsBlind;
-  window.detectFrozenZeroCounter = detectFrozenZeroCounter;
-  window.parseCounterFields = parseCounterFields;
-  window.isFrozenZeroNotReady = isFrozenZeroNotReady;
-  window.FROZEN_ZERO_STREAK_THRESHOLD = FROZEN_ZERO_STREAK_THRESHOLD;
-  window.FROZEN_ZERO_MIN_ELAPSED_MS = FROZEN_ZERO_MIN_ELAPSED_MS;
-  window.estimateScriptTimeBudget = estimateScriptTimeBudget;
-  window.validateInputAgainstSchema = validateInputAgainstSchema;
-  window.validateOutputAgainstSchema = validateOutputAgainstSchema;
-  window.findEmptyExtractionFields = findEmptyExtractionFields;
-  window.findUpstreamExtractionStepId = findUpstreamExtractionStepId;
-  window.findUpstreamProducingStepId = findUpstreamProducingStepId;
-  window.getFirstRecordHtmlFromExecution = getFirstRecordHtmlFromExecution;
-  window.getFirstRecordHtmlFromAnyStep = getFirstRecordHtmlFromAnyStep;
-  window.formatElementsForPrompt = formatElementsForPrompt;
-  window.waitForPageSettle = waitForPageSettle;
-  window.hashString = hashString;
-  window.buildRequirementRestatePrompt = buildRequirementRestatePrompt;
-  window.normalizeRestatement = normalizeRestatement;
-  window.schemaArrayItemFieldKeys = schemaArrayItemFieldKeys;
-  window.detectEmptyOutputFieldsByRatio = detectEmptyOutputFieldsByRatio;
-  window.formatEmptyOutputFieldsSignal = formatEmptyOutputFieldsSignal;
-  window.detectDuplicateRecords = detectDuplicateRecords;
-  window.detectDuplicateEntities = detectDuplicateEntities;
-  window.detectOversizedFields = detectOversizedFields;
-  window.formatDuplicateRecordsSignal = formatDuplicateRecordsSignal;
-    window.getOutputFieldOptions = getOutputFieldOptions;
-  window.truncateSnapshotForLLM = truncateSnapshotForLLM;
-    window.summarizeStepsGeneration = summarizeStepsGeneration;
-  window.summarizeGeneratedSteps = summarizeGeneratedSteps;
-  window.stripSnapshotsFromTestResult = stripSnapshotsFromTestResult;
-  window.stripPagesFromLLMContext = stripPagesFromLLMContext;
-  window.dedupeStepIterations = dedupeStepIterations;
-  window.elideDuplicateFinalResults = elideDuplicateFinalResults;
-  window.formatDomActivitySummary = formatDomActivitySummary;
-  window.summarizeExecutionDiagnostics = summarizeExecutionDiagnostics;
-  window.summarizeAllStepDiagnostics = summarizeAllStepDiagnostics;
-  window.formatSelectorDiagnosticsForPrompt = formatSelectorDiagnosticsForPrompt;
-  window.scoreAttemptResult = scoreAttemptResult;
-                window.getStepTemplates = getStepTemplates;
-  window.applyTemplate = applyTemplate;
-  window.STEP_TEMPLATES = STEP_TEMPLATES;
-  window.SCRIPT_DSL_GUIDE = SCRIPT_DSL_GUIDE;
-  window.appendGlobalContextBlock = appendGlobalContextBlock;
-  window.buildAutoFixSystemMessage = buildAutoFixSystemMessage;
-  window.buildRequirementsBlock = buildRequirementsBlock;
-  window.suggestServiceName = suggestServiceName;
-  window.fillEntryUrlDefaults = fillEntryUrlDefaults;
-  window.normalizeStepTopology = normalizeStepTopology;
-  window.DEFAULT_POLL_MAX_ITERATIONS = DEFAULT_POLL_MAX_ITERATIONS;
-  window.validateForExecution = validateForExecution;
-  window.validateChain = validateChain;
-  window.appendStepWithChainLink = appendStepWithChainLink;
-  window.removeStepWithRelink = removeStepWithRelink;
-  window.relinkChainToArray = relinkChainToArray;
-  window.ANNOTATION_PURPOSES = ANNOTATION_PURPOSES;
-  window.WAIT_CONDITIONS = WAIT_CONDITIONS;
-  window.buildAnnotationsText = buildAnnotationsText;
-}
+// Forty-sixth log F5: ONE literal bag feeds every resolution surface. In
+// the wizard PAGE the two service.update static lints (detectUnawaitedDollar-
+// Calls, detectNeverExtractedFields) were structurally dead for the whole
+// campaign: session-tools' page-context resolveWU falls back to a literal
+// 3-key bag when window.__wizardUtilsModuleMarker__ is absent — and nothing
+// ever set the marker. Top-level function declarations hoist onto window in
+// a classic script, which healed some callers by accident while resolveWU's
+// fallback discarded everything outside its 3 keys (and const exports never
+// reached window at all). Assign the full bag to the marker session-tools
+// and verify-runner already resolve, and Object.assign it onto the global so
+// direct property access keeps working. test/forty-sixth-log-followups.test.js
+// pins marker-bag keys === module.exports keys so a future export cannot
+// land on one surface only (the inline-fallback drift class, RC8/RC35).
+var WU_EXPORT_BAG = { parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 
-// Service worker has no `window` (global is `self`). Expose the same helpers
-// so lib/service-registry.js can resolve validateChain when saving from the
-// background context. (Top-level function declarations are already on self,
-// but be explicit so this survives a future refactor to arrow-function consts.)
-if (typeof self !== 'undefined' && typeof window === 'undefined') {
-  self.validateChain = validateChain;
-  self.validateForExecution = validateForExecution;
-  self.detectFrozenZeroCounter = detectFrozenZeroCounter;
-  self.parseCounterFields = parseCounterFields;
-  self.isFrozenZeroNotReady = isFrozenZeroNotReady;
-  self.FROZEN_ZERO_MIN_ELAPSED_MS = FROZEN_ZERO_MIN_ELAPSED_MS;
-  self.validateInputAgainstSchema = validateInputAgainstSchema;
-  self.validateOutputAgainstSchema = validateOutputAgainstSchema;
-  self.findEmptyExtractionFields = findEmptyExtractionFields;
-  self.findUpstreamExtractionStepId = findUpstreamExtractionStepId;
-  self.findUpstreamProducingStepId = findUpstreamProducingStepId;
-  self.getFirstRecordHtmlFromExecution = getFirstRecordHtmlFromExecution;
-  self.getFirstRecordHtmlFromAnyStep = getFirstRecordHtmlFromAnyStep;
-  self.schemaArrayItemFieldKeys = schemaArrayItemFieldKeys;
-  self.detectEmptyOutputFieldsByRatio = detectEmptyOutputFieldsByRatio;
-  self.formatEmptyOutputFieldsSignal = formatEmptyOutputFieldsSignal;
-  self.detectDuplicateRecords = detectDuplicateRecords;
-  self.detectDuplicateEntities = detectDuplicateEntities;
-  self.detectOversizedFields = detectOversizedFields;
-  self.formatDuplicateRecordsSignal = formatDuplicateRecordsSignal;
-    self.getOutputFieldOptions = getOutputFieldOptions;
-  self.truncateSnapshotForLLM = truncateSnapshotForLLM;
-    self.summarizeStepsGeneration = summarizeStepsGeneration;
-  self.summarizeGeneratedSteps = summarizeGeneratedSteps;
-  self.stripSnapshotsFromTestResult = stripSnapshotsFromTestResult;
-  self.stripPagesFromLLMContext = stripPagesFromLLMContext;
-  self.dedupeStepIterations = dedupeStepIterations;
-  self.elideDuplicateFinalResults = elideDuplicateFinalResults;
-  self.isPredecessorValue = isPredecessorValue;
-  self.sampleRecordsForLLMContext = sampleRecordsForLLMContext;
-  self.formatDomActivitySummary = formatDomActivitySummary;
-  self.summarizeExecutionDiagnostics = summarizeExecutionDiagnostics;
-  self.summarizeAllStepDiagnostics = summarizeAllStepDiagnostics;
-  self.formatSelectorDiagnosticsForPrompt = formatSelectorDiagnosticsForPrompt;
-  self.scoreAttemptResult = scoreAttemptResult;
-                self.appendStepWithChainLink = appendStepWithChainLink;
-  self.removeStepWithRelink = removeStepWithRelink;
-  self.relinkChainToArray = relinkChainToArray;
-  self.fillEntryUrlDefaults = fillEntryUrlDefaults;
-  self.normalizeStepTopology = normalizeStepTopology;
-  self.headTailSlice = headTailSlice;
-  self.detectUnawaitedDollarCalls = detectUnawaitedDollarCalls;
-  self.emptyFieldDiagnostics = emptyFieldDiagnostics;
-  self.detectNeverExtractedFields = detectNeverExtractedFields;
-  self.DEFAULT_POLL_MAX_ITERATIONS = DEFAULT_POLL_MAX_ITERATIONS;
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = WU_EXPORT_BAG;
+} else if (typeof window !== 'undefined') {
+  window.__wizardUtilsModuleMarker__ = WU_EXPORT_BAG;
+  Object.assign(window, WU_EXPORT_BAG);
+} else if (typeof self !== 'undefined') {
+  self.__wizardUtilsModuleMarker__ = WU_EXPORT_BAG;
+  Object.assign(self, WU_EXPORT_BAG);
 }

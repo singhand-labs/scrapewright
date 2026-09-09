@@ -113,8 +113,10 @@ describe('RC54: capped formatter contract', () => {
     const src = readSrc('lib/wizard-utils.js');
     assert.ok(/function formatElementsForPrompt\(/.test(src),
       'formatter must be defined in wizard-utils.js');
-    assert.match(src, /module\.exports[^\n]*formatElementsForPrompt/,
-      'formatter must appear in module.exports');
+    // Forty-sixth log: module.exports receives the unified WU_EXPORT_BAG (the
+    // page-context marker bag); the formatter must ride that bag.
+    assert.match(src, /WU_EXPORT_BAG = \{[^}]*formatElementsForPrompt/,
+      'formatter must appear in the WU_EXPORT_BAG that module.exports receives');
   });
 });
 

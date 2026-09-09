@@ -222,7 +222,8 @@ describe('RC60: context sampling wiring (post-research-session)', () => {
   it('sampleRecordsForLLMContext is exported from wizard-utils', () => {
     const src = readSrc('lib/wizard-utils.js');
     assert.match(src, /function sampleRecordsForLLMContext\(/);
-    assert.match(src, /module\.exports[^\n]*sampleRecordsForLLMContext/);
+    // Forty-sixth log: module.exports receives the unified WU_EXPORT_BAG.
+    assert.match(src, /WU_EXPORT_BAG = \{[^}]*sampleRecordsForLLMContext/);
   });
 });
 

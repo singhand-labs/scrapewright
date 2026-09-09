@@ -125,7 +125,7 @@ On the Options page click **+ New Service** to enter the research-first AI wizar
 | Stage | What you do |
 |-------|-------------|
 | **1 · Requirements** | Enter the target URL + the requirement in natural language (input parameters, page operations, which fields to return). Confirm a plain-language restatement of your requirement, answer any clarifying questions, then click **Research** |
-| **2 · AI Research** | Watch the live session: the AI opens the page, probes its structure with real reads, discovers and verifies selectors, agrees with you on the I/O contract, generates the step scripts, and test-runs them to green — revising on every honest failure. You can step in at any point (annotations, feedback, contract revisions) |
+| **2 · AI Research** | Watch the live session: the AI opens the page, probes its structure with real reads, discovers and verifies selectors, agrees with you on the I/O contract **and the test request values** (the concrete inputs every test run sends — you can edit them in the same panel), generates the step scripts, and test-runs them to green — revising on every honest failure. You can step in at any point (annotations, feedback, contract revisions) |
 | **3 · Review & Deploy** | Inspect the verified result (you can re-run tests, tweak steps/schemas, or describe problems in your own words). Click deploy and the service starts serving |
 
 <p align="center">
@@ -135,7 +135,7 @@ On the Options page click **+ New Service** to enter the research-first AI wizar
   <em>Requirements stage: describe the requirement in natural language; the AI takes it from there</em>
 </p>
 
-**What the research session actually does.** This is not a one-shot generation: the wizard runs an auditable loop — observe (DOM probes, element annotation, selector diagnostics) → hypothesize (candidate selectors and field mappings) → verify (a real test run scored against your requirement) → confirm (the I/O contract is shown to you for approval before anything is committed). Every claim the AI makes must be grounded in something it actually read on the page; when a verification fails, the session reports the failure honestly and keeps revising rather than shipping a best-effort guess. If the page needs a login or other human action, the wizard surfaces a banner with the matching button.
+**What the research session actually does.** This is not a one-shot generation: the wizard runs an auditable loop — observe (DOM probes, element annotation, selector diagnostics) → hypothesize (candidate selectors and field mappings) → verify (a real test run scored against your requirement) → confirm (the I/O contract **and the test request values** are shown to you for approval before anything is committed). Every claim the AI makes must be grounded in something it actually read on the page; when a verification fails, the session reports the failure honestly and keeps revising rather than shipping a best-effort guess. If the page needs a login or other human action, the wizard surfaces a banner with the matching button.
 
 When the result isn't what you want, describe the problem in your own words (e.g. "publish date is missing") and the session continues from where it stopped — your feedback is folded into the same research loop, not a from-scratch redo. See [Whitepaper §5](docs/technical-whitepaper.en.md) for how it works.
 

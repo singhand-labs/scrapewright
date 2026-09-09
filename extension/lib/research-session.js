@@ -28,7 +28,7 @@
   const INTERNAL_TOOL_SPECS = [
     { name: 'ledger.add', args: '{finding, evidence?, confidence?, selectors?}', returns: '{added:true, id}' },
     { name: 'knowledge.query', args: '{ids:["unitId"]}', returns: '{units:[{id,title,body}]}' },
-    { name: 'service.update', args: '{steps, inputSchema?, outputSchema?, testInput?, name?, overrides?} — REPLACES the whole artifact (send the complete steps array every time); overrides waives grounding receipts (an array of selector strings, or {"selectors":[...]}) and never carries steps — a waiver stays in force for the rest of the session, you do NOT need to resend it with later updates; testInput (sample input values) is REQUIRED when the target URL has {{param}} placeholders, or verify.run fails with MISSING_URL_PARAM; inputSchema/outputSchema, when sent, MUST be JSON Schema objects like {"type":"object","required":["posts"],"properties":{"posts":{"type":"array","items":{"type":"object"}}}} — natural-language maps ({"posts":"array of post objects"}) are rejected: verify scoring reads "required"/"properties" and cannot see through descriptions; once the user has confirmed the contract you may OMIT the schemas — the confirmed contract attaches to the artifact automatically — and sending schemas that MATERIALLY differ from the confirmed ones is rejected (renegotiate via io.confirm first)', returns: '{version} | {updated, waiverRecorded} | {updated, testInputAdopted} | {updated, schemasAttached} | {grounding:"rejected", rejections}' }
+    { name: 'service.update', args: '{steps, inputSchema?, outputSchema?, testInput?, name?, overrides?} — REPLACES the whole artifact (send the complete steps array every time); overrides waives grounding receipts (an array of selector strings, or {"selectors":[...]}) and never carries steps — a waiver stays in force for the rest of the session, you do NOT need to resend it with later updates; testInput (sample input values) is REQUIRED when the target URL has {{param}} placeholders, or verify.run fails with MISSING_URL_PARAM; testInput values are user-confirmed alongside the contract (io.confirm carries them in the same panel) — sending values that DIFFER from the confirmed ones is rejected with TEST_INPUT_UNCONFIRMED: re-confirm via io.confirm (same schemas, new testInput) first; inputSchema/outputSchema, when sent, MUST be JSON Schema objects like {"type":"object","required":["posts"],"properties":{"posts":{"type":"array","items":{"type":"object"}}}} — natural-language maps ({"posts":"array of post objects"}) are rejected: verify scoring reads "required"/"properties" and cannot see through descriptions; once the user has confirmed the contract you may OMIT the schemas — the confirmed contract attaches to the artifact automatically — and sending schemas that MATERIALLY differ from the confirmed ones is rejected (renegotiate via io.confirm first)', returns: '{version} | {updated, waiverRecorded} | {updated, testInputAdopted} | {updated, schemasAttached} | {grounding:"rejected", rejections}' }
   ];
 
   const DEFAULTS = {
@@ -270,7 +270,17 @@
       } else if (state.lastVerifyEmptyFields) {
         ladder = ' [VERIFY PARTIAL-EMPTY — confirmed field(s) empty in every record: ' + state.lastVerifyEmptyFields.join(', ') + ']';
       }
-      return ladder + unverifiedArtifactSuffix('current');
+      // Forty-sixth log: extracted-vs-requested and relative-timestamp holes
+      // are independent of the red/green ladder — a GREEN verify shipped 3/5
+      // with relative ages and every existing branch stayed silent. Additive,
+      // same contract as unverifiedArtifactSuffix.
+      const csNote = state.lastVerifyCountShortfall
+        ? ' [VERIFY COUNT-SHORTFALL — ' + state.lastVerifyCountShortfall + ']'
+        : '';
+      const rtNote = state.lastVerifyRelativeTimestamps
+        ? ' [VERIFY RELATIVE-TIMESTAMPS — time field(s) carrying relative ages, not absolute values: ' + state.lastVerifyRelativeTimestamps.join(', ') + ']'
+        : '';
+      return ladder + csNote + rtNote + unverifiedArtifactSuffix('current');
     }
 
     function stateForPersist() {
@@ -819,6 +829,18 @@
               detail = (detail ? detail + ' ' : '') +
                 '[VERIFY PARTIAL-EMPTY — confirmed field(s) empty in every record: ' + state.lastVerifyEmptyFields.join(', ') + ']';
             }
+            // Forty-sixth log: independent of the ladder above — a GREEN
+            // verify shipped 3-of-5 (count requested via the confirmed test
+            // input) and postTime as relative ages ("a day ago") with every
+            // branch silent. Disclose alongside, not instead.
+            if (state.lastVerifyCountShortfall) {
+              detail = (detail ? detail + ' ' : '') +
+                '[VERIFY COUNT-SHORTFALL — ' + state.lastVerifyCountShortfall + '; the user requested a count the run did not deliver — ship consciously or renegotiate]';
+            }
+            if (state.lastVerifyRelativeTimestamps) {
+              detail = (detail ? detail + ' ' : '') +
+                '[VERIFY RELATIVE-TIMESTAMPS — time field(s) carrying relative ages, not absolute values: ' + state.lastVerifyRelativeTimestamps.join(', ') + '; rebind to the datetime attribute / labelledby reference / hovercard or renegotiate the contract]';
+            }
             // Twenty-seventh log: the shipped artifact had no verify at all
             // while the ladder named only the OLDER artifact's failure —
             // both disclose. Shared helper with the budget stops
@@ -877,6 +899,16 @@
             state.lastVerifyEmptyFields = pe.length
               ? pe.slice(0, 6).map((f) => String(f.path || f.field) + ' ' + (f.emptyCount || 0) + '/' + (f.totalCount || 0) + ' empty')
               : null;
+            const cs = (result && result.detectors && result.detectors.countShortfall) ? result.detectors.countShortfall : null;
+            state.lastVerifyCountShortfall = cs
+              ? 'requested ' + cs.requested + ' via the test input, extracted ' + cs.extracted + ' into ' + JSON.stringify(cs.field) + (cs.severe ? ' (severe)' : '')
+              : null;
+            const rtList = (result && result.detectors && Array.isArray(result.detectors.relativeTimestamps))
+              ? result.detectors.relativeTimestamps
+              : [];
+            state.lastVerifyRelativeTimestamps = rtList.length
+              ? rtList.slice(0, 6).map((f) => String(f.path || f.field) + ' ' + (f.relativeCount || 0) + '/' + (f.totalRecords || 0) + ' relative (e.g. ' + JSON.stringify(String(f.sampleValue || '').slice(0, 40)) + ')')
+              : null;
             state.lastVerifySchemaBlind = !!(Array.isArray(result && result.events) && result.events.indexOf('SCHEMA_BLIND') !== -1);
             // The tool_result event's summary is a capped one-liner — too
             // short for the verify report's verdict. Attach a compact digest
@@ -888,7 +920,9 @@
               score: (result && result.score && typeof result.score.score === 'number') ? Math.round(result.score.score) : null,
               executedVersion: state.artifactVersions.length,
               tags: Array.isArray(result.events) ? result.events.slice(0, 8) : [],
-              partialEmpty: state.lastVerifyEmptyFields || []
+              partialEmpty: state.lastVerifyEmptyFields || [],
+              countShortfall: state.lastVerifyCountShortfall,
+              relativeTimestamps: state.lastVerifyRelativeTimestamps || []
             };
           }
           // Replay/persistence must carry WHAT was probed (the args), not just

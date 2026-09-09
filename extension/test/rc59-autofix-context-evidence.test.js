@@ -231,13 +231,14 @@ describe('RC59: serialization helper exports (post-research-session)', () => {
   it('stripSnapshotsFromTestResult is exported from wizard-utils (verify-runner deps surface)', () => {
     const src = readSrc('lib/wizard-utils.js');
     assert.match(src, /function stripSnapshotsFromTestResult\(/);
-    assert.match(src, /module\.exports[^\n]*stripSnapshotsFromTestResult/);
+    // Forty-sixth log: module.exports receives the unified WU_EXPORT_BAG.
+    assert.match(src, /WU_EXPORT_BAG = \{[^}]*stripSnapshotsFromTestResult/);
   });
 
   it('elideDuplicateFinalResults is exported from wizard-utils', () => {
     const src = readSrc('lib/wizard-utils.js');
     assert.match(src, /function elideDuplicateFinalResults\(/);
-    assert.match(src, /module\.exports[^\n]*elideDuplicateFinalResults/);
+    assert.match(src, /WU_EXPORT_BAG = \{[^}]*elideDuplicateFinalResults/);
   });
 
 });

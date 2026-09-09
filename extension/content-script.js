@@ -2070,13 +2070,59 @@
       return { scrolled: false, prevY, newY: prevY };
     }
     root.scrollBy ? root.scrollBy(0, delta) : (root.scrollTop = prevY + delta);
+    const newY = root.scrollTop || 0;
+    if (newY !== prevY) {
+      sendDebugLog('info', 'content-script', 'domScrollBy', {
+        selector: sel || '(window)',
+        deltaY: delta,
+        prevY,
+        newY
+      });
+      return { scrolled: true, prevY, newY };
+    }
+    // Forty-sixth log: a frozen WINDOW root is not a frozen page. The feed
+    // may scroll inside an inner overflow container — the window sits at its
+    // bottom while the feed has more, and $scrollBy loops reported
+    // scrolled:false forever (scrollUntil then declared the feed exhausted
+    // on window evidence alone). Mirror domScrollToBottom's inner-container
+    // fallback: when the primary root made NO position change, probe for a
+    // real scrollable element and scroll THAT. Coordinates switch to the
+    // root that actually scrolled so no-progress loops still terminate
+    // correctly; the window coordinate survives as rootY and the fallback
+    // key discloses the path.
+    const ops = getScrollOps();
+    const inner = (ops && typeof ops.findScrollableContainer === 'function')
+      ? ops.findScrollableContainer(document)
+      : null;
+    if (inner && inner !== root) {
+      const innerPrev = inner.scrollTop || 0;
+      inner.scrollBy ? inner.scrollBy(0, delta) : (inner.scrollTop = innerPrev + delta);
+      const innerNew = inner.scrollTop || 0;
+      sendDebugLog('info', 'content-script', 'domScrollBy', {
+        selector: sel || '(window)',
+        deltaY: delta,
+        prevY,
+        newY,
+        fallback: 'inner-container',
+        innerTag: inner.tagName,
+        innerPrevY: innerPrev,
+        innerNewY: innerNew
+      });
+      return {
+        scrolled: innerNew !== innerPrev,
+        prevY: innerPrev,
+        newY: innerNew,
+        rootY: newY,
+        fallback: 'inner-container'
+      };
+    }
     sendDebugLog('info', 'content-script', 'domScrollBy', {
       selector: sel || '(window)',
       deltaY: delta,
       prevY,
-      newY: root.scrollTop || 0
+      newY
     });
-    return { scrolled: (root.scrollTop || 0) !== prevY, prevY, newY: root.scrollTop || 0 };
+    return { scrolled: false, prevY, newY };
   }
 
   async function domScrollToBottom(sel) {

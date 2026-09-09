@@ -52,6 +52,7 @@
       detectDuplicateEntities: w.detectDuplicateEntities,
       detectOversizedFields: w.detectOversizedFields,
       detectCountShortfall: w.detectCountShortfall,
+      detectRelativeTimestamps: w.detectRelativeTimestamps,
       validateOutputAgainstSchema: w.validateOutputAgainstSchema,
       scoreAttemptResult: w.scoreAttemptResult,
       stripSnapshotsFromTestResult: w.stripSnapshotsFromTestResult,
@@ -469,7 +470,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null };
+      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -663,6 +664,14 @@
           // ZERO-TRAP deadlock; surface it and let the human/LLM judge.
           detectors.countShortfall = WU.detectCountShortfall(finalData, input, outputSchema) || null;
         }
+        if (!error && typeof WU.detectRelativeTimestamps === 'function') {
+          // Forty-sixth log: report-only. A time-like field whose values are
+          // relative ages ("a day ago") is the rendered age label, not the
+          // absolute timestamp the contract describes — rebind (datetime
+          // attr / labelledby reference / hovercard) or renegotiate.
+          const relTs = WU.detectRelativeTimestamps(finalData, outputSchema);
+          if (relTs && relTs.length) detectors.relativeTimestamps = relTs;
+        }
         if (!error && RSD && typeof RSD.formatShapeDistributionFromData === 'function') {
           // Report-only: 2+ field-population signatures across the extracted
           // records mean the selector kept mixed card types — a card-policy
@@ -844,7 +853,11 @@
         if (/SCRIPT_TIMEOUT/.test(msg)) add('SCRIPT_TIMEOUT');
         if (/HOVER_ANCHORS_BLIND/.test(msg)) add('HOVER_NO_SIGNAL');
         if (detectors.emptyFields.length) add('EMPTY_FIELDS');
-        if (detectors.countShortfall) add('COUNT_SHORTFALL');
+        // Forty-sixth log: the detector now reports EVERY shortfall; the tag
+        // (and its knowledge attach) stays severe-only so 9/10 runs are not
+        // nagged — the report and the finish ladder disclose the rest.
+        if (detectors.countShortfall && detectors.countShortfall.severe) add('COUNT_SHORTFALL');
+        if (detectors.relativeTimestamps) add('RELATIVE_TIMESTAMP');
         if (detectors.shapeDistribution) add('CARD_POLICY');
         if (detectors.stepNoReturn) add('STEP_NO_RETURN');
         if (detectors.junkValues) add('JUNK_VALUES');

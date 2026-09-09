@@ -165,9 +165,9 @@
       '4. After any container/filter fix, propagate it to every step sharing that selector.',
       '5. When verify.run fails, read diag.read BEFORE changing anything.',
       '6. To observe a hover popover during research call probe.hover (a session tool — do NOT call the $hover DSL primitive as a tool); it returns the popover evidence (observedPopover identity + htmlSnippet) and, when the popover is observed, a canonical popoverSelector whose EXACT string is recorded as an observation receipt — copy that string VERBATIM into popoverSel; an embellished variant (extra attributes) is a new string the gate must reject. A no-popover probe.hover result may carry rejectedAddedTexts — text READ out of hover-mounted nodes the visual filter rejected (hidden or zero-height mounts): the popover "exists" as readable content even though it never rendered visually; if the value you need is in rejectedAddedTexts, bind the field from it directly instead of re-hovering. Also try probe.labelledby on the anchor first: tooltip and timestamp values very often live in the element an aria-labelledby reference points at — hidden but readable in one call, no hover needed. Popover absence is ANCHOR-specific evidence: a link with no hovercard does not mean the page has none — hover at least one other anchor before concluding popovers do not work here — on a repeating item (list card, table row, or detail block) the element that carries identity or author metadata is the usual hovercard carrier. When two different anchors show no popover, stop: the page has none. CHOOSE THE ANCHOR BY REQUIREMENT SEMANTICS, not element type: any element can carry a hover or click handler (span, abbr, time, div, li — not just links), so to read a timestamp tooltip hover the timestamp element itself (the abbr/time/span rendering the relative age); an a[href]-typed anchor both misses the semantic target (its popover never triggers) and wastes budget on navigation chrome that matches first in document order.',
-      '7. Scrolling is available DURING research via probe.scroll and probe.scrollUntil (session tools — do NOT call the $scroll DSL primitives as tools). REQUIREMENT-BOUNDED SCROLLING: when the requirement names a count (N items / 条数), the scroll loop is BOUNDED by that count — call probe.scrollUntil({sel, targetCount: N}) which scrolls one viewport, settles, and re-counts each round, stopping the MOMENT the population reaches N; never scroll to the end of the feed for a bounded requirement, and never spend turns on manual scroll→count cycles the tool performs in one call (scroll-to-exhaustion wastes budget on feeds that never end). READ THE TRACE it returns: a count that NEVER changes while page height grows means sel matches static page chrome instead of the growing population — a wrong selector, not missing data; re-target sel at what actually grows before scrolling again. A count AND height that both stop changing means the feed is exhausted — that is all the data there is. A container selector you scroll or count becomes an observation receipt, grounding a later $scrollToBottom(sel)/$scrollBy(n, sel) in steps.',
+      '7. Scrolling is available DURING research via probe.scroll and probe.scrollUntil (session tools — do NOT call the $scroll DSL primitives as tools). REQUIREMENT-BOUNDED SCROLLING: when the requirement names a count (N items / 条数), the scroll loop is BOUNDED by that count — call probe.scrollUntil({sel, targetCount: N}) which scrolls one viewport, settles, and re-counts each round, stopping the MOMENT the population reaches N; never scroll to the end of the feed for a bounded requirement, and never spend turns on manual scroll→count cycles the tool performs in one call (scroll-to-exhaustion wastes budget on feeds that never end). READ THE TRACE it returns: a count that NEVER changes while page height grows means sel matches static page chrome instead of the growing population — a wrong selector, not missing data; re-target sel at what actually grows before scrolling again. A count AND height that both stop changing means the SCROLL ROOT TESTED is exhausted — that is all this path yields (some sites scroll the feed inside an inner overflow container while the window sits still; the at_bottom note and the $scrollBy fallback:"inner-container" disclosure say when to retry with scrollSel). A container selector you scroll or count becomes an observation receipt, grounding a later $scrollToBottom(sel)/$scrollBy(n, sel) in steps.',
       '8. Iterate the fieldMap in the LIVE tab with probe.extract BEFORE writing steps: one probe turn per revision, warm DOM, empty-field census included. Reserve service.update + verify.run for the end-to-end check — verify opens a FRESH tab, so cold-load divergence (fewer/different items than the research tab) is expected; investigate counts with probes on the research tab, not by re-verifying. Run the FIRST verify with the SAME input values that drove the research page: a different input value can change the result-card population ENTIRELY (a field selector grounded on the researched query may match 0 items under another query — population divergence, not a rendering failure; the verify error FIELD_MATCH_ZERO names the census). Only after a green verify, spot-check one other input. When verify reports INPUT_VALUE_SUSPECT (zero containers on the page — no result items at all), the input VALUE itself is the prime suspect: the site may simply have no content for it (an obscure keyword, an over-specific filter) — that is not a selector bug. Re-run verify.run with {"input": {<param>: <a DIFFERENT, more common value>}} BEFORE hardening selectors; if the alternate value succeeds, adopt it with service.update({testInput: {...}}) (steps-less update is allowed for adoption) and re-verify without an override; note the input-value sensitivity in the ledger. BUT read the differential first: when the error says SELECTOR_OVERFILTERED (or the census carries [differential: ...] showing the stripped base selector matched >0), the page HAS items and your own trailing :not()/:has() clause(s) removed them — that is a selector problem, NOT an input-value problem: census each clause (count with/without it; attrStats descendant form) and drop or fix the fatal clause instead of re-testing input values. A "no containers matched" probe error carries the same differential inline.',
-      '9. EARLY contract confirmation: right after the first page.open and a coarse look at the repeating item\'s structure (list card, table row, or detail block), propose the input/output contract with io.confirm({inputSchema, outputSchema, note}) and WAIT for the user — service.update is REJECTED until the user confirms. Before that coarse look, make sure the page is RENDERED, not just loaded: ready/bodyTextChars from page.open says the tab loaded; a shell-sized body or empty-looking page on a JS-heavy site is usually still hydrating — call page.settle and only then probe (probing an unhydrated shell yields "empty page" evidence about timing, not about the page). annotate.request is likewise rejected until the confirmation lands: user annotation picks elements for output FIELDS, so settle the contract first. Apply every revision the user returns and re-confirm. Once confirmed, do NOT re-propose the same contract — a re-proposal whose shape matches the confirmed one auto-confirms without prompting the user; propose again only when the user asks for a change or evidence forces a MATERIAL renegotiation. Adding/renaming/removing fields or changing types later is a MATERIAL change: call io.confirm again with the new schemas before service.update (description-only edits are exempt). After confirmation you may send service.update with steps only — the confirmed schemas attach to the artifact automatically; a schema-only service.update ({inputSchema, outputSchema} alone, no steps) also lands the contract when the artifact already exists.',
+      '9. EARLY contract confirmation: right after the first page.open and a coarse look at the repeating item\'s structure (list card, table row, or detail block), propose the input/output contract with io.confirm({inputSchema, outputSchema, testInput, note}) and WAIT for the user — service.update is REJECTED until the user confirms. Before that coarse look, make sure the page is RENDERED, not just loaded: ready/bodyTextChars from page.open says the tab loaded; a shell-sized body or empty-looking page on a JS-heavy site is usually still hydrating — call page.settle and only then probe (probing an unhydrated shell yields "empty page" evidence about timing, not about the page). annotate.request is likewise rejected until the confirmation lands: user annotation picks elements for output FIELDS, so settle the contract first. Apply every revision the user returns and re-confirm. Once confirmed, do NOT re-propose the same contract — a re-proposal whose shape AND test values match the confirmed ones auto-confirms without prompting the user; propose again only when the user asks for a change or evidence forces a MATERIAL renegotiation. Adding/renaming/removing fields or changing types later is a MATERIAL change: call io.confirm again with the new schemas before service.update (description-only edits are exempt). After confirmation you may send service.update with steps only — the confirmed schemas attach to the artifact automatically; a schema-only service.update ({inputSchema, outputSchema} alone, no steps) also lands the contract when the artifact already exists. PROPOSE THE TEST REQUEST VALUES TOGETHER WITH THE SCHEMAS: pass testInput ({keyword:"...",count:N} — the concrete values every verify.run sends) in the same io.confirm; the user confirms or edits them in the same panel and they become the artifact\'s testInput. Propose the values you actually researched with; omitting testInput shows the artifact\'s current values for blessing. Changing test values later is a MATERIAL change: service.update({testInput:...}) with values differing from the confirmed ones is rejected with TEST_INPUT_UNCONFIRMED — re-confirm via io.confirm with the same schemas and the new testInput first.',
       '10. Ship real values only. A green verify can still carry junk: bare query strings ("?a=b…") posing as ids, data: URIs polluting url/media arrays (inline UI icons — filter arrays to http(s) entries inside the step script), raw HTML dumps in data fields, and OBFUSCATED text (anti-scrape decoy characters mixed into textContent — interleaved/scrambled runs, reversed fragments, combining marks, zero-width chars). If a text value reads scrambled, the clean value usually lives in an ATTRIBUTE on the same element (aria-label, title, datetime) — probe it (attrStats, or extract with attr) and bind the field to that attribute; never ship an obfuscated "best-effort" value in a confirmed field. Check detectors.junkValues in the verify report. If research proves a confirmed field is unextractable or only junk-reachable, renegotiate the contract with io.confirm (drop or redefine the field) instead of shipping it empty/junk. Scalar or single-value outputs skip the array filters but still go through detectors.junkValues. An empty string is not a value either: check detectors.partialEmptyFields — a confirmed field empty in EVERY record (emptyRatio 1) is a binding failure or the page lacks the data, so fix the binding (attribute fallback) or renegotiate with io.confirm; a field empty in only SOME records may legitimately vary (a text-only item has no media) — if it does and the field is required, move it to optional in the contract. Never rationalize a persistent empty as timing or "acceptable", and never hardcode an empty-string placeholder for a confirmed field. Do not declare synthetic bookkeeping fields (an index, serialNumber, a loop counter) in outputSchema: declare only fields the requirement asks for — a populated synthetic field masks the empty-data signals (a record whose only filled field is index reads as non-empty).'
     ].join('\n');
   }
@@ -213,7 +213,28 @@
     // rejected. The full copy lets service.update attach the confirmed
     // contract automatically and the DRIFT error quote it verbatim.
     let ioConfirmedSchemas = null;
+    let ioConfirmedTestInput = null;
     const IO_LEDGER_MARKER = 'I/O CONTRACT CONFIRMED';
+
+    // Forty-sixth log: the test request values are part of the confirmed
+    // contract. Equality must be key-ORDER-insensitive (the model resending
+    // {count,keyword} after confirming {keyword,count} is not a drift), so
+    // compare a sorted-key serialization. null = "no testInput at all"
+    // (parameterless service / legacy confirmations) — two nulls are equal.
+    function testInputKey(ti) {
+      if (!ti || typeof ti !== 'object' || Array.isArray(ti)) return null;
+      const parts = [];
+      for (const k of Object.keys(ti).sort()) {
+        let v;
+        try { v = JSON.stringify(ti[k]); } catch (e) { v = String(ti[k]); }
+        parts.push(k + ':' + v);
+      }
+      return parts.join('|');
+    }
+
+    function isPlainObjectValue(v) {
+      return !!v && typeof v === 'object' && !Array.isArray(v);
+    }
 
     function ioContractConfirmed(ctx) {
       if (ioConfirmed) return true;
@@ -239,7 +260,13 @@
           if (f.indexOf(IO_LEDGER_MARKER) === -1) continue;
           const at = f.indexOf(' shape: ');
           if (at === -1) return null;
-          return JSON.parse(f.slice(at + ' shape: '.length));
+          // Forty-sixth log: the marker may carry ' testInput: {...}' AFTER
+          // the shape JSON — slice it off before parsing or the parse dies
+          // on trailing content and every resumed session loses the dedup.
+          const tiAt = f.indexOf(' testInput: ', at);
+          const end = tiAt === -1 ? -1 : tiAt;
+          const slice = end === -1 ? f.slice(at + ' shape: '.length) : f.slice(at + ' shape: '.length, end);
+          return JSON.parse(slice);
         }
       } catch (e) { return null; }
       return null;
@@ -264,6 +291,27 @@
           const slice = end === -1 ? f.slice(at + ' schemas: '.length) : f.slice(at + ' schemas: '.length, end);
           const parsed = JSON.parse(slice);
           return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : null;
+        }
+      } catch (e) { return null; }
+      return null;
+    }
+
+    // Confirmed test request values the ledger marker recorded (forty-sixth
+    // log). Legacy markers (pre-F1) carry no ' testInput: ' section and
+    // return null — the adoption path then stays lenient, preserving the
+    // pre-fix behavior for sessions resumed from old ledgers.
+    function ledgerConfirmedTestInput(ctx) {
+      try {
+        const ser = (ctx && ctx.ledger && typeof ctx.ledger.serialize === 'function')
+          ? ctx.ledger.serialize() : null;
+        const entries = (ser && Array.isArray(ser.entries)) ? ser.entries : [];
+        for (let i = entries.length - 1; i >= 0; i--) {
+          const f = entries[i] && typeof entries[i].finding === 'string' ? entries[i].finding : '';
+          if (f.indexOf(IO_LEDGER_MARKER) === -1) continue;
+          const at = f.indexOf(' testInput: ');
+          if (at === -1) return null;
+          const parsed = JSON.parse(f.slice(at + ' testInput: '.length));
+          return isPlainObjectValue(parsed) ? parsed : null;
         }
       } catch (e) { return null; }
       return null;
@@ -343,6 +391,24 @@
       } catch (e) { return false; }
     }
 
+    // Forty-sixth log: the user-blessed test request values must land on the
+    // artifact at the moment of confirmation (same contract as
+    // attachConfirmedSchemas — a verify between confirmation and the next
+    // service.update must already run the confirmed values, not the model's
+    // silent pick). Shape guard keeps re-confirmation idempotent.
+    function attachConfirmedTestInput(ti) {
+      if (!isPlainObjectValue(ti) || !Object.keys(ti).length) return false;
+      const currentSteps = (typeof d.getSteps === 'function' ? (d.getSteps() || []) : []);
+      if (!currentSteps.length) return false; // no artifact yet — service.update attaches on landing
+      const current = (typeof d.getTestInput === 'function') ? d.getTestInput() : null;
+      if (testInputKey(current) === testInputKey(ti)) return false;
+      try {
+        d.applyArtifact({ steps: currentSteps, testInput: ti });
+        if (lastVerify) lastVerify.staleArtifact = true;
+        return true;
+      } catch (e) { return false; }
+    }
+
     async function ioConfirm(args, ctx) {
       const a = args && typeof args === 'object' ? args : {};
       const bridge = d.ioConfirmBridge;
@@ -362,19 +428,39 @@
           error: 'SCHEMA_NO_FIELDS: outputSchema declares no fields — neither "required" nor "properties" names an output field. Scoring and every empty/junk detector read those keys, so a fieldless contract verifies BLIND: verify.run reports score 0 (green garbage) whether extraction succeeded or failed. Resend io.confirm with an outputSchema like {"type":"object","required":["posts"],"properties":{"posts":{"type":"array","items":{"type":"object"}}}} listing every output field under properties and the must-haves in required.'
         };
       }
+      // Forty-sixth log (user request): the TEST REQUEST VALUES are
+      // confirmed together with the schemas. The model had been picking
+      // {keyword, count} silently — every verify.run executed values the
+      // user never saw. The proposal may carry testInput; when it omits it,
+      // the artifact's CURRENT values are what the user is asked to bless.
+      if (a.testInput != null && !isPlainObjectValue(a.testInput)) {
+        return {
+          error: 'TEST_INPUT_NOT_OBJECT: testInput must be a plain object of concrete request parameter values like {"keyword":"machine learning","count":5} — the user confirms these exact values alongside the schemas.'
+        };
+      }
+      const liveTestInput = (typeof d.getTestInput === 'function') ? d.getTestInput() : null;
+      const liveHasValues = isPlainObjectValue(liveTestInput) && Object.keys(liveTestInput).length > 0;
+      const proposedTestInput = isPlainObjectValue(a.testInput) ? a.testInput : (liveHasValues ? liveTestInput : null);
       // Dedup: a contract the user already confirmed is NOT re-prompted while
       // its shape is unchanged (rejections of revisions leave the original
       // standing). Only a materially different proposal pops the panel again.
       const incoming = { input: schemaShape(a.inputSchema), output: schemaShape(a.outputSchema) };
       const priorShape = ioConfirmedShape || ledgerConfirmedShape(ctx);
+      // Forty-sixth log: same-shape dedup survives ONLY while the test
+      // request values are unchanged too — re-proposing new test values is a
+      // MATERIAL change the user must bless, even with identical schemas.
+      const priorTestInput = ioConfirmedTestInput || ledgerConfirmedTestInput(ctx);
+      const testInputUnchanged = testInputKey(proposedTestInput) === testInputKey(priorTestInput);
       if (ioContractConfirmed(ctx) && priorShape &&
-          priorShape.input === incoming.input && priorShape.output === incoming.output) {
+          priorShape.input === incoming.input && priorShape.output === incoming.output &&
+          testInputUnchanged) {
         ioConfirmed = true; // resume path: the runtime flag catches up
         ioConfirmedShape = incoming;
         // A same-shape re-proposal carries the full schemas — capture them
         // too (legacy markers stored shape only; this is the recovery path
         // by which a resumed legacy session starts attaching the contract).
         ioConfirmedSchemas = { inputSchema: a.inputSchema, outputSchema: a.outputSchema };
+        if (proposedTestInput) ioConfirmedTestInput = proposedTestInput;
         const recoveredAttached = attachConfirmedSchemas(ioConfirmedSchemas);
         return {
           confirmed: true,
@@ -396,6 +482,7 @@
         res = await bridge.request({
           inputSchema: a.inputSchema,
           outputSchema: a.outputSchema,
+          testInput: proposedTestInput || {},
           note: typeof a.note === 'string' ? a.note : '',
           diffLines: diffLines
         });
@@ -406,6 +493,12 @@
         ioConfirmed = true;
         ioConfirmedShape = { input: schemaShape(a.inputSchema), output: schemaShape(a.outputSchema) };
         ioConfirmedSchemas = { inputSchema: a.inputSchema, outputSchema: a.outputSchema };
+        // The panel may return user-EDITED values; they win over the
+        // proposal (the user is the authority on test request parameters).
+        // Legacy bridges that resolve without testInput keep the proposal.
+        const userTestInput = isPlainObjectValue(res.testInput) ? res.testInput : null;
+        const confirmedTestInput = userTestInput || proposedTestInput || null;
+        ioConfirmedTestInput = confirmedTestInput;
         const ledger = (ctx && ctx.ledger) || null;
         if (ledger) {
           try {
@@ -413,8 +506,9 @@
               finding: IO_LEDGER_MARKER + ' — inputs: [' + Object.keys((a.inputSchema && a.inputSchema.properties) || {}).join(', ') +
                 '] outputs: [' + Object.keys((a.outputSchema && a.outputSchema.properties) || {}).join(', ') +
                 '] schemas: ' + JSON.stringify({ inputSchema: a.inputSchema, outputSchema: a.outputSchema }) +
-                ' shape: ' + JSON.stringify({ input: incoming.input, output: incoming.output }),
-              evidence: 'io.confirm (user approved the proposed contract)',
+                ' shape: ' + JSON.stringify({ input: incoming.input, output: incoming.output }) +
+                (confirmedTestInput ? ' testInput: ' + JSON.stringify(confirmedTestInput) : ''),
+              evidence: 'io.confirm (user approved the proposed contract' + (userTestInput ? ' and test request values' : '') + ')',
               confidence: 'high',
               provenance: 'user',
               selectors: []
@@ -422,10 +516,13 @@
           } catch (e) { /* ledger secondary — the runtime flag already holds */ }
         }
         const attachedNow = attachConfirmedSchemas(ioConfirmedSchemas);
+        const attachedTI = attachConfirmedTestInput(confirmedTestInput);
         return {
           confirmed: true,
           note: 'contract approved — author the steps and call service.update (schemas optional: the confirmed contract attaches automatically)'
+            + (confirmedTestInput ? '; test request parameters confirmed: ' + JSON.stringify(confirmedTestInput) : '')
             + (attachedNow ? '; amended contract applied to the current artifact — verify.run scores against it now' : '')
+            + (attachedTI ? '; confirmed test values applied to the current artifact' : '')
         };
       }
       return {
@@ -574,6 +671,24 @@
         ' Either resend service.update with steps ONLY (omit the schemas — the confirmed contract attaches to the artifact automatically), or, if the field list itself must change, call io.confirm with the NEW schemas and wait for the user.';
     }
 
+    // Forty-sixth log: adopting DIFFERENT test request values changes what
+    // every verify.run executes and what the deployed service defaults to —
+    // the user blessed specific values at io.confirm, so a differing
+    // testInput at service.update is a MATERIAL contract change that must be
+    // re-confirmed. Returns a teaching error string or null.
+    function testInputDriftError(a, ctx) {
+      if (a.testInput == null) return null;
+      if (!isPlainObjectValue(a.testInput)) {
+        return 'TEST_INPUT_NOT_OBJECT: testInput must be a plain object of request parameter values like {"keyword":"machine learning","count":5}, not ' + JSON.stringify(a.testInput) + '.';
+      }
+      const confirmedTI = ioConfirmedTestInput || ledgerConfirmedTestInput(ctx);
+      if (!confirmedTI) return null; // parameterless service / legacy pre-F1 confirmation — lenient
+      if (testInputKey(a.testInput) === testInputKey(confirmedTI)) return null;
+      return 'TEST_INPUT_UNCONFIRMED: the test request parameters differ from the ones the user confirmed (' +
+        JSON.stringify(confirmedTI) + '). These values drive every verify.run and the deployed service\'s default input, so different values need the user\'s blessing: re-confirm with io.confirm({inputSchema, outputSchema, testInput: ' +
+        JSON.stringify(a.testInput) + ', note: "why the test values change"}) — the SAME schemas, the NEW testInput — then resend this update.';
+    }
+
     async function serviceUpdate(args, ctx) {
       const a = args && typeof args === 'object' ? args : {};
       const steps = Array.isArray(a.steps) ? a.steps : [];
@@ -608,6 +723,11 @@
         if (a.outputSchema != null && schemaShape(a.outputSchema) !== ioConfirmedShape.output) drift.push('outputSchema');
         if (drift.length) return { error: driftTeaching(drift, ctx) };
       }
+      // Forty-sixth log: test request values are user-confirmed alongside
+      // the schemas — a differing testInput (adoption or steps-bearing) is
+      // rejected here, before any branch that could apply it.
+      const tiErr = testInputDriftError(a, ctx);
+      if (tiErr) return { error: tiErr };
       // Fourteenth-log follow-up (user request): when an alternate input
       // value turned out to be the fix (INPUT_VALUE_SUSPECT loop), the model
       // must be able to ADOPT it without re-sending the whole step graph.
@@ -853,12 +973,12 @@
       { name: 'probe.sample', args: '{sel, opts:{index,wantHtml,clean}}', returns: '{match,total,element,html?} — clean:true strips scripts/styles/noise from the HTML (prefer it when reading structure)' },
       { name: 'probe.hover', args: '{anchorSel, popoverSel?, opts:{index,timeoutMs}}', returns: '{hovered,htmlSnippet,popoverSelector,popoverSelectorNote?,reason,observedPopover?,rejectedAddedTexts?,budgetNote?,timeoutMs?} — on reason:popover_timeout the result carries the budget it waited (timeoutMs+budgetNote): absence at N ms says nothing about a larger budget, retry with a bigger opts.timeoutMs before concluding the popover never renders' },
       { name: 'probe.scroll', args: "{mode?:'bottom'|'by', sel?, by?}", returns: '{scrolled,prevY,newY}' },
-      { name: 'probe.scrollUntil', args: '{sel, targetCount, maxRounds?, settleMs?, by?, scrollSel?}', returns: '{satisfied,finalCount,targetCount,rounds,trace[{count,y,h}],reason,note?} — one call does the scroll→settle→count loop and stops the MOMENT the sel population reaches targetCount. reason=count_frozen means page height grew while the sel count never moved: the selector matches static page chrome, not the growing population (re-target sel, do not scroll more); reason=at_bottom means the feed is exhausted; reason=max_rounds means it was still growing (re-run to continue)' },
+      { name: 'probe.scrollUntil', args: '{sel, targetCount, maxRounds?, settleMs?, by?, scrollSel?}', returns: '{satisfied,finalCount,targetCount,rounds,trace[{count,y,h}],reason,note?} — one call does the scroll→settle→count loop and stops the MOMENT the sel population reaches targetCount. reason=count_frozen means page height grew while the sel count never moved: the selector matches static page chrome, not the growing population (re-target sel, do not scroll more); reason=at_bottom means the SCROLL ROOT tested is exhausted (window-bottom evidence — when the feed scrolls in an inner overflow container the window sits still while the feed has more; read the note, and retry with scrollSel pointing at the feed\'s own scrollable container); reason=max_rounds means it was still growing (re-run to continue)' },
       { name: 'probe.extract', args: '{containerSel, fieldMap, multi?, allowEmpty?}', returns: '{total,records[3],emptyFields{field:emptyCount}}' },
       { name: 'diag.read', args: '{stepId?, kind?}', returns: '{selectorDiagnostics, failingStep?, popover, counters, lastError?} — kind:"contract" (no verify needed) reports whether the I/O contract is confirmed and whether the artifact carries the schemas, so you can see schema-blindness BEFORE verify.run' },
       { name: 'verify.run', args: '{input?} — optional object overriding the test input for THIS run (the mechanism for alternate-value re-tests when INPUT_VALUE_SUSPECT says the site may have no content for the current value)', returns: '{ok,score,scoreNote?,error,detectors,steps,resultDebug?,finalResult,schemaOk} — detectors.partialEmptyFields lists confirmed fields that came back empty with their emptyRatio (empty/total records): ratio 1 means fix the binding or renegotiate the contract, not ship it. detectors.emptyFieldDiagnostics (beside it) carries per-field falsification crumbs lifted from the owning step\'s LAST iteration diagnostics — an aria reference that resolves to nothing (missingIds), a sub-selector matching 0 containers, an absent attribute — read it BEFORE re-probing: it names WHERE and WHY the empty field died. resultDebug surfaces your step result\'s SMALL non-record keys (debug payloads you attached to the return) ahead of the sampled records, so you can read your own instrumentation. A field you SAW populated on the research tab but empty in verify means the mechanism depends on page state the research tab ACCUMULATED (earlier hovers mounting hidden spans, long dwell hydrating extras) — a fresh load does not reproduce it: re-derive the read on a freshly opened page, do not iterate the same binding blind' },
       { name: 'annotate.request', args: '{why, fields?, containerSel?}', returns: '{annotations[{selector,purpose,outputField}]} | {cancelled} — REQUIRES a confirmed I/O contract (io.confirm first)' },
-      { name: 'io.confirm', args: '{inputSchema, outputSchema, note?}', returns: '{confirmed:true} | {confirmed:false, feedback} — propose the contract EARLY and wait for the user; service.update is rejected until a confirmation lands; a SAME-shape re-proposal auto-confirms without prompting. outputSchema MUST declare its fields (properties + required); a fieldless {"type":"object"} verifies blind and is rejected' }
+      { name: 'io.confirm', args: '{inputSchema, outputSchema, testInput?, note?}', returns: '{confirmed:true} | {confirmed:false, feedback} — propose the contract EARLY and wait for the user; service.update is rejected until a confirmation lands; a SAME-shape re-proposal (schemas AND test values unchanged) auto-confirms without prompting. testInput carries the CONCRETE test request values (e.g. {"keyword":"machine learning","count":5}) — propose the values you actually researched with; the user confirms or edits them in the SAME panel and they become the artifact\'s testInput (omit testInput and the artifact\'s current values are shown for blessing). Changing test values later is a MATERIAL change: service.update({testInput:...}) with values differing from the confirmed ones is rejected with TEST_INPUT_UNCONFIRMED until re-confirmed here. outputSchema MUST declare its fields (properties + required); a fieldless {"type":"object"} verifies blind and is rejected' }
     ];
 
     return {

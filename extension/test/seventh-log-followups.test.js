@@ -120,10 +120,15 @@ describe('F2: detectCountShortfall (behavioral)', () => {
     }
   });
 
-  it('does not flag minor shortfalls (9/10) or satisfied counts', () => {
+  it('satisfied counts stay null; minor shortfalls are REPORTED non-severe (forty-sixth log: 3/5 was invisible)', () => {
     assert.equal(detectCountShortfall(data(10), { count: 10 }, schema), null);
-    assert.equal(detectCountShortfall(data(9), { count: 10 }, schema), null);
-    assert.equal(detectCountShortfall(data(5), { count: 10 }, schema), null);
+    // Forty-sixth log widened the detector: every shortfall reports, with a
+    // `severe` flag — the COUNT_SHORTFALL tag/knowledge attach stays
+    // severe-only, so 9/10 is disclosed without being nagged.
+    const nine = detectCountShortfall(data(9), { count: 10 }, schema);
+    assert.ok(nine && nine.extracted === 9 && nine.severe === false, '9/10 reported non-severe');
+    const five = detectCountShortfall(data(5), { count: 10 }, schema);
+    assert.ok(five && five.severe === true, '5/10 stays severe');
   });
 
   it('does not flag when no count-like input or tiny requests (noise guard)', () => {

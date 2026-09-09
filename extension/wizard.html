@@ -122,6 +122,16 @@
           <label>Output schema</label>
           <pre id="ioConfirmOutput"></pre>
         </div>
+        <!-- Forty-sixth log (user request): the TEST REQUEST PARAMETERS are
+             confirmed BY THE USER in the same panel — the model had been
+             picking {keyword, count} silently and every verify.run executed
+             values the user never saw. Editable: the confirmed values become
+             the artifact's testInput. Hidden for parameterless services. -->
+        <div class="io-schema-row hidden" id="ioConfirmTestInputRow">
+          <label>Test request parameters (editable — these values drive every verify run)</label>
+          <textarea id="ioConfirmTestInput" rows="4" spellcheck="false" placeholder='{"keyword":"…","count":5}'></textarea>
+          <div id="ioConfirmTestInputError" class="hint-label hidden"></div>
+        </div>
         <textarea id="ioConfirmFeedback" rows="2" placeholder="Optional: describe changes (fields to add / rename / remove), then send revision notes"></textarea>
         <div class="exploration-buttons">
           <button id="btnIoConfirm" class="btn-primary">Confirm — continue research</button>
