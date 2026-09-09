@@ -59,6 +59,8 @@
       sampleRecordsForLLMContext: w.sampleRecordsForLLMContext,
       detectUnawaitedDollarCalls: w.detectUnawaitedDollarCalls,
       emptyFieldDiagnostics: w.emptyFieldDiagnostics,
+      detectHtmlFieldsWithoutTags: w.detectHtmlFieldsWithoutTags,
+      schemaItemRequiredForPath: w.schemaItemRequiredForPath,
       headTailSlice: w.headTailSlice
     };
     const missing = [];
@@ -470,7 +472,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null };
+      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -684,6 +686,14 @@
           // contract that wants these values — surface, teach, never block.
           detectors.junkValues = detectJunkValues(finalData, outputSchema);
         }
+        if (!error && typeof WU.detectHtmlFieldsWithoutTags === 'function') {
+          // Report-only (forty-seventh log): posts.htmlSnippet shipped
+          // content.slice(0,500) — text under a markup-named field on a
+          // green verify. A captured DOM region always contains tags;
+          // surface the census + copied-from sibling, teach, never block.
+          const hm = WU.detectHtmlFieldsWithoutTags(finalData) || [];
+          detectors.htmlNoMarkup = hm.length ? hm : null;
+        }
         if (!error && typeof WU.detectOversizedFields === 'function') {
           // Report-only (forty-first log): htmlSnippet fields read whole-card
           // outerHTML at 82396-99278 chars each (result.json: 332KB for 3
@@ -770,9 +780,18 @@
       if (!error && Array.isArray(detectors.partialEmptyFields) && outputSchema && outputSchema.properties) {
         const reqProps = outputSchema.properties;
         for (const pe of detectors.partialEmptyFields) {
-          const key = String(pe.path || '').split('.')[0];
-          const prop = reqProps[key];
-          const itemRequired = prop && prop.items && Array.isArray(prop.items.required) ? prop.items.required : null;
+          // Forty-seventh log: resolve the path against the DECLARING
+          // array's items.required — 'posts.hoverCards[].type' is governed
+          // by hoverCards' items, not the top-level posts items. Falls
+          // back to the depth-1 inline form when the helper is missing.
+          let itemRequired = null;
+          if (typeof WU.schemaItemRequiredForPath === 'function') {
+            itemRequired = WU.schemaItemRequiredForPath(outputSchema, String(pe.path || ''));
+          } else {
+            const key = String(pe.path || '').split('.')[0];
+            const prop = reqProps[key];
+            itemRequired = prop && prop.items && Array.isArray(prop.items.required) ? prop.items.required : null;
+          }
           if (itemRequired && itemRequired.indexOf(pe.field) !== -1) {
             error = new Error(
               'REQUIRED_FIELD_EMPTY: ' + pe.path + ' is empty in ' + pe.emptyCount + '/' + pe.totalCount +
@@ -862,6 +881,7 @@
         if (detectors.stepNoReturn) add('STEP_NO_RETURN');
         if (detectors.junkValues) add('JUNK_VALUES');
         if (detectors.oversizedFields) add('OUTPUT_FIELD_SIZE');
+        if (detectors.htmlNoMarkup) add('HTML_FIELD_NO_MARKUP');
         if (detectors.partialEmptyFields) add('PARTIAL_EMPTY_FIELDS');
         if (schemaBlindNote(outputSchema)) add('SCHEMA_BLIND');
         if (detectors.adMarkerSelectors) add('AD_MARKER_SELECTOR');

@@ -2040,6 +2040,62 @@ function detectEmptyOutputFieldsByRatio(data, outputSchema, options) {
         sampleNonEmpty: samples
       });
     }
+    // Forty-seventh log: nested record arrays were scalar leaves here — a
+    // non-empty hoverCards array with every card's `type` hardcoded '' read
+    // "not empty" at depth 1 and nothing ever descended, so the contract's
+    // richest structure was the one no census could see. Census sub-fields
+    // of record-valued array fields across ALL nested records from ALL
+    // parents, path 'a.b[].c', keys = schema-declared nested fields UNION
+    // fields present in the data (declared-but-absent counts as empty;
+    // present-but-undeclared still gets surfaced).
+    const itemProps = (prop.items && prop.items.properties && typeof prop.items.properties === 'object' && !Array.isArray(prop.items.properties))
+      ? prop.items.properties : null;
+    for (const fk of fieldKeys) {
+      const nestedDecl = itemProps ? itemProps[fk] : null;
+      const nestedRecs = [];
+      let parentsWithRecords = 0;
+      for (const rec of arr) {
+        if (!rec || typeof rec !== 'object' || Array.isArray(rec)) continue;
+        const v = rec[fk];
+        if (!Array.isArray(v)) continue;
+        const objs = v.filter((c) => c && typeof c === 'object' && !Array.isArray(c));
+        if (!objs.length) continue;
+        parentsWithRecords += 1;
+        for (const c of objs) nestedRecs.push(c);
+      }
+      if (!nestedRecs.length || nestedRecs.length < minRecords) continue;
+      const nestedItemsProps = (nestedDecl && nestedDecl.type === 'array' && nestedDecl.items && typeof nestedDecl.items === 'object' && nestedDecl.items.properties && typeof nestedDecl.items.properties === 'object' && !Array.isArray(nestedDecl.items.properties))
+        ? nestedDecl.items.properties : null;
+      const subKeys = [];
+      const seenSub = Object.create(null);
+      if (nestedItemsProps) {
+        for (const sk of Object.keys(nestedItemsProps)) { if (!seenSub[sk]) { seenSub[sk] = 1; subKeys.push(sk); } }
+      }
+      for (const c of nestedRecs) {
+        for (const sk of Object.keys(c)) { if (!seenSub[sk]) { seenSub[sk] = 1; subKeys.push(sk); } }
+      }
+      for (const sk of subKeys) {
+        let nestedEmpty = 0;
+        const nestedSamples = [];
+        for (const c of nestedRecs) {
+          const v = c[sk];
+          if (isEmptyValue(v)) nestedEmpty += 1;
+          else if (nestedSamples.length < maxSamples) nestedSamples.push(typeof v === 'string' ? v.slice(0, 80) : v);
+        }
+        const nestedRatio = nestedEmpty / nestedRecs.length;
+        if (nestedRatio < threshold) continue;
+        result.push({
+          field: sk,
+          path: `${key}.${fk}[].${sk}`,
+          parentField: `${key}.${fk}`,
+          parentRecords: parentsWithRecords,
+          emptyCount: nestedEmpty,
+          totalCount: nestedRecs.length,
+          emptyRatio: nestedRatio,
+          sampleNonEmpty: nestedSamples
+        });
+      }
+    }
   }
   return result;
 }
@@ -2381,6 +2437,46 @@ const OVERSIZED_FIELD_THRESHOLD = 20000;
 function detectOversizedFields(data, outputSchema) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return [];
   const out = [];
+  const censusStrings = (recs, fields, labelOf) => {
+    for (const f of fields) {
+      let count = 0, totalLen = 0, maxLen = 0, n = 0;
+      const nestedRecs = [];
+      for (const r of recs) {
+        const v = r[f];
+        if (typeof v === 'string') {
+          n++; totalLen += v.length;
+          if (v.length > maxLen) maxLen = v.length;
+          if (v.length > OVERSIZED_FIELD_THRESHOLD) count++;
+        } else if (Array.isArray(v)) {
+          // Forty-seventh log: a record field holding an array of records
+          // was skipped whole — 52818-66956-char card markup rode under
+          // the census while depth 1 saw a non-string leaf. Collect nested
+          // records and measure their string sub-fields ('a.b[].c' paths).
+          for (const c of v) if (c && typeof c === 'object' && !Array.isArray(c)) nestedRecs.push(c);
+        }
+      }
+      if (count > 0) {
+        out.push({ field: labelOf(f), count, total: recs.length, maxLen, avgLen: n ? Math.round(totalLen / n) : 0 });
+      }
+      if (nestedRecs.length) {
+        const subNames = new Set();
+        for (const c of nestedRecs) for (const sk of Object.keys(c)) subNames.add(sk);
+        for (const sf of subNames) {
+          let sc = 0, st = 0, sm = 0, sn = 0;
+          for (const c of nestedRecs) {
+            const sv = c[sf];
+            if (typeof sv !== 'string') continue;
+            sn++; st += sv.length;
+            if (sv.length > sm) sm = sv.length;
+            if (sv.length > OVERSIZED_FIELD_THRESHOLD) sc++;
+          }
+          if (sc > 0) {
+            out.push({ field: labelOf(f) + '[].' + sf, count: sc, total: nestedRecs.length, maxLen: sm, avgLen: sn ? Math.round(st / sn) : 0 });
+          }
+        }
+      }
+    }
+  };
   for (const key of Object.keys(data)) {
     const value = data[key];
     if (Array.isArray(value)) {
@@ -2388,25 +2484,95 @@ function detectOversizedFields(data, outputSchema) {
       if (!recs.length) continue;
       const fieldNames = new Set();
       for (const r of recs) for (const k of Object.keys(r)) fieldNames.add(k);
-      for (const f of fieldNames) {
-        let count = 0, totalLen = 0, maxLen = 0, n = 0;
-        for (const r of recs) {
-          const v = r[f];
-          if (typeof v === 'string') {
-            n++; totalLen += v.length;
-            if (v.length > maxLen) maxLen = v.length;
-            if (v.length > OVERSIZED_FIELD_THRESHOLD) count++;
-          }
-        }
-        if (count > 0) {
-          out.push({ field: key + '.' + f, count, total: recs.length, maxLen, avgLen: n ? Math.round(totalLen / n) : 0 });
-        }
-      }
+      censusStrings(recs, fieldNames, (f) => key + '.' + f);
     } else if (typeof value === 'string' && value.length > OVERSIZED_FIELD_THRESHOLD) {
       out.push({ field: key, count: 1, total: 1, maxLen: value.length, avgLen: value.length });
     }
   }
   return out;
+}
+
+// Forty-seventh log F3: posts.htmlSnippet shipped content.slice(0,500) —
+// plain text under a markup-named field on a green verify (score 133). A
+// captured DOM region always contains tags; a non-empty value with zero
+// '<' is text copied from a sibling field (or fabricated), never captured
+// markup. copiedFrom names the sibling whose value carries this value
+// verbatim/as a prefix whenever the copy is provable. Report-only: the
+// confirmed contract may honestly want a text field under that name —
+// surface, teach, never block.
+function detectHtmlFieldsWithoutTags(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return [];
+  const MARKUP_NAME_RE = /html|markup/i;
+  const out = [];
+  const census = (recs, labelOf) => {
+    const fieldNames = new Set();
+    for (const r of recs) for (const k of Object.keys(r)) fieldNames.add(k);
+    for (const f of fieldNames) {
+      if (!MARKUP_NAME_RE.test(f)) continue;
+      let count = 0, maxLen = 0;
+      const samples = [];
+      for (const r of recs) {
+        const v = r[f];
+        if (typeof v !== 'string' || !v.length || v.indexOf('<') !== -1) continue;
+        count++;
+        if (v.length > maxLen) maxLen = v.length;
+        if (samples.length < 2) samples.push(v.slice(0, 60));
+      }
+      if (!count) continue;
+      const probe = recs.find((r) => typeof r[f] === 'string' && r[f].length && r[f].indexOf('<') === -1);
+      const val = probe ? probe[f] : '';
+      const sib = probe ? Object.keys(probe).find((s) => {
+        if (s === f || MARKUP_NAME_RE.test(s)) return false;
+        const sv = probe[s];
+        return typeof sv === 'string' && sv.length > 0 &&
+          (sv === val || (val.length >= 16 && sv.indexOf(val) === 0));
+      }) : null;
+      out.push({ field: labelOf(f), path: labelOf(f), count, total: recs.length, maxLen, copiedFrom: sib || null, samples });
+    }
+  };
+  for (const key of Object.keys(data)) {
+    const value = data[key];
+    if (!Array.isArray(value)) continue;
+    const recs = value.filter((r) => r && typeof r === 'object' && !Array.isArray(r));
+    if (!recs.length) continue;
+    census(recs, (f) => key + '.' + f);
+    const fieldNames = new Set();
+    for (const r of recs) for (const k of Object.keys(r)) fieldNames.add(k);
+    for (const f of fieldNames) {
+      const nested = [];
+      for (const r of recs) {
+        const v = r[f];
+        if (Array.isArray(v)) for (const c of v) if (c && typeof c === 'object' && !Array.isArray(c)) nested.push(c);
+      }
+      if (nested.length) census(nested, (sf) => key + '.' + f + '[].' + sf);
+    }
+  }
+  return out;
+}
+
+// Forty-seventh log F2: the REQUIRED_FIELD_EMPTY gate resolved only depth-1
+// paths ('posts.location') against the top array's items.required. A nested
+// path ('posts.hoverCards[].type') is governed by the DECLARING array's
+// items.required (hoverCards'), not the outer records'. Walk the path
+// segments down through each array's items and return the required list
+// that governs the FINAL field name (null when any hop is not a declared
+// record array or the declaring items carry no required list).
+function schemaItemRequiredForPath(outputSchema, path) {
+  if (!outputSchema || typeof outputSchema !== 'object' || !outputSchema.properties || typeof outputSchema.properties !== 'object' || Array.isArray(outputSchema.properties)) return null;
+  if (typeof path !== 'string' || !path.length) return null;
+  const segs = path.split('.');
+  if (segs.length < 2) return null;
+  let node = outputSchema;
+  for (let i = 0; i < segs.length - 1; i++) {
+    const name = segs[i].replace(/\[\]$/, '');
+    const props = (node && node.properties && typeof node.properties === 'object' && !Array.isArray(node.properties)) ? node.properties : null;
+    const prop = props ? props[name] : null;
+    if (!prop || prop.type !== 'array' || !prop.items || typeof prop.items !== 'object' || Array.isArray(prop.items)) return null;
+    node = prop.items;
+  }
+  const finalName = segs[segs.length - 1].replace(/\[\]$/, '');
+  if (!finalName) return null;
+  return Array.isArray(node.required) ? node.required.map(String) : null;
 }
 
 // detectCountShortfall(data, inputValues, outputSchema, options) → null | {field, requested, extracted, ratio, severe}
@@ -4443,35 +4609,54 @@ function detectNeverExtractedFields(steps, outputSchema) {
     ? outputSchema.properties : {};
   let blanked = null;
   const out = [];
+  const lintField = (f, path) => {
+    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(f)) return;
+    if (blanked === null) {
+      blanked = steps.map((s) => blankStringsAndCommentsForLint(String((s && s.script) || ''))).join('\n');
+    }
+    const esc = f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    let mentionRe, literalRe;
+    try {
+      mentionRe = new RegExp('(?<![A-Za-z0-9_$])' + esc + '(?![A-Za-z0-9_$])', 'g');
+      literalRe = new RegExp('(?<![A-Za-z0-9_$])' + esc + '\\s*:\\s*([\'"`])[^\'"`\n]*\\1', 'g');
+    } catch (e) {
+      mentionRe = new RegExp('(^|[^A-Za-z0-9_$])' + esc + '($|[^A-Za-z0-9_$])', 'g');
+      literalRe = new RegExp('(^|[^A-Za-z0-9_$])' + esc + '\\s*:\\s*([\'"`])[^\'"`\n]*\\2', 'g');
+    }
+    const mentions = (blanked.match(mentionRe) || []).length;
+    const literals = (blanked.match(literalRe) || []).length;
+    if (mentions > 0 && mentions === literals) {
+      out.push({ field: f, path: path, literalCount: literals });
+    }
+  };
+  // Forty-seventh log: recurse one schema level into nested record-array
+  // fields — hoverCards[].type was declared (and hardcoded '') while this
+  // lint never enumerated past depth 1, so the literal sat through three
+  // deployed versions with no receipt naming it.
+  const expand = (items, prefix) => {
+    const req = Array.isArray(items.required) ? items.required.map(String) : [];
+    const ipo = (items.properties && typeof items.properties === 'object' && !Array.isArray(items.properties)) ? items.properties : null;
+    const ip = ipo ? Object.keys(ipo) : [];
+    const fields = [];
+    for (const f of req.concat(ip)) if (fields.indexOf(f) === -1) fields.push(f);
+    if (!fields.length) return;
+    for (const f of fields) lintField(f, prefix + '.' + f);
+    if (!ipo) return;
+    for (const f of fields) {
+      const np = ipo[f];
+      if (!np || np.type !== 'array' || !np.items || typeof np.items !== 'object' || Array.isArray(np.items)) continue;
+      const nReq = Array.isArray(np.items.required) ? np.items.required.map(String) : [];
+      const nProps = (np.items.properties && typeof np.items.properties === 'object' && !Array.isArray(np.items.properties)) ? Object.keys(np.items.properties) : [];
+      const nFields = [];
+      for (const nf of nReq.concat(nProps)) if (nFields.indexOf(nf) === -1) nFields.push(nf);
+      for (const nf of nFields) lintField(nf, prefix + '.' + f + '[].' + nf);
+    }
+  };
   for (const key of Object.keys(props)) {
     const prop = props[key];
     const items = (prop && prop.items && typeof prop.items === 'object') ? prop.items : null;
     if (!items) continue;
-    const req = Array.isArray(items.required) ? items.required.map(String) : [];
-    const ip = (items.properties && typeof items.properties === 'object' && !Array.isArray(items.properties)) ? Object.keys(items.properties) : [];
-    const fields = [];
-    for (const f of req.concat(ip)) if (fields.indexOf(f) === -1) fields.push(f);
-    if (!fields.length) continue;
-    if (blanked === null) {
-      blanked = steps.map((s) => blankStringsAndCommentsForLint(String((s && s.script) || ''))).join('\n');
-    }
-    for (const f of fields) {
-      if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(f)) continue;
-      const esc = f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      let mentionRe, literalRe;
-      try {
-        mentionRe = new RegExp('(?<![A-Za-z0-9_$])' + esc + '(?![A-Za-z0-9_$])', 'g');
-        literalRe = new RegExp('(?<![A-Za-z0-9_$])' + esc + '\\s*:\\s*([\'"`])[^\'"`\n]*\\1', 'g');
-      } catch (e) {
-        mentionRe = new RegExp('(^|[^A-Za-z0-9_$])' + esc + '($|[^A-Za-z0-9_$])', 'g');
-        literalRe = new RegExp('(^|[^A-Za-z0-9_$])' + esc + '\\s*:\\s*([\'"`])[^\'"`\n]*\\2', 'g');
-      }
-      const mentions = (blanked.match(mentionRe) || []).length;
-      const literals = (blanked.match(literalRe) || []).length;
-      if (mentions > 0 && mentions === literals) {
-        out.push({ field: f, path: key + '.' + f, literalCount: literals });
-      }
-    }
+    expand(items, key);
   }
   return out;
 }
@@ -4491,7 +4676,7 @@ function detectNeverExtractedFields(steps, outputSchema) {
 // direct property access keeps working. test/forty-sixth-log-followups.test.js
 // pins marker-bag keys === module.exports keys so a future export cannot
 // land on one surface only (the inline-fallback drift class, RC8/RC35).
-var WU_EXPORT_BAG = { parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+var WU_EXPORT_BAG = { parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = WU_EXPORT_BAG;
