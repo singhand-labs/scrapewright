@@ -2662,8 +2662,101 @@
     });
     var dispatchDoneAt = Date.now();
 
+    // Forty-fifth log F1: dispatch-failure early-out. When the trusted
+    // mouseMoved never reached the page (hoverResp.dispatched === false), NO
+    // popover can have mounted from this hover — yet the code below used to
+    // run the full dwell loop (whose first scoring tick on a giant streaming
+    // DOM takes tens of seconds: addedNodes rescan from index 0, RC49
+    // descendant walks, elementsFromPoint sampling, per-candidate outerHTML
+    // serialization + baseline Set hashing) and then the dismiss CDP
+    // roundtrip anyway. Live evidence: dispatch failed 17:20:40 and the
+    // failure returned promptly (hover_request diagnostic 17:20:40.055), but
+    // the result was not delivered until 17:21:05 — a 30s step-budget kill
+    // with ZERO hover_auto_discover diagnostics in the gap; three such kills
+    // taught the model to abandon hovercards for the rest of the session.
+    // The dwell loop and the dismiss are now skipped on dispatch failure;
+    // the anchor-label harvest below still runs (needs no dispatch).
+    var dispatchFailed = !(hoverResp && hoverResp.dispatched);
     var dispatchedAt = Date.now();
     var deadline = dispatchedAt + timeoutMs;
+    // Forty-fifth log F3: mid-tick deadline bail. The while-loop deadline is
+    // only checked BETWEEN ticks; one synchronous scoring tick over a giant
+    // streaming DOM can exceed the entire dwell budget by itself (see F1
+    // above). The per-candidate loops below check tickOverBudget() and bail
+    // mid-tick once deadline + grace has passed — returning popover_timeout
+    // with deadlineBailed evidence instead of eating the caller's whole step
+    // budget inside a single tick.
+    var TICK_DEADLINE_GRACE_MS = 1500;
+    var deadlineBailed = false;
+    function tickOverBudget() {
+      return Date.now() > deadline + TICK_DEADLINE_GRACE_MS;
+    }
+    // Forty-fifth log F2: the candidate pool persists across ticks and
+    // addedNodes is consumed through a cursor. The prior code rebuilt the
+    // pool EVERY tick from addedNodes[0] — on streaming pages hundreds of
+    // accumulated feed mounts were re-walked (RC49 descendant descent) and
+    // re-deduped (linear seenEls array scan) per tick: O(ticks × nodes²)
+    // candidate work before scoring even began. Pool persistence also
+    // preserves the RC43 stability contract: a candidate that passed on
+    // tick N is still in the pool on tick N+1, so "same element wins two
+    // consecutive ticks" remains observable.
+    var candidatePool = [];
+    var candidateSource = new Map();
+    var seenEls = new Set();
+    var addedNodesCursor = 0;
+    function pushCandidate(el, source) {
+      if (!el || el.nodeType !== 1) return;
+      if (seenEls.has(el)) return;
+      seenEls.add(el);
+      candidatePool.push(el);
+      candidateSource.set(el, source);
+    }
+    // Twenty-fourth log: keep the node REFERENCE of every rejected
+    // ADDED candidate so the no-popover result can read its text.
+    // candidateSource persists across ticks (F2), so an added node rejected
+    // on any tick is still remembered here.
+    function rememberRejectedAdded(node) {
+      if (!node || node.nodeType !== 1) return;
+      if (candidateSource.get(node) !== 'added') return;
+      if (rejectedAddedNodes.indexOf(node) !== -1) return;
+      if (rejectedAddedNodes.length >= 8) return;
+      rejectedAddedNodes.push(node);
+    }
+    // RC49: portal-wrapper descent. Portal-based hovercard frameworks
+    // (React Portals, modal-style popovers) mount in two phases: (1) create
+    // an invisible wrapper DIV (display:none, visibility:hidden, opacity:0,
+    // or 0x0), then (2) render the hovercard content INSIDE the wrapper as
+    // a child. MutationObserver fires for the wrapper; the candidate filter
+    // calls isElementVisible(wrapper) which returns false; the filter
+    // rejects it without ever inspecting the visible children inside.
+    //
+    // console.log 2026-08-13 08:27:43-52 (post-RC48) showed 82 of 116
+    // null-pick iterations with addedNodes:2 (portal mounted) where BOTH
+    // added DIVs were rejected as `invisible` — 164 invisible rejections
+    // across the run. Every one was a missed hovercard whose content was
+    // fully rendered inside the wrapper.
+    //
+    // Fix: when pushCandidate surfaces an ADDED node that is itself
+    // invisible, walk its descendants (bounded) and push visible
+    // descendants to candidatePool with source='added'. The source tag
+    // lets them win the RC46 cascade over efp-sampled page chrome.
+    //
+    // The walk happens BEFORE the filter loop so descendants enter the
+    // scoring pool on the same tick as the wrapper mount — no extra
+    // polling round-trip needed.
+    var RC49_MAX_DESCENDANTS = 50;
+    function collectVisibleDescendantsFromInvisibleAdded(root) {
+      if (!root || root.nodeType !== 1) return;
+      if (candidateSource.get(root) !== 'added') return;
+      if (isElementVisible(root)) return;
+      var descendants;
+      try { descendants = root.querySelectorAll('*'); } catch (e) { return; }
+      for (var i = 0; i < descendants.length && i < RC49_MAX_DESCENDANTS; i++) {
+        if (isElementVisible(descendants[i])) {
+          pushCandidate(descendants[i], 'added');
+        }
+      }
+    }
     // RC41 (console.log 2026-08-12 NINTH hover incident): gate auto-discovery
     // behind a minimum dwell time. The prior architecture picked "best of
     // pool" on the FIRST 250ms tick — before the hovercard had time to mount.
@@ -2678,7 +2771,7 @@
     // (a) popoverSel is exempt — explicit selectors should be honored
     // immediately.
     var MIN_AUTO_DISCOVER_DWELL_MS = 500;
-    while (Date.now() < deadline) {
+    while (!dispatchFailed && Date.now() < deadline) {
       var dwellMs = Date.now() - dispatchedAt;
       // Path (a): explicit selector match.
       // RC43 (ELEVENTH hover incident, console.log 2026-08-12): the prior
@@ -2778,79 +2871,17 @@
         }
       }
 
-      // Build candidate pool. Dedupe by element identity.
-      //
-      // RC41 (console.log 2026-08-12 NINTH incident): tag each candidate
-      // with its SOURCE so the diagnostic and the scoring cascade can
-      // distinguish NEW candidates (MutationObserver addedNodes — strongest
-      // hovercard signal) from PRE-EXISTING candidates (elementsFromPoint
-      // samples — usually post wrappers, content sections, etc.).
-      // addedNodes is the universal "portal mounted this" signal across
-      // React/Vue/Popper/Floating UI; preferring it ties the picker to the
-      // actual hovercard-mount event instead of trying to recognize the
-      // hovercard by shape.
-      var candidatePool = [];
-      var candidateSource = new Map();
-      var seenEls = [];
-      function pushCandidate(el, source) {
-        if (!el || el.nodeType !== 1) return;
-        for (var d = 0; d < seenEls.length; d++) {
-          if (seenEls[d] === el) return;
-        }
-        seenEls.push(el);
-        candidatePool.push(el);
-        candidateSource.set(el, source);
-      }
-      // Twenty-fourth log: keep the node REFERENCE of every rejected
-      // ADDED candidate so the no-popover result can read its text.
-      // candidateSource is per-tick, so the check must run inside the
-      // tick that observed the mount.
-      function rememberRejectedAdded(node) {
-        if (!node || node.nodeType !== 1) return;
-        if (candidateSource.get(node) !== 'added') return;
-        if (rejectedAddedNodes.indexOf(node) !== -1) return;
-        if (rejectedAddedNodes.length >= 8) return;
-        rejectedAddedNodes.push(node);
-      }
-      // RC49: portal-wrapper descent. Portal-based hovercard frameworks
-      // (React Portals, modal-style popovers) mount in two phases: (1) create
-      // an invisible wrapper DIV (display:none, visibility:hidden, opacity:0,
-      // or 0x0), then (2) render the hovercard content INSIDE the wrapper as
-      // a child. MutationObserver fires for the wrapper; the candidate filter
-      // calls isElementVisible(wrapper) which returns false; the filter
-      // rejects it without ever inspecting the visible children inside.
-      //
-      // console.log 2026-08-13 08:27:43-52 (post-RC48) showed 82 of 116
-      // null-pick iterations with addedNodes:2 (portal mounted) where BOTH
-      // added DIVs were rejected as `invisible` — 164 invisible rejections
-      // across the run. Every one was a missed hovercard whose content was
-      // fully rendered inside the wrapper.
-      //
-      // Fix: when pushCandidate surfaces an ADDED node that is itself
-      // invisible, walk its descendants (bounded) and push visible
-      // descendants to candidatePool with source='added'. The source tag
-      // lets them win the RC46 cascade over efp-sampled page chrome.
-      //
-      // The walk happens BEFORE the filter loop so descendants enter the
-      // scoring pool on the same tick as the wrapper mount — no extra
-      // polling round-trip needed.
-      var RC49_MAX_DESCENDANTS = 50;
-      function collectVisibleDescendantsFromInvisibleAdded(root) {
-        if (!root || root.nodeType !== 1) return;
-        if (candidateSource.get(root) !== 'added') return;
-        if (isElementVisible(root)) return;
-        var descendants;
-        try { descendants = root.querySelectorAll('*'); } catch (e) { return; }
-        for (var i = 0; i < descendants.length && i < RC49_MAX_DESCENDANTS; i++) {
-          if (isElementVisible(descendants[i])) {
-            pushCandidate(descendants[i], 'added');
-          }
-        }
-      }
-      for (var k = 0; k < addedNodes.length; k++) {
+      // Build candidate pool from the incremental cursor (F2): only added
+      // nodes observed since the last tick are pushed/walked. Accumulated
+      // feed mounts from earlier ticks are already in the persistent pool.
+      // F3: check the tick budget per node — the RC49 descendant walks make
+      // this loop the most expensive part of a tick on streaming pages.
+      for (var k = addedNodesCursor; k < addedNodes.length; k++) {
+        if (tickOverBudget()) { deadlineBailed = true; break; }
         pushCandidate(addedNodes[k], 'added');
         collectVisibleDescendantsFromInvisibleAdded(addedNodes[k]);
       }
+      addedNodesCursor = addedNodes.length;
       // Path (c): elementsFromPoint sampling. Sample at cursor and
       // cardinal offsets (~120px) to catch hovercards appearing beside
       // the anchor rather than overlapping it. Wraps in try/catch since
@@ -2892,7 +2923,13 @@
       var passingCandidates = [];
       var rejectedSummary = [];
       for (var ci = 0; ci < candidatePool.length; ci++) {
+        if (tickOverBudget()) { deadlineBailed = true; break; }
         var node = candidatePool[ci];
+        // F2 pool persistence: detached nodes (efp chrome removed mid-dwell,
+        // portal scaffolding unmounted by the page) can never be picked —
+        // skip them without paying outerHTML serialization. Added-source
+        // detaches still feed the twenty-fourth-log text harvest.
+        if (!node.isConnected) { rememberRejectedAdded(node); continue; }
         if (!isElementVisible(node)) {
           rememberRejectedAdded(node);
           if (rejectedSummary.length < 5) rejectedSummary.push({
@@ -2992,6 +3029,11 @@
           source: nsource
         });
       }
+      // F3: a mid-tick bail means the DOM outran the budget — stop polling
+      // instead of sleeping into another oversized tick. The partial
+      // passingCandidates of a bailed tick are discarded (never scored as a
+      // pick), and the result below discloses deadlineBailed.
+      if (deadlineBailed) break;
       // Sort passing candidates by the scoring cascade. RC46 reordering:
       // source ('added' beats 'efp') is checked BEFORE posAbsolute. Why: a
       // candidate that just appeared in the MutationObserver buffer (added)
@@ -3138,7 +3180,10 @@
     // mouseMoved), same tab, same debugger — hover succeeds (active tab),
     // dismiss hung (background tab). This is the parallel asymmetry to RC48
     // (which fixed asymmetric timeouts); RC50 fixes asymmetric tab activation.
-    if (dismiss) {
+    // Forty-fifth log F1: also skip entirely on dispatch failure — the mouse
+    // never moved, so there is nothing to dismiss, and the extra activation +
+    // CDP roundtrip only burns the caller's budget.
+    if (dismiss && !dispatchFailed) {
       try {
         await withTabActivation('hoverDismiss', async function () {
           await chrome.runtime.sendMessage({ type: 'TRUSTED_HOVER_DISMISS' });
@@ -3175,6 +3220,14 @@
     }
     if (earlyExited) {
       result.reason = 'no_hover_signal_early_exit';
+    } else if (dispatchFailed) {
+      // Forty-fifth log F1: name the environmental failure and its remedy —
+      // the 45th-log model read bare dispatch-failure reasons as "popovers
+      // unavailable in this environment" and abandoned hovercards for the
+      // whole session. The dwell budget was never spent, so the
+      // popover_timeout budgetNote below would be a lie here.
+      result.reason = (hoverResp && hoverResp.reason) ? hoverResp.reason : 'hover_dispatch_failed';
+      result.budgetNote = 'the trusted mouseMoved never reached the page, so no popover could mount — this is an environmental transient (busy renderer / CDP contention), not evidence about this anchor: retry the same hover before concluding popovers are unavailable';
     } else if (!htmlSnippet && (popoverSel || observer)) {
       result.reason = 'popover_timeout';
       // Thirty-first log: the contract was renegotiated on underpowered
@@ -3185,6 +3238,13 @@
       // concluding the popover does not exist.
       result.timeoutMs = timeoutMs;
       result.budgetNote = 'absence is budget-bounded — hover waited ' + timeoutMs + 'ms; slow/cold popovers can exceed it, retry with a larger opts.timeoutMs before concluding the popover never renders';
+      // Forty-fifth log F3: a mid-tick bail means the budget expired INSIDE
+      // a scoring tick — evidence beyond the scanned prefix went unscored,
+      // which is strictly different from "nothing mounted".
+      if (deadlineBailed) {
+        result.deadlineBailed = true;
+        result.budgetNote += '; scoring bailed mid-tick (deadlineBailed) — the page DOM was too large to scan within this budget, so popover evidence beyond the scanned prefix went unscored: retry with a larger opts.timeoutMs';
+      }
     } else if (!result.hovered) {
       result.reason = hoverResp && hoverResp.reason ? hoverResp.reason : 'hover_failed';
     }

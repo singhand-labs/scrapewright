@@ -57,8 +57,10 @@ describe('P1: domHover keeps the observed candidate (source audit)', () => {
   const fnStart = CS_SRC.indexOf('async function domHover(');
   // Thirty-first log bumped 40000→42000; the forty-second log's
   // anchor-label harvest (+~1.1k chars before the result assembly) pushed
-  // result.observedPopover past that — window is a scoping heuristic.
-  const fnBody = CS_SRC.slice(fnStart, fnStart + 44000);
+  // result.observedPopover past that; the forty-fifth log's dispatch
+  // early-out + cursor/pool/bail declarations (+~6k) pushed it past 44000 —
+  // window is a scoping heuristic.
+  const fnBody = CS_SRC.slice(fnStart, fnStart + 52000);
 
   it('tracks the best scoring-cascade pick across auto-discover ticks', () => {
     assert.ok(/observedBest/.test(fnBody),
@@ -264,8 +266,9 @@ describe('P3: hover_anchor_timing phase diagnostics (source audit)', () => {
   // Thirty-first log: the budget-disclosure additions to domHover's
   // popover_timeout branch pushed the notify past the old 40000 window —
   // the window is a scoping heuristic, not a size contract. Forty-second
-  // log: harvest block pushed it past 42000 too.
-  const fnBody = CS_SRC.slice(fnStart, fnStart + 44000);
+  // log: harvest block pushed it past 42000 too. Forty-fifth log:
+  // dispatch early-out + cursor/pool/bail declarations pushed past 44000.
+  const fnBody = CS_SRC.slice(fnStart, fnStart + 52000);
 
   it('emits hover_anchor_timing with per-phase durations', () => {
     const i = fnBody.indexOf('hover_anchor_timing');

@@ -759,16 +759,55 @@ function waitForTabLoad(tabId, timeoutMs = 60000) {
         setTimeout(resolve, 1000);
         return;
       }
+      let settled = false;
+      let probeEvidence = null;
+      const finish = (fn) => {
+        if (settled) return;
+        settled = true;
+        chrome.tabs.onUpdated.removeListener(listener);
+        fn();
+      };
       const listener = (updatedTabId, info) => {
         if (updatedTabId === tabId && info.status === 'complete') {
-          chrome.tabs.onUpdated.removeListener(listener);
-          setTimeout(resolve, 1000);
+          finish(() => setTimeout(resolve, 1000));
         }
       };
       chrome.tabs.onUpdated.addListener(listener);
+      // Forty-fifth log: streaming pages can stay readyState 'interactive'
+      // for minutes while fully rendered (3.5M body chars, no 'complete'
+      // event — 4 x 60s hard-rejects in the log). Probe shortly BEFORE the
+      // hard timeout and resolve when the page is interactive/complete with
+      // meaningful content. The probe can only UPGRADE the outcome;
+      // everything else defers to the hard timeout, which rejects with the
+      // probe evidence embedded. Mirrors the wizard.js copy.
+      const probeAtMs = Math.max(0, timeoutMs - 1500);
+      const probePage = async () => {
+        try {
+          const results = await Promise.race([
+            chrome.scripting.executeScript({
+              target: { tabId },
+              func: () => ({
+                readyState: document.readyState,
+                bodyChars: (document.body && document.body.textContent || '').length
+              })
+            }),
+            new Promise((res) => setTimeout(() => res(null), 3000))
+          ]);
+          const p = results && results[0] && results[0].result;
+          if (p && (p.readyState === 'interactive' || p.readyState === 'complete') && (p.bodyChars || 0) > 1000) {
+            finish(resolve);
+          } else if (p) {
+            probeEvidence = ` (page reachable: readyState=${p.readyState}, bodyChars=${p.bodyChars} — still loading or empty)`;
+          } else {
+            probeEvidence = ' (page probe timed out — tab unreachable or main thread blocked)';
+          }
+        } catch (e) {
+          probeEvidence = ` (page probe failed: ${e && e.message || String(e)})`;
+        }
+      };
+      setTimeout(probePage, probeAtMs);
       setTimeout(() => {
-        chrome.tabs.onUpdated.removeListener(listener);
-        reject(new Error(`Tab load timeout after ${Math.round(timeoutMs / 1000)}s`));
+        finish(() => reject(new Error(`Tab load timeout after ${Math.round(timeoutMs / 1000)}s${probeEvidence || ''}`)));
       }, timeoutMs);
     });
   });

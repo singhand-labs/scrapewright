@@ -1875,16 +1875,58 @@ async function confirmDeploy() {
 
 function waitForTabLoad(tabId, timeoutMs = 60000) {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    let probeEvidence = null;
+    const finish = (fn) => {
+      if (settled) return;
+      settled = true;
+      chrome.tabs.onUpdated.removeListener(listener);
+      fn();
+    };
     const listener = (updatedTabId, info) => {
       if (updatedTabId === tabId && info.status === 'complete') {
-        chrome.tabs.onUpdated.removeListener(listener);
-        setTimeout(resolve, 500);
+        finish(() => setTimeout(resolve, 500));
       }
     };
     chrome.tabs.onUpdated.addListener(listener);
+    // Forty-fifth log: streaming pages can stay readyState 'interactive' for
+    // minutes while fully rendered (the log's search page carried 3.5M chars
+    // of body text but never fired status 'complete'; 4 x 60s hard-rejects
+    // burned ~4 minutes plus LLM retry churn). Probe the page shortly
+    // BEFORE the hard timeout — early enough that a resolve still beats the
+    // outer withTimeout(60s) wrappers in makeWizardRail and verify-runner —
+    // and resolve when the page is interactive/complete with meaningful
+    // content. The probe can only UPGRADE the outcome: everything else
+    // defers to the hard timeout, which rejects with the probe evidence
+    // embedded so the model knows the tab is reachable vs dead.
+    const probeAtMs = Math.max(0, timeoutMs - 1500);
+    const probePage = async () => {
+      try {
+        const results = await Promise.race([
+          chrome.scripting.executeScript({
+            target: { tabId },
+            func: () => ({
+              readyState: document.readyState,
+              bodyChars: (document.body && document.body.textContent || '').length
+            })
+          }),
+          new Promise((res) => setTimeout(() => res(null), 3000))
+        ]);
+        const p = results && results[0] && results[0].result;
+        if (p && (p.readyState === 'interactive' || p.readyState === 'complete') && (p.bodyChars || 0) > 1000) {
+          finish(resolve);
+        } else if (p) {
+          probeEvidence = ` (page reachable: readyState=${p.readyState}, bodyChars=${p.bodyChars} — still loading or empty)`;
+        } else {
+          probeEvidence = ' (page probe timed out — tab unreachable or main thread blocked)';
+        }
+      } catch (e) {
+        probeEvidence = ` (page probe failed: ${e && e.message || String(e)})`;
+      }
+    };
+    setTimeout(probePage, probeAtMs);
     setTimeout(() => {
-      chrome.tabs.onUpdated.removeListener(listener);
-      reject(new Error(`Tab load timeout after ${Math.round(timeoutMs / 1000)}s`));
+      finish(() => reject(new Error(`Tab load timeout after ${Math.round(timeoutMs / 1000)}s${probeEvidence || ''}`)));
     }, timeoutMs);
   });
 }
