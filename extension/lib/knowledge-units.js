@@ -155,6 +155,13 @@
       body: 'An id-like field (postId, videoId, ...) whose value repeats across records almost never means the records are duplicates — it means the extractor read a value every record SHARES (the list owner id, the container permalink) instead of a per-record identifier. The census names the duplicated value and the record ordinals. Re-probe one of the listed records and look one level deeper: per-record ids live on per-record elements — the record link href, a data attr on the card — never on the shared container. Combine with the empty-ratio census: records with an EMPTY id and records with the SHARED id usually fail for the same reason (two link shapes, one selector).'
     },
     {
+      id: 'position-like-id',
+      title: 'An id field of small ascending integers is a position/index read, not an identity',
+      matchEvents: ['POSITION_LIKE_ID'],
+      origin: '2026-09-10 fifty-fifth live log; postId shipped as 3,4,5,6,7,9,10,11 — the extractor fell back to aria-posinset (position-in-set) when the permalink route came back empty, behind a green verify at score 183.98',
+      body: 'Identity values are long opaque tokens everywhere (10+ digit numbers, slugs, hashes). An id-named field whose values are small ascending integers was read from a POSITION attribute — aria-posinset, a list index, a row number — which is the FEED slot, not the record identity: values shift as the feed reorders and say nothing about the record. Re-bind the field to the record permalink / link href (story_fbid, /posts/<id>, fbid= query param); when the page exposes no per-record identity link, say so and renegotiate the field away with io.confirm instead of shipping the position.'
+    },
+    {
       id: 'time-field-implausible',
       title: 'A time-named field whose values carry no date shape is a wrong-anchor bind',
       matchEvents: ['TIME_FIELD_IMPLAUSIBLE'],

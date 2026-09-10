@@ -280,7 +280,17 @@
       const rtNote = state.lastVerifyRelativeTimestamps
         ? ' [VERIFY RELATIVE-TIMESTAMPS — time field(s) carrying relative ages, not absolute values: ' + state.lastVerifyRelativeTimestamps.join(', ') + ']'
         : '';
-      return ladder + csNote + rtNote + unverifiedArtifactSuffix('current');
+      // Fifty-fifth log: junk-class censuses ride the same additive ladder.
+      const tiNote = state.lastVerifyTimeImplausible
+        ? ' [VERIFY TIME-IMPLAUSIBLE — time field(s) whose values carry no date shape: ' + state.lastVerifyTimeImplausible.join('; ') + ']'
+        : '';
+      const jkNote = state.lastVerifyJunkFields
+        ? ' [VERIFY JUNK-VALUES — field(s) carrying junk values: ' + state.lastVerifyJunkFields.join(', ') + ']'
+        : '';
+      const plNote = state.lastVerifyPositionLikeIds
+        ? ' [VERIFY POSITION-LIKE-IDS — id field(s) holding position/index values, not identities: ' + state.lastVerifyPositionLikeIds.join('; ') + ']'
+        : '';
+      return ladder + csNote + rtNote + tiNote + jkNote + plNote + unverifiedArtifactSuffix('current');
     }
 
     function stateForPersist() {
@@ -902,6 +912,20 @@
               detail = (detail ? detail + ' ' : '') +
                 '[VERIFY RELATIVE-TIMESTAMPS — time field(s) carrying relative ages, not absolute values: ' + state.lastVerifyRelativeTimestamps.join(', ') + '; rebind to the datetime attribute / labelledby reference / hovercard or renegotiate the contract]';
             }
+            if (state.lastVerifyTimeImplausible) {
+              // Fifty-fifth log: postTime shipped as "Learn More" on 5/8
+              // records behind this exact silence.
+              detail = (detail ? detail + ' ' : '') +
+                '[VERIFY TIME-IMPLAUSIBLE — time field(s) whose values carry no date shape: ' + state.lastVerifyTimeImplausible.join('; ') + '; re-bind to the timestamp anchor whose value matches a date, or renegotiate]';
+            }
+            if (state.lastVerifyJunkFields) {
+              detail = (detail ? detail + ' ' : '') +
+                '[VERIFY JUNK-VALUES — field(s) carrying junk values: ' + state.lastVerifyJunkFields.join(', ') + ']';
+            }
+            if (state.lastVerifyPositionLikeIds) {
+              detail = (detail ? detail + ' ' : '') +
+                '[VERIFY POSITION-LIKE-IDS — id field(s) holding position/index values, not identities: ' + state.lastVerifyPositionLikeIds.join('; ') + '; re-bind to the record permalink/href or drop the field]';
+            }
             // Twenty-seventh log: the shipped artifact had no verify at all
             // while the ladder named only the OLDER artifact's failure —
             // both disclose. Shared helper with the budget stops
@@ -969,6 +993,29 @@
               : [];
             state.lastVerifyRelativeTimestamps = rtList.length
               ? rtList.slice(0, 6).map((f) => String(f.path || f.field) + ' ' + (f.relativeCount || 0) + '/' + (f.totalRecords || 0) + ' relative (e.g. ' + JSON.stringify(String(f.sampleValue || '').slice(0, 40)) + ')')
+              : null;
+            // Fifty-fifth log: the junk-class censuses must ride the stop
+            // disclosures too — the model shipped postTime="Learn More" on
+            // 5/8 records behind a green verify whose finish summary named
+            // only the partial-empties; the user reading the completion
+            // never learned the time field was garbage.
+            const itfList = (result && result.detectors && Array.isArray(result.detectors.implausibleTimeFields))
+              ? result.detectors.implausibleTimeFields
+              : [];
+            state.lastVerifyTimeImplausible = itfList.length
+              ? itfList.slice(0, 4).map((f) => String(f.path || f.field) + ' ' + (f.implausibleCount || 0) + '/' + (f.nonEmpty || 0) + ' no date shape (e.g. ' + JSON.stringify(String(f.sample || '').slice(0, 30)) + ')')
+              : null;
+            const jfList = (result && result.detectors && result.detectors.junkValues && Array.isArray(result.detectors.junkValues.fields))
+              ? result.detectors.junkValues.fields
+              : [];
+            state.lastVerifyJunkFields = jfList.length
+              ? jfList.slice(0, 6).map((f) => String(f.field || f.path)).filter(Boolean)
+              : null;
+            const pliList = (result && result.detectors && Array.isArray(result.detectors.positionLikeIds))
+              ? result.detectors.positionLikeIds
+              : [];
+            state.lastVerifyPositionLikeIds = pliList.length
+              ? pliList.slice(0, 4).map((f) => String(f.path || f.field) + ' (position-like values e.g. ' + JSON.stringify(String(f.sample || '')) + ')')
               : null;
             state.lastVerifySchemaBlind = !!(Array.isArray(result && result.events) && result.events.indexOf('SCHEMA_BLIND') !== -1);
             // The tool_result event's summary is a capped one-liner — too

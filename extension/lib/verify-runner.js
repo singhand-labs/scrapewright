@@ -47,6 +47,7 @@
       detectFrozenScrollCount: w.detectFrozenScrollCount,
       detectSiblingCountContrast: w.detectSiblingCountContrast,
       detectImplausibleTimeFields: w.detectImplausibleTimeFields,
+      detectPositionLikeIds: w.detectPositionLikeIds,
       detectDuplicateIdValues: w.detectDuplicateIdValues,
       detectFieldMatchZero: w.detectFieldMatchZero,
       detectContainerMatchZero: w.detectContainerMatchZero,
@@ -477,7 +478,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, siblingCountContrast: null, implausibleTimeFields: null };
+      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, siblingCountContrast: null, implausibleTimeFields: null, positionLikeIds: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -771,6 +772,15 @@
           const itf = WU.detectImplausibleTimeFields(finalData, outputSchema) || [];
           if (itf.length) detectors.implausibleTimeFields = itf;
         }
+        if (typeof WU.detectPositionLikeIds === 'function') {
+          // Fifty-fifth log: report-only. postId as the small ascending
+          // integers 3..11 — aria-posinset (position-in-set) read as the
+          // per-record identity. Identity values are long opaque tokens;
+          // small integers are positions. The census names the permalink
+          // route where real ids live.
+          const pli = WU.detectPositionLikeIds(finalData, outputSchema) || [];
+          if (pli.length) detectors.positionLikeIds = pli;
+        }
         if (typeof WU.detectSiblingCountContrast === 'function') {
           // Fiftieth log: report-only. A count-named field empty on most
           // records while a SIBLING count field extracts real values from the
@@ -1008,6 +1018,7 @@
         if (detectors.scrollCountFrozen) add('SCROLL_COUNT_FROZEN');
         if (detectors.siblingCountContrast) add('COUNT_FIELD_HIDDEN_VALUE');
         if (detectors.implausibleTimeFields) add('TIME_FIELD_IMPLAUSIBLE');
+        if (detectors.positionLikeIds) add('POSITION_LIKE_ID');
         if (detectors.duplicateIdValues) add('DUPLICATE_ID_VALUES');
         if (detectors.shapeDistribution) add('CARD_POLICY');
         if (detectors.stepNoReturn) add('STEP_NO_RETURN');
