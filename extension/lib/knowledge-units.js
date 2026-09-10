@@ -155,6 +155,20 @@
       body: 'An id-like field (postId, videoId, ...) whose value repeats across records almost never means the records are duplicates — it means the extractor read a value every record SHARES (the list owner id, the container permalink) instead of a per-record identifier. The census names the duplicated value and the record ordinals. Re-probe one of the listed records and look one level deeper: per-record ids live on per-record elements — the record link href, a data attr on the card — never on the shared container. Combine with the empty-ratio census: records with an EMPTY id and records with the SHARED id usually fail for the same reason (two link shapes, one selector).'
     },
     {
+      id: 'time-field-implausible',
+      title: 'A time-named field whose values carry no date shape is a wrong-anchor bind',
+      matchEvents: ['TIME_FIELD_IMPLAUSIBLE'],
+      origin: '2026-09-10 fifty-second live log; postTime shipped as "m.meCatMachine Learning (ML) Explained | Types…" — the labelledby resolution of the WRONG anchor concatenating its referenced texts (redirect domains + page titles) — while relative/empty/junk censuses all passed it',
+      body: 'A time-named field (postTime/createdAt/…time/date) whose non-empty values carry NO date/time shape (no month name, clock, time-unit word, ISO or CJK date) is almost always an ARIA labelledby/text read on the WRONG anchor: its referenced texts concatenate into redirect domains + page titles. Fix by SHAPE, not by trying more anchors blind: enumerate the timestamp-candidate anchors in one record (probe.extract with multi:true over a[href] labelledby candidates), keep only values matching a date SHAPE (month name / HH:MM / N-unit(-ago) / ISO / CJK date), bind the field to the surviving anchor, and re-verify. If NO candidate carries a date shape, the page does not expose the timestamp for this population — renegotiate via io.confirm instead of shipping titles as timestamps.'
+    },
+    {
+      id: 'stagnant-disclosures',
+      title: 'Three identical verify disclosures in a row means the loop is stuck — take an exit, do not re-verify',
+      matchEvents: ['STAGNANT_DISCLOSURES'],
+      origin: '2026-09-10 fifty-second live log; five consecutive verify.run calls carried the IDENTICAL partial-empty signature (location 5/5, hoverCards[].role 10/10, postTime relative) with zero research-tab probes between updates, and the session exhausted all 60 turns without moving a single field',
+      body: 'When verify reports the SAME disclosure signature (same empty-field paths and counts, same junk fields) for the third consecutive run, re-verifying the same artifact shape will not move anything — the loop is stuck. Take exactly one exit: (a) go back to the RESEARCH tab (it is still open) and probe the NAMED records/fields — emptyRecordSamples tells you WHICH records, attrStats/labelledby tell you WHERE the value lives — then fix the selector/assembly from that evidence; (b) renegotiate the contract via io.confirm, dropping or adjusting fields the page genuinely lacks; (c) accept the current shape and disclose honestly in finish. A bare service.update → verify.run cycle with no probe in between is the signature of the stuck loop.'
+    },
+    {
       id: 'count-field-hidden-value',
       title: 'Empty count field with a populated sibling count — the value hides in an aria attribute or reference',
       matchEvents: ['COUNT_FIELD_HIDDEN_VALUE'],

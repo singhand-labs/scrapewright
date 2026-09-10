@@ -428,6 +428,22 @@
           error: 'SCHEMA_NO_FIELDS: outputSchema declares no fields — neither "required" nor "properties" names an output field. Scoring and every empty/junk detector read those keys, so a fieldless contract verifies BLIND: verify.run reports score 0 (green garbage) whether extraction succeeded or failed. Resend io.confirm with an outputSchema like {"type":"object","required":["posts"],"properties":{"posts":{"type":"array","items":{"type":"object"}}}} listing every output field under properties and the must-haves in required.'
         };
       }
+      // Fifty-second log: likes/comments/shares/htmlSnippet/hoverCards were
+      // declared at the items level OUTSIDE properties and admitted — the
+      // strays were invisible to every schema-driven gate for the whole
+      // session (the never-extracted lint never enumerated them, `role: ''`
+      // sat hardcoded through seven artifact versions with no receipt).
+      const outStrays = (typeof WU.detectStrayFieldDeclarations === 'function')
+        ? WU.detectStrayFieldDeclarations(a.outputSchema) : null;
+      if (outStrays) {
+        const allStrays = [];
+        for (const h of outStrays) allStrays.push.apply(allStrays, h.strays);
+        return {
+          confirmed: false,
+          error: 'SCHEMA_STRAY_FIELD_DECLS: outputSchema declares field definition(s) OUTSIDE "properties" — [' + Array.from(new Set(allStrays)).sort().join(', ') + '] sit at ' +
+            outStrays.map((h) => h.at).join('; ') + ' as siblings of "properties"/"required", not inside them. Stray declarations are INVISIBLE to every schema-driven gate: scoring required-coverage, the empty/junk censuses, and the never-extracted lint never read them (a session shipped role 10/10 empty through seven artifact versions this way). Move each declaration under its parent object\'s "properties" and re-confirm.'
+        };
+      }
       // Forty-sixth log (user request): the TEST REQUEST VALUES are
       // confirmed together with the schemas. The model had been picking
       // {keyword, count} silently — every verify.run executed values the
@@ -532,6 +548,25 @@
       };
     }
 
+    // Fifty-second log: five identical consecutive verify disclosures
+    // (location 5/5, hoverCards[].role 10/10, postTime relative) burned the
+    // whole 60-turn budget with zero research-tab probes between updates —
+    // the model re-verified the same broken shape and nothing told it the
+    // loop was stuck. Track the disclosure signature across verify.run calls
+    // (per session-tools instance = per session) and fire an advisory on the
+    // THIRD identical consecutive signature.
+    let verifySignatureHistory = [];
+    let probesSinceLastVerify = 0;
+
+    // Fifty-second log: wrap every probe so the stagnation census can see
+    // research activity between verifies.
+    function wrapProbe(fn) {
+      return async function (args, ctx) {
+        probesSinceLastVerify += 1;
+        return fn(args, ctx);
+      };
+    }
+
     async function verifyRun(args, ctx) {
       const service = d.getDraftService();
       if (!service || !Array.isArray(service.steps) || !service.steps.length) {
@@ -548,7 +583,30 @@
         ((ioConfirmedSchemas || ledgerConfirmedSchemas(ctx) || {}).outputSchema) || null;
       const out = await d.runVerify({ service: service, input: input, outputSchema: outputSchema });
       lastVerify = { events: out.events || [], report: out.report, raw: out.raw, at: Date.now() };
-      return out.report;
+      const report = out.report || {};
+      // Fifty-second log stagnation census: the signature is the sorted
+      // partial-empty paths+counts, the junk field set, and the relative
+      // timestamp paths — unchanged across three consecutive verifies means
+      // the current approach is not moving these fields.
+      try {
+        const det = report.detectors || {};
+        const pe = Array.isArray(det.partialEmptyFields) ? det.partialEmptyFields
+          .map((f) => String(f.path || f.field) + ':' + (f.emptyCount != null ? f.emptyCount : '?') + '/' + (f.totalCount != null ? f.totalCount : '?')) : [];
+        const jf = det.junkValues && Array.isArray(det.junkValues.fields) ? det.junkValues.fields.map((f) => String(f.field)) : [];
+        const rt = Array.isArray(det.relativeTimestamps) ? det.relativeTimestamps.map((f) => String(f.path || f.field)) : [];
+        const sig = JSON.stringify([pe.slice().sort(), jf.slice().sort(), rt.slice().sort()]);
+        const lastTwo = verifySignatureHistory.slice(-2);
+        verifySignatureHistory.push(sig);
+        if (verifySignatureHistory.length > 6) verifySignatureHistory.shift();
+        if (lastTwo.length === 2 && lastTwo[0] === sig && lastTwo[1] === sig) {
+          const lines = pe.length ? pe.join(', ') : (jf.length ? ('junk: ' + jf.join(', ')) : 'the same disclosure set');
+          report.stagnationNote = 'STAGNANT_DISCLOSURES: this is the THIRD consecutive verify.run with an IDENTICAL disclosure signature (' + lines + '). Re-verifying the same artifact shape is not moving these fields. Pick ONE exit: (a) probe the NAMED records/fields on the RESEARCH tab (it is still open — probe.sample/probe.attrStats/probe.labelledby on the empty/junk fields\' elements) and fix the selector/assembly from evidence; (b) renegotiate the contract via io.confirm (drop or adjust fields the page genuinely lacks); (c) accept and disclose honestly in finish. Do not call verify.run again before doing (a) or (b).' +
+            (probesSinceLastVerify === 0 ? ' Note: you have not run a single research-tab probe between these verifies.' : '');
+          report.events = Array.isArray(report.events) ? report.events.concat(['STAGNANT_DISCLOSURES']) : ['STAGNANT_DISCLOSURES'];
+        }
+      } catch (_) { /* the stagnation census must never break the verify result */ }
+      probesSinceLastVerify = 0;
+      return report;
     }
 
     // Contract-state analysis view (twenty-first log, per the analysis-tools
@@ -712,6 +770,19 @@
         return {
           error: 'SCHEMA_NO_FIELDS: outputSchema declares no fields — neither "required" nor "properties" names an output field, so scoring and every empty/junk detector verify BLIND (score 0 green garbage). Resend with the fielded outputSchema the contract carries: fields under "properties", must-haves in "required" — renegotiate with io.confirm first if the field list itself is changing.'
         };
+      }
+      // Fifty-second log: stray field declarations (schema-shaped objects
+      // sitting OUTSIDE properties) must not land here either — same blind
+      // spot as above, one level subtler.
+      if (a.outputSchema != null && typeof WU.detectStrayFieldDeclarations === 'function') {
+        const updStrays = WU.detectStrayFieldDeclarations(a.outputSchema);
+        if (updStrays) {
+          const allS = [];
+          for (const h of updStrays) allS.push.apply(allS, h.strays);
+          return {
+            error: 'SCHEMA_STRAY_FIELD_DECLS: outputSchema declares field definition(s) OUTSIDE "properties" — [' + Array.from(new Set(allS)).sort().join(', ') + '] at ' + updStrays.map((h) => h.at).join('; ') + '. Stray declarations are invisible to every schema-driven gate (scoring, empty/junk censuses, the never-extracted lint). Move them under the parent object\'s "properties" and re-send (io.confirm again if the contract is changing).'
+          };
+        }
       }
       // Runtime-flag path: a materially different contract must be
       // re-confirmed. The ledger-marker recovery path (session resume /
@@ -965,15 +1036,18 @@
       'page.open': pageOpen,
       'page.state': d.rail.pageState,
       'page.settle': pageSettle,
-      'probe.count': probes.count,
-      'probe.text': probes.text,
-      'probe.attrStats': probes.attrStats,
-      'probe.labelledby': probes.labelledby,
-      'probe.sample': probes.sample,
-      'probe.hover': probes.hover,
-      'probe.scroll': probes.scroll,
-      'probe.scrollUntil': probes.scrollUntil,
-      'probe.extract': probes.extract,
+      // Fifty-second log: the stagnation advisory needs to know whether ANY
+      // research-tab probe ran between two verifies — a bare update↔verify
+      // loop with zero probes is the exact shape that burned 60 turns.
+      'probe.count': wrapProbe(probes.count),
+      'probe.text': wrapProbe(probes.text),
+      'probe.attrStats': wrapProbe(probes.attrStats),
+      'probe.labelledby': wrapProbe(probes.labelledby),
+      'probe.sample': wrapProbe(probes.sample),
+      'probe.hover': wrapProbe(probes.hover),
+      'probe.scroll': wrapProbe(probes.scroll),
+      'probe.scrollUntil': wrapProbe(probes.scrollUntil),
+      'probe.extract': wrapProbe(probes.extract),
       'diag.read': diagRead,
       'verify.run': verifyRun,
       'annotate.request': annotateRequest,

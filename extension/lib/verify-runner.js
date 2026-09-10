@@ -46,6 +46,7 @@
       detectFrozenZeroCounter: w.detectFrozenZeroCounter,
       detectFrozenScrollCount: w.detectFrozenScrollCount,
       detectSiblingCountContrast: w.detectSiblingCountContrast,
+      detectImplausibleTimeFields: w.detectImplausibleTimeFields,
       detectDuplicateIdValues: w.detectDuplicateIdValues,
       detectFieldMatchZero: w.detectFieldMatchZero,
       detectContainerMatchZero: w.detectContainerMatchZero,
@@ -476,7 +477,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, siblingCountContrast: null };
+      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, siblingCountContrast: null, implausibleTimeFields: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -760,6 +761,16 @@
           const fsc = WU.detectFrozenScrollCount(events) || [];
           if (fsc.length) detectors.scrollCountFrozen = fsc;
         }
+        if (typeof WU.detectImplausibleTimeFields === 'function') {
+          // Fifty-second log: report-only. A time-named field whose non-empty
+          // values carry no date/time shape ("m.meCat…" — the labelledby
+          // resolution of the WRONG anchor concatenating redirect domains and
+          // page titles) passes the relative/empty/junk censuses. The census
+          // names the field with a sample and teaches filtering candidates
+          // by date shape / re-binding the timestamp anchor.
+          const itf = WU.detectImplausibleTimeFields(finalData, outputSchema) || [];
+          if (itf.length) detectors.implausibleTimeFields = itf;
+        }
         if (typeof WU.detectSiblingCountContrast === 'function') {
           // Fiftieth log: report-only. A count-named field empty on most
           // records while a SIBLING count field extracts real values from the
@@ -996,6 +1007,7 @@
         if (detectors.relativeTimestamps) add('RELATIVE_TIMESTAMP');
         if (detectors.scrollCountFrozen) add('SCROLL_COUNT_FROZEN');
         if (detectors.siblingCountContrast) add('COUNT_FIELD_HIDDEN_VALUE');
+        if (detectors.implausibleTimeFields) add('TIME_FIELD_IMPLAUSIBLE');
         if (detectors.duplicateIdValues) add('DUPLICATE_ID_VALUES');
         if (detectors.shapeDistribution) add('CARD_POLICY');
         if (detectors.stepNoReturn) add('STEP_NO_RETURN');

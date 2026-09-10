@@ -1303,6 +1303,123 @@ function detectSiblingCountContrast(data, schema) {
 // are excluded from the blind judgment (container-empty is the
 // CLICK_CONTAINERS_EMPTY failure class with a different remedy).
 
+
+// Fifty-second log: the confirmed outputSchema carried likes/comments/shares/
+// htmlSnippet/hoverCards declared at the ARRAY-ITEMS level, OUTSIDE the
+// object's "properties" — malformed, and admitted everywhere. The strays were
+// invisible to every schema-driven gate: the never-extracted lint enumerated
+// only properties keys (so `role: ''` sat hardcoded through SEVEN artifact
+// versions with no receipt naming it — the nested hoverCards recursion never
+// ran), required-coverage and the empty/junk censuses never read them. A stray
+// declaration is an object value with schema shape (type/properties/items/
+// required keys) sitting under a key that is NOT a JSON-Schema keyword.
+const SCHEMA_KEYWORD_ALLOWLIST = {
+  type: 1, properties: 1, required: 1, items: 1, description: 1, title: 1,
+  examples: 1, default: 1, enum: 1, const: 1, additionalProperties: 1,
+  anyOf: 1, oneOf: 1, allOf: 1, not: 1, '$schema': 1, '$id': 1, '$ref': 1,
+  '$defs': 1, definitions: 1, minimum: 1, maximum: 1, exclusiveMinimum: 1,
+  exclusiveMaximum: 1, minLength: 1, maxLength: 1, minItems: 1, maxItems: 1,
+  pattern: 1, format: 1, multipleOf: 1, uniqueItems: 1, patternProperties: 1,
+  propertyNames: 1, dependencies: 1, dependentRequired: 1, dependentSchemas: 1,
+  nullable: 1, deprecated: 1, readOnly: 1, writeOnly: 1
+};
+
+function detectStrayFieldDeclarations(schema) {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return null;
+  const byPath = new Map();
+  const visit = (node, path) => {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) return;
+    for (const k of Object.keys(node)) {
+      if (SCHEMA_KEYWORD_ALLOWLIST[k]) continue;
+      const v = node[k];
+      if (v && typeof v === 'object' && !Array.isArray(v) &&
+          (('type' in v) || ('properties' in v) || ('items' in v) || ('required' in v))) {
+        if (!byPath.has(path)) byPath.set(path, []);
+        byPath.get(path).push(k);
+      }
+    }
+    if (node.properties && typeof node.properties === 'object' && !Array.isArray(node.properties)) {
+      for (const pk of Object.keys(node.properties)) visit(node.properties[pk], path + '.' + pk);
+    }
+    if (node.items && typeof node.items === 'object' && !Array.isArray(node.items)) {
+      visit(node.items, path + '[]');
+    }
+  };
+  visit(schema, '$');
+  if (!byPath.size) return null;
+  const hits = [];
+  for (const p of Array.from(byPath.keys())) {
+    hits.push({ at: p, strays: byPath.get(p).sort() });
+  }
+  return hits;
+}
+
+// Fifty-second log: postTime shipped as "m.meCatMachine Learning (ML)
+// Explained | Types…" — the labelledby resolution of the WRONG anchor (its
+// referenced texts concatenate: redirect domains + page title). The value has
+// no date/time shape, but the relative-timestamp/empty/junk censuses all
+// passed it: not relative, not empty, not a junk token. A time-NAMED field
+// whose non-empty values mostly carry no date shape is an implausible bind.
+const TIME_FIELD_NAME_RE = /(?:time|date|posted|created|published|updated|timestamp)/i;
+const TIME_SHAPE_RES = [
+  /(?:january|february|march|april|may|june|july|august|september|october|november|december)/i,
+  /\d{1,2}:\d{2}/,
+  /\b\d+\s*(?:second|sec|minute|min|hour|hr|day|week|month|year)s?\b/i,
+  /\b(?:second|minute|hour|day|week|month|year)s?\s+ago\b/i,
+  /\d{4}[-/]\d{1,2}[-/]\d{1,2}/,
+  /\d{4}\s*年/,
+  /[0-9一二三四五六七八九十百千]+\s*(?:秒|分钟|分|小时|时|天|日|周|月|年)/
+];
+
+function plausibleTimeValue(v) {
+  const s = String(v == null ? '' : v).trim();
+  if (!s) return true; // empties belong to the partial-empty census
+  for (const re of TIME_SHAPE_RES) {
+    if (re.test(s)) return true;
+  }
+  return false;
+}
+
+function detectImplausibleTimeFields(data, schema) {
+  const out = [];
+  if (!data || typeof data !== 'object') return null;
+  const props = (schema && schema.properties) || {};
+  for (const arrField of Object.keys(props)) {
+    const prop = props[arrField];
+    if (!prop || prop.type !== 'array' || !prop.items || prop.items.type !== 'object') continue;
+    const records = data[arrField];
+    if (!Array.isArray(records) || records.length < 2) continue;
+    const itemProps = (prop.items && prop.items.properties) || {};
+    for (const field of Object.keys(itemProps)) {
+      if (!TIME_FIELD_NAME_RE.test(field)) continue;
+      let nonEmpty = 0;
+      let bad = 0;
+      let sample = null;
+      for (const r of records) {
+        const v = r ? r[field] : undefined;
+        const str = (typeof v === 'string') ? v.trim() : (v == null ? '' : String(v));
+        if (!str) continue;
+        nonEmpty += 1;
+        if (!plausibleTimeValue(str)) {
+          bad += 1;
+          if (sample == null) sample = str.slice(0, 60);
+        }
+      }
+      if (nonEmpty >= 2 && bad >= 2 && (bad / nonEmpty) >= (1 / 3)) {
+        out.push({
+          field: field,
+          path: arrField + '.' + field,
+          nonEmpty: nonEmpty,
+          implausibleCount: bad,
+          sample: sample,
+          note: 'values carry no date/time shape (no month name, clock, time-unit word, ISO/CJK date) — typically an ARIA labelledby resolution on the WRONG anchor: its referenced texts concatenate (redirect domains + page titles). Filter candidate anchors by date SHAPE, re-bind the timestamp field to the anchor whose labelledby/text value matches a real date, or renegotiate the field via io.confirm.'
+        });
+      }
+    }
+  }
+  return out.length ? out : null;
+}
+
 function detectHoverAnchorsBlind(events) {
   if (!Array.isArray(events)) return null;
   const perStep = new Map();
@@ -4951,7 +5068,7 @@ function detectNeverExtractedFields(steps, outputSchema) {
 // direct property access keeps working. test/forty-sixth-log-followups.test.js
 // pins marker-bag keys === module.exports keys so a future export cannot
 // land on one surface only (the inline-fallback drift class, RC8/RC35).
-var WU_EXPORT_BAG = { parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+var WU_EXPORT_BAG = { parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = WU_EXPORT_BAG;

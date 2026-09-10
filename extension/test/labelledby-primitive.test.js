@@ -103,7 +103,7 @@ describe('$labelledby wiring (source audit)', () => {
     const ST = fs.readFileSync(path.join(__dirname, '..', 'lib', 'session-tools.js'), 'utf8');
     assert.match(ST, /\$labelledby\(sel, attr\?, timeoutMs\?\)/, '$ API listing');
     assert.match(ST, /name: 'probe\.labelledby'/, 'probe tool spec');
-    assert.match(ST, /'probe\.labelledby': probes\.labelledby/, 'probe registered');
+    assert.match(ST, /'probe\.labelledby': (?:wrapProbe\()?probes\.labelledby/, 'probe registered (fifty-second log: probes wrapped for the stagnation census)');
   });
 });
 
