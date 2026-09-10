@@ -747,7 +747,11 @@ describe('LLM failure discipline', () => {
       requirement: 'r',
       llm: scriptedLlm([
         { __throw: 'ECONNRESET' },
-        { __throw: 'timeout' },
+        // Fifty-fourth log: timeout-class errors are TERMINAL at the engine
+        // layer (the llm client already owns timeout retries — the engine
+        // re-retrying multiplied into a ~20-minute wall-clock spiral), so
+        // this fixture uses non-timeout transients only.
+        { __throw: 'ECONNREFUSED' },
         reply(finishEnvelope('recovered'))
       ], calls),
       tools: {},
@@ -846,8 +850,13 @@ describe('protocol violations', () => {
       requirement: 'r',
       llm: scriptedLlm([
         // Fifth-log shape: reply cut before the closing braces (finish_reason
-        // stop) — the two replies that killed the real session.
-        reply('{"think":"Groups block","goals":null,"hypotheses":{"add":"Non-post recommendation articles contain a[href*=\'/groups/\'] links instead of permalinks"},"tool":"probe.count","args":{"sel":"div[role=\'feed\'] div[role=\'article\']:not(:has(a[href*=\'/groups/\']))"'),
+        // stop) — the two replies that killed the real session. Fifty-fourth
+        // log: the close-braces salvage recovers cut PROBE replies outright,
+        // so this fixture cuts a PAYLOAD tool (service.update) — the class
+        // the salvage deliberately rejects in favor of the cut-off
+        // repair/continuation machinery (a truncated artifact must never be
+        // silently accepted).
+        reply('{"think":"write artifact","tool":"service.update","args":{"steps":[{"id":"s1","script":"return await $count(\'div.card\')"'),
         reply(envelope('probe.count', { sel: 'div.card' })),
         reply(finishEnvelope())
       ], []),

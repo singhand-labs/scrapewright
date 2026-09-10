@@ -613,6 +613,20 @@
         try {
           res = await llm({ messages: messages, maxTokens: budgets.maxTokensPerCall });
         } catch (e) { err = e; }
+        if (err) {
+          // Fifty-fourth log: the llm client already owns timeout/retry
+          // discipline (chatWithRetry: 3 wire attempts with backoff). A
+          // TIMED-OUT call retried AGAIN at the engine layer multiplied into
+          // a ~20-minute spiral (120s × 3 client × 3 engine) that ate the
+          // whole wall-clock budget while the v1 artifact sat one verify
+          // away. Timeouts are terminal here; only transient non-timeout
+          // errors keep the engine retry.
+          if (/timed?[ -]?out|timeout/i.test(String((err && err.message) || err))) {
+            throw Object.assign(new Error(String((err && err.message) || err)), { code: 'LLM_ERROR' });
+          }
+          state.spend.llmCalls += 1;
+          emit('llm_reply', { chars: 0, finish_reason: '' });
+        }
         if (!err) {
           state.spend.llmCalls += 1;
           accountUsage(messages, res);
@@ -643,12 +657,21 @@
           if (err) throw Object.assign(new Error(String((err && err.message) || err)), { code: 'LLM_ERROR' });
           throw Object.assign(new Error('empty LLM reply (no finish_reason=length) after ' + attempt + ' attempts'), { code: 'LLM_EMPTY' });
         }
+        // Fifty-fourth log: never START another multi-minute attempt when
+        // the wall clock is nearly gone — die as the resumable wallClock
+        // stop instead of burning the budget inside a retry spiral.
+        if (state.elapsedMs + netSegmentMs() >= budgets.wallClockMs - 120000) {
+          throw Object.assign(new Error('time budget nearly exhausted inside an LLM retry loop — raise the budget (wallClockMs) in the resume seed to continue'), { code: 'WALL_CLOCK_RETRY' });
+        }
         if (retry.backoffMs > 0) await sleep(retry.backoffMs * Math.pow(2, attempt - 1));
       }
     }
 
     function llmStopFromError(err) {
       if (err && err.code === 'EMPTY_LENGTH') return ['llm:length', String(err.message || err)];
+      // Fifty-fourth log: the retry-spiral guard dies as the RESUMABLE
+      // wallClock stop, not an error — the artifact is often one verify away.
+      if (err && err.code === 'WALL_CLOCK_RETRY') return ['wallClock', String(err.message || err)];
       return ['llm:error', String((err && err.message) || err)];
     }
 

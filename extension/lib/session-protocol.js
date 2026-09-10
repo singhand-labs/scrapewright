@@ -35,7 +35,10 @@
     '  ask the user (annotate.request). service.update rejects ungrounded',
     '  selectors — a wrong guess costs a full verify-and-repair cycle.',
     '- Prefer the cheapest probe that answers the current question.',
-    '- Tool results are capped; never ask for raw pages.'
+    '- Tool results are capped; never ask for raw pages.',
+    '- Keep "think" SHORT (a few sentences at most): draft schemas, selectors',
+    '  and scripts inside the TOOL ARGS (io.confirm/service.update arguments),',
+    '  never inside think — long replies are the ones providers truncate.'
   ].join('\n');
 
   function renderToolCatalog(toolSpecs) {
@@ -136,12 +139,61 @@
         // FAILURE shape has no 'value' key — returning the wrapper then would
         // leak a {ok:false,...} object into parseAssistantTurn as if it were
         // the parsed turn (misclassifies as missing-action; third-live-log
-        // root cause). Only a successful unwrap or a legacy raw value passes.
+        // root cause). Only a successful unwrap or a legacy raw value
+        // returns; a FAILURE falls through to the close-braces salvage
+        // (fifty-fourth log) instead of returning early.
         if (out && typeof out === 'object' && !Array.isArray(out) && 'ok' in out) {
-          return out.ok && out.value !== undefined ? out.value : undefined;
+          if (out.ok && out.value !== undefined) return out.value;
+        } else if (out !== undefined) {
+          return out;
         }
-        return out === undefined ? undefined : out;
-      } catch (e) { return undefined; }
+      } catch (e) { /* fall through to the salvage */ }
+    }
+    // Fifty-fourth log: glm-5.3-flash cuts LONG completions mid-JSON while
+    // reporting finish_reason:"stop" (max_tokens nowhere near reached). The
+    // shorter-resend + continuation chain recovered most of them but a
+    // cascade still killed a session. Deterministic last stage: CLOSE the
+    // dangling quotes/braces and re-parse — a cut inside the action
+    // recovers the turn outright, a cut inside think degrades to think-only
+    // (the fifty-third-log two-round action repair), and garbage stays
+    // unparseable. Quote/escape-aware; a trailing dangling escape is
+    // dropped before closing so it cannot corrupt the last token.
+    if (typeof candidate === 'string' && candidate.trim().startsWith('{')) {
+      let src = candidate;
+      let quote = null;
+      let escape = false;
+      const stack = [];
+      for (let i = 0; i < src.length; i++) {
+        const ch = src[i];
+        if (quote) {
+          if (escape) { escape = false; continue; }
+          if (ch === '\\') { escape = true; continue; }
+          if (ch === quote) quote = null;
+          continue;
+        }
+        if (ch === '"') { quote = ch; continue; }
+        if (ch === '{' || ch === '[') stack.push(ch);
+        else if (ch === '}' || ch === ']') stack.pop();
+      }
+      if (quote || stack.length) {
+        if (quote && escape) src = src.slice(0, -1); // drop the dangling backslash
+        let closed = src + (quote ? quote : '');
+        while (stack.length) closed += (stack.pop() === '{' ? '}' : ']');
+        try {
+          const salvaged = JSON.parse(closed);
+          // A cut inside a PAYLOAD tool's arguments would silently truncate
+          // the artifact/contract — the eighteenth-log continuation round
+          // exists precisely to recover the full payload, so reject the
+          // salvage there and keep the loud cut-off path. Think-only and
+          // cheap-probe recoveries are safe (a truncated probe arg shows up
+          // in the very next tool result).
+          if (salvaged && typeof salvaged === 'object' && !Array.isArray(salvaged) &&
+              (salvaged.tool === 'service.update' || salvaged.tool === 'io.confirm')) {
+            return undefined;
+          }
+          return salvaged;
+        } catch (e) { return undefined; }
+      }
     }
     return undefined;
   }
