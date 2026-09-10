@@ -433,6 +433,21 @@
       // strays were invisible to every schema-driven gate for the whole
       // session (the never-extracted lint never enumerated them, `role: ''`
       // sat hardcoded through seven artifact versions with no receipt).
+      // Fifty-ninth log: a renegotiation carried "postId": {"type":"type",
+      // "description":"placeholder"} — a literal unfilled stub — and the
+      // panel showed it to the USER, who had to reject it twice. Placeholder-
+      // shaped schemas are rejected before the panel: the user is the
+      // authority on the CONTRACT, not the lint layer for stub values.
+      const outStubs = (typeof WU.detectSchemaPlaceholderFields === 'function')
+        ? WU.detectSchemaPlaceholderFields(a.outputSchema) : null;
+      if (outStubs) {
+        return {
+          confirmed: false,
+          error: 'PLACEHOLDER_SCHEMA: outputSchema contains unfilled stub field(s) — ' +
+            outStubs.map((h) => h.field + ' (' + h.problems.join('; ') + ')').join(', ') +
+            '. Fill every field with a real type from the JSON-Schema set (object/string/number/integer/boolean/array/null) and a real description, then re-propose.'
+        };
+      }
       const outStrays = (typeof WU.detectStrayFieldDeclarations === 'function')
         ? WU.detectStrayFieldDeclarations(a.outputSchema) : null;
       if (outStrays) {
@@ -779,6 +794,16 @@
       // Fifty-second log: stray field declarations (schema-shaped objects
       // sitting OUTSIDE properties) must not land here either — same blind
       // spot as above, one level subtler.
+      if (a.outputSchema != null && typeof WU.detectSchemaPlaceholderFields === 'function') {
+        const updStubs = WU.detectSchemaPlaceholderFields(a.outputSchema);
+        if (updStubs) {
+          return {
+            error: 'PLACEHOLDER_SCHEMA: outputSchema contains unfilled stub field(s) — ' +
+              updStubs.map((h) => h.field + ' (' + h.problems.join('; ') + ').').join(' ') +
+              ' Fill every field with a real JSON-Schema type and description, then re-send.'
+          };
+        }
+      }
       if (a.outputSchema != null && typeof WU.detectStrayFieldDeclarations === 'function') {
         const updStrays = WU.detectStrayFieldDeclarations(a.outputSchema);
         if (updStrays) {
