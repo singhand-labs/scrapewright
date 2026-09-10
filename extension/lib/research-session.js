@@ -737,25 +737,64 @@
             // The detail names the REAL failure (parse position, keys seen) —
             // "missing-action" alone sent the model hunting for an action it
             // had already written while the true problem was unescaped quotes
-            // (third live log).
-            let nudgeText = 'PROTOCOL VIOLATION (' + parsed.violation + (parsed.detail ? ' — ' + parsed.detail : '') + '): reply with ONE JSON object with exactly one of "tool" or "finish". No prose outside the JSON. Strict JSON quoting only: double quotes for every key and string value — single quotes are NOT valid JSON, and an unescaped double quote inside a value must be escaped (\\") or avoided.';
-            // Fifth-live-log turn 21: BOTH the original and the repair reply
-            // were cut off before the closing braces (finish_reason "stop").
-            // Generic advice made the model resend at the same length and
-            // truncate again — name the class and demand a shorter resend.
-            if (parsed.detail && /cut-off|Unterminated string|Unexpected end/i.test(parsed.detail)) {
-              nudgeText += ' Your previous reply was CUT OFF before the JSON closed. Resend the SAME turn much SHORTER: a one-sentence think, then tool/args, then the closing braces — long replies are the ones that get truncated.';
-            }
-            state.transcript.push({ kind: 'system', text: nudgeText });
+            // (third live log). Fifty-third log: the nudge is now CLASS-AWARE
+            // — glm-5.3-flash intermittently ends its reply after "think"
+            // (valid JSON, reasoning, no action), and the generic
+            // JSON-quoting lecture is noise for that class (the reply was
+            // legal JSON; the model must COMMIT an action, not fix quotes).
+            const isActionShapeViolation = (v) => v === 'missing-action' || v === 'ambiguous-action';
+            const nudgeFor = (p, round) => {
+              const head = 'PROTOCOL VIOLATION (' + p.violation + (p.detail ? ' — ' + p.detail : '') + '): ';
+              if (p.violation === 'missing-action' && /think/.test(String(p.detail || ''))) {
+                return head + 'your reply REASONED but never committed an action — it ended after "think". ' +
+                  (round >= 2 ? 'FINAL CHANCE. ' : '') +
+                  'Resend now: keep your think, then ADD exactly one of "tool": "<name>" + "args": {…} or "finish": { "summary": "…" }. ' +
+                  'Your think already names the next step — commit it as the action.';
+              }
+              if (p.violation === 'ambiguous-action') {
+                return head + 'your reply named BOTH "tool" and "finish" — keep exactly one (finish only when the session is done). ' +
+                  (round >= 2 ? 'FINAL CHANCE. ' : '') +
+                  'Resend the same turn with ONE action.';
+              }
+              // JSON-shape classes keep the quoting-led lecture.
+              return head + 'reply with ONE JSON object with exactly one of "tool" or "finish". No prose outside the JSON. Strict JSON quoting only: double quotes for every key and string value — single quotes are NOT valid JSON, and an unescaped double quote inside a value must be escaped (\\") or avoided.' +
+                (round >= 2 ? ' FINAL CHANCE.' : '');
+            };
+            // Fifty-third log: action-shape violations (valid JSON, no
+            // committed action) get TWO repair rounds before the stop — the
+            // first repaired 4 of 5 live think-only replies, and the fifth
+            // killed an 18-turn session with 70% of the budget left. JSON
+            // classes keep the original two-strike behavior (the cut-off
+            // class additionally keeps its continuation round below).
+            const maxRepairRounds = isActionShapeViolation(parsed.violation) ? 2 : 1;
             let repaired = null;
-            try {
-              repaired = await callLlm(assembleMessages());
-            } catch (err) {
-              const s = llmStopFromError(err);
-              report = await stop(s[0], s[1]);
-              break;
+            let repairRound = 0;
+            while (repairRound < maxRepairRounds) {
+              repairRound += 1;
+              // Fifth-live-log turn 21: BOTH the original and the repair reply
+              // were cut off before the closing braces (finish_reason "stop").
+              // Generic advice made the model resend at the same length and
+              // truncate again — name the class and demand a shorter resend.
+              let nudgeText = nudgeFor(parsed, repairRound);
+              if (parsed.detail && /cut-off|Unterminated string|Unexpected end/i.test(parsed.detail)) {
+                nudgeText += ' Your previous reply was CUT OFF before the JSON closed. Resend the SAME turn much SHORTER: a one-sentence think, then tool/args, then the closing braces — long replies are the ones that get truncated.';
+              }
+              state.transcript.push({ kind: 'system', text: nudgeText });
+              try {
+                repaired = await callLlm(assembleMessages());
+              } catch (err) {
+                const s = llmStopFromError(err);
+                report = await stop(s[0], s[1]);
+                break;
+              }
+              const p2 = Protocol.parseAssistantTurn(repaired);
+              if (p2.ok) { parsed = p2; break; }
+              // Eighteenth log: the repair failure was invisible — only the
+              // first violation got an event. Surface EVERY failed parse.
+              emit('protocol_violation', { violation: p2.violation, detail: p2.detail || null });
+              parsed = p2;
             }
-            parsed = Protocol.parseAssistantTurn(repaired);
+            if (report) break; // the callLlm error path above already stopped the session
             if (!parsed.ok) {
               // Eighteenth log: for a STILL-cut-off reply run ONE continuation
               // round before giving up — quote the exact cut point, ask for
@@ -787,7 +826,6 @@
                 // first violation got an event, and stop() carried the bare
                 // class name while the parse evidence (position, tail)
                 // evaporated exactly where the session died.
-                emit('protocol_violation', { violation: parsed.violation, detail: parsed.detail || null });
                 report = await stop('protocol', parsed.violation + (parsed.detail ? ' — ' + parsed.detail : ''));
                 break;
               }
