@@ -544,9 +544,9 @@
             }).join('; ');
             error.message = error.message + (diffHitRed
               ? ' — SELECTOR_OVERFILTERED: your trailing :not()/:has() clause(s) removed EVERY item the base selector matches (' + zLinesRed +
-                '). Census each clause by counting with and without it (probe.count, attrStats) before re-testing input values.'
+                '). Census each clause by counting with and without it (probe.count, attrStats) before re-testing input values; if the census PROVES the clause is correct and the population is genuinely empty for this input class, consider the FAIL-SOFT artifact: pass opts.allowEmpty on the extract call and return {posts:[], note:"no items for this input"} so the deployed SERVICE reports the empty result honestly instead of erroring on every such call.'
               : ' — INPUT_VALUE_SUSPECT: the page held no result items at all for this input (' + zLinesRed +
-                '). Re-run verify.run with a DIFFERENT, more common input value BEFORE hardening selectors; if the alternate value also matches zero containers, the page population itself is the limit — say so instead of iterating selectors.');
+                '). Re-run verify.run with a DIFFERENT, more common input value BEFORE hardening selectors; if the alternate value also matches zero containers, the page population itself is the limit — say so instead of iterating selectors, and consider the FAIL-SOFT artifact for this input class: pass opts.allowEmpty on the extract call and return {posts:[], note:"no items for this input"} so the deployed SERVICE reports the empty result honestly instead of erroring on every such call.');
           }
         }
       } else if (result) {

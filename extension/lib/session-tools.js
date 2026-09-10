@@ -872,6 +872,15 @@
           }
         }
       }
+      // Fifty-seventh log: invented Playwright-style pseudo-classes
+      // (:textless — the fifty-first log had :textish) inside service
+      // selectors; browsers reject them at querySelectorAll time. Same
+      // advisory-only contract as the un-awaited-$ lint above.
+      if (typeof WU.detectNonStandardPseudoSelectors === 'function') {
+        for (const h of (WU.detectNonStandardPseudoSelectors(steps) || [])) {
+          staticLint.push('step "' + String(h.stepId) + '": non-standard pseudo-class ' + h.pseudo + ' in a selector — browsers reject it at query time. STANDARD CSS ONLY: express text-matching with attribute selectors ([aria-label*=…], [href*=…]) or structural pseudos (:has/:not/:nth-of-type). Playwright-only pseudo-classes (near: ' + h.near + ') do not exist in querySelectorAll.');
+        }
+      }
       // Thirty-first log: comments/shares shipped as `comments: "", shares:
       // ""` hardcoded literals — schema record fields no step ever extracts.
       // Verify stayed green (a literal satisfies shape checks) and only the
