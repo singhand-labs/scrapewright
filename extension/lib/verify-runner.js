@@ -382,19 +382,32 @@
             // keepalive inject; verify runs detached in scrape-tab.js). When it
             // fires anyway, close the tab that arrives late — a leaked
             // invisible background tab has no handle otherwise.
-            let createTimedOut = false;
-            const createPromise = d.createTab(url).then((created) => {
-              if (createTimedOut) {
-                d.removeTab(created).catch(() => {});
-                throw new Error('Tab arrived after the create timeout — closed to avoid a leaked background tab.');
+            const attemptCreate = async () => {
+              let createTimedOut = false;
+              const createPromise = d.createTab(url).then((created) => {
+                if (createTimedOut) {
+                  d.removeTab(created).catch(() => {});
+                  throw new Error('Tab arrived after the create timeout — closed to avoid a leaked background tab.');
+                }
+                return created;
+              });
+              try {
+                return await withTimeout(createPromise, 10000, 'Failed to create tab (10s timeout)');
+              } catch (e) {
+                createTimedOut = true;
+                createPromise.catch(() => {}); // the late arrival's rejection is nobody's to observe
+                throw e;
               }
-              return created;
-            });
+            };
+            // Fifty-sixth log: Chrome tab creation stalled 10s TWICE in a row
+            // (transient browser load) and killed the final two verifies of a
+            // 59-turn session — a possibly-green artifact shipped behind a
+            // failed-verify verdict. One fresh-window retry; a double stall
+            // still fails honestly.
             try {
-              tab = await withTimeout(createPromise, 10000, 'Failed to create tab (10s timeout)');
+              tab = await attemptCreate();
             } catch (e) {
-              createTimedOut = true;
-              throw e;
+              tab = await attemptCreate();
             }
             log('Opening ' + url + '...');
             return tab;

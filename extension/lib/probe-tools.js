@@ -629,7 +629,88 @@
       return out;
     }
 
-    return { count, text, attrStats, labelledby, sample, hover, scroll, scrollUntil, extract };
+    // Fifty-sixth log (user directive: model-capability walls deserve TOOLS,
+    // not more prompt-preaching): the absolute-timestamp wall recurred across
+    // logs 15/24/28/31/52/55/56 — models re-discover the same dance every
+    // session at 5-10 turns each (candidate anchors → hover → labelledby →
+    // regex filtering) and still finish with "only sometimes reachable".
+    // ONE composite call does the whole dance: it extracts the time-ish
+    // anchors of ONE container through $extractWithHover (which hovers every
+    // anchor and harvests labelledbyText at dwell, cold-tab re-read included)
+    // and returns ONLY date-shaped candidates (the fifty-second-log shape
+    // rules), preferring an ABSOLUTE value over a relative age.
+    let __wuBag = null;
+    function looksLikeDateRef(v) {
+      if (!__wuBag) {
+        if (typeof require !== 'undefined') {
+          try { __wuBag = require('./wizard-utils'); } catch (e) { __wuBag = null; }
+        }
+        if (!__wuBag && typeof global !== 'undefined' && global.__wizardUtilsModuleMarker__) __wuBag = global.__wizardUtilsModuleMarker__;
+      }
+      if (__wuBag && typeof __wuBag.looksLikeDate === 'function') return __wuBag.looksLikeDate(v);
+      // Degraded fallback (page context without wizard-utils): permissive.
+      return /\d/.test(String(v == null ? '' : v));
+    }
+
+    async function timestamp(args0) {
+      const a = args0 && typeof args0 === 'object' ? args0 : {};
+      const containerSel = (typeof a.containerSel === 'string' && a.containerSel.trim()) ? a.containerSel.trim() : null;
+      if (!containerSel) {
+        return { error: 'containerSel (required) — the repeating card container whose timestamp you are binding. The probe hovers its time-ish anchors once and returns date-shaped candidates only (absolute preferred).' };
+      }
+      const index = (typeof a.index === 'number' && a.index >= 0) ? Math.floor(a.index) : 0;
+      const anchorSel = (typeof a.anchorSel === 'string' && a.anchorSel.trim()) ? a.anchorSel.trim()
+        : 'a:has(span[aria-labelledby]), [aria-labelledby], abbr[aria-label], time';
+      const snippet = 'return $extractWithHover(' + JSON.stringify(containerSel) + ', {' +
+        '__t_label: { selector: ' + JSON.stringify(anchorSel) + ', labelledby: true },' +
+        '__t_aria: { selector: ' + JSON.stringify(anchorSel) + ', attr: "aria-label" },' +
+        '__t_text: { selector: ' + JSON.stringify(anchorSel) + ' }' +
+        '}, { hover: { anchorSel: ' + JSON.stringify(anchorSel) + ' }, containerIndex: ' + index + ' });';
+      const r = await runSnippet(snippet);
+      if (r && typeof r.error === 'string') return r;
+      const rec = Array.isArray(r) ? r[0] : null;
+      if (!rec) return { error: 'no containers matched ' + containerSel + ' — check the container selector before concluding anything about timestamps' };
+      const REL = /\b(?:second|minute|hour|day|week|month|year)s?\s+ago\b|[0-9一二三四五六七八九十百千]+\s*(?:秒|分钟|分|小时|时|天|日|周|月|年)/i;
+      const candidates = [];
+      const push = (value, source) => {
+        const str = typeof value === 'string' ? value.trim() : '';
+        if (!str || !looksLikeDateRef(str)) return;
+        candidates.push({ value: str.slice(0, 120), source: source, relative: REL.test(str) });
+      };
+      push(rec.__t_label, 'labelledby');
+      push(rec.__t_aria, 'aria-label');
+      push(rec.__t_text, 'text');
+      for (const h of (rec.hovercards || [])) {
+        if (!h) continue;
+        push(h.labelledbyText, 'hover.labelledbyText');
+        push(h.anchorText, 'hover.anchorText');
+      }
+      const absolute = (candidates.find((c) => !c.relative) || null);
+      const relative = (candidates.find((c) => c.relative) || null);
+      const out = {
+        containerSel: containerSel,
+        anchorSel: anchorSel,
+        absolute: absolute ? absolute.value : null,
+        absoluteSource: absolute ? absolute.source : null,
+        relative: relative ? relative.value : null,
+        candidates: candidates
+      };
+      if (!candidates.length) {
+        out.note = 'no date-shaped value on any time-ish anchor (labelledby / aria-label / text, with and without hover). If a second probe.timestamp with a narrower anchorSel over the timestamp link also fails, the page does not expose the timestamp for this population — renegotiate the field via io.confirm instead of shipping titles or relative ages as postTime.';
+      } else if (!absolute) {
+        out.note = 'only RELATIVE ages are date-shaped here — the absolute value needs the hover-mounted tooltip: re-run with a narrower anchorSel over the timestamp link itself; if that also yields only relative ages, renegotiate.';
+      }
+      if (observationLog) {
+        observationLog.record({
+          tool: 'probe.timestamp',
+          selectors: [containerSel],
+          summary: 'timestamp probe absolute=' + JSON.stringify(out.absolute) + ' relative=' + JSON.stringify(!!out.relative)
+        });
+      }
+      return out;
+    }
+
+    return { count, text, attrStats, labelledby, sample, hover, scroll, scrollUntil, extract, timestamp };
   }
 
   const api = { createProbeTools };
