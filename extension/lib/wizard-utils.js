@@ -1493,6 +1493,57 @@ function detectNonStandardPseudoSelectors(steps) {
   return out.length ? out : null;
 }
 
+// Fifty-eighth log: likes shipped as "Like: 37 people" — the count is RIGHT
+// THERE, parseable, but the census family (36th control-label is digit-FREE;
+// 50th sibling-contrast is about EMPTY fields) never named the label-PREFIXED
+// shape. A count-named field whose value is a letters-only label followed by
+// a number carries extractable data — teach the parse, don't just disclose.
+const LABEL_PREFIXED_COUNT_RE = /^[^0-9\n]{1,24}?\d/u;
+
+function detectLabelPrefixedCounts(data, schema) {
+  const out = [];
+  if (!data || typeof data !== 'object') return null;
+  const props = (schema && schema.properties) || {};
+  for (const arrField of Object.keys(props)) {
+    const prop = props[arrField];
+    if (!prop || prop.type !== 'array' || !prop.items || prop.items.type !== 'object') continue;
+    const records = data[arrField];
+    if (!Array.isArray(records) || records.length < 1) continue;
+    const itemProps = (prop.items && prop.items.properties) || {};
+    for (const field of Object.keys(itemProps)) {
+      if (!isCountLikeFieldName(field)) continue;
+      let hits = 0;
+      let sample = null;
+      let parsed = null;
+      for (const r of records) {
+        const v = r ? r[field] : undefined;
+        const str = (typeof v === 'string') ? v.trim() : '';
+        if (!str) continue;
+        if (!LABEL_PREFIXED_COUNT_RE.test(str)) continue;
+        if (!/\d/.test(str)) continue;
+        hits += 1;
+        if (sample == null) {
+          sample = str.slice(0, 40);
+          const m = str.match(/(\d[\d.,]*\s*[KkMm]?)/);
+          parsed = m ? m[1].trim() : null;
+        }
+      }
+      if (hits > 0 && (hits / records.length) >= 0.5) {
+        out.push({
+          field: field,
+          path: arrField + '.' + field,
+          count: hits,
+          sample: sample,
+          parsedSample: parsed,
+          note: 'the value is a CONTROL LABEL plus the count (e.g. ' + JSON.stringify(sample) + ') — the number is right there: parse it in the assembly with value.match(/(\\d[\\d.,]*\\s*[KkMm]?)/)[1]' +
+            ' (or bind the field to the count-carrying element/attribute instead of the labeled control). Shipping the label prefix passes every empty detector while carrying a parseable count.'
+        });
+      }
+    }
+  }
+  return out.length ? out : null;
+}
+
 function detectHoverAnchorsBlind(events) {
   if (!Array.isArray(events)) return null;
   const perStep = new Map();
@@ -5141,7 +5192,7 @@ function detectNeverExtractedFields(steps, outputSchema) {
 // direct property access keeps working. test/forty-sixth-log-followups.test.js
 // pins marker-bag keys === module.exports keys so a future export cannot
 // land on one surface only (the inline-fallback drift class, RC8/RC35).
-var WU_EXPORT_BAG = { parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, detectNonStandardPseudoSelectors, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+var WU_EXPORT_BAG = { parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = WU_EXPORT_BAG;

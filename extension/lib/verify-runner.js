@@ -48,6 +48,7 @@
       detectSiblingCountContrast: w.detectSiblingCountContrast,
       detectImplausibleTimeFields: w.detectImplausibleTimeFields,
       detectPositionLikeIds: w.detectPositionLikeIds,
+      detectLabelPrefixedCounts: w.detectLabelPrefixedCounts,
       detectDuplicateIdValues: w.detectDuplicateIdValues,
       detectFieldMatchZero: w.detectFieldMatchZero,
       detectContainerMatchZero: w.detectContainerMatchZero,
@@ -491,7 +492,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, siblingCountContrast: null, implausibleTimeFields: null, positionLikeIds: null };
+      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, siblingCountContrast: null, implausibleTimeFields: null, positionLikeIds: null, labelPrefixedCounts: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -794,6 +795,14 @@
           const pli = WU.detectPositionLikeIds(finalData, outputSchema) || [];
           if (pli.length) detectors.positionLikeIds = pli;
         }
+        if (typeof WU.detectLabelPrefixedCounts === 'function') {
+          // Fifty-eighth log: report-only. A count field shipping a control
+          // label PLUS the count ("Like: 37 people") carries extractable
+          // data — the census carries the parsed sample and teaches the
+          // one-line parse instead of just disclosing the junk.
+          const lpc = WU.detectLabelPrefixedCounts(finalData, outputSchema) || [];
+          if (lpc.length) detectors.labelPrefixedCounts = lpc;
+        }
         if (typeof WU.detectSiblingCountContrast === 'function') {
           // Fiftieth log: report-only. A count-named field empty on most
           // records while a SIBLING count field extracts real values from the
@@ -1032,6 +1041,7 @@
         if (detectors.siblingCountContrast) add('COUNT_FIELD_HIDDEN_VALUE');
         if (detectors.implausibleTimeFields) add('TIME_FIELD_IMPLAUSIBLE');
         if (detectors.positionLikeIds) add('POSITION_LIKE_ID');
+        if (detectors.labelPrefixedCounts) add('LABEL_PREFIXED_COUNT');
         if (detectors.duplicateIdValues) add('DUPLICATE_ID_VALUES');
         if (detectors.shapeDistribution) add('CARD_POLICY');
         if (detectors.stepNoReturn) add('STEP_NO_RETURN');

@@ -1008,8 +1008,11 @@
             const jfList = (result && result.detectors && result.detectors.junkValues && Array.isArray(result.detectors.junkValues.fields))
               ? result.detectors.junkValues.fields
               : [];
+            // Fifty-eighth log: two census entries for the SAME field
+            // (queryBlob + opaqueToken kinds) printed the field twice in the
+            // finish disclosure — dedupe, keep first-seen order.
             state.lastVerifyJunkFields = jfList.length
-              ? jfList.slice(0, 6).map((f) => String(f.field || f.path)).filter(Boolean)
+              ? Array.from(new Set(jfList.slice(0, 8).map((f) => String(f.field || f.path)).filter(Boolean))).slice(0, 6)
               : null;
             const pliList = (result && result.detectors && Array.isArray(result.detectors.positionLikeIds))
               ? result.detectors.positionLikeIds
