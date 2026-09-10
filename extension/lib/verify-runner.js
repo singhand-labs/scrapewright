@@ -501,6 +501,39 @@
           const fscRed = WU.detectFrozenScrollCount(events) || [];
           if (fscRed.length) detectors.scrollCountFrozen = fscRed;
         }
+        // Fifty-first log: a step that THREW on zero containers (the
+        // "$extractWithHover: no containers matched" shape) emits STEP_FAILED
+        // with the sandbox-relayed selectorDiagnostics and no iteration —
+        // the census scanned only iterations, so the red verify shipped with
+        // a BARE message and zero tags. Run the container census here and
+        // embed the lines into the error the model reads, honoring the
+        // twenty-fifth-log lead order: a populated stripped base means the
+        // caller's own clauses removed the population (SELECTOR_OVERFILTERED
+        // supersedes the input-value advice).
+        if (typeof WU.detectContainerMatchZero === 'function') {
+          const czRed = WU.detectContainerMatchZero(events) || null;
+          if (czRed && czRed.length) {
+            detectors.containerZero = czRed;
+            const diffHitRed = czRed.find((z) => Array.isArray(z.selectorDifferential) &&
+              z.selectorDifferential.some((st) => st && st.count > 0));
+            const zLinesRed = czRed.map((z) => {
+              const stepDefZ = stepsDefs.find((s) => String(s.id) === String(z.stepId));
+              let line = 'step "' + (stepDefZ ? stepDefZ.name : z.stepId) + '" (' + z.api + '): container ' +
+                JSON.stringify(z.containerSelector) + ' matched 0 items on ' + z.calls + ' call(s)';
+              if (Array.isArray(z.selectorDifferential) && z.selectorDifferential.length) {
+                line += ' [differential: ' + z.selectorDifferential
+                  .map((st) => JSON.stringify(String(st.sel).slice(0, 100)) + ' → ' + st.count)
+                  .join(', ') + ']';
+              }
+              return line;
+            }).join('; ');
+            error.message = error.message + (diffHitRed
+              ? ' — SELECTOR_OVERFILTERED: your trailing :not()/:has() clause(s) removed EVERY item the base selector matches (' + zLinesRed +
+                '). Census each clause by counting with and without it (probe.count, attrStats) before re-testing input values.'
+              : ' — INPUT_VALUE_SUSPECT: the page held no result items at all for this input (' + zLinesRed +
+                '). Re-run verify.run with a DIFFERENT, more common input value BEFORE hardening selectors; if the alternate value also matches zero containers, the page population itself is the limit — say so instead of iterating selectors.');
+          }
+        }
       } else if (result) {
         const toError = (msg, stepId, extra) => {
           const e = new Error(msg);

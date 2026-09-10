@@ -1718,7 +1718,24 @@
   // trailing clause / is a comma list / cannot be counted. Best-effort: an
   // invalid intermediate stage stops the walk, keeping earlier stages.
   function computeSelectorDifferential(sel) {
-    if (typeof sel !== 'string' || !sel || sel.indexOf(',') !== -1) return null;
+    if (typeof sel !== 'string' || !sel) return null;
+    // Fifty-first log: a comma is only a LIST SEPARATOR at paren depth 0.
+    // Commas inside functional pseudo-class arguments — :has(a[href*='/posts/'],
+    // a[href*='/permalink/']) is the standard inclusion-list shape — are part of
+    // ONE compound selector and must not disable the differential (the blanket
+    // indexOf(',') bail shipped a bare "no containers matched" while the
+    // stripped base matched 4). Quote-aware so '(' / ',' inside attribute
+    // values cannot skew the depth count.
+    {
+      let d = 0, q = null;
+      for (const ch of sel) {
+        if (q) { if (ch === q) q = null; continue; }
+        if (ch === '"' || ch === "'") { q = ch; continue; }
+        if (ch === '(') d += 1;
+        else if (ch === ')') d -= 1;
+        else if (ch === ',' && d === 0) return null;
+      }
+    }
     const stages = [];
     let cur = sel.trim();
     let guard = 0;

@@ -342,8 +342,12 @@
       const a = args0 && typeof args0 === 'object' ? args0 : {};
       const sel = (typeof a.sel === 'string' && a.sel.trim()) ? a.sel.trim() : null;
       const mode = a.mode === 'by' ? 'by' : 'bottom';
-      const by = (typeof a.by === 'number' && a.by > 0) ? Math.floor(a.by) : null;
-      if (mode === 'by' && !by) return { error: 'by (positive pixel count) required for mode:"by"' };
+      // Fifty-first log: negative by is a legal scroll-UP (envelope parity
+      // with $scrollBy's signed deltaY — the model's "scroll back to
+      // re-examine the top of the feed" was blocked). Zero / non-numeric
+      // stays an error: a no-op scroll is a bug.
+      const by = (typeof a.by === 'number' && Number.isFinite(a.by) && a.by !== 0) ? Math.floor(a.by) : null;
+      if (mode === 'by' && !by) return { error: 'by (non-zero pixel count; negative scrolls up) required for mode:"by"' };
       const snippet = mode === 'by'
         ? 'return $scrollBy(' + by + (sel ? ', ' + JSON.stringify(sel) : '') + ');'
         : 'return $scrollToBottom(' + (sel ? JSON.stringify(sel) : '') + ');';

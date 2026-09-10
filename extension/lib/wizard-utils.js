@@ -1391,7 +1391,13 @@ function detectContainerMatchZero(events) {
   if (!Array.isArray(events)) return null;
   const agg = new Map(); // stepId + ' ' + containerSelector → stats
   for (const evt of events) {
-    if (!evt || evt.type !== 'STEP_ITERATION') continue;
+    // Fifty-first log: a step that THREW on zero containers emits STEP_FAILED
+    // (the sandbox's error path relays the failing call's _diagnostics into
+    // event.selectorDiagnostics) and never emits a STEP_ITERATION — scanning
+    // only iterations made the throw shape invisible to this census, so the
+    // "$extractWithHover: no containers matched" red verify carried no
+    // container census at all. Both event types carry the same payload shape.
+    if (!evt || (evt.type !== 'STEP_ITERATION' && evt.type !== 'STEP_FAILED')) continue;
     const diags = Array.isArray(evt.selectorDiagnostics) ? evt.selectorDiagnostics : [];
     for (const d of diags) {
       if (!d) continue;

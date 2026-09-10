@@ -352,7 +352,8 @@ describe('probe.scroll', () => {
 
   it('validates mode/by args and forwards executor errors', async () => {
     const { tools, observationLog } = makeTools(async () => { throw new Error('SYNTAX_ERR'); });
-    assert.equal((await tools.scroll({ mode: 'by' })).error, 'by (positive pixel count) required for mode:"by"');
+    // Fifty-first log: the message now teaches negative-scrolls-up; zero is still a bug.
+    assert.equal((await tools.scroll({ mode: 'by' })).error, 'by (non-zero pixel count; negative scrolls up) required for mode:"by"');
     assert.equal((await tools.scroll({})).error, 'SYNTAX_ERR');
     assert.equal(observationLog.size(), 0, 'a failed scroll is not an observation');
   });
