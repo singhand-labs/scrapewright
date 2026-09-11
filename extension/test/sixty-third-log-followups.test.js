@@ -72,7 +72,7 @@ describe('sixty-third log F2: position-guided inner-quote repair', () => {
   it('REPLY 1 (":"] closer-set killer) parses with args preserved byte-for-byte', () => {
     const out = parseJsonLenient(REPLY_1);
     assert.ok(out.ok, 'parses: ' + (out.error || ''));
-    assert.ok(out.repairs.includes('escape-inner-quotes'), 'repair recorded: ' + JSON.stringify(out.repairs));
+    assert.ok(out.repairs.some((r) => /^escape-inner-quotes(:\d+)?$/.test(r)), 'repair recorded: ' + JSON.stringify(out.repairs));
     assert.equal(out.value.tool, 'probe.text');
     // The model escaped the sel correctly — the repair must not touch it.
     assert.equal(out.value.args.sel, 'div[role=feed] div[aria-posinset] a[href*="comment_id"]');

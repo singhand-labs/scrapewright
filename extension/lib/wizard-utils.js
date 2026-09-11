@@ -2215,8 +2215,9 @@ function escapePrematureQuoteClosers(src, maxRounds) {
     return -1;
   };
   let s = src;
+  let rounds = 0;
   for (let round = 0; round < (maxRounds || 24); round++) {
-    try { JSON.parse(s); return s; } catch (e) {
+    try { JSON.parse(s); return { text: s, rounds }; } catch (e) {
       const msg = String(e.message || e);
       const m = /position (\d+)/.exec(msg);
       if (!m) return null;
@@ -2234,9 +2235,41 @@ function escapePrematureQuoteClosers(src, maxRounds) {
       } else return null;
       if (idx < 0) return null;
       s = s.slice(0, idx) + '\\' + s.slice(idx);
+      rounds += 1;
     }
   }
   return null;
+}
+
+// Code-review P2 (string-aware comma strip): the old blanket
+// `s.replace(/,(\s*[}\]])/g, '$1')` edited commas INSIDE string values too —
+// a payload quoting page evidence like "a, ] b" got silently rewritten. Walk
+// the text with a string-state machine (the same brace/quote scanner pattern
+// as repairUnescapedQuotes) and strip a comma only when it sits in STRUCTURAL
+// position (outside any string, next non-ws char is } or ]).
+function stripStructuralTrailingCommas(text) {
+  if (typeof text !== 'string' || !text) return text;
+  let out = '';
+  let i = 0;
+  const n = text.length;
+  let inString = false;
+  while (i < n) {
+    const c = text[i];
+    if (inString) {
+      if (c === '\\') { out += text.slice(i, i + 2); i += 2; continue; }
+      if (c === '"') inString = false;
+      out += c; i++; continue;
+    }
+    if (c === '"') { inString = true; out += c; i++; continue; }
+    if (c === ',') {
+      let q = i + 1;
+      while (q < n && /\s/.test(text[q])) q++;
+      if (q < n && (text[q] === '}' || text[q] === ']')) { i++; continue; }
+      out += c; i++; continue;
+    }
+    out += c; i++;
+  }
+  return out;
 }
 
 // Lenient JSON parser for LLM output. Tries strict JSON.parse first; on
@@ -2300,9 +2333,10 @@ function parseJsonLenient(text) {
     repairs.push('repair-common-mistakes');
     s = commonFixed;
   }
-  // Remove commas that directly precede a closing } or ] (with optional whitespace).
-  // Safe because no valid JSON has `,}` or `,]` — those are always malformed.
-  const trailingFixed = s.replace(/,(\s*[}\]])/g, '$1');
+  // Remove commas that directly precede a closing } or ] (with optional
+  // whitespace) — STRING-AWARE (code review P2): commas inside quoted values
+  // are content, never structural.
+  const trailingFixed = stripStructuralTrailingCommas(s);
   if (trailingFixed !== s) {
     repairs.push('remove-trailing-commas');
     s = trailingFixed;
@@ -2317,10 +2351,14 @@ function parseJsonLenient(text) {
     // quotes two things: `"people", "Wow"`). Purely additive coverage; the
     // corpus-proven behavior only runs when it fails.
     const posEscaped = escapePrematureQuoteClosers(stripped);
-    if (posEscaped != null && posEscaped !== stripped) {
-      const posFixed = posEscaped.replace(/,(\s*[}\]])/g, '$1');
+    if (posEscaped != null && posEscaped.text != null && posEscaped.text !== stripped) {
+      const posFixed = stripStructuralTrailingCommas(posEscaped.text);
       try {
-        return { ok: true, value: JSON.parse(posFixed), repairs: repairs.concat(['escape-inner-quotes']) };
+        // Code-review P2: the repairs token carries the ROUND COUNT — the
+        // escape pass is inherently ambiguous (it guesses which quote closed
+        // early), and N rounds in the receipt discloses how much guessing
+        // happened.
+        return { ok: true, value: JSON.parse(posFixed), repairs: repairs.concat(['escape-inner-quotes:' + posEscaped.rounds]) };
       } catch (e2) { /* fall through to the closer-set rewrite */ }
     }
     // Quote-aware rewrite of the comment-stripped ORIGINAL. Only fires when
@@ -2328,7 +2366,7 @@ function parseJsonLenient(text) {
     // purely additive coverage.
     const rewritten = repairUnescapedQuotes(stripped);
     if (rewritten != null && rewritten !== stripped) {
-      const rewrittenFixed = rewritten.replace(/,(\s*[}\]])/g, '$1');
+      const rewrittenFixed = stripStructuralTrailingCommas(rewritten);
       try {
         return { ok: true, value: JSON.parse(rewrittenFixed), repairs: repairs.concat(['escape-content-quotes']) };
       } catch (e2) { /* fall through to the failure report */ }
