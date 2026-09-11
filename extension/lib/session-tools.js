@@ -577,7 +577,12 @@
       if (sess && typeof sess.parkBegin === 'function') sess.parkBegin();
       let res;
       try {
+        // Code-review P3 (reliability): a bridge crash (panel DOM missing,
+        // chrome error) must degrade into a tool-level error teaching the
+        // fallback — an unhandled rejection here would kill the whole turn.
         res = await d.observeBridge.request({ question: q.slice(0, 500), hint: typeof a.hint === 'string' ? a.hint.slice(0, 300) : '' });
+      } catch (e) {
+        return { error: 'observe bridge failed: ' + String((e && e.message) || e) + ' — fall back to probing, never guess' };
       } finally {
         if (sess && typeof sess.parkEnd === 'function') sess.parkEnd();
       }
