@@ -732,6 +732,11 @@
       const out = {
         containerSel: containerSel,
         anchorSel: anchorSel,
+        // 机械-语义分离（spec 3.B）：heuristicValue 是日历通用正则的
+        // 便捷默认（value 为旧名别名，保留一个版本周期）；识别职责归
+        // 研究期 LLM —— candidates[]（原文+来源）才是一等公民。
+        heuristicValue: absolute ? absolute.value : (relative ? relative.value : ''),
+        value: absolute ? absolute.value : (relative ? relative.value : ''),
         absolute: absolute ? absolute.value : null,
         absoluteSource: absolute ? absolute.source : null,
         relative: relative ? relative.value : null,
@@ -746,7 +751,7 @@
         observationLog.record({
           tool: 'probe.timestamp',
           selectors: [containerSel],
-          summary: 'timestamp probe absolute=' + JSON.stringify(out.absolute) + ' relative=' + JSON.stringify(!!out.relative)
+          summary: 'timestamp probe heuristicValue=' + JSON.stringify(out.heuristicValue) + ' absolute=' + JSON.stringify(out.absolute) + ' relative=' + JSON.stringify(!!out.relative)
         });
       }
       return out;

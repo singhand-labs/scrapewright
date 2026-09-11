@@ -2022,8 +2022,13 @@
     }
     const absolute = candidates.find((c) => !c.relative) || null;
     const relative = candidates.find((c) => c.relative) || null;
+    const heuristic = absolute ? absolute.value : (relative ? relative.value : '');
     const result = {
-      value: absolute ? absolute.value : (relative ? relative.value : ''),
+      // 机械-语义分离（spec 3.B）：heuristicValue 是日历通用形态的便捷
+      // 默认；识别职责归研究期 LLM —— candidates[]（原文+来源）才是
+      // 一等公民。value 为旧名别名，保留一个版本周期。
+      heuristicValue: heuristic,
+      value: heuristic,
       absolute: absolute ? absolute.value : null,
       absoluteSource: absolute ? absolute.source : null,
       relative: relative ? relative.value : null,
