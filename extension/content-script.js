@@ -43,6 +43,31 @@
     // names one of them. Mirrors lib/list-extract-ops.js (RC5 fix).
     const DOM_PROPERTY_READS = new Set(['outerHTML', 'innerHTML']);
 
+    // 机械-语义分离（spec 3.A，inline 镜像 lib/list-extract-ops.js）：match
+    // 是 LLM 自写正则——基建只应用，不解释（谓词零知识）。命中即取整个
+    // 原文值，未命中得空串；非法正则报错教重写。
+    function compileMatch(spec) {
+      const m = (spec && typeof spec === 'object' && typeof spec.match === 'string') ? spec.match : null;
+      if (m == null) return null;
+      try { return new RegExp(m); }
+      catch (e) { throw new Error('field match is not a valid regex (' + m + '): ' + (e && e.message) + ' — rewrite the predicate; the harness applies it verbatim and never interprets it'); }
+    }
+    function applyMatch(value, re) {
+      if (!re) return value;
+      if (Array.isArray(value)) {
+        const hit = value.find(function (v) { return typeof v === 'string' && re.test(v); });
+        return hit !== undefined ? hit : '';
+      }
+      return (typeof value === 'string' && re.test(value)) ? value : '';
+    }
+    function isHoverPopoverSpec(spec) {
+      return !!(spec && typeof spec === 'object' &&
+        (spec.read === 'hoverPopover' || spec.read === 'hoverPopoverHtml'));
+    }
+    function stripTags(html) {
+      return String(html || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+
     function readField(container, spec) {
       // Forty-eighth log (inline mirror of lib/list-extract-ops.js): a
       // multi:true spec reads ALL matches — probe.extract {multi:true}
@@ -127,8 +152,13 @@
       for (const container of containers) {
         const rec = {};
         for (const [field, spec] of Object.entries(fieldMap)) {
+          // 机械-语义分离（spec 3.A）：hoverPopover 来源只在 $extractWithHover
+          // 合法（那里才有悬停阶段）——纯 $extractList 教学性报错。
+          if (isHoverPopoverSpec(spec)) {
+            throw new Error('$extractList field "' + field + '" uses read:\'hoverPopover\' — hover-mounted popover sources are only valid in $extractWithHover (which has a hover phase); drop the read: here or switch the call to $extractWithHover');
+          }
           try {
-            rec[field] = readField(container, spec);
+            rec[field] = applyMatch(readField(container, spec), compileMatch(spec));
           } catch (err) {
             throw new Error(`$extractList field "${field}" selector invalid: ${err.message}`);
           }
@@ -153,8 +183,11 @@
       for (const container of containers) {
         const rec = {};
         for (const [field, spec] of Object.entries(fieldMap)) {
+          if (isHoverPopoverSpec(spec)) {
+            throw new Error('$extractListMulti field "' + field + '" uses read:\'hoverPopover\' — hover-mounted popover sources are only valid in $extractWithHover (which has a hover phase); drop the read: here or switch the call to $extractWithHover');
+          }
           try {
-            rec[field] = readFieldAll(container, spec);
+            rec[field] = applyMatch(readFieldAll(container, spec), compileMatch(spec));
           } catch (err) {
             throw new Error(`$extractListMulti field "${field}" selector invalid: ${err.message}`);
           }
@@ -184,9 +217,20 @@
         if (opts && opts.allowEmpty) return [];
         throw new Error('$extractWithHover: no containers matched');
       }
-      // Field extraction reuses extractListRecords above. allowEmpty is
-      // forced on here because container count is already validated.
-      var records = extractListRecords(containers, fieldMap, { allowEmpty: true });
+      // 机械-语义分离（spec 3.A）：read:hoverPopover 字段在悬停阶段后填
+      // 充——预提取用过滤后的 fieldMap（这些字段的值不来自静态 DOM；
+      // extractListRecords 现在对 hoverPopover 规格教学性抛错）。
+      var staticFieldMap = {};
+      var hoverReadFields = [];
+      for (var fk0 in fieldMap) {
+        if (Object.prototype.hasOwnProperty.call(fieldMap, fk0)) {
+          if (isHoverPopoverSpec(fieldMap[fk0])) hoverReadFields.push(fk0);
+          else staticFieldMap[fk0] = fieldMap[fk0];
+        }
+      }
+      var records = Object.keys(staticFieldMap).length
+        ? extractListRecords(containers, staticFieldMap, { allowEmpty: true })
+        : containers.map(function () { return {}; });
       var anchorSel = hoverConfig.anchorSel;
       var popoverSel = hoverConfig.popoverSel || null;
       var perHoverOpts = {};
@@ -266,6 +310,37 @@
             }
           }
           records[i].hovercards = hovercards;
+          // 机械-语义分离（spec 3.A）：悬停来源字段 —— 对字段选择器命中的
+          // 元素执行捕获，剥标签（hoverPopover）或保留标记
+          // （hoverPopoverHtml），match 谓词照常应用（命中→原文，未命中→
+          // 空串；捕获原文仍留在 hovercards[].popoverText 供证据回环）。
+          for (var hf = 0; hf < hoverReadFields.length; hf++) {
+            var hfieldName = hoverReadFields[hf];
+            var hspec = fieldMap[hfieldName] || {};
+            var hsel = typeof hspec.selector === 'string' ? hspec.selector : null;
+            var hre = compileMatch(hspec);
+            var hvals = [];
+            var hcands = hsel
+              ? Array.prototype.slice.call(container.querySelectorAll(hsel))
+              : [container];
+            for (var hh = 0; hh < hcands.length; hh++) {
+              var htext = null;
+              try {
+                var hr = await hoverFn(hcands[hh], popoverSel, perHoverOpts);
+                htext = (hr && typeof hr.htmlSnippet === 'string' && hr.htmlSnippet)
+                  ? ((hspec.read === 'hoverPopoverHtml') ? hr.htmlSnippet : stripTags(hr.htmlSnippet))
+                  : null;
+              } catch (_) { htext = null; }
+              if (htext) hvals.push(htext);
+            }
+            if (hspec.multi === true) {
+              records[i][hfieldName] = hvals
+                .map(function (v) { return applyMatch(v, hre); })
+                .filter(Boolean);
+            } else {
+              records[i][hfieldName] = applyMatch(hvals.length ? hvals[0] : '', hre);
+            }
+          }
         }
         // Forty-fourth log (inline mirror of lib/list-extract-ops.js): field
         // extraction ran BEFORE the hover batch, but on a cold tab the batch

@@ -116,3 +116,71 @@ describe('T2: heuristicValue 降级（便捷默认认账）', () => {
     assert.ok(/heuristicValue/.test(st.slice(j, j + 1200)), 'probe spec 必须提及 heuristicValue');
   });
 });
+
+describe('T3: 来源代数 read: + match（谓词零知识）', () => {
+  it('read:hoverPopover + match：post-hover 填充，谓词只应用不解释（命中→原文，未命中→空串）', async () => {
+    const { dom } = makeHoverDom();
+    const ops = loadInline(dom);
+    const out = await ops.extractWithHoverRecords(
+      [dom.window.document.getElementById('card')],
+      { postTime: { selector: '.a', read: 'hoverPopover', match: '\\d{4} at .*?(AM|PM)' } },
+      { anchorSel: '.a' },
+      async () => ({ hovered: true, htmlSnippet: '<div>Shared · Friday, September 11, 2026 at 1:43 AM</div>' }),
+      {}
+    );
+    // 谓词零知识：match 命中即取整个原文值（基建不截取子串），未命中才是空串。
+    assert.equal(out[0].postTime, 'Shared · Friday, September 11, 2026 at 1:43 AM');
+    assert.ok(out[0].hovercards[0].popoverText.includes('September 11, 2026'));
+  });
+  it('read:hoverPopoverHtml 保留标记原文；无 match 原样返回', async () => {
+    const { dom } = makeHoverDom();
+    const ops = loadInline(dom);
+    const out = await ops.extractWithHoverRecords(
+      [dom.window.document.getElementById('card')],
+      { raw: { selector: '.a', read: 'hoverPopoverHtml' } },
+      { anchorSel: '.a' },
+      async () => ({ hovered: true, htmlSnippet: '<div>x<b>y</b></div>' }),
+      {}
+    );
+    assert.equal(out[0].raw, '<div>x<b>y</b></div>');
+  });
+  it('match 不命中 → 字段空 + 捕获原文仍在 hovercards（证据回环）', async () => {
+    const { dom } = makeHoverDom();
+    const ops = loadInline(dom);
+    const out = await ops.extractWithHoverRecords(
+      [dom.window.document.getElementById('card')],
+      { postTime: { selector: '.a', read: 'hoverPopover', match: '^[0-9]+$' } },
+      { anchorSel: '.a' },
+      async () => ({ hovered: true, htmlSnippet: '<div>September 11, 2026</div>' }),
+      {}
+    );
+    assert.strictEqual(out[0].postTime, '');
+    assert.ok(out[0].hovercards[0].popoverText.includes('September 11'));
+  });
+  it('纯 $extractList 传 hoverPopover 来源 → 教学性报错', async () => {
+    const { dom } = makeHoverDom();
+    const ops = loadInline(dom);
+    await assert.rejects(
+      async () => ops.extractListRecords([dom.window.document.getElementById('card')], { x: { selector: '.a', read: 'hoverPopover' } }, {}),
+      /hoverPopover.*\$extractWithHover|extractWithHover.*hoverPopover/
+    );
+  });
+  it('match 对普通 read 也生效（text + match 过滤语义）；非法正则报错教重写', () => {
+    const { dom } = makeHoverDom();
+    const ops = loadInline(dom);
+    const out = ops.extractListRecords(
+      [dom.window.document.getElementById('card')],
+      { v: { selector: '.a', match: 'anch' } }, {});
+    assert.equal(out[0].v, 'anchor');
+    assert.throws(
+      () => ops.extractListRecords([dom.window.document.getElementById('card')], { v: { selector: '.a', match: '(' } }, {}),
+      /match.*正则|invalid match|Invalid regular expression/i
+    );
+  });
+  it('源审计：lib 镜像同步 read:/match', () => {
+    const lib = readSrc('lib/list-extract-ops.js');
+    assert.ok(/read === 'hoverPopover'/.test(lib) || /'hoverPopover'/.test(lib));
+    assert.ok(/compileMatch/.test(lib));
+    assert.ok(/isHoverPopoverSpec/.test(lib));
+  });
+});

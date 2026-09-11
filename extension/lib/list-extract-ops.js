@@ -18,6 +18,31 @@
 // field in extraction outputs.
 const DOM_PROPERTY_READS = new Set(['outerHTML', 'innerHTML']);
 
+// 机械-语义分离（spec 3.A，mirror of content-script.js inline ops）：match
+// 是 LLM 自写正则——基建只应用，不解释（谓词零知识）。命中即取整个
+// 原文值，未命中得空串；非法正则报错教重写。
+function compileMatch(spec) {
+  const m = (spec && typeof spec === 'object' && typeof spec.match === 'string') ? spec.match : null;
+  if (m == null) return null;
+  try { return new RegExp(m); }
+  catch (e) { throw new Error('field match is not a valid regex (' + m + '): ' + (e && e.message) + ' — rewrite the predicate; the harness applies it verbatim and never interprets it'); }
+}
+function applyMatch(value, re) {
+  if (!re) return value;
+  if (Array.isArray(value)) {
+    const hit = value.find((v) => typeof v === 'string' && re.test(v));
+    return hit !== undefined ? hit : '';
+  }
+  return (typeof value === 'string' && re.test(value)) ? value : '';
+}
+function isHoverPopoverSpec(spec) {
+  return !!(spec && typeof spec === 'object' &&
+    (spec.read === 'hoverPopover' || spec.read === 'hoverPopoverHtml'));
+}
+function stripTags(html) {
+  return String(html || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 // Forty-first log: whole-card `attr: 'outerHTML'` fields came back 82396-99278
 // chars each (result.json: 332KB for 3 posts). ElementData caps textContent at
 // 50000 — element-HTML property reads get the same budget, with an in-value
@@ -190,8 +215,13 @@ function extractListRecords(containers, fieldMap, opts) {
   for (const container of containers) {
     const rec = {};
     for (const [field, spec] of Object.entries(fieldMap)) {
+      // 机械-语义分离（spec 3.A）：hoverPopover 来源只在 $extractWithHover
+      // 合法（那里才有悬停阶段）——纯 $extractList 教学性报错。
+      if (isHoverPopoverSpec(spec)) {
+        throw new Error('$extractList field "' + field + '" uses read:\'hoverPopover\' — hover-mounted popover sources are only valid in $extractWithHover (which has a hover phase); drop the read: here or switch the call to $extractWithHover');
+      }
       try {
-        rec[field] = readField(container, spec);
+        rec[field] = applyMatch(readField(container, spec), compileMatch(spec));
       } catch (err) {
         throw new Error(`$extractList field "${field}" selector invalid: ${err.message}`);
       }
@@ -216,8 +246,11 @@ function extractListMultiRecords(containers, fieldMap, opts) {
   for (const container of containers) {
     const rec = {};
     for (const [field, spec] of Object.entries(fieldMap)) {
+      if (isHoverPopoverSpec(spec)) {
+        throw new Error('$extractListMulti field "' + field + '" uses read:\'hoverPopover\' — hover-mounted popover sources are only valid in $extractWithHover (which has a hover phase); drop the read: here or switch the call to $extractWithHover');
+      }
       try {
-        rec[field] = readFieldAll(container, spec);
+        rec[field] = applyMatch(readFieldAll(container, spec), compileMatch(spec));
       } catch (err) {
         throw new Error(`$extractListMulti field "${field}" selector invalid: ${err.message}`);
       }
@@ -342,7 +375,20 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
   // Step 1: extract fields per container via the existing helper. allowEmpty
   // is forced on here because we already validated containers.length > 0;
   // per-field emptiness is signaled via diagnostics, not by throwing.
-  const records = extractListRecords(containers, fieldMap, { allowEmpty: true });
+  // 机械-语义分离（spec 3.A）：read:hoverPopover 字段在悬停阶段后填充
+  // ——预提取用过滤后的 fieldMap（extractListRecords 现在对 hoverPopover
+  // 规格教学性抛错）。
+  const staticFieldMap = {};
+  const hoverReadFields = [];
+  for (const fk in fieldMap) {
+    if (Object.prototype.hasOwnProperty.call(fieldMap, fk)) {
+      if (isHoverPopoverSpec(fieldMap[fk])) hoverReadFields.push(fk);
+      else staticFieldMap[fk] = fieldMap[fk];
+    }
+  }
+  const records = Object.keys(staticFieldMap).length
+    ? extractListRecords(containers, staticFieldMap, { allowEmpty: true })
+    : containers.map(() => ({}));
   // Step 2-4: per-container anchor iteration. Sequential — only one popover
   // can be on screen at a time on most sites (the page dismisses the previous
   // popover on the next hover). Parallel dispatch would race.
@@ -440,6 +486,35 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
       }
     }
     records[i].hovercards = hovercards;
+    // 机械-语义分离（spec 3.A）：悬停来源字段 —— 对字段选择器命中的元素
+    // 执行捕获，剥标签（hoverPopover）或保留标记（hoverPopoverHtml），
+    // match 谓词照常应用（命中→原文，未命中→空串；捕获原文仍留在
+    // hovercards[].popoverText 供证据回环）。
+    for (let hf = 0; hf < hoverReadFields.length; hf++) {
+      const hfieldName = hoverReadFields[hf];
+      const hspec = fieldMap[hfieldName] || {};
+      const hsel = typeof hspec.selector === 'string' ? hspec.selector : null;
+      const hre = compileMatch(hspec);
+      const hvals = [];
+      const hcands = hsel
+        ? Array.prototype.slice.call(container.querySelectorAll(hsel))
+        : [container];
+      for (let hh = 0; hh < hcands.length; hh++) {
+        let htext = null;
+        try {
+          const hr = await hoverFn(hcands[hh], popoverSel, perHoverOpts);
+          htext = (hr && typeof hr.htmlSnippet === 'string' && hr.htmlSnippet)
+            ? ((hspec.read === 'hoverPopoverHtml') ? hr.htmlSnippet : stripTags(hr.htmlSnippet))
+            : null;
+        } catch (_) { htext = null; }
+        if (htext) hvals.push(htext);
+      }
+      if (hspec.multi === true) {
+        records[i][hfieldName] = hvals.map((v) => applyMatch(v, hre)).filter(Boolean);
+      } else {
+        records[i][hfieldName] = applyMatch(hvals.length ? hvals[0] : '', hre);
+      }
+    }
   }
   // Forty-fourth log: the field extraction above ran BEFORE the hover batch,
   // but on a cold tab the batch is exactly what hydrates lazily-mounted ARIA
