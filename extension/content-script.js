@@ -1251,6 +1251,14 @@
           recordDomActivity('$labelledby', data.selector, result ? 1 : 0, Date.now() - __t0);
           break;
         }
+        case 'timestamp': {
+          const __t0 = Date.now();
+          const __r = await domTimestamp(data.selector, data.args && data.args[0]);
+          result = __r.result;
+          _diagnostics = __r._diagnostics;
+          recordDomActivity('$timestamp', data.selector, (result && result.value) ? 1 : 0, Date.now() - __t0);
+          break;
+        }
         case 'count': {
           const __t0 = Date.now();
           const __r = domCount(data.selector);
@@ -1891,6 +1899,140 @@
     // Return the self-describing object (same shape as the probe): empty
     // paths carry their falsification note IN the return value.
     return { result: resolved, _diagnostics };
+  }
+
+  // Sixty-fifth log: the step-side timestamp primitive. The research side
+  // has probe.timestamp (fifty-sixth log); the STEP DSL had nothing, and the
+  // 65th session hand-rolled EIGHT artifact versions of the candidate dance:
+  // labelledby-only reads (empty on cold verify tabs where the reference
+  // chain is not mounted), then anchor visible-text unions (junk from media
+  // anchors passing first-match filters — the verify tags TIME_FIELD_IMPLAUSIBLE
+  // were flagging exactly that junk), then fire-and-forget $hover calls whose
+  // captured tooltip htmlSnippet — the absolute date, visibly mounting on
+  // screen — was discarded on arrival by `try { await $hover(...) } catch {}`.
+  // One call now does the whole dance per card: labelledby / aria-label /
+  // visible text (the source that survives cold tabs) + the hover-mounted
+  // popover's own text, filtered to date-shaped candidates, ABSOLUTE
+  // preferred over a relative age. Mirrors wizard-utils' extractDateSubstrings
+  // (sixty-fourth log) — the drift-guard test pins the two behaviors equal.
+  var TS_MAX_HOVER_ANCHORS = 3;
+  var TS_MAX_WHOLE_VALUE_CHARS = 60;
+  var TS_REL_RE = /\b(?:second|minute|hour|day|week|month|year)s?\s+ago\b|[0-9一二三四五六七八九十百千]+\s*(?:秒|分钟|分|小时|时|天|日|周|月|年)\s*前/i;
+  var TS_SHAPE_RES = [
+    /(?:january|february|march|april|may|june|july|august|september|october|november|december)/i,
+    /\d{1,2}:\d{2}/,
+    /\b\d+\s*(?:second|sec|minute|min|hour|hr|day|week|month|year)s?\b/i,
+    /\b(?:second|minute|hour|day|week|month|year)s?\s+ago\b/i,
+    /\d{4}[-/]\d{1,2}[-/]\d{1,2}/,
+    /\d{4}\s*年/,
+    /[0-9一二三四五六七八九十百千]+\s*(?:秒|分钟|分|小时|时|天|日|周|月|年)/
+  ];
+  var TS_DATE_SUBSTRING_RES = [
+    /\d{4}-\d{1,2}-\d{1,2}(?:[T ]\d{1,2}:\d{2}(?::\d{2})?)?/g,
+    /(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}(?:[ ,]+at[ ,]+\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))?/g,
+    /\b\d{1,2}\/\d{1,2}\/\d{4}(?:\s+\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)?/g,
+    /\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日(?:\s*\d{1,2}:\d{2})?/g,
+    /\b\d+\s*(?:second|minute|hour|day|week|month|year)s?\s+ago\b/g,
+    /[0-9一二三四五六七八九十百千]+\s*(?:秒|分钟|分|小时|时|天|日|周|月|年)\s*前/g
+  ];
+  function extractDateSubstringsCS(text) {
+    const s = String(text == null ? '' : text);
+    if (!s) return [];
+    const out = [];
+    const seen = new Set();
+    for (const re of TS_DATE_SUBSTRING_RES) {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(s)) !== null) {
+        const v = m[0].replace(/\s+/g, ' ').trim();
+        if (!v || seen.has(v)) continue;
+        seen.add(v);
+        out.push(v);
+      }
+    }
+    return out.filter((v) => !out.some((w) => w !== v && w.includes(v)));
+  }
+  async function domTimestamp(sel, opts) {
+    const o = (opts && typeof opts === 'object') ? opts : {};
+    const anchorSel = (typeof o.anchorSel === 'string' && o.anchorSel.trim()) ? o.anchorSel.trim()
+      : 'a:has(span[aria-labelledby]), [aria-labelledby], abbr[aria-label], time';
+    const timeoutMs = (typeof o.timeoutMs === 'number' && o.timeoutMs > 0) ? o.timeoutMs : 4500;
+    const index = (typeof o.index === 'number' && o.index >= 0) ? Math.floor(o.index) : 0;
+    const containers = querySelectorAllDeep(sel);
+    if (!containers.length) {
+      return { result: { error: 'ELEMENT_NOT_FOUND: ' + sel + ' — $timestamp takes the repeating card container selector' }, _diagnostics: { api: 'timestamp', selector: sel, containers: 0 } };
+    }
+    const container = containers[Math.min(index, containers.length - 1)];
+    let anchors = [];
+    try { anchors = Array.prototype.slice.call(container.querySelectorAll(anchorSel)); } catch (e) { anchors = []; }
+    const candidates = [];
+    const seen = new Set();
+    const push = (value, source) => {
+      const str = typeof value === 'string' ? value.trim() : '';
+      if (!str) return;
+      const add = (v, rel) => {
+        const k = source + '|' + v;
+        if (seen.has(k)) return;
+        seen.add(k);
+        candidates.push({ value: v.slice(0, 120), source: source, relative: rel });
+      };
+      if (str.length <= TS_MAX_WHOLE_VALUE_CHARS) {
+        for (const re of TS_SHAPE_RES) {
+          if (re.test(str)) { add(str, TS_REL_RE.test(str)); return; }
+        }
+        return;
+      }
+      for (const sub of extractDateSubstringsCS(str)) add(sub, TS_REL_RE.test(sub));
+    };
+    let hoversDone = 0;
+    for (let ai = 0; ai < anchors.length; ai++) {
+      const anchor = anchors[ai];
+      if (!anchor || anchor.nodeType !== 1) continue;
+      push((anchor.getAttribute && anchor.getAttribute('aria-label')) || '', 'aria-label');
+      push((anchor.textContent || ''), 'text');
+      let lbl = null;
+      try { lbl = harvestAnchorLabel(anchor); } catch (_) { lbl = null; }
+      if (lbl && lbl.text) push(lbl.text, 'labelledby');
+      // Hover only while no absolute candidate exists yet and the anchor
+      // budget holds — once a date is in hand, remaining anchors cost
+      // nothing but time. Default 4500ms: tooltips mount in 600-1600ms, and
+      // narrowing the dwell below that (the 65th session's 1200ms) closes
+      // the capture window before the popover appears.
+      const haveAbs = candidates.some((c) => !c.relative);
+      if (haveAbs || hoversDone >= TS_MAX_HOVER_ANCHORS) continue;
+      hoversDone += 1;
+      let hv = null;
+      try { hv = await domHover(anchor, null, { timeoutMs: timeoutMs }); } catch (_) { hv = null; }
+      if (hv && hv.htmlSnippet) {
+        // Popover text is structurally prose ("Shared with Public ·
+        // Friday, …") — never a whole-value candidate; extract substrings.
+        const popText = String(hv.htmlSnippet).replace(/<[^>]*>/g, ' ');
+        for (const sub of extractDateSubstringsCS(popText)) {
+          const k = 'popoverText|' + sub;
+          if (seen.has(k)) continue;
+          seen.add(k);
+          candidates.push({ value: sub.slice(0, 120), source: 'popoverText', relative: TS_REL_RE.test(sub) });
+        }
+      }
+    }
+    const absolute = candidates.find((c) => !c.relative) || null;
+    const relative = candidates.find((c) => c.relative) || null;
+    const result = {
+      value: absolute ? absolute.value : (relative ? relative.value : ''),
+      absolute: absolute ? absolute.value : null,
+      absoluteSource: absolute ? absolute.source : null,
+      relative: relative ? relative.value : null,
+      candidates: candidates,
+      anchorsProbed: anchors.length,
+      hoversDispatched: hoversDone
+    };
+    if (!candidates.length) {
+      result.note = 'no date-shaped value on this card (labelledby / aria-label / visible text / hover popover text). If the page exposes no timestamp for these cards, renegotiate the field via io.confirm instead of shipping titles or junk as postTime.';
+    }
+    notifyBackgroundDiagnostic('timestamp_done', {
+      selector: sel, anchors: anchors.length, hoversDispatched: hoversDone, absoluteFound: !!absolute
+    });
+    return { result, _diagnostics: { api: 'timestamp', selector: sel, anchors: anchors.length, hovers: hoversDone, absolute: !!absolute } };
   }
 
   async function domExists(sel, timeoutMs) {

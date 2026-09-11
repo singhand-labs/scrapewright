@@ -42,6 +42,10 @@
   window.$check = (sel, prop) => sendDomRequest('check', sel, [prop]);
   window.$exists = (sel, timeoutMs) => sendDomRequest('exists', sel, [timeoutMs]);
   window.$labelledby = (sel, attr, timeoutMs) => sendDomRequest('labelledby', sel, [attr, timeoutMs]);
+  // Sixty-fifth log: one-call timestamp value for a card — labelledby/aria/
+  // visible-text + hover-popover text, date-shape filtered, absolute
+  // preferred. postTime = (await $timestamp(cardSel)).value.
+  window.$timestamp = (sel, opts) => sendDomRequest('timestamp', sel, [opts || {}]);
   window.$count = (sel) => sendDomRequest('count', sel);
   window.$list = (sel) => sendDomRequest('list', sel);
 window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opts || {}]);
