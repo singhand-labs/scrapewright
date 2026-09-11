@@ -416,7 +416,11 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
           // needs no visible popover.
           labelledbyText: (r && typeof r.labelledbyText === 'string' && r.labelledbyText) ? r.labelledbyText : null,
           labelledbyAttr: (r && typeof r.labelledbyAttr === 'string' && r.labelledbyAttr) ? r.labelledbyAttr : null,
-          labelledbyNote: (r && typeof r.labelledbyNote === 'string' && r.labelledbyNote) ? r.labelledbyNote : null
+          labelledbyNote: (r && typeof r.labelledbyNote === 'string' && r.labelledbyNote) ? r.labelledbyNote : null,
+          // 机械-语义分离（spec 3.B）：剥标签原文，模型免写 DOM 解析。
+          popoverText: (r && typeof r.htmlSnippet === 'string' && r.htmlSnippet)
+            ? r.htmlSnippet.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+            : null
         });
       } catch (err) {
         hovercards.push({
@@ -430,7 +434,8 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
           anchorText: anchorText,
           labelledbyText: null,
           labelledbyAttr: null,
-          labelledbyNote: null
+          labelledbyNote: null,
+          popoverText: null
         });
       }
     }
