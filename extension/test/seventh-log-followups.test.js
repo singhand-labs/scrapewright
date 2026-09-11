@@ -171,9 +171,10 @@ describe('F3: extractWithHover_done carries failure reasons (source audit)', () 
   it('the done event includes a failureReasons histogram and observedPopoverCount', () => {
     const i = CS_SRC.indexOf("notifyBackgroundDiagnostic('extractWithHover_done'");
     assert.ok(i > -1, 'the done event must exist');
-    // 3100-char lookback: the sixty-second-log hoverSummary.enhancedModeDisabled
-    // aggregate sits between this tally and the done event (~700 chars).
-    const chunk = CS_SRC.slice(i - 3100, i + 700);
+    // 4200-char lookback: the sixty-second-log hoverSummary.enhancedModeDisabled
+    // aggregate + the mechanical-semantic-separation capturedPopovers block sit
+    // between this tally and the done event.
+    const chunk = CS_SRC.slice(i - 4200, i + 700);
     assert.ok(/failureReasons/.test(chunk),
       'failed hover reasons must be tallied onto the event');
     assert.ok(/observedPopoverCount/.test(chunk),

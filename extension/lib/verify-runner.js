@@ -499,7 +499,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, siblingCountContrast: null, implausibleTimeFields: null, positionLikeIds: null, labelPrefixedCounts: null };
+      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, siblingCountContrast: null, implausibleTimeFields: null, positionLikeIds: null, labelPrefixedCounts: null, unusedCaptures: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -511,6 +511,33 @@
       }
 
       const finalData = result ? ((result.finalResult && result.finalResult.data) || result.finalResult) : null;
+
+      // 机械-语义分离（spec 3.C）：观测平权——SW 诊断里躺着的弹层捕获
+      // 从未进入模型视野（第 65 轮：12+ 次 tooltip 捕获被 fire-and-forget
+      // 脚本丢弃，模型只见"字段空"）。捕获>0 且 fieldMap 无悬停读字段时
+      // 列原文样本，教 read:'hoverPopover' 绑定。
+      const computeUnusedCaptures = () => {
+        let total = 0; let readFields = 0; const samples = [];
+        for (const ev of events) {
+          for (const d of ((ev && Array.isArray(ev.selectorDiagnostics)) ? ev.selectorDiagnostics : [])) {
+            if (!d || d.api !== 'extractWithHover') continue;
+            const cp = d.capturedPopovers;
+            if (!cp) continue;
+            total += (d.hoverSummary && d.hoverSummary.hovercardsCaptured) || cp.captured || 0;
+            readFields += cp.popoverReadFields || 0;
+            for (const s of (cp.samples || [])) {
+              if (typeof s === 'string' && s && samples.length < 3) samples.push(s);
+            }
+          }
+        }
+        if (total > 0 && readFields === 0) {
+          return {
+            totalCaptured: total, popoverReadFields: 0, samples: samples,
+            note: 'hover popovers were CAPTURED this run but no fieldMap field consumes them (read:\'hoverPopover\') — bind the field to the popover text of its anchor selector (and filter with your own match regex), instead of discarding the capture'
+          };
+        }
+        return null;
+      };
 
       if (error) {
         augmentError(error, stepsDefs, events);
@@ -557,6 +584,7 @@
                 '). Re-run verify.run with a DIFFERENT, more common input value BEFORE hardening selectors; if the alternate value also matches zero containers, the page population itself is the limit — say so instead of iterating selectors, and consider the FAIL-SOFT artifact for this input class: pass opts.allowEmpty on the extract call and return {posts:[], note:"no items for this input"} so the deployed SERVICE reports the empty result honestly instead of erroring on every such call.');
           }
         }
+        detectors.unusedCaptures = computeUnusedCaptures();
       } else if (result) {
         const toError = (msg, stepId, extra) => {
           const e = new Error(msg);
@@ -922,6 +950,7 @@
             detectors.emptyFieldDiagnostics = efd.length ? efd : null;
           }
         }
+        detectors.unusedCaptures = computeUnusedCaptures();
       }
 
       // Twenty-sixth log: verifies 1-4 all returned ok:true (score 133) while

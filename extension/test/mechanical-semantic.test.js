@@ -184,3 +184,81 @@ describe('T3: 来源代数 read: + match（谓词零知识）', () => {
     assert.ok(/isHoverPopoverSpec/.test(lib));
   });
 });
+
+const { createVerifyRunner } = require('../lib/verify-runner');
+const { createSessionTools } = require('../lib/session-tools');
+
+function verifyRunnerWith(diagEntry, orchestrateImpl) {
+  const deps = {
+    orchestrate: orchestrateImpl || (async () => ({
+      finalResult: { posts: [{ postId: '1', postTime: 'x' }] },
+      steps: [{ stepId: 's3', stepName: 'x', result: { done: true } }], pages: []
+    })),
+    ensureLock: async () => {}, getSignal: () => null, log: () => {}, onEvent: () => {},
+    createTab: async (u) => ({ id: 11, url: u }), removeTab: async () => {},
+    waitForTabLoad: async () => {}, sendMessage: async () => ({ pong: true }),
+    executeScript: async () => ({ result: 'ok', selectorDiagnostics: [] }),
+    captureSnapshot: async () => ({ html: '' }), evaluateCondition: async () => true
+  };
+  const runner = createVerifyRunner(deps);
+  return { runner, deps };
+}
+
+describe('T4: 未消费捕获普查（观测平权）', () => {
+  const CAPTURED_DIAG = {
+    api: 'extractWithHover', containerSelector: 'div.card', processedContainers: 3,
+    anchorSel: '.a',
+    hoverSummary: { anchorsFound: 5, hovercardsCaptured: 4, hoverFailures: 1 },
+    capturedPopovers: { popoverReadFields: 0, samples: ['Shared · Friday, September 11, 2026 at 1:43 AM'] },
+    perField: []
+  };
+  function runWithDiag(diag) {
+    const deps = {
+      orchestrate: async (service, input, orchDeps, options) => {
+        options.onEvent({ type: 'STEP_START', stepId: 's3', maxIterations: 1 });
+        options.onEvent({ type: 'STEP_ITERATION', stepId: 's3', iteration: 1, selectorDiagnostics: [diag] });
+        options.onEvent({ type: 'STEP_DONE', stepId: 's3', iterations: 1, resultPreview: 'ok' });
+        return { finalResult: { posts: [{ postId: '1' }] }, steps: [{ stepId: 's3', stepName: 'x', result: { done: true } }], pages: [] };
+      },
+      ensureLock: async () => {}, getSignal: () => null, log: () => {}, onEvent: () => {},
+      createTab: async (u) => ({ id: 11, url: u }), removeTab: async () => {},
+      waitForTabLoad: async () => {}, sendMessage: async () => ({ pong: true }),
+      executeScript: async () => ({ result: 'ok', selectorDiagnostics: [] }),
+      captureSnapshot: async () => ({ html: '' }), evaluateCondition: async () => true
+    };
+    return createVerifyRunner(deps)({ service: { targetUrl: 'https://e.com', steps: [{ id: 's3', script: 'return 1', onSuccess: 'TERMINATE' }], config: {} }, input: {}, outputSchema: null });
+  }
+  it('verify 报告携带 unusedCaptures 普查（捕获>0 且 0 字段消费）', async () => {
+    const out = await runWithDiag(CAPTURED_DIAG);
+    const uc = out.report.detectors.unusedCaptures;
+    assert.ok(uc, 'census present');
+    assert.equal(uc.totalCaptured, 4);
+    assert.ok(uc.samples.some((s) => s.includes('September 11, 2026')));
+    assert.match(uc.note, /hoverPopover/);
+  });
+  it('字段已用 hoverPopover 来源时普查静默', async () => {
+    const out = await runWithDiag(Object.assign({}, CAPTURED_DIAG, {
+      capturedPopovers: { popoverReadFields: 1, samples: [] }
+    }));
+    assert.ok(!out.report.detectors.unusedCaptures);
+  });
+  it('diag.read kind unusedCaptures 透出', async () => {
+    const { createSessionTools } = require('../lib/session-tools');
+    const deps = {
+      rail: { pageOpen: async () => ({ tabId: 1, url: 'u', ready: true }), pageState: async () => ({}), executeDsl: async () => 1, ensureLock: async () => {}, releaseLock: async () => {}, dispose: async () => {}, tabId: 1 },
+      runVerify: async () => ({ report: { ok: true, error: null, aborted: false, score: { score: 1, isData: true, breakdown: {} }, schemaOk: true, schemaMissing: [], detectors: { emptyFields: [], duplicateFields: [], countShortfall: null, unusedCaptures: { totalCaptured: 4, popoverReadFields: 0, samples: ['September 11, 2026 at 1:43 AM'], note: 'bind via read:hoverPopover' } }, steps: [], finalResult: { posts: [{}] }, pages: '1', eventCount: 1, events: [] }, events: [], raw: {} }),
+      getDraftService: () => ({ name: 's', steps: [{ id: 'x', script: 'return 1', onSuccess: 'TERMINATE' }] }),
+      applyArtifact: () => {}, getTestInput: () => ({}), getOutputSchema: () => null, getSteps: () => [],
+      annotationBridge: null, ioConfirmBridge: { request: async () => ({ confirmed: true }) }
+    };
+    const t = createSessionTools(deps);
+    await t.tools['verify.run']({});
+    const r = await t.tools['diag.read']({ kind: 'unusedCaptures' });
+    assert.ok(r.unusedCaptures);
+    assert.ok(r.unusedCaptures.samples[0].includes('September 11'));
+  });
+  it('domExtractWithHover 源审计：capturedPopovers 骑诊断通道', () => {
+    assert.ok(/capturedPopovers/.test(CS), 'content-script 诊断必须携带 capturedPopovers');
+    assert.ok(/popoverReadFields/.test(CS));
+  });
+});

@@ -3979,6 +3979,29 @@
         note: 'deterministic capability gate — Enhanced Scraping Mode is off (Settings); no hover can dispatch until it is enabled. Popover-mounted values are unavailable this run: surface in finish, use labelledby/attr/text routes, or renegotiate hover-dependent fields.'
       };
     }
+    // 机械-语义分离（spec 3.C）：未消费捕获普查的数据源——本次调用捕获
+    // 的弹层原文样本 + fieldMap 里悬停读字段数。verify 侧据此生成
+    // "捕获了 N 条弹层文本，0 字段消费" 的观测平权普查。
+    var capturedSamples = [];
+    for (var ci2 = 0; ci2 < records.length && capturedSamples.length < 3; ci2++) {
+      var hcs2 = (records[ci2] && records[ci2].hovercards) || [];
+      for (var cj2 = 0; cj2 < hcs2.length && capturedSamples.length < 3; cj2++) {
+        var hsnip = hcs2[cj2] && hcs2[cj2].htmlSnippet;
+        if (typeof hsnip === 'string' && hsnip) {
+          capturedSamples.push(hsnip.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200));
+        }
+      }
+    }
+    var popoverReadFieldCount = 0;
+    for (var fk3 in (fieldMap || {})) {
+      if (Object.prototype.hasOwnProperty.call(fieldMap, fk3) &&
+        (fieldMap[fk3] && (fieldMap[fk3].read === 'hoverPopover' || fieldMap[fk3].read === 'hoverPopoverHtml'))) popoverReadFieldCount += 1;
+    }
+    _diagnostics.capturedPopovers = {
+      popoverReadFields: popoverReadFieldCount,
+      captured: hovercardsCaptured,
+      samples: capturedSamples
+    };
     _diagnostics.anchorSel = hoverConfig.anchorSel;
     // Anchor fixes need the REAL container markup, not a generic snippet.
     // computeExtractListDiagnostics caps firstContainerHtml at 2000 chars,

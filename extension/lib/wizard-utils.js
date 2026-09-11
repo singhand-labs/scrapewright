@@ -4174,6 +4174,9 @@ function summarizeAllStepDiagnostics(events, steps) {
             if (line.length > 240) line = line.slice(0, 237) + '...';
             lines.push(line);
           }
+          if (d.capturedPopovers && Array.isArray(d.capturedPopovers.samples) && d.capturedPopovers.samples.length) {
+            lines.push('      captured popover text (raw, unconsumed unless a field reads hoverPopover): ' + JSON.stringify(d.capturedPopovers.samples));
+          }
           if (d.firstContainerHtml && typeof d.firstContainerHtml === 'string' && d.firstContainerHtml.length > 0) {
             // Display cap matches the extractWithHover source-side capture
             // (8000, set in domExtractWithHover) — re-amputating here with the
