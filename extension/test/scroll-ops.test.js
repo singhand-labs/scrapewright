@@ -280,7 +280,7 @@ describe('scrollToBottomIncremental — trustedWheelFallback (RC19)', () => {
       sleep: noSleep,
       maxAttempts: 5,
       noProgressLimit: 3,
-      trustedWheelFallback: async () => ({ dispatched: false, reason: 'debugger permission not granted' })
+      trustedWheelFallback: async () => ({ dispatched: false, reason: 'enhanced mode disabled' })
     });
     assert.equal(res.stalled, true);
     assert.equal(res.attempts, 3, 'must break at noProgressLimit=3 when fallback declines');

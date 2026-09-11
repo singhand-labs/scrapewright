@@ -360,7 +360,7 @@ describe('lib/renderer-activation.js — dispatchTrustedWheelScroll error recove
     assert.equal(calls.attach.length, 0, 'must NOT attach without flag — fast-fail to avoid banner flicker');
     assert.equal(calls.sendCommand.length, 0);
     assert.equal(calls.detach.length, 0);
-    assert.match(result.reason, /debugger permission not granted/);
+    assert.match(result.reason, /enhanced mode disabled/);
   });
 
   it('returns ok:false when attach fails (e.g., another debugger attached)', async () => {
@@ -597,7 +597,7 @@ describe('lib/renderer-activation.js — dispatchTrustedHover gating + errors', 
     assert.equal(result.dispatched, false);
     assert.equal(result.attached, false);
     assert.equal(calls.attach.length, 0, 'must NOT attach when Enhanced Mode is off');
-    assert.match(result.reason, /debugger permission not granted/);
+    assert.match(result.reason, /enhanced mode disabled/);
   });
 
   it('fast-fails when chrome.debugger is unavailable (test sandbox shape)', async () => {
@@ -700,7 +700,7 @@ describe('lib/renderer-activation.js — dispatchTrustedHoverDismiss', () => {
     assert.equal(result.ok, false);
     assert.equal(result.attached, false);
     assert.equal(calls.attach.length, 0);
-    assert.match(result.reason, /debugger permission not granted/);
+    assert.match(result.reason, /enhanced mode disabled/);
   });
 
   it('uses default (2000ms) timeout for mouseMoved + detach — RC48 fix', async () => {

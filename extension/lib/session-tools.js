@@ -603,26 +603,44 @@
       // partial-empty paths+counts, the junk field set, and the relative
       // timestamp paths — unchanged across three consecutive verifies means
       // the current approach is not moving these fields.
+      //
+      // Sixty-second log: exact-signature equality was too brittle — the
+      // incident session ran three reds (v3/v4/v5) all failing the SAME
+      // REQUIRED_FIELD_EMPTY gate on the same 4/4-empty fields, but an
+      // OPTIONAL field flapped across the empty-ratio threshold between runs
+      // (hoverExtensions 2/4 → 0/4 → 2/4), so no two signatures were
+      // byte-identical and the streak never formed. The stagnation question
+      // is about the PERSISTENT core, not the flapping periphery: fire when
+      // the last three verifies SHARE disclosure entries (set intersection),
+      // and name the shared entries — fields stuck across all three verifies
+      // are exactly the ones "not moving". Monotone progress still escapes
+      // (a fixed field drops out of the intersection), and the fifty-sixth
+      // all-empty guard is preserved structurally (empty signatures
+      // intersect to nothing).
       try {
         const det = report.detectors || {};
         const pe = Array.isArray(det.partialEmptyFields) ? det.partialEmptyFields
           .map((f) => String(f.path || f.field) + ':' + (f.emptyCount != null ? f.emptyCount : '?') + '/' + (f.totalCount != null ? f.totalCount : '?')) : [];
         const jf = det.junkValues && Array.isArray(det.junkValues.fields) ? det.junkValues.fields.map((f) => String(f.field)) : [];
         const rt = Array.isArray(det.relativeTimestamps) ? det.relativeTimestamps.map((f) => String(f.path || f.field)) : [];
-        const sig = JSON.stringify([pe.slice().sort(), jf.slice().sort(), rt.slice().sort()]);
-        // Fifty-sixth log: an ALL-EMPTY signature is not stagnation — the
-        // error CLASS was changing between runs (POLL_EXHAUSTED →
-        // count-shortfall → frozen) while the empty disclosure set stayed
-        // trivially identical and tagged a red→green boundary run.
-        const sigHasContent = pe.length > 0 || jf.length > 0 || rt.length > 0;
-        const lastTwo = verifySignatureHistory.slice(-2);
+        const sig = { pe: pe.slice().sort(), jf: jf.slice().sort(), rt: rt.slice().sort() };
         verifySignatureHistory.push(sig);
         if (verifySignatureHistory.length > 6) verifySignatureHistory.shift();
-        if (sigHasContent && lastTwo.length === 2 && lastTwo[0] === sig && lastTwo[1] === sig) {
-          const lines = pe.length ? pe.join(', ') : (jf.length ? ('junk: ' + jf.join(', ')) : 'the same disclosure set');
-          report.stagnationNote = 'STAGNANT_DISCLOSURES: this is the THIRD consecutive verify.run with an IDENTICAL disclosure signature (' + lines + '). Re-verifying the same artifact shape is not moving these fields. Pick ONE exit: (a) probe the NAMED records/fields on the RESEARCH tab (it is still open — probe.sample/probe.attrStats/probe.labelledby on the empty/junk fields\' elements) and fix the selector/assembly from evidence; (b) renegotiate the contract via io.confirm (drop or adjust fields the page genuinely lacks); (c) accept and disclose honestly in finish. Do not call verify.run again before doing (a) or (b).' +
-            (probesSinceLastVerify === 0 ? ' Note: you have not run a single research-tab probe between these verifies.' : '');
-          report.events = Array.isArray(report.events) ? report.events.concat(['STAGNANT_DISCLOSURES']) : ['STAGNANT_DISCLOSURES'];
+        const lastThree = verifySignatureHistory.slice(-3);
+        if (lastThree.length === 3) {
+          const intersect = (key) => lastThree[0][key].filter((x) =>
+            lastThree[1][key].indexOf(x) !== -1 && lastThree[2][key].indexOf(x) !== -1);
+          const commonPe = intersect('pe');
+          const commonJf = intersect('jf');
+          const commonRt = intersect('rt');
+          if (commonPe.length || commonJf.length || commonRt.length) {
+            const lines = commonPe.length
+              ? commonPe.join(', ')
+              : (commonJf.length ? ('junk: ' + commonJf.join(', ')) : commonRt.join(', '));
+            report.stagnationNote = 'STAGNANT_DISCLOSURES: the THIRD consecutive verify.run still discloses these PERSISTENT entries (' + lines + ') — they have not moved across three verifies, so re-verifying this artifact shape cannot fix them. Pick ONE exit: (a) probe the NAMED records/fields on the RESEARCH tab (it is still open — probe.sample/probe.attrStats/probe.labelledby on the empty/junk fields\' elements) and fix the selector/assembly from evidence; (b) renegotiate the contract via io.confirm (drop or adjust fields the page genuinely lacks); (c) accept and disclose honestly in finish. Do not call verify.run again before doing (a) or (b).' +
+              (probesSinceLastVerify === 0 ? ' Note: you have not run a single research-tab probe between these verifies.' : '');
+            report.events = Array.isArray(report.events) ? report.events.concat(['STAGNANT_DISCLOSURES']) : ['STAGNANT_DISCLOSURES'];
+          }
         }
       } catch (_) { /* the stagnation census must never break the verify result */ }
       probesSinceLastVerify = 0;

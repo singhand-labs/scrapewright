@@ -187,10 +187,15 @@
     }
 
     // Reuse the same opt-in gate. If Enhanced Mode is off, fast-fail without
-    // touching the debugger.
+    // touching the debugger. Sixty-second log: the old reason string
+    // ('debugger permission not granted') named a permission the manifest
+    // already grants — the actual gate is the user's Enhanced Mode toggle,
+    // and the misnomer fed a 23-retry loop in one session because every
+    // receipt looked like a transient permission problem. Same token as the
+    // scroll path's RC25 short-circuit reason so both lanes read identically.
     var permitted = await hasDebuggerPermission();
     if (!permitted) {
-      return { ok: false, dispatched: false, reason: 'debugger permission not granted' };
+      return { ok: false, dispatched: false, reason: 'enhanced mode disabled' };
     }
 
     var target = { tabId: tabId };
@@ -295,7 +300,9 @@
 
     var permitted = await hasDebuggerPermission();
     if (!permitted) {
-      return { ok: false, attached: false, dispatched: false, detached: false, reason: 'debugger permission not granted' };
+      // Sixty-second log: see dispatchTrustedWheelScroll — this is the
+      // Enhanced Mode opt-out gate, deterministic until the user toggles it.
+      return { ok: false, attached: false, dispatched: false, detached: false, reason: 'enhanced mode disabled' };
     }
 
     var target = { tabId: tabId };
@@ -380,7 +387,9 @@
 
     var permitted = await hasDebuggerPermission();
     if (!permitted) {
-      return { ok: false, attached: false, dispatched: false, detached: false, reason: 'debugger permission not granted' };
+      // Sixty-second log: see dispatchTrustedWheelScroll — same deterministic
+      // Enhanced Mode opt-out gate, same honest token.
+      return { ok: false, attached: false, dispatched: false, detached: false, reason: 'enhanced mode disabled' };
     }
 
     var target = { tabId: tabId };

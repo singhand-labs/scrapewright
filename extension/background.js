@@ -1275,6 +1275,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // Test sandbox or sendMessage unavailable — ignore.
       }
     }
+    // Sixty-second log: same user-facing surfacing for the HOVER lane. The
+    // trusted-wheel skip already had this channel (RC25); the hover gate
+    // failure did not, so an entire session ran with hover dead while the
+    // only visible signal was console diagnostics — the model retried 23
+    // times and the user never learned the one-toggle remedy. The
+    // hover_request diagnostic carries dispatched:false + the gate reason on
+    // every gated attempt (per anchor inside $extractWithHover batches).
+    if (cat === 'hover_request' && message.payload && message.payload.dispatched === false &&
+        message.payload.reason === 'enhanced mode disabled') {
+      try {
+        chrome.runtime.sendMessage({
+          type: 'HOVER_SKIPPED_ENHANCED_MODE',
+          tabId: tabId,
+          payload: message.payload || {}
+        }, function () {
+          void chrome.runtime.lastError;
+        });
+      } catch (e) {
+        // Test sandbox or sendMessage unavailable — ignore.
+      }
+    }
     return false;
   }
   if (message.type === 'TAB_ACTIVATION_REQUEST') {

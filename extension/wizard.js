@@ -467,6 +467,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (message.type === 'TRUSTED_WHEEL_SKIPPED') {
       wizardState.trustedWheelSkipCount = (wizardState.trustedWheelSkipCount || 0) + 1;
     }
+    // Sixty-second log: hover-lane parity with the RC25 wheel tip above —
+    // an Enhanced-Mode-off run killed every trusted hover for a whole
+    // session and the user had no visible signal (console diagnostics only).
+    if (message.type === 'HOVER_SKIPPED_ENHANCED_MODE') {
+      wizardState.hoverSkipCount = (wizardState.hoverSkipCount || 0) + 1;
+    }
   });
 
   // Resume offer: an interrupted research session is parked in storage —
@@ -1562,6 +1568,7 @@ async function testScript() {
   wizardState.testAborted = false;
   sessionAbortRequested = false; // A1: an aborted session must not poison manual tests
   wizardState.trustedWheelSkipCount = 0;
+  wizardState.hoverSkipCount = 0;
   debugLogger.log('info', 'wizard', 'testScript start', {
     targetUrl: wizardState.targetUrl,
     stepCount: wizardState.steps ? wizardState.steps.length : 0,
@@ -1647,6 +1654,16 @@ async function presentTestOutcome(out) {
   if ((wizardState.trustedWheelSkipCount || 0) > 0 && !wizardState.testAborted) {
     const count = wizardState.trustedWheelSkipCount;
     const tip = 'Scrolling stalled ' + count + '× on this page; Enhanced Mode (trusted-wheel fallback) is off — enable it under Settings → Enhanced scraping mode for sites that gate lazy-load on isTrusted scroll events.';
+    appendLog(tip, 'warn');
+    showToast(tip, 'info', 8000);
+  }
+
+  // Sixty-second log: hover-lane parity — hovercards/popovers stayed empty
+  // all session because the trusted-hover path was opted out, and only the
+  // console knew. Surface the same one-toggle remedy to the user directly.
+  if ((wizardState.hoverSkipCount || 0) > 0 && !wizardState.testAborted) {
+    const count = wizardState.hoverSkipCount;
+    const tip = 'Hover dispatches failed ' + count + '× — Enhanced Mode is off, so hovercards/popovers can never mount. Enable it under Settings → Enhanced scraping mode if the service needs hover-based enrichment.';
     appendLog(tip, 'warn');
     showToast(tip, 'info', 8000);
   }
@@ -2976,6 +2993,7 @@ async function presentSessionCompletion() {
   const hasArtifact = !!(st && Array.isArray(st.artifactVersions) && st.artifactVersions.length);
   wizardState.testAborted = false;
   wizardState.trustedWheelSkipCount = 0;
+  wizardState.hoverSkipCount = 0;
   if (lv && lv.raw && !lv.staleArtifact) {
     appendLog('Session complete — presenting the last verified run. Review the result, send feedback to continue fixing, or deploy.', 'success');
     showSessionFeedbackPanel();

@@ -3444,7 +3444,17 @@
       // whole session. The dwell budget was never spent, so the
       // popover_timeout budgetNote below would be a lie here.
       result.reason = (hoverResp && hoverResp.reason) ? hoverResp.reason : 'hover_dispatch_failed';
-      result.budgetNote = 'the trusted mouseMoved never reached the page, so no popover could mount — this is an environmental transient (busy renderer / CDP contention), not evidence about this anchor: retry the same hover before concluding popovers are unavailable';
+      // Sixty-second log: the 45th-log "transient, retry" teaching was written
+      // for CDP-contention dispatch failures — but the Enhanced Mode opt-out
+      // gate fails the SAME way (dispatched:false) DETERMINISTICALLY, and the
+      // single transient note actively misled: one session retried 23 times,
+      // every retry structurally doomed, because the receipt kept saying
+      // "transient, retry". Two failure shapes, two opposite remedies.
+      if (result.reason === 'enhanced mode disabled') {
+        result.budgetNote = 'the trusted-hover path is opted out — Enhanced Scraping Mode is OFF (a Settings toggle, not a page property), so NO hover in this session can dispatch and no retry can change that. Popover-mounted values are unavailable until the user enables it: surface that in the finish summary. The non-hover routes still work — labelledby/attr/text reads (the anchor-label harvest above already ran) — so fall back to those or renegotiate hover-dependent fields via io.confirm.';
+      } else {
+        result.budgetNote = 'the trusted mouseMoved never reached the page, so no popover could mount — this is an environmental transient (busy renderer / CDP contention), not evidence about this anchor: retry the same hover before concluding popovers are unavailable';
+      }
     } else if (!htmlSnippet && (popoverSel || observer)) {
       result.reason = 'popover_timeout';
       // Thirty-first log: the contract was renegotiated on underpowered
@@ -3684,6 +3694,16 @@
       failureReasons: failureReasons,
       observedPopoverCount: observedPopoverCount
     };
+    // Sixty-second log: a gate failure in the tally is not one anchor's bad
+    // luck — the Enhanced Mode opt-out disables EVERY dispatch in the session
+    // deterministically. Name it at the aggregate so a verify-time reader of
+    // the diagnostics sees a capability fact, not N per-anchor failures.
+    if (failureReasons['enhanced mode disabled']) {
+      _diagnostics.hoverSummary.enhancedModeDisabled = {
+        failures: failureReasons['enhanced mode disabled'],
+        note: 'deterministic capability gate — Enhanced Scraping Mode is off (Settings); no hover can dispatch until it is enabled. Popover-mounted values are unavailable this run: surface in finish, use labelledby/attr/text routes, or renegotiate hover-dependent fields.'
+      };
+    }
     _diagnostics.anchorSel = hoverConfig.anchorSel;
     // Anchor fixes need the REAL container markup, not a generic snippet.
     // computeExtractListDiagnostics caps firstContainerHtml at 2000 chars,
