@@ -710,7 +710,50 @@
       return out;
     }
 
-    return { count, text, attrStats, labelledby, sample, hover, scroll, scrollUntil, extract, timestamp };
+    // Fifty-ninth-log correction (user-reported): a session's model asserted
+    // "unauthenticated page" from page SHAPE (recommendation cards) with zero
+    // login-marker evidence — and the claim propagated into conclusions. The
+    // browser was logged in the whole time; the 55th/58th sessions on the
+    // SAME browser extracted real posts. Environmental claims need EVIDENCE:
+    // one call returns the generic login/logout marker census with an
+    // interpretation, so "requires login" / "logged-out" conclusions quote
+    // numbers instead of vibes.
+    async function loginState() {
+      const snippet = 'return {' +
+        'passwordFields: await $count(\'input[type=password]\'),' +
+        'loginLinks: await $count(\'a[href*="login"], a[href*="signin"]\'),' +
+        'logoutMarkers: await $count(\'a[href*="logout"], form[action*="logout"], button[name*="logout"], [role="menuitem"][href*="logout"]\')' +
+        '};';
+      const r = await runSnippet(snippet);
+      if (r && typeof r.error === 'string') return r;
+      const ev = (r && typeof r === 'object') ? r : {};
+      const out = {
+        evidence: {
+          passwordFields: Number(ev.passwordFields) || 0,
+          loginLinks: Number(ev.loginLinks) || 0,
+          logoutMarkers: Number(ev.logoutMarkers) || 0
+        }
+      };
+      if (out.evidence.logoutMarkers > 0 && out.evidence.passwordFields === 0) {
+        out.loggedIn = true;
+        out.loginWall = false;
+        out.note = 'logout markers present and no password fields — the session IS logged in. Do NOT attribute empty results to authentication; look for population/selector/throttling causes instead.';
+      } else if (out.evidence.passwordFields > 0 && out.evidence.logoutMarkers === 0) {
+        out.loggedIn = false;
+        out.loginWall = true;
+        out.note = 'password fields and login links present with no logout markers — this page is a login wall / logged-out view. Before concluding the SERVICE needs login, retry once after a page.settle (SPA shells mount the form first).';
+      } else {
+        out.loggedIn = null;
+        out.loginWall = null;
+        out.note = 'no decisive markers on this view (SPA shells often render neither). Retry after page.settle, or sample the account-menu region ([aria-haspopup=menu]) before asserting ANY login state. Never write "requires login" or "unauthenticated" into a ledger finding or finish without this census.';
+      }
+      if (observationLog) {
+        observationLog.record({ tool: 'probe.loginState', selectors: [], summary: 'loginState loggedIn=' + JSON.stringify(out.loggedIn) + ' wall=' + JSON.stringify(out.loginWall) + ' evidence=' + JSON.stringify(out.evidence) });
+      }
+      return out;
+    }
+
+    return { count, text, attrStats, labelledby, sample, hover, scroll, scrollUntil, extract, timestamp, loginState };
   }
 
   const api = { createProbeTools };
