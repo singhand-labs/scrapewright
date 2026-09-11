@@ -262,3 +262,26 @@ describe('T4: 未消费捕获普查（观测平权）', () => {
     assert.ok(/popoverReadFields/.test(CS));
   });
 });
+
+describe('T5: 守则与文档', () => {
+  it('DSL 指南：$extractWithHover 文档化 read:/match；$timestamp 文档化 heuristicValue 性质', () => {
+    const g = readSrc('lib/wizard-utils.js');
+    const eIdx = g.indexOf('$extractWithHover(containerSel, fieldMap, opts)');
+    assert.ok(eIdx > -1);
+    assert.match(g.slice(eIdx, eIdx + 6000), /read:\s*'hoverPopover'/);
+    assert.match(g.slice(eIdx, eIdx + 6000), /match/);
+    const tIdx = g.indexOf('$timestamp(containerSel, {anchorSel?, timeoutMs?, index?})');
+    assert.match(g.slice(tIdx, tIdx + 1800), /heuristicValue/);
+  });
+  it('守则（universality guard 扩展）：语义正则必须伴随原文候选——$timestamp 与 probe.timestamp 的候选数组是契约', () => {
+    assert.ok(/candidates: candidates/.test(CS), 'domTimestamp 必须返回候选原文');
+    const pt = readSrc('lib/probe-tools.js');
+    assert.ok(/candidates: candidates/.test(pt));
+  });
+  it('CLAUDE.md 与白皮书同步 heuristicValue/read:', () => {
+    assert.match(readSrc('../CLAUDE.md'), /heuristicValue/);
+    assert.match(readSrc('../CLAUDE.md'), /hoverPopover/);
+    assert.match(readSrc('../docs/technical-whitepaper.en.md'), /heuristicValue|hoverPopover/);
+    assert.match(readSrc('../docs/technical-whitepaper.md'), /hoverPopover/);
+  });
+});
