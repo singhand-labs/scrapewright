@@ -109,7 +109,7 @@
     },
     {
       key: 'finalize', pct: 0.9,
-      text: (used, max) => 'BUDGET ADVISORY (90% of the turn budget spent: ' + used + ' of ' + max + ' — only ' + (max - used) + ' left): FINALIZE — submit your best-grounded artifact via service.update immediately and run verify.run; spend what remains ONLY on defects verify reports. (If the contract is still unconfirmed, io.confirm comes first.)'
+      text: (used, max) => 'BUDGET ADVISORY (90% of the turn budget spent: ' + used + ' of ' + max + ' — only ' + (max - used) + ' left): FINALIZE — submit your best-grounded artifact via service.update immediately and run verify.run; spend what remains ONLY on defects verify reports. (If the contract is still unconfirmed, io.confirm comes first.) If the next verify is red and ≤1 turn remains, do NOT write another update you cannot verify — finish with the last verified artifact and disclose.'
     }
   ];
 
@@ -1089,6 +1089,10 @@
       parkEnd: parkEnd,
       state: () => JSON.parse(JSON.stringify(stateForPersist())),
       report: buildReport,
+      // Sixty-seventh log: tool handlers (service.update endgame warning)
+      // read live budget state through ctx.session — getters, not copies.
+      get spend() { return state.spend; },
+      get budgets() { return budgets; },
       get observationLog() { return observationLog; },
       get ledger() { return ledger; }
     };

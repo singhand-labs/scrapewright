@@ -11,7 +11,9 @@
 // HOVER_NO_SIGNAL, COUNTER_FROZEN, DUPLICATE_RECORDS, SELECTOR_ZERO_MATCH,
 // FIELD_COLLISION, SCRIPT_TIMEOUT, CARD_POLICY, POLL_EXHAUSTED, SCHEMA_BLIND,
 // AD_MARKER_SELECTOR, SELECTOR_OVERFILTERED, OUTPUT_FIELD_SIZE,
-// PARTIAL_EMPTY_FIELDS, RELATIVE_TIMESTAMP, CLICK_CONTAINERS_TRANSIENT.
+// PARTIAL_EMPTY_FIELDS, RELATIVE_TIMESTAMP, CLICK_CONTAINERS_TRANSIENT,
+// REQUIRED_FIELD_EMPTY (67th log — the red gate's own tag), JUNK_VALUES,
+// JUNK_DOMINATED, SCHEMA_STRAY_FIELD_DECLS.
 //
 // Write path: sessions PROPOSE units; the user approves; the universality
 // guard test runs on every change to this file.
@@ -181,6 +183,13 @@
       matchEvents: ['COUNT_FIELD_HIDDEN_VALUE'],
       origin: '2026-09-09 fiftieth live log; likes read empty on every record and comments on 3/5 while shares extracted real values from the same action-bar family — the model shipped empty after two textContent probes',
       body: 'A count-named field (likes/comments/shares/replies/views/votes and *count/total names) reading empty on most records while a SIBLING count field extracts real values from the same record family is NOT an unextractable field: the family demonstrably renders counts, so the empty one\'s value typically lives outside textContent — in the element\'s aria-label ATTRIBUTE or in an aria-labelledby-referenced hidden span (the same mechanism timestamp anchors use). Route order: probe.attrStats {containerSel, attr:"aria-label"} over the element family to see attribute-shaped numbers; probe.labelledby on the empty field\'s element to resolve the hidden-span reference; then bind the extract field spec {attr:"aria-label"} or {labelledby:true}. Renegotiate the field away via io.confirm only after BOTH routes falsify — textContent emptiness proves nothing.'
+    },
+    {
+      id: 'verify-red-snippet-first',
+      title: 'A red verify is a data-shape mismatch — dry-run the fix with probe.snippet before the next service.update',
+      matchEvents: ['REQUIRED_FIELD_EMPTY', 'PARTIAL_EMPTY_FIELDS', 'JUNK_VALUES', 'JUNK_DOMINATED', 'COUNT_SHORTFALL', 'TIME_FIELD_IMPLAUSIBLE', 'SCHEMA_STRAY_FIELD_DECLS'],
+      origin: '2026-09-11 sixty-seventh live log; 8 blind service.update calls + 4 verify rounds burned all 60 turns while probe.snippet — the test-before-artifact tool — got ZERO uses; the postId regex was written against a digit-only hoped-for shape on non-numeric ids and stayed empty 2/2 through every rewrite, and the final turn wrote an artifact that could never be verified',
+      body: 'A red verify means the artifact\'s extraction does not match the page\'s REAL data shapes. Do not iterate blindly: (1) read the failing records\' source values from the verify report (resultPreview / emptyRecordSamples contexts) or diag.read; (2) DRY-RUN the corrected extraction with probe.snippet on the research tab — one snippet round against the real values replaces a blind service.update + verify.run pair that costs 2 turns and ~90s each cycle; (3) only when the snippet returns the expected shape, write it into service.update and verify once. Regexes and fieldMap selectors must be written against OBSERVED values — id-like fields are often non-numeric, labels carry prefixes, and anti-scrape text interleaves combining marks; the raw values, not your assumption of them, decide the pattern.'
     }
   ];
 

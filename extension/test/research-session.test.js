@@ -1140,7 +1140,13 @@ describe('knowledge integration', () => {
     });
     await session.run();
     const attaches = events.filter(e => e.type === 'knowledge_attached');
-    assert.equal(attaches.length, 1);
+    // Sixty-seventh log: two units now match COUNT_SHORTFALL (card-polarity
+    // and verify-red-snippet-first) — the invariant is per-ID uniqueness
+    // (no unit attaches twice across the two identical verifies), not a
+    // single attach event.
+    const ids = attaches.map(e => e.id);
+    assert.ok(attaches.length >= 1, 'at least one unit attached');
+    assert.equal(new Set(ids).size, ids.length, 'no unit id attaches more than once');
   });
 
   it('dispatches knowledge.query and returns unit bodies', async () => {

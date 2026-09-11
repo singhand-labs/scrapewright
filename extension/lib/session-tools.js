@@ -1035,7 +1035,7 @@
           const parts = [];
           if (attached) parts.push('the confirmed I/O contract was attached (your update omitted schemas) — verify.run now scores against it');
           if (attachedTestInput) parts.push('the confirmed test request values were attached (your update omitted testInput) — verify.run WITHOUT an override now runs them');
-          return Object.assign({ updated: true, version: version, schemasAttached: attached, testInputAttached: attachedTestInput, note: parts.join('; ') }, staticLint.length ? { staticLint: staticLint } : {});
+          return Object.assign({ updated: true, version: version, schemasAttached: attached, testInputAttached: attachedTestInput, note: parts.join('; ') }, staticLint.length ? { staticLint: staticLint } : {}, endgameWarning(ctx));
         }
       } catch (e) {
         return { error: 'artifact apply failed: ' + String((e && e.message) || e) };
@@ -1044,7 +1044,22 @@
       const version = (st && st.session && Array.isArray(st.session.artifactVersions))
         ? st.session.artifactVersions.length + 1
         : 1;
-      return Object.assign({ updated: true, version: version }, staticLint.length ? { staticLint: staticLint } : {});
+      return Object.assign({ updated: true, version: version }, staticLint.length ? { staticLint: staticLint } : {}, endgameWarning(ctx));
+    }
+
+    // Sixty-seventh log: the final turns wrote artifact v7 that could never
+    // be verified — 8 blind service.update calls with zero probe.snippet
+    // uses burned the whole 60-turn budget. When the endgame is in sight
+    // (≤2 turns left), the update receipt itself warns that an unverifiable
+    // rewrite leaves CURRENT ARTIFACT UNVERIFIED and routes toward the next
+    // verify.run or an honest finish.
+    function endgameWarning(ctx) {
+      const spend = ctx && ctx.session && ctx.session.spend;
+      const budgets = ctx && ctx.session && ctx.session.budgets;
+      if (!spend || !budgets || typeof spend.turns !== 'number' || typeof budgets.maxTurns !== 'number') return {};
+      const turnsLeft = Math.max(0, budgets.maxTurns - spend.turns);
+      if (turnsLeft > 2) return {};
+      return { warning: 'only ' + turnsLeft + ' turn(s) left — an update you cannot verify leaves CURRENT ARTIFACT UNVERIFIED; prefer refining toward the next verify.run (1 turn) over another blind rewrite, or finish honestly with disclosed limits' };
     }
 
     // Ninth-log M3: the research tab must never open a LITERAL {{param}}

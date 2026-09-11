@@ -1023,7 +1023,11 @@
               'then probe THOSE records on the research tab before touching the selector. Either fix the extraction ' +
               '(the field is contractually demanded — ground a selector for it, re-check the fieldMap anchor and the ' +
               'record assembly), or renegotiate the contract with io.confirm (move the field out of required / drop it) ' +
-              'when it genuinely never exists on these cards. Optional-field emptiness stays advisory; a required one does not.'
+              'when it genuinely never exists on these cards. Before the next service.update, test the corrected ' +
+              'extraction against the REAL values — fetch what the step actually produced (this report\'s resultPreview ' +
+              '/ diag.read) and dry-run the corrected regex/assembly with probe.snippet on the research tab: one snippet ' +
+              'round beats a blind update+verify pair (2 turns), and regexes written against hoped-for shapes (e.g. ' +
+              'digit-only id patterns on non-numeric ids) fail every record. Optional-field emptiness stays advisory; a required one does not.'
             );
             break;
           }
@@ -1078,6 +1082,11 @@
         const add = (t) => { if (tags.indexOf(t) === -1) tags.push(t); };
         const msg = error ? String(error.message) : '';
         if (/ZERO_COUNTER_FROZEN/.test(msg)) add('COUNTER_FROZEN');
+        // Sixty-seventh log: the red gate existed only as the error MESSAGE —
+        // the knowledge auto-attach lever (58th-log adoption mechanism) reads
+        // result.events tags, so the snippet-first unit never attached on the
+        // 8-blind-update death spiral. Emit the tag on the red gate itself.
+        if (/REQUIRED_FIELD_EMPTY/.test(msg)) add('REQUIRED_FIELD_EMPTY');
         if (/COUNT_SELECTOR_BLIND/.test(msg)) add('SELECTOR_ZERO_MATCH');
         // Seventeenth log: budget exhaustion with NON-zero intermediate counts
         // (thin content below the step's target) was tagged SELECTOR_ZERO_MATCH —
@@ -1205,6 +1214,18 @@
       }
 
       const score = WU.scoreAttemptResult(finalData, outputSchema);
+      // Sixty-seventh log: the partial-empty census reached the model as a
+      // bare tag + detector rows while it blind-rewrote the extraction 8
+      // times with ZERO probe.snippet uses. Carry a short teaching note on
+      // the report itself so the advisory path (non-required fields) also
+      // routes snippet-first.
+      const partialEmptyNote = (Array.isArray(detectors.partialEmptyFields) && detectors.partialEmptyFields.length)
+        ? 'PARTIAL_EMPTY_FIELDS census: ' + detectors.partialEmptyFields
+            .slice(0, 4).map((pe) => String(pe.path) + ' empty in ' + pe.emptyCount + '/' + pe.totalCount).join('; ') +
+          '. Read the failing records\' source values (resultPreview / emptyRecordSamples contexts / diag.read) ' +
+          'and dry-run the fix with probe.snippet before re-authoring — regexes and fieldMap selectors must be ' +
+          'written against OBSERVED values, not hoped-for shapes.'
+        : null;
       const report = {
         ok: !error,
         error: error ? { message: error.message, stepId: error.stepId || null } : null,
@@ -1214,6 +1235,7 @@
         schemaOk: !!oc.ok,
         schemaMissing: oc.missing || [],
         detectors: detectors,
+        partialEmptyNote: partialEmptyNote,
         steps: compactSteps,
         resultDebug: result ? resultDebugDigest(result.finalResult) : null,
         finalResult: result ? WU.sampleRecordsForLLMContext(result.finalResult, { recordKeep: 3, stringCap: 2000 }) : null,
