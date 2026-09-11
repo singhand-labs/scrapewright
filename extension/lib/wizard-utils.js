@@ -1626,7 +1626,7 @@ function detectHoverAnchorsBlind(events) {
 // healthy cold-load transient and stays silent.
 function detectFieldMatchZero(events) {
   if (!Array.isArray(events)) return null;
-  const agg = new Map(); // stepId + ' ' + field → stats
+  const agg = new Map(); // stepId + '\u0000' + field → stats
   for (const evt of events) {
     if (!evt || evt.type !== 'STEP_ITERATION') continue;
     const diags = Array.isArray(evt.selectorDiagnostics) ? evt.selectorDiagnostics : [];
@@ -1637,7 +1637,7 @@ function detectFieldMatchZero(events) {
       for (const f of d.perField) {
         if (!f || typeof f.field !== 'string') continue;
         if (!f.subSelector) continue; // self-read of the container — matchCount 0 is shape, not evidence
-        const key = evt.stepId + ' ' + f.field;
+        const key = evt.stepId + '\u0000' + f.field;
         let e = agg.get(key);
         if (!e) {
           e = { stepId: evt.stepId, field: f.field, subSelector: f.subSelector, api: d.api || 'extractList', calls: 0, zeroCalls: 0, containerMatches: 0 };
