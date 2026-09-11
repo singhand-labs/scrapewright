@@ -651,6 +651,15 @@
       // Degraded fallback (page context without wizard-utils): permissive.
       return /\d/.test(String(v == null ? '' : v));
     }
+    // Sixty-fourth log: date-shaped SUBSTRING extraction for long strings —
+    // the whole-string predicate lets prose that merely mentions a duration
+    // ("…in 20 years…") pass, and the absolute value often lives INSIDE a
+    // captured popover snippet rather than in any single anchor attribute.
+    function extractDateSubstringsRef(v) {
+      if (__wuBag && typeof __wuBag.extractDateSubstrings === 'function') return __wuBag.extractDateSubstrings(v);
+      const m = String(v == null ? '' : v).match(/\d{4}-\d{1,2}-\d{1,2}/);
+      return m ? [m[0]] : [];
+    }
 
     async function timestamp(args0) {
       const a = args0 && typeof args0 === 'object' ? args0 : {};
@@ -672,10 +681,32 @@
       if (!rec) return { error: 'no containers matched ' + containerSel + ' — check the container selector before concluding anything about timestamps' };
       const REL = /\b(?:second|minute|hour|day|week|month|year)s?\s+ago\b|[0-9一二三四五六七八九十百千]+\s*(?:秒|分钟|分|小时|时|天|日|周|月|年)/i;
       const candidates = [];
+      // Sixty-fourth log, two defects fixed in one gate:
+      //   (a) MASQUERADE — the 64th session's probe.timestamp returned
+      //       "Ng6cOb30.comCatThis week mathematicians used AI … in 20
+      //       years…" in the ABSOLUTE slot: the whole-string predicate
+      //       passed it via \b\d+\s*years\b and REL found no "ago", so
+      //       prose that MENTIONS a duration became a "date". Long strings
+      //       are prose — they contribute date-shaped SUBSTRINGS only.
+      //   (b) POPOVER BLINDNESS — the harvest read only anchor
+      //       labelledby/aria/text; the absolute timestamp usually lives in
+      //       the hover-mounted tooltip's own text (htmlSnippet), which was
+      //       never a source. The tool's confident "no absolute" receipts
+      //       were then quoted by the model into "the timestamp hovercard
+      //       never renders a full-date popover" — an environmental claim
+      //       contradicted by its own earlier manual hover capture.
+      const MAX_WHOLE_VALUE_CHARS = 60;
       const push = (value, source) => {
         const str = typeof value === 'string' ? value.trim() : '';
-        if (!str || !looksLikeDateRef(str)) return;
-        candidates.push({ value: str.slice(0, 120), source: source, relative: REL.test(str) });
+        if (!str) return;
+        if (str.length <= MAX_WHOLE_VALUE_CHARS) {
+          if (looksLikeDateRef(str)) candidates.push({ value: str.slice(0, 120), source: source, relative: REL.test(str) });
+          return;
+        }
+        for (const sub of extractDateSubstringsRef(str)) {
+          const v = String(sub).slice(0, 120);
+          candidates.push({ value: v, source: source, relative: REL.test(v) });
+        }
       };
       push(rec.__t_label, 'labelledby');
       push(rec.__t_aria, 'aria-label');
@@ -684,6 +715,17 @@
         if (!h) continue;
         push(h.labelledbyText, 'hover.labelledbyText');
         push(h.anchorText, 'hover.anchorText');
+        // The captured popover's own text — popover markup is structurally
+        // prose ("Shared with Public · Friday, September 11, 2026 at …"), so
+        // it NEVER takes the whole-value path: strip markup and extract the
+        // date-shaped substrings.
+        if (h.htmlSnippet) {
+          const popText = String(h.htmlSnippet).replace(/<[^>]*>/g, ' ');
+          for (const sub of extractDateSubstringsRef(popText)) {
+            const v = String(sub).slice(0, 120);
+            candidates.push({ value: v, source: 'hover.popoverText', relative: REL.test(v) });
+          }
+        }
       }
       const absolute = (candidates.find((c) => !c.relative) || null);
       const relative = (candidates.find((c) => c.relative) || null);
@@ -696,7 +738,7 @@
         candidates: candidates
       };
       if (!candidates.length) {
-        out.note = 'no date-shaped value on any time-ish anchor (labelledby / aria-label / text, with and without hover). If a second probe.timestamp with a narrower anchorSel over the timestamp link also fails, the page does not expose the timestamp for this population — renegotiate the field via io.confirm instead of shipping titles or relative ages as postTime.';
+        out.note = 'no date-shaped value on the anchors THIS call hovered (labelledby / aria-label / text, hover-mounted popover text included). If a second probe.timestamp with a narrower anchorSel over the timestamp element itself also fails, these anchors expose no timestamp — renegotiate the field via io.confirm instead of shipping titles or relative ages as postTime.';
       } else if (!absolute) {
         out.note = 'only RELATIVE ages are date-shaped here — the absolute value needs the hover-mounted tooltip: re-run with a narrower anchorSel over the timestamp link itself; if that also yields only relative ages, renegotiate.';
       }
