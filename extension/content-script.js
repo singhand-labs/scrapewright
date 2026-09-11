@@ -2734,9 +2734,57 @@
     var scrollDoneAt = Date.now();
 
     var rect = anchor.getBoundingClientRect();
-    // Default to viewport center if rect is degenerate (display:none, etc.).
-    var x = (rect.width > 0) ? Math.round(rect.left + rect.width / 2) : 400;
-    var y = (rect.height > 0) ? Math.round(rect.top + rect.height / 2) : 400;
+    // Sixty-third log: a degenerate rect (display:none / zero-size — e.g. a
+    // hidden tooltip span dragged in by a broad union anchorSel like
+    // `[aria-labelledby]`) used to fall through to a fixed (400,400)
+    // "viewport center" dispatch point that had no relationship to the
+    // anchor. The full pipeline then ran (activation + CDP mouseMoved +
+    // ~3s no-signal dwell + dismiss) and the receipt reported
+    // no_hover_signal_early_exit — which reads as "this anchor has no
+    // popover" when the truth is that hover was structurally impossible: no
+    // box, no pixels, no mouse target, ever. Same failure genre as the
+    // sixty-second log's deterministic gate: report the structural fact,
+    // skip everything, keep the label harvest (hidden elements are
+    // perfectly readable — reading needs no box).
+    if (rect.width <= 0 || rect.height <= 0) {
+      notifyBackgroundDiagnostic('hover_request', {
+        selector: selectorForLog,
+        popoverSelector: popoverSel || null,
+        hoverX: null, hoverY: null,
+        dispatched: false, ok: false, reason: 'anchor_not_hoverable',
+        anchorRect: { width: rect.width, height: rect.height },
+        // Same shape as the dispatch-path diagnostic so SW-log readers never
+        // fork on which fields exist — baselines are honestly false here
+        // (the skip precedes baseline sampling).
+        popoverBaselineSampled: false,
+        baselineEfpCount: 0
+      });
+      var notHoverableLabel = null;
+      try { notHoverableLabel = harvestAnchorLabel(anchor); } catch (_) { notHoverableLabel = null; }
+      var notHoverable = {
+        hovered: false,
+        htmlSnippet: null,
+        popoverSelector: null,
+        autoDiscovered: false,
+        hoverDispatched: false,
+        hoverReason: 'anchor_not_hoverable',
+        reason: 'anchor_not_hoverable',
+        anchorRect: { width: rect.width, height: rect.height },
+        budgetNote: 'the anchor element has no rendered box (display:none or zero size — typically a hidden tooltip span a broad union anchorSel matched), so no mouse dispatch can ever target it — this is a property of the anchor, not a transient and not evidence about popovers: do NOT retry it. Narrow anchorSel to VISIBLE interactive elements, or read the value through the non-hover routes — labelledby/attr/text reads work on hidden elements (the anchor-label harvest ran; its result is attached when the references resolve).'
+      };
+      if (notHoverableLabel) {
+        if (notHoverableLabel.text) {
+          notHoverable.labelledbyText = notHoverableLabel.text;
+          notHoverable.labelledbyAttr = notHoverableLabel.attr;
+        } else if (notHoverableLabel.note) {
+          notHoverable.labelledbyAttr = notHoverableLabel.attr;
+          notHoverable.labelledbyNote = notHoverableLabel.note;
+        }
+      }
+      return notHoverable;
+    }
+    var x = Math.round(rect.left + rect.width / 2);
+    var y = Math.round(rect.top + rect.height / 2);
 
     // Popover detection. Two paths:
     //   (a) If popoverSel was provided, poll for it explicitly (preferred —

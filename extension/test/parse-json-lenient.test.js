@@ -378,7 +378,10 @@ describe('parseJsonLenient', () => {
       const res = parseJsonLenient(input);
       assert.equal(res.ok, true);
       assert.equal(res.value.name, 'a"b');
-      assert.ok(res.repairs.includes('escape-content-quotes'));
+      // Sixty-third log: the position-guided escape-inner-quotes pass now
+    // owns most of this class (it runs before the closer-set rewrite), but
+    // either token proves a quote-repair pass fired.
+    assert.ok(res.repairs.includes('escape-inner-quotes') || res.repairs.includes('escape-content-quotes'));
     });
 
     it('code-bearing mode handles trailing semicolon before closing "', () => {
@@ -410,7 +413,10 @@ describe('unescaped double quotes inside string values (third-live-log incident 
     assert.equal(res.value.tool, 'probe.sample');
     assert.equal(res.value.args.opts.index, 1);
     assert.ok(res.value.think.includes('"Cat Hwang"'), 'the quoted name survives inside think');
-    assert.ok(res.repairs.includes('escape-content-quotes'));
+    // Sixty-third log: the position-guided escape-inner-quotes pass now
+    // owns most of this class (it runs before the closer-set rewrite), but
+    // either token proves a quote-repair pass fired.
+    assert.ok(res.repairs.includes('escape-inner-quotes') || res.repairs.includes('escape-content-quotes'));
   });
 
   it('repairs bare quotes around English inside CJK parens (second malformed reply)', () => {

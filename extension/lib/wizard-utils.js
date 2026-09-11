@@ -516,6 +516,7 @@ HOVER ENRICHMENT (hovercard / link-preview fields): some sites surface richer da
 CSS TRAP (CRITICAL) — Do NOT address the Nth anchor in a list with \`selector:nth-of-type(\${i+1})\`. As documented in the CSS TRAP rule above, \` nth-of-type(N)\` matches the Nth sibling OF THE SAME TAG inside its parent, not the Nth compound-selector match — so on a real component-library DOM it silently picks the wrong anchor (or none) for every i>0. The fix is \$hover's \`opts.index\` parameter: pass \`{ index: i }\` and the framework enumerates all matches of the anchor selector via querySelectorAll, then picks the i-th — same semantics as indexing into a \$list() array, no fragile CSS gymnastics.
 RULES:
 - \$hover requires Enhanced Mode (it uses CDP Input.dispatchMouseEvent under the hood to produce an isTrusted=true hover — JS-only mouseover is filtered by hover-gated loaders). Without Enhanced Mode, hovered:false with reason:'enhanced mode disabled' — DETERMINISTIC (a Settings toggle, not a transient): no retry will change it, popover-mounted values are unavailable for the whole session, and hover-dependent fields need either the user enabling the toggle or contract renegotiation. Surface this to the user via test-result feedback, not by retrying; labelledby/attr/text reads still work without it.
+- ANCHOR MUST HAVE A BOX — an anchor with reason:'anchor_not_hoverable' (display:none / zero-size, typically a HIDDEN tooltip span that a broad union anchorSel like [aria-labelledby] matched) has no rendered box, so no mouse dispatch can ever target it: DETERMINISTIC, do not retry. The dispatch, dwell, and dismiss are all skipped and the anchor-label harvest still ran (labelledby/attr/text reads work on hidden elements). Narrow anchorSel to VISIBLE interactive elements — hover anchors must be things a human can point a mouse at.
 - popoverSelector is the popover container, NOT the field inside it. Inspect the page (DevTools Elements panel) while manually hovering the anchor to find the popover container selector. A weak popoverSelector (e.g. 'div') will match the wrong element; a too-specific one will time out.
 - After \$hover returns, the framework auto-dismisses (moves the trusted cursor to (1,1) so the popover closes). Pass { dismiss: false } ONLY if you want the popover to linger (rare — usually you want it gone before the next iteration).
 - AUTO-DISCOVERY: if your popoverSelector does not match within timeoutMs, the framework falls back to watching DOM mutations and picks up any new visible element of non-trivial size (>=50x50 px) added during the hover window. The result then carries \`autoDiscovered: true\` and \`popoverSelector: '[auto-discovered popover]'\`. This catches React Portal / Vue Teleport / Popper / Floating UI popovers when you don't know the exact container selector. It is still BETTER to provide the right popoverSelector (explicit beats heuristic) — use auto-discovery as a safety net, not a substitute for inspecting the popover DOM.
@@ -2137,6 +2138,60 @@ function repairUnescapedQuotes(text) {
   return out;
 }
 
+// Sixty-third log: position-guided inner-quote escaping. That session's TWO
+// terminal protocol violations were replies whose think prose quoted page
+// evidence ("Like: 179 people", "Wow: 11 people") while the args were
+// perfectly escaped. repairUnescapedQuotes' closer-set heuristic (a quote
+// followed by ,/}/]/: closes the string) mis-fires exactly on prose that
+// quotes two things comma-separated: `"people", "Wow"` is indistinguishable
+// from a value close + the next key. The V8 parse error carries the exact
+// position of the structural expectation failure — escape the quote that
+// prematurely closed the value and re-parse; iterate one quote per round.
+// Only the two premature-close signatures act:
+//   - "Expected ',' or '}' after property value" @N → the value string
+//     closed early; escape the nearest unescaped " before N.
+//   - "Expected ':' after property name" @N → the PREVIOUS value closed
+//     early, making the following prose look like a key; escape back past
+//     the phantom key's quotes and the comma to the value's premature close.
+// Truncation ("Unterminated string") and trailing-junk classes return null —
+// they stay with their existing owners (close-braces salvage, continuation
+// repair round), and valid JSON returns src unchanged on round 0.
+function escapePrematureQuoteClosers(src, maxRounds) {
+  if (typeof src !== 'string' || !src) return null;
+  const nearestUnescapedQuote = (s, pos) => {
+    for (let i = pos - 1; i >= 0; i--) {
+      if (s[i] !== '"') continue;
+      let esc = false;
+      for (let j = i - 1; j >= 0 && s[j] === '\\'; j--) esc = !esc;
+      if (!esc) return i;
+    }
+    return -1;
+  };
+  let s = src;
+  for (let round = 0; round < (maxRounds || 24); round++) {
+    try { JSON.parse(s); return s; } catch (e) {
+      const msg = String(e.message || e);
+      const m = /position (\d+)/.exec(msg);
+      if (!m) return null;
+      const pos = +m[1];
+      let idx = -1;
+      if (/Expected ',' or '}' after property value/.test(msg)) {
+        idx = nearestUnescapedQuote(s, pos);
+      } else if (/Expected ':' after property name/.test(msg)) {
+        const keyClose = nearestUnescapedQuote(s, pos);
+        const keyOpen = keyClose >= 0 ? nearestUnescapedQuote(s, keyClose) : -1;
+        if (keyOpen < 0) return null;
+        let i = keyOpen - 1;
+        while (i >= 0 && /[\s,]/.test(s[i])) i--;
+        idx = nearestUnescapedQuote(s, i + 1);
+      } else return null;
+      if (idx < 0) return null;
+      s = s.slice(0, idx) + '\\' + s.slice(idx);
+    }
+  }
+  return null;
+}
+
 // Lenient JSON parser for LLM output. Tries strict JSON.parse first; on
 // failure, applies a small set of safe repairs (strip JS comments outside
 // strings, repair bare keys / single-quotes / missing commas, drop trailing
@@ -2208,10 +2263,22 @@ function parseJsonLenient(text) {
   try {
     return { ok: true, value: JSON.parse(s), repairs };
   } catch (e) {
-    // Last resort: quote-aware rewrite of the comment-stripped ORIGINAL (the
-    // common-mistakes pass above has already corrupted unescaped-quote strings
-    // by then). Only fires when everything above failed, so the corpus-proven
-    // behavior is untouched; purely additive coverage.
+    // Last resort, now two passes on the comment-stripped ORIGINAL (the
+    // common-mistakes pass above has already corrupted unescaped-quote
+    // strings by then). Sixty-third log: the position-guided pass runs
+    // FIRST — precise where the closer-set heuristic mis-fires (prose that
+    // quotes two things: `"people", "Wow"`). Purely additive coverage; the
+    // corpus-proven behavior only runs when it fails.
+    const posEscaped = escapePrematureQuoteClosers(stripped);
+    if (posEscaped != null && posEscaped !== stripped) {
+      const posFixed = posEscaped.replace(/,(\s*[}\]])/g, '$1');
+      try {
+        return { ok: true, value: JSON.parse(posFixed), repairs: repairs.concat(['escape-inner-quotes']) };
+      } catch (e2) { /* fall through to the closer-set rewrite */ }
+    }
+    // Quote-aware rewrite of the comment-stripped ORIGINAL. Only fires when
+    // everything above failed, so the corpus-proven behavior is untouched;
+    // purely additive coverage.
     const rewritten = repairUnescapedQuotes(stripped);
     if (rewritten != null && rewritten !== stripped) {
       const rewrittenFixed = rewritten.replace(/,(\s*[}\]])/g, '$1');

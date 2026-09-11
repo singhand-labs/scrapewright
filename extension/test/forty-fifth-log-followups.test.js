@@ -205,7 +205,16 @@ function makeAnchorDom() {
     { url: 'https://example.com/page' }
   );
   const anchor = dom.window.document.getElementById('anchor');
-  anchor.scrollIntoView = function () {}; // jsdom does not implement it
+  anchor.scrollIntoView = function () {};
+  // Sixty-third log: JSDOM has no layout engine — getBoundingClientRect is
+  // ALL ZEROS for every element. In production these anchors have real
+  // boxes, and a zero-box anchor now early-outs as anchor_not_hoverable
+  // before any dispatch. Stub a real box so these tests keep exercising the
+  // dispatch/dwell paths they were written for; the sixty-third-log tests
+  // use the raw JSDOM zero rect to hit the gate.
+  anchor.getBoundingClientRect = function () {
+    return { left: 800, top: 400, width: 96, height: 24, right: 896, bottom: 424 };
+  };
   return { dom, anchor };
 }
 
