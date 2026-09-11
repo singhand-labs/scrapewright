@@ -2053,6 +2053,13 @@
   // (sixty-fourth log) — the drift-guard test pins the two behaviors equal.
   var TS_MAX_HOVER_ANCHORS = 3;
   var TS_MAX_WHOLE_VALUE_CHARS = 60;
+  // Code-review P2: cross-call shared hover budget. $timestamp's per-call cap
+  // (TS_MAX_HOVER_ANCHORS × timeoutMs) still multiplied across calls — a
+  // loop over N cards burned N×3×4500ms of dwell while labels kept arriving
+  // for free. The budget is shared per content-script instance (per page) and
+  // only covers the HOVER dwells; when exhausted, remaining hovers are
+  // skipped (label harvest continues) and the result's note explains.
+  var TS_SHARED_HOVER_BUDGET_MS = 30000;
   var TS_REL_RE = /\b(?:second|minute|hour|day|week|month|year)s?\s+ago\b|[0-9一二三四五六七八九十百千]+\s*(?:秒|分钟|分|小时|时|天|日|周|月|年)\s*前/i;
   var TS_SHAPE_RES = [
     /(?:january|february|march|april|may|june|july|august|september|october|november|december)/i,
@@ -2094,13 +2101,24 @@
       : 'a:has(span[aria-labelledby]), [aria-labelledby], abbr[aria-label], time';
     const timeoutMs = (typeof o.timeoutMs === 'number' && o.timeoutMs > 0) ? o.timeoutMs : 4500;
     const index = (typeof o.index === 'number' && o.index >= 0) ? Math.floor(o.index) : 0;
+    // Code-review P3 (selector hygiene): querySelectorAllDeep swallows
+    // SyntaxError internally — an invalid container selector would come back
+    // as "0 containers" (a cold-tab-shaped false negative) instead of a named
+    // error. Probe the selector and rethrow named.
+    try { document.querySelectorAll(sel); } catch (e) {
+      throw new Error('$timestamp container selector invalid: ' + sel + ' — ' + ((e && e.message) || String(e)));
+    }
     const containers = querySelectorAllDeep(sel);
     if (!containers.length) {
-      return { result: { error: 'ELEMENT_NOT_FOUND: ' + sel + ' — $timestamp takes the repeating card container selector' }, _diagnostics: { api: 'timestamp', selector: sel, containers: 0 } };
+      return { result: { error: 'ELEMENT_NOT_FOUND: ' + sel + ' — $timestamp takes the repeating card container selector', note: 'no containers matched — cold tab? await $wait(sel) first' }, _diagnostics: { api: 'timestamp', selector: sel, containers: 0 } };
     }
     const container = containers[Math.min(index, containers.length - 1)];
     let anchors = [];
-    try { anchors = Array.prototype.slice.call(container.querySelectorAll(anchorSel)); } catch (e) { anchors = []; }
+    // Code-review P3: same hygiene for anchorSel — the old catch swallowed
+    // the SyntaxError into anchors=[] (a silent "no timestamp here" for what
+    // is a typo'd selector).
+    try { anchors = Array.prototype.slice.call(container.querySelectorAll(anchorSel)); }
+    catch (e) { throw new Error('$timestamp anchor selector invalid: ' + anchorSel + ' — ' + ((e && e.message) || String(e))); }
     const candidates = [];
     const seen = new Set();
     const push = (value, source) => {
@@ -2121,6 +2139,7 @@
       for (const sub of extractDateSubstringsCS(str)) add(sub, TS_REL_RE.test(sub));
     };
     let hoversDone = 0;
+    let hoverBudgetExhausted = false;
     for (let ai = 0; ai < anchors.length; ai++) {
       const anchor = anchors[ai];
       if (!anchor || anchor.nodeType !== 1) continue;
@@ -2136,9 +2155,14 @@
       // the capture window before the popover appears.
       const haveAbs = candidates.some((c) => !c.relative);
       if (haveAbs || hoversDone >= TS_MAX_HOVER_ANCHORS) continue;
+      if (TS_SHARED_HOVER_BUDGET_MS <= 0) { hoverBudgetExhausted = true; break; }
       hoversDone += 1;
       let hv = null;
+      const __hvT0 = Date.now();
       try { hv = await domHover(anchor, null, { timeoutMs: timeoutMs }); } catch (_) { hv = null; }
+      // Code-review P2: charge the measured dwell to the shared budget (min
+      // 1ms so uninstrumented fast returns cannot make it infinite).
+      TS_SHARED_HOVER_BUDGET_MS -= Math.max(1, Date.now() - __hvT0);
       if (hv && hv.htmlSnippet) {
         // Popover text is structurally prose ("Shared with Public ·
         // Friday, …") — never a whole-value candidate; extract substrings.
@@ -2169,6 +2193,10 @@
     };
     if (!candidates.length) {
       result.note = 'no date-shaped value on this card (labelledby / aria-label / visible text / hover popover text). If the page exposes no timestamp for these cards, renegotiate the field via io.confirm instead of shipping titles or junk as postTime.';
+    }
+    if (hoverBudgetExhausted) {
+      result.note = (result.note ? result.note + ' ' : '') +
+        'hovering stopped (shared hover budget exhausted on this page after earlier $timestamp calls) — narrow anchorSel to the time-bearing anchor(s) via probe, or renegotiate the field via io.confirm; do not widen the budget';
     }
     notifyBackgroundDiagnostic('timestamp_done', {
       selector: sel, anchors: anchors.length, hoversDispatched: hoversDone, absoluteFound: !!absolute
