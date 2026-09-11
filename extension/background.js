@@ -16,6 +16,16 @@ importScripts(
 
 const registry = new ServiceRegistry();
 
+// Code-review P3: HOVER_SKIPPED_ENHANCED_MODE broadcast dedupe — one
+// forward per tabId per reason; count carried in the payload. Cleared when
+// the tab closes.
+const hoverSkipForwarded = new Map();
+try {
+  chrome.tabs.onRemoved.addListener(function (closedTabId) {
+    hoverSkipForwarded.delete(closedTabId);
+  });
+} catch (e) { /* test sandbox */ }
+
 // RC56: track user tab switches + land focus on the last-clicked tab when a
 // scrape tab closes. Listeners must register at top level so the MV3
 // service worker re-registers them on every wake.
@@ -1282,18 +1292,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // times and the user never learned the one-toggle remedy. The
     // hover_request diagnostic carries dispatched:false + the gate reason on
     // every gated attempt (per anchor inside $extractWithHover batches).
+    // Code-review P3 dedupe: forward ONCE per tabId (per reason) — the gate
+    // is deterministic, so N per-anchor skips were N identical broadcasts
+    // the wizard counted one-by-one. The stored count is included in the
+    // forwarded payload; a reason CHANGE re-forwards (a different gate is a
+    // new fact). Cleared on tab close below.
     if (cat === 'hover_request' && message.payload && message.payload.dispatched === false &&
         message.payload.reason === 'enhanced mode disabled') {
-      try {
-        chrome.runtime.sendMessage({
-          type: 'HOVER_SKIPPED_ENHANCED_MODE',
-          tabId: tabId,
-          payload: message.payload || {}
-        }, function () {
-          void chrome.runtime.lastError;
-        });
-      } catch (e) {
-        // Test sandbox or sendMessage unavailable — ignore.
+      const tabIdHs = tabId;
+      let stHs = hoverSkipForwarded.get(tabIdHs);
+      if (!stHs || stHs.reason !== message.payload.reason) {
+        stHs = { reason: message.payload.reason, count: 0 };
+        hoverSkipForwarded.set(tabIdHs, stHs);
+        stHs.shouldForward = true;
+      }
+      stHs.count += 1;
+      if (stHs.shouldForward) {
+        stHs.shouldForward = false;
+        try {
+          chrome.runtime.sendMessage({
+            type: 'HOVER_SKIPPED_ENHANCED_MODE',
+            tabId: tabIdHs,
+            payload: Object.assign({}, message.payload || {}, { skipCount: stHs.count })
+          }, function () {
+            void chrome.runtime.lastError;
+          });
+        } catch (e) {
+          // Test sandbox or sendMessage unavailable — ignore.
+        }
       }
     }
     return false;
