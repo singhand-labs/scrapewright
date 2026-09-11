@@ -810,12 +810,25 @@
       if (code.length > 8000) return { error: 'code too long (' + code.length + ' chars, max 8000) — split the experiment' };
       if (!/\breturn\b/.test(code)) return { error: 'snippet must contain a top-level return statement (STEP_NO_RETURN otherwise)' };
       const r = await runSnippet(code);
-      if (r && typeof r.error === 'string') return { error: r.error };
+      // Code-review P3: r.error is a failure ONLY when it is the sole own
+      // key — a snippet legitimately returning {error:'x', data:1} (e.g. an
+      // $openTab result envelope or the model's own shaped return) passed
+      // through as data before; the old check swallowed it into a tool error.
+      if (r && typeof r.error === 'string' && Object.keys(r).length === 1) return { error: r.error };
       let out;
       try { out = JSON.stringify(r, null, 1); } catch (e) { out = String(r); }
       const capped = out.length > 4000;
-      if (observationLog) observationLog.record({ tool: 'probe.snippet', selectors: [], summary: 'snippet ' + code.length + ' chars' });
-      return { result: capped ? out.slice(0, 2000) + '…[+' + (out.length - 4000) + ' chars]…' + out.slice(-2000) : out, truncated: capped };
+      // Code-review P3: log the code head + hash so the observation log can
+      // correlate results with WHICH experiment ran.
+      let codeHead = '';
+      try { codeHead = code.replace(/\s+/g, ' ').trim().slice(0, 80); } catch (_) { codeHead = ''; }
+      let codeHash = 0;
+      for (let i = 0; i < code.length; i++) { codeHash = ((codeHash * 31) + code.charCodeAt(i)) | 0; }
+      const passthrough = !!(r && typeof r === 'object' && typeof r.error === 'string');
+      if (observationLog) observationLog.record({ tool: 'probe.snippet', selectors: [], summary: 'snippet ' + code.length + ' chars hash=' + codeHash + ' head=' + JSON.stringify(codeHead) });
+      const res = { result: capped ? out.slice(0, 2000) + '…[+' + (out.length - 4000) + ' chars]…' + out.slice(-2000) : out, truncated: capped };
+      if (passthrough) res.note = 'result carried an error field; passed through';
+      return res;
     }
 
     return { count, text, attrStats, labelledby, sample, hover, scroll, scrollUntil, extract, timestamp, loginState, snippet };
