@@ -147,7 +147,7 @@ describe('forty-fifth log P2: waitForTabLoad interactive-page fallback', () => {
       probeResult: { readyState: 'loading', bodyChars: 50 }
     });
     const p = h.fn(7);
-    const assertion = assert.rejects(p, /Tab load timeout after 60s \(page reachable: readyState=loading, bodyChars=50/);
+    const assertion = assert.rejects(p, /Tab load timeout after 120s \(page reachable: readyState=loading, bodyChars=50/);
     await h.runTimers();
     await assertion;
   });
@@ -155,7 +155,7 @@ describe('forty-fifth log P2: waitForTabLoad interactive-page fallback', () => {
   it('a failing probe defers to the hard timeout and names the probe failure', async () => {
     const h = loadWaitForTabLoad('wizard.js', WTFL_SOURCES[0][1], { probeError: 'frame gone' });
     const p = h.fn(7);
-    const assertion = assert.rejects(p, /Tab load timeout after 60s.*probe failed: frame gone/);
+    const assertion = assert.rejects(p, /Tab load timeout after 120s.*probe failed: frame gone/);
     await h.runTimers();
     await assertion;
   });

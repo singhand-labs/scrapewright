@@ -521,7 +521,7 @@ async function handleExecute(serviceName, input) {
 
   let lastError = null;
   const maxRetries = service.config.maxRetries;
-  const tabLoadTimeoutMs = service.config.tabLoadTimeoutMs ?? 60000;
+  const tabLoadTimeoutMs = service.config.tabLoadTimeoutMs ?? 120000; // sixtieth-round: slow-network tolerance (was 60s)
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
@@ -751,7 +751,7 @@ async function handleExecute(serviceName, input) {
   };
 }
 
-function waitForTabLoad(tabId, timeoutMs = 60000) {
+function waitForTabLoad(tabId, timeoutMs = 120000) { // sixtieth-round: slow-network tolerance (was 60s; keep in sync with wizard.js)
   return new Promise((resolve, reject) => {
     // Check if already loaded
     chrome.tabs.get(tabId, (tab) => {
@@ -1455,7 +1455,7 @@ async function handleOpenTabExecute(url, scriptStr, parentTabId, reqId) {
   }
   debugLogger.log('info', 'background', 'handleOpenTabExecute sub-tab ready, executing script', { tabId: tab.id });
   const executor = new OffscreenExecutor(tab.id);
-  executor.timeoutMs = 60000;
+  executor.timeoutMs = 120000; // sixtieth-round: slow-network tolerance for $openTab sub-tab execution (was 60s)
   try {
     // scriptStr is a function body (may contain function declarations + return statements)
     // OffscreenExecutor.execute resolves the envelope {result, selectorDiagnostics};

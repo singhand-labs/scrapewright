@@ -393,7 +393,10 @@
                 return created;
               });
               try {
-                return await withTimeout(createPromise, 10000, 'Failed to create tab (10s timeout)');
+                // Sixtieth-round user directive: be tolerant of slow
+                // networks / loaded browsers — 15s per window (plus the
+                // fifty-sixth-log retry = up to 30s) instead of 10s.
+                return await withTimeout(createPromise, 15000, 'Failed to create tab (15s timeout)');
               } catch (e) {
                 createTimedOut = true;
                 createPromise.catch(() => {}); // the late arrival's rejection is nobody's to observe
@@ -414,7 +417,11 @@
             return tab;
           },
           waitForTabLoad: async (tabId) => {
-            await withTimeout(d.waitForTabLoad(tabId), 60000, 'Page load timeout (60s)');
+            // Sixtieth-round user directive: slow networks need a tolerant
+            // page-load budget — 120s (the forty-fifth-log streaming probe at
+            // timeoutMs-1500 still upgrades early resolves; the hard reject
+            // keeps its probe evidence).
+            await withTimeout(d.waitForTabLoad(tabId), 120000, 'Page load timeout (120s)');
             log('Page loaded.');
             // Wait for the content-script to be listening before the first
             // DOM_REQUEST — prevents the RELAY_FAILED (tabId:null) race.

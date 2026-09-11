@@ -79,7 +79,7 @@ describe('F1: verify tab-create retry (fifty-sixth log)', () => {
     const out = await runner({ service: SERVICE, input: {}, outputSchema: SCHEMA });
     assert.equal(out.report.ok, true, 'the retry saved the run');
     assert.equal(getCalls(), 2, 'exactly two create attempts');
-  }, 20000);
+  }, 45000);
 
   it('a double stall still fails honestly (bounded retry)', async () => {
     const { runner, getCalls } = runnerWithCreateAttempts({ stallCount: 2 });
@@ -87,7 +87,7 @@ describe('F1: verify tab-create retry (fifty-sixth log)', () => {
     assert.equal(out.report.ok, false);
     assert.match(String((out.report.error && out.report.error.message) || ''), /Failed to create tab/);
     assert.equal(getCalls(), 2, 'no third attempt');
-  }, 20000);
+  }, 45000);
 });
 
 // ---------------------------------------------------------------------------

@@ -1575,7 +1575,7 @@ async function testScript() {
   const service = {
     targetUrl: wizardState.targetUrl,
     steps: wizardState.steps,
-    config: { timeoutMs: hoverAwareTimeoutMs(wizardState.steps, DEPLOY_TIMEOUT_MS), maxRetries: 0, autoCloseTab: true, maxStepIterations: 50, tabLoadTimeoutMs: 60000 }
+    config: { timeoutMs: hoverAwareTimeoutMs(wizardState.steps, DEPLOY_TIMEOUT_MS), maxRetries: 0, autoCloseTab: true, maxStepIterations: 50, tabLoadTimeoutMs: 120000 }
   };
 
   appendLog('Starting step execution...');
@@ -1858,7 +1858,7 @@ async function confirmDeploy() {
     annotations: wizardState.annotations,
     config: existingService
       ? { ...existingService.config, timeoutMs: hoverAwareTimeoutMs(wizardState.steps, existingService.config?.timeoutMs ?? DEPLOY_TIMEOUT_MS) }
-      : { enabled: true, timeoutMs: hoverAwareTimeoutMs(wizardState.steps, DEPLOY_TIMEOUT_MS), maxRetries: 1, autoCloseTab: true, maxStepIterations: 50, tabLoadTimeoutMs: 60000 },
+      : { enabled: true, timeoutMs: hoverAwareTimeoutMs(wizardState.steps, DEPLOY_TIMEOUT_MS), maxRetries: 1, autoCloseTab: true, maxStepIterations: 50, tabLoadTimeoutMs: 120000 },
     // Spec §3B: persist the session's findings ledger as the service's
     // per-site memory — a later edit/repair session seeds from it instead
     // of re-discovering the page.
@@ -1873,7 +1873,7 @@ async function confirmDeploy() {
   setTimeout(() => { window.location.href = 'options.html'; }, 1000);
 }
 
-function waitForTabLoad(tabId, timeoutMs = 60000) {
+function waitForTabLoad(tabId, timeoutMs = 120000) { // sixtieth-round: slow-network tolerance (was 60s)
   return new Promise((resolve, reject) => {
     let settled = false;
     let probeEvidence = null;
@@ -1894,7 +1894,7 @@ function waitForTabLoad(tabId, timeoutMs = 60000) {
     // of body text but never fired status 'complete'; 4 x 60s hard-rejects
     // burned ~4 minutes plus LLM retry churn). Probe the page shortly
     // BEFORE the hard timeout — early enough that a resolve still beats the
-    // outer withTimeout(60s) wrappers in makeWizardRail and verify-runner —
+    // outer withTimeout(120s) wrappers in makeWizardRail and verify-runner —
     // and resolve when the page is interactive/complete with meaningful
     // content. The probe can only UPGRADE the outcome: everything else
     // defers to the hard timeout, which rejects with the probe evidence
@@ -1989,7 +1989,7 @@ function makeWizardRail() {
     defaultUrl: wizardState.targetUrl,
     createTab: (url) => createScrapeTab(url),
     removeTab: (tabId) => chrome.tabs.remove(tabId).catch(() => {}),
-    waitForTabLoad: (tabId) => withTimeout(waitForTabLoad(tabId), 60000, 'Page load timeout (60s)'),
+    waitForTabLoad: (tabId) => withTimeout(waitForTabLoad(tabId), 120000, 'Page load timeout (120s)'),
     getTab: (tabId) => chrome.tabs.get(tabId),
     watchTab: (tabId, onReload) => {
       // C3: a complete→loading transition on the SAME tab is a reload or
@@ -2819,7 +2819,7 @@ async function startResearchSession(seedOverride) {
     getDraftService: () => ({
       targetUrl: wizardState.targetUrl,
       steps: wizardState.steps,
-      config: { timeoutMs: hoverAwareTimeoutMs(wizardState.steps, DEPLOY_TIMEOUT_MS), maxRetries: 0, autoCloseTab: true, maxStepIterations: 50, tabLoadTimeoutMs: 60000 }
+      config: { timeoutMs: hoverAwareTimeoutMs(wizardState.steps, DEPLOY_TIMEOUT_MS), maxRetries: 0, autoCloseTab: true, maxStepIterations: 50, tabLoadTimeoutMs: 120000 }
     }),
     applyArtifact: applySessionArtifact,
     getTestInput: () => wizardState.testInput || {},
