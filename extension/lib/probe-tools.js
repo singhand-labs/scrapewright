@@ -800,7 +800,25 @@
       return out;
     }
 
-    return { count, text, attrStats, labelledby, sample, hover, scroll, scrollUntil, extract, timestamp, loginState };
+    // Harness 对标（2026-09-11 用户指示 ④）：Claude-Code 式"先跑再写"——任意
+    // DSL 片段在研究页试跑，原始返回（截断）。装配逻辑先在此验证，再写进
+    // service.update，8 版本盲改的迭代模式变成 1 次试跑。
+    async function snippet(args0) {
+      const a = args0 && typeof args0 === 'object' ? args0 : {};
+      const code = typeof a.code === 'string' ? a.code : '';
+      if (!code.trim()) return { error: 'code (required) — an async function BODY using the $ API; MUST contain a top-level return' };
+      if (code.length > 8000) return { error: 'code too long (' + code.length + ' chars, max 8000) — split the experiment' };
+      if (!/\breturn\b/.test(code)) return { error: 'snippet must contain a top-level return statement (STEP_NO_RETURN otherwise)' };
+      const r = await runSnippet(code);
+      if (r && typeof r.error === 'string') return { error: r.error };
+      let out;
+      try { out = JSON.stringify(r, null, 1); } catch (e) { out = String(r); }
+      const capped = out.length > 4000;
+      if (observationLog) observationLog.record({ tool: 'probe.snippet', selectors: [], summary: 'snippet ' + code.length + ' chars' });
+      return { result: capped ? out.slice(0, 2000) + '…[+' + (out.length - 4000) + ' chars]…' + out.slice(-2000) : out, truncated: capped };
+    }
+
+    return { count, text, attrStats, labelledby, sample, hover, scroll, scrollUntil, extract, timestamp, loginState, snippet };
   }
 
   const api = { createProbeTools };

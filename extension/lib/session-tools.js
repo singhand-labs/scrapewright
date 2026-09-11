@@ -563,6 +563,30 @@
       };
     }
 
+    // Harness 对标（2026-09-11 用户指示 ①）：人类传感器。研究过程感知不到
+    // 页面行为（弹层是否真的可见挂载、登录/地区差异、两次运行条数不同）
+    // 时随时问用户——一个用户观察胜过数轮盲探，且等待不消耗会话时钟。
+    async function userObserve(args, ctx) {
+      const a = args && typeof args === 'object' ? args : {};
+      const q = typeof a.question === 'string' ? a.question.trim() : '';
+      if (!q) return { error: 'question (required) — what you want the user to look at on the page, phrased for a human (e.g. "hover the first post timestamp — does a tooltip with a full date appear?")' };
+      if (!d.observeBridge || typeof d.observeBridge.request !== 'function') {
+        return { error: 'user observation bridge not wired in this host' };
+      }
+      const sess = (ctx && ctx.session) || null;
+      if (sess && typeof sess.parkBegin === 'function') sess.parkBegin();
+      let res;
+      try {
+        res = await d.observeBridge.request({ question: q.slice(0, 500), hint: typeof a.hint === 'string' ? a.hint.slice(0, 300) : '' });
+      } finally {
+        if (sess && typeof sess.parkEnd === 'function') sess.parkEnd();
+      }
+      if (!res || res.cancelled) return { cancelled: true, note: 'user dismissed the question — fall back to probing, never guess' };
+      const ledger = (ctx && ctx.ledger) || null;
+      if (ledger && res.answer) ledger.add({ finding: 'user observation: ' + q + ' → ' + String(res.answer).slice(0, 300), evidence: 'user.observe', confidence: 'high', provenance: 'user', selectors: [] });
+      return { answer: String(res.answer || '') };
+    }
+
     // Fifty-second log: five identical consecutive verify disclosures
     // (location 5/5, hoverCards[].role 10/10, postTime relative) burned the
     // whole 60-turn budget with zero research-tab probes between updates —
@@ -1112,10 +1136,12 @@
       'probe.extract': wrapProbe(probes.extract),
       'probe.timestamp': wrapProbe(probes.timestamp),
       'probe.loginState': wrapProbe(probes.loginState),
+      'probe.snippet': wrapProbe(probes.snippet),
       'diag.read': diagRead,
       'verify.run': verifyRun,
       'annotate.request': annotateRequest,
       'io.confirm': ioConfirm,
+      'user.observe': userObserve,
       'service.update': serviceUpdate
     };
 
@@ -1137,6 +1163,8 @@
       { name: 'diag.read', args: '{stepId?, kind?}', returns: '{selectorDiagnostics, failingStep?, popover, counters, lastError?} — kind:"contract" (no verify needed) reports whether the I/O contract is confirmed and whether the artifact carries the schemas, so you can see schema-blindness BEFORE verify.run; kind:"unusedCaptures" 返回 verify 报告的未消费弹层捕获普查（原文样本）' },
       { name: 'verify.run', args: '{input?} — optional object overriding the test input for THIS run (the mechanism for alternate-value re-tests when INPUT_VALUE_SUSPECT says the site may have no content for the current value)', returns: '{ok,score,scoreNote?,error,detectors,steps,resultDebug?,finalResult,schemaOk} — detectors.partialEmptyFields lists confirmed fields that came back empty with their emptyRatio (empty/total records): ratio 1 means fix the binding or renegotiate the contract, not ship it. Each entry also carries emptyRecordSamples — WHICH records are empty (1-based ordinal + a content hint from that record; nested paths use parentIndex.subIndex) — so "postId 2/4" becomes "empty: #2 (photo post), #4 (text-only note)": match the named records against steps[].resultPreview, then probe THOSE record shapes on the research tab instead of blind-rewriting the selector. detectors.emptyFieldDiagnostics (beside it) carries per-field falsification crumbs lifted from the owning step\'s LAST iteration diagnostics — an aria reference that resolves to nothing (missingIds), a sub-selector matching 0 containers, an absent attribute — read it BEFORE re-probing: it names WHERE and WHY the empty field died. resultDebug surfaces your step result\'s SMALL non-record keys (debug payloads you attached to the return) ahead of the sampled records, so you can read your own instrumentation. A field you SAW populated on the research tab but empty in verify means the mechanism depends on page state the research tab ACCUMULATED (earlier hovers mounting hidden spans, long dwell hydrating extras) — a fresh load does not reproduce it: re-derive the read on a freshly opened page, do not iterate the same binding blind' },
       { name: 'annotate.request', args: '{why, fields?, containerSel?}', returns: '{annotations[{selector,purpose,outputField}]} | {cancelled} — REQUIRES a confirmed I/O contract (io.confirm first)' },
+      { name: 'user.observe', args: '{question, hint?}', returns: '{answer} | {cancelled} — ASK THE USER what they observe on the page when the harness cannot perceive it (popovers that never visibly mount, login/geo variance, count variance between runs). Their eyes are the best sensor available; quote the answer as evidence (it lands in the ledger). AVOID GUESSING page behavior: if two probes disagree or a receipt is blind to what matters, one user.observe beats rounds of blind re-probing. The wait does not consume the session clock.' },
+      { name: 'probe.snippet', args: '{code}', returns: '{result, truncated?} — run an ARBITRARY $-DSL snippet (async function body, top-level await + return) on the research tab and get the RAW result (JSON, capped). Test-before-artifact: verify extraction/assembly logic here BEFORE writing it into service.update — a broken fieldMap or regex shows its actual output in one call instead of a red verify round.' },
       { name: 'io.confirm', args: '{inputSchema, outputSchema, testInput?, note?}', returns: '{confirmed:true} | {confirmed:false, feedback} — propose the contract EARLY and wait for the user; service.update is rejected until a confirmation lands; a SAME-shape re-proposal (schemas AND test values unchanged) auto-confirms without prompting. testInput carries the CONCRETE test request values (e.g. {"keyword":"machine learning","count":5}) — propose the values you actually researched with; the user confirms or edits them in the SAME panel and they become the artifact\'s testInput (omit testInput and the artifact\'s current values are shown for blessing). Changing test values later is a MATERIAL change: service.update({testInput:...}) with values differing from the confirmed ones is rejected with TEST_INPUT_UNCONFIRMED until re-confirmed here. outputSchema MUST declare its fields (properties + required); a fieldless {"type":"object"} verifies blind and is rejected' }
     ];
 

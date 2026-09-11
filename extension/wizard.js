@@ -423,6 +423,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     wizardIoBridge && wizardIoBridge.revise(text);
   });
   document.getElementById('btnIoReject').addEventListener('click', () => { wizardIoBridge && wizardIoBridge.reject(); });
+  document.getElementById('btnUserObserveSubmit').addEventListener('click', () => { wizardObserveBridge && wizardObserveBridge.submit(); });
+  document.getElementById('btnUserObserveCancel').addEventListener('click', () => { wizardObserveBridge && wizardObserveBridge.cancel(); });
   document.getElementById('btnDeployAnyway').addEventListener('click', () => {
     // A16: the button only exists on phase5 — no phase switch needed.
     confirmDeploy();
@@ -2175,6 +2177,7 @@ function createWizardAnnotationBridge(getRail) {
 
 let wizardAnnotationBridge = null;
 let wizardIoBridge = null;
+let wizardObserveBridge = null;
 
 // Ninth-log follow-up (user request): the session must confirm the I/O
 // contract with the user EARLY — before deep research and authoring — so the
@@ -2298,6 +2301,59 @@ function createWizardIoBridge() {
         appendLog('I/O contract rejected by the user — the session will renegotiate.', 'warn');
         r({ confirmed: false, feedback: 'User rejected this contract proposal — renegotiate based on evidence: re-propose with different fields, or justify adding/dropping them.' });
       }
+    }
+  };
+}
+
+// Harness 对标（2026-09-11 用户指示 ①）：user.observe 的面板桥。研究过程
+// 感知不到页面行为时，模型随时把问题摆给用户——弹层是否真的弹出、登录/
+// 地区差异、两次运行条数不同——用户的眼睛是最好的传感器，一个观察胜过
+// 数轮盲探。与 io/annotation 桥同型：request 挂起等待面板答复，会话停止
+// 时 cancel 兜底，等待不消耗会话时钟（parkBegin/parkEnd 在工具侧）。
+function createWizardObserveBridge() {
+  let pendingResolve = null;
+
+  function hidePanel() {
+    const panel = document.getElementById('userObservePanel');
+    if (panel) panel.classList.add('hidden');
+    badgeAfterPanelClose();
+  }
+
+  return {
+    request(req) {
+      return new Promise((resolve) => {
+        pendingResolve = resolve;
+        const r = req && typeof req === 'object' ? req : {};
+        const qEl = document.getElementById('userObserveQuestion');
+        if (qEl) qEl.textContent = String(r.question || '');
+        const hEl = document.getElementById('userObserveHint');
+        if (hEl) hEl.textContent = String(r.hint || '');
+        const aEl = document.getElementById('userObserveAnswer');
+        if (aEl) aEl.value = '';
+        const panel = document.getElementById('userObservePanel');
+        if (panel) panel.classList.remove('hidden');
+        setSessionBadge('waiting', 'waiting for your observation');
+        appendLog('The AI asks for your observation: ' + String(r.question || ''), 'warn');
+        focusWizardTab();
+      });
+    },
+    submit() {
+      const aEl = document.getElementById('userObserveAnswer');
+      const answer = aEl ? String(aEl.value || '').trim() : '';
+      if (!answer) {
+        showToast('Describe what you observe on the page first (or press Cancel).', 'warn', 4000);
+        return;
+      }
+      const r = pendingResolve;
+      pendingResolve = null;
+      hidePanel();
+      if (r) r({ answer: answer });
+    },
+    cancel() {
+      const r = pendingResolve;
+      pendingResolve = null;
+      hidePanel();
+      if (r) r({ cancelled: true });
     }
   };
 }
@@ -2577,6 +2633,7 @@ function handleSessionEvent(ev) {
         stopSessionElapsedTimer();
         wizardAnnotationBridge && wizardAnnotationBridge.cancel();
         wizardIoBridge && wizardIoBridge.cancel();
+        wizardObserveBridge && wizardObserveBridge.cancel();
         if (wizardRail) wizardRail.releaseLock();
         appendLog('Session stopped: ' + ev.reason + (ev.detail ? ' — ' + String(ev.detail).slice(0, 300) : ''), ev.reason === 'completed' ? 'success' : 'warn');
         if (wizardPersistence) wizardPersistence.flush();
@@ -2837,6 +2894,7 @@ async function startResearchSession(seedOverride) {
   getWizardRunner();
   wizardAnnotationBridge = createWizardAnnotationBridge(() => wizardRail);
   wizardIoBridge = createWizardIoBridge();
+  wizardObserveBridge = createWizardObserveBridge();
   wizardToolsBag = SessionTools.createSessionTools({
     rail: wizardRail,
     runVerify: getWizardRunner(),
@@ -2851,7 +2909,8 @@ async function startResearchSession(seedOverride) {
     getInputSchema: () => wizardState.inputSchema,
     getSteps: () => wizardState.steps,
     annotationBridge: wizardAnnotationBridge,
-    ioConfirmBridge: wizardIoBridge
+    ioConfirmBridge: wizardIoBridge,
+    observeBridge: wizardObserveBridge
   });
 
   wizardPersistence = SessionPersistence.createSessionPersistence(chrome.storage.local, 'wizardResearchSession');
@@ -2888,7 +2947,7 @@ async function startResearchSession(seedOverride) {
     onEvent: handleSessionEvent,
     // C4 production wiring: engine stop/abort cancels pending user-parked
     // bridges (io.confirm / annotate.request) so run() can never hang.
-    userBridges: [wizardIoBridge, wizardAnnotationBridge]
+    userBridges: [wizardIoBridge, wizardAnnotationBridge, wizardObserveBridge]
   });
   wizardToolsBag.bindEngine(wizardSession);
 
@@ -3004,10 +3063,12 @@ async function presentSessionCompletion() {
   if (lv && lv.raw && !lv.staleArtifact) {
     appendLog('Session complete — presenting the last verified run. Review the result, send feedback to continue fixing, or deploy.', 'success');
     showSessionFeedbackPanel();
+    renderResultReview();
     await presentTestOutcome({ events: lv.events, report: lv.report, raw: lv.raw });
   } else if (hasArtifact) {
     appendLog('Session complete. Running a fresh end-to-end verification of the authored steps…', 'success');
     showSessionFeedbackPanel();
+    renderResultReview();
     await testScript();
   } else {
     appendLog('Session complete. Review the steps and deploy.', 'success');
@@ -3018,6 +3079,66 @@ async function presentSessionCompletion() {
 function showSessionFeedbackPanel() {
   const panel = document.getElementById('sessionFeedbackPanel');
   if (panel) panel.classList.remove('hidden');
+}
+
+// Harness 对标（2026-09-11 用户指示 ③）：收场审查门——把最后 verify 报告
+// 的问题条目摆给用户（红验错误、部分空字段、相对时间戳、条数缺口、AD
+// 极性、其余非空检测器），每条带"反馈修复此项"按钮：点击把条目文本追加
+// 进反馈框继续修复，或直接部署（已知问题将随披露说明交付）。用户决定
+// 是否反馈再 autofix，而不是绿了就静默部署。
+function renderResultReview() {
+  const listEl = document.getElementById('resultReviewList');
+  if (!listEl) return;
+  listEl.innerHTML = '';
+  const lv = (wizardToolsBag && typeof wizardToolsBag.getLastVerify === 'function')
+    ? wizardToolsBag.getLastVerify() : null;
+  const report = lv && lv.report;
+  if (!report) return;
+  const items = [];
+  const errMsg = report.error && report.error.message ? String(report.error.message) : '';
+  if (errMsg) items.push('verify 失败: ' + errMsg.slice(0, 300));
+  const det = report.detectors || {};
+  if (Array.isArray(det.partialEmptyFields)) {
+    for (const pe of det.partialEmptyFields) {
+      items.push('字段 ' + pe.path + ' 空 ' + pe.emptyCount + '/' + pe.totalCount + ' 条记录');
+    }
+  }
+  if (Array.isArray(det.relativeTimestamps) && det.relativeTimestamps.length) {
+    items.push('相对时间戳（非绝对日期）: ' + det.relativeTimestamps.slice(0, 3).join(', '));
+  }
+  if (det.countShortfall) {
+    items.push('条数缺口: ' + JSON.stringify(det.countShortfall).slice(0, 200));
+  }
+  if (report.scoreNote) items.push('评分说明（含广告位极性）: ' + String(report.scoreNote).slice(0, 200));
+  const covered = ['partialEmptyFields', 'relativeTimestamps', 'countShortfall'];
+  for (const k of Object.keys(det)) {
+    if (covered.indexOf(k) !== -1) continue;
+    const v = det[k];
+    if (v && (Array.isArray(v) ? v.length : true)) items.push('检测器 ' + k + ' 有发现');
+  }
+  if (!items.length) return;
+  const capped = items.slice(0, 8);
+  const headEl = document.createElement('p');
+  headEl.className = 'hint-label';
+  headEl.textContent = '审查以下可能的问题：点任意条目把它加入反馈继续修复，或直接部署（已知问题将随披露说明交付）。';
+  listEl.appendChild(headEl);
+  for (const it of capped) {
+    const row = document.createElement('div');
+    row.className = 'result-review-item';
+    const span = document.createElement('span');
+    span.textContent = it;
+    row.appendChild(span);
+    const btn = document.createElement('button');
+    btn.textContent = '反馈修复此项';
+    btn.addEventListener('click', () => {
+      const textEl = document.getElementById('sessionFeedbackText');
+      if (!textEl) return;
+      textEl.value = (textEl.value ? textEl.value.replace(/\s+$/, '') + '\n' : '') + '请修复：' + it + '\n';
+      textEl.focus();
+    });
+    row.appendChild(btn);
+    listEl.appendChild(row);
+  }
 }
 
 // Ninth-log L4: feedback-driven repair continuation. The completed session is

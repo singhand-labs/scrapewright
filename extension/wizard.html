@@ -139,6 +139,18 @@
           <button id="btnIoReject">Reject — renegotiate</button>
         </div>
       </div>
+      <!-- Harness 对标（2026-09-11 用户指示）：研究过程感知不到页面行为时
+           随时弹窗问用户观察——用户的眼睛是最好的传感器。 -->
+      <div id="userObservePanel" class="exploration-panel hidden">
+        <h3>The AI asks what you observe</h3>
+        <p id="userObserveQuestion"></p>
+        <p id="userObserveHint" class="hint-label"></p>
+        <textarea id="userObserveAnswer" rows="2" placeholder="Describe what you see on the page (e.g. does a tooltip pop up when hovering the timestamp? does a login wall show?)"></textarea>
+        <div class="exploration-buttons">
+          <button id="btnUserObserveSubmit" class="btn-primary">Submit Observation</button>
+          <button id="btnUserObserveCancel">Cancel</button>
+        </div>
+      </div>
       <div id="executionProgress" class="hidden">
         <h4>Execution progress</h4>
         <table>
@@ -207,6 +219,9 @@
            the research engine from the persisted state with the fix request. -->
       <div id="sessionFeedbackPanel" class="hidden">
         <h4>Result not right? Continue the research session</h4>
+        <!-- Harness 对标（2026-09-11 用户指示）：收场审查门——把最后 verify
+             报告的问题条目摆给用户，用户决定反馈哪项继续修复再部署。 -->
+        <div id="resultReviewList"></div>
         <textarea id="sessionFeedbackText" rows="3" placeholder="Describe what is wrong or missing (e.g. a field comes back empty, records are missing, wrong page region) — the completed session resumes and fixes it."></textarea>
         <div class="sessionFeedbackActions">
           <button id="btnSessionFeedback" class="btn-secondary">Send Feedback — Continue Fixing</button>
