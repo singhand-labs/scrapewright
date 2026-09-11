@@ -216,7 +216,7 @@ describe('T4: 未消费捕获普查（观测平权）', () => {
     const deps = {
       orchestrate: async (service, input, orchDeps, options) => {
         options.onEvent({ type: 'STEP_START', stepId: 's3', maxIterations: 1 });
-        options.onEvent({ type: 'STEP_ITERATION', stepId: 's3', iteration: 1, selectorDiagnostics: [diag] });
+        options.onEvent({ type: 'STEP_ITERATION', stepId: 's3', iteration: 1, selectorDiagnostics: Array.isArray(diag) ? diag : [diag] });
         options.onEvent({ type: 'STEP_DONE', stepId: 's3', iterations: 1, resultPreview: 'ok' });
         return { finalResult: { posts: [{ postId: '1' }] }, steps: [{ stepId: 's3', stepName: 'x', result: { done: true } }], pages: [] };
       },
@@ -236,11 +236,35 @@ describe('T4: 未消费捕获普查（观测平权）', () => {
     assert.ok(uc.samples.some((s) => s.includes('September 11, 2026')));
     assert.match(uc.note, /hoverPopover/);
   });
-  it('字段已用 hoverPopover 来源时普查静默', async () => {
+  it('字段已声明（popoverReadFields>0 且捕获>0）→ declaredButEmpty 教学普查（不再静默）', async () => {
     const out = await runWithDiag(Object.assign({}, CAPTURED_DIAG, {
       capturedPopovers: { popoverReadFields: 1, samples: [] }
     }));
-    assert.ok(!out.report.detectors.unusedCaptures);
+    const uc = out.report.detectors.unusedCaptures;
+    assert.ok(uc, 'declared+captured → census present');
+    assert.equal(uc.declaredButEmpty, true);
+    assert.match(uc.note, /match/);
+  });
+  it('逐调用门：一次消费调用不再洗白同轮的非消费调用（去重后不双计）', async () => {
+    const consuming = Object.assign({}, CAPTURED_DIAG, {
+      containerSelector: 'div.cardA',
+      capturedPopovers: { popoverReadFields: 1, samples: [] }
+    });
+    const nonConsuming = Object.assign({}, CAPTURED_DIAG, {
+      containerSelector: 'div.cardB',
+      capturedPopovers: { popoverReadFields: 0, samples: ['Shared · Friday'] }
+    });
+    const out = await runWithDiag([nonConsuming, consuming]);
+    const uc = out.report.detectors.unusedCaptures;
+    assert.ok(uc, 'per-call gate fires');
+    assert.equal(uc.popoverReadFields, 0);
+    assert.equal(uc.totalCaptured, 8, 'both calls counted');
+  });
+  it('同一调用跨事件重复 → 只计最后一次（无重复计数）', async () => {
+    const out = await runWithDiag([CAPTURED_DIAG, CAPTURED_DIAG]);
+    const uc = out.report.detectors.unusedCaptures;
+    assert.ok(uc);
+    assert.equal(uc.totalCaptured, 4, 'identical diag events deduped to the last one');
   });
   it('diag.read kind unusedCaptures 透出', async () => {
     const { createSessionTools } = require('../lib/session-tools');

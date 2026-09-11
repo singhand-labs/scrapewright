@@ -518,22 +518,49 @@
       // 列原文样本，教 read:'hoverPopover' 绑定。
       const computeUnusedCaptures = () => {
         let total = 0; let readFields = 0; const samples = [];
+        let nonConsumingCall = false;
+        let declaredCall = false;
+        // Code-review P1 (a)+(b): the old run-level gate (declared===0 across
+        // the WHOLE run) let one consuming call whitewash every non-consuming
+        // call in the same run. Per-call gate now: ANY single diagnostic with
+        // captured>0 and popoverReadFields===0 fires. Totals dedupe by
+        // stepId+containerSelector keeping only the LAST diagnostics object —
+        // iteration spam from the same call double-counted hovercardsCaptured.
+        const byCall = new Map();
         for (const ev of events) {
           for (const d of ((ev && Array.isArray(ev.selectorDiagnostics)) ? ev.selectorDiagnostics : [])) {
             if (!d || d.api !== 'extractWithHover') continue;
-            const cp = d.capturedPopovers;
-            if (!cp) continue;
-            total += (d.hoverSummary && d.hoverSummary.hovercardsCaptured) || cp.captured || 0;
-            readFields += cp.popoverReadFields || 0;
-            for (const s of (cp.samples || [])) {
-              if (typeof s === 'string' && s && samples.length < 3) samples.push(s);
-            }
+            if (!d.capturedPopovers) continue;
+            byCall.set(String((ev && ev.stepId) || '') + '|' + (d.containerSelector || ''), d);
           }
         }
-        if (total > 0 && readFields === 0) {
+        for (const d of byCall.values()) {
+          const cp = d.capturedPopovers;
+          const captured = (d.hoverSummary && d.hoverSummary.hovercardsCaptured) || cp.captured || 0;
+          total += captured;
+          readFields += cp.popoverReadFields || 0;
+          if (captured > 0 && !(cp.popoverReadFields > 0)) nonConsumingCall = true;
+          if (captured > 0 && cp.popoverReadFields > 0) declaredCall = true;
+          for (const s of (cp.samples || [])) {
+            if (typeof s === 'string' && s && samples.length < 3) samples.push(s);
+          }
+        }
+        if (nonConsumingCall) {
           return {
             totalCaptured: total, popoverReadFields: 0, samples: samples,
             note: 'hover popovers were CAPTURED this run but no fieldMap field consumes them (read:\'hoverPopover\') — bind the field to the popover text of its anchor selector (and filter with your own match regex), instead of discarding the capture'
+          };
+        }
+        if (declaredCall) {
+          // (c) declared-but-empty: hover-read fields were declared AND
+          // popovers captured — teaching the model to CHECK whether the
+          // match/selector actually consumed anything (an over-strict match
+          // predicate or a non-matching field selector ships '' while the
+          // raw capture sits in hovercards[].popoverText).
+          return {
+            totalCaptured: total, popoverReadFields: readFields, samples: samples,
+            declaredButEmpty: true,
+            note: 'hover-read fields are declared and popovers were captured — verify the field values actually consumed them: an over-strict match predicate or a field selector that misses the anchor ships \'\' while the raw capture rides hovercards[].popoverText; loosen or rewrite the predicate (or point the selector at the hovered anchor)'
           };
         }
         return null;
