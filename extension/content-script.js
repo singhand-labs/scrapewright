@@ -55,10 +55,18 @@
     function applyMatch(value, re) {
       if (!re) return value;
       if (Array.isArray(value)) {
-        const hit = value.find(function (v) { return typeof v === 'string' && re.test(v); });
-        return hit !== undefined ? hit : '';
+        // Code-review P1 (inline mirror): preserve the array envelope —
+        // multi:true inputs yield the FILTERED ARRAY of passing values.
+        return value.filter(function (v) { return testMatchValue(v, re); });
       }
-      return (typeof value === 'string' && re.test(value)) ? value : '';
+      return testMatchValue(value, re) ? value : '';
+    }
+    // Code-review P2 hardening (inline mirror): defensive lastIndex reset +
+    // skip .test on >2000-char strings (backtracking hang guard).
+    function testMatchValue(v, re) {
+      if (typeof v !== 'string' || v.length > 2000) return false;
+      re.lastIndex = 0;
+      return re.test(v);
     }
     function isHoverPopoverSpec(spec) {
       return !!(spec && typeof spec === 'object' &&
@@ -149,16 +157,20 @@
         throw new Error('$extractList: no containers matched');
       }
       const records = [];
+      // Code-review P2 (inline mirror): compile predicates once, before any
+      // DOM work.
+      const matchByField = {};
+      for (const [field, spec] of Object.entries(fieldMap)) {
+        if (isHoverPopoverSpec(spec)) {
+          throw new Error('$extractList field "' + field + '" uses read:\'hoverPopover\' — hover-mounted popover sources are only valid in $extractWithHover (which has a hover phase); drop the read: here or switch the call to $extractWithHover');
+        }
+        matchByField[field] = compileMatch(spec);
+      }
       for (const container of containers) {
         const rec = {};
         for (const [field, spec] of Object.entries(fieldMap)) {
-          // 机械-语义分离（spec 3.A）：hoverPopover 来源只在 $extractWithHover
-          // 合法（那里才有悬停阶段）——纯 $extractList 教学性报错。
-          if (isHoverPopoverSpec(spec)) {
-            throw new Error('$extractList field "' + field + '" uses read:\'hoverPopover\' — hover-mounted popover sources are only valid in $extractWithHover (which has a hover phase); drop the read: here or switch the call to $extractWithHover');
-          }
           try {
-            rec[field] = applyMatch(readField(container, spec), compileMatch(spec));
+            rec[field] = applyMatch(readField(container, spec), matchByField[field]);
           } catch (err) {
             throw new Error(`$extractList field "${field}" selector invalid: ${err.message}`);
           }
@@ -180,14 +192,19 @@
         throw new Error('$extractListMulti: no containers matched');
       }
       const records = [];
+      // Code-review P2 (inline mirror): compile once, before any DOM work.
+      const matchByField = {};
+      for (const [field, spec] of Object.entries(fieldMap)) {
+        if (isHoverPopoverSpec(spec)) {
+          throw new Error('$extractListMulti field "' + field + '" uses read:\'hoverPopover\' — hover-mounted popover sources are only valid in $extractWithHover (which has a hover phase); drop the read: here or switch the call to $extractWithHover');
+        }
+        matchByField[field] = compileMatch(spec);
+      }
       for (const container of containers) {
         const rec = {};
         for (const [field, spec] of Object.entries(fieldMap)) {
-          if (isHoverPopoverSpec(spec)) {
-            throw new Error('$extractListMulti field "' + field + '" uses read:\'hoverPopover\' — hover-mounted popover sources are only valid in $extractWithHover (which has a hover phase); drop the read: here or switch the call to $extractWithHover');
-          }
           try {
-            rec[field] = applyMatch(readFieldAll(container, spec), compileMatch(spec));
+            rec[field] = applyMatch(readFieldAll(container, spec), matchByField[field]);
           } catch (err) {
             throw new Error(`$extractListMulti field "${field}" selector invalid: ${err.message}`);
           }
@@ -222,10 +239,17 @@
       // extractListRecords 现在对 hoverPopover 规格教学性抛错）。
       var staticFieldMap = {};
       var hoverReadFields = [];
+      var hoverMatchByField = {};
       for (var fk0 in fieldMap) {
         if (Object.prototype.hasOwnProperty.call(fieldMap, fk0)) {
-          if (isHoverPopoverSpec(fieldMap[fk0])) hoverReadFields.push(fk0);
-          else staticFieldMap[fk0] = fieldMap[fk0];
+          if (isHoverPopoverSpec(fieldMap[fk0])) {
+            hoverReadFields.push(fk0);
+            // Code-review P2 (inline mirror): compile during the split — an
+            // invalid match throws BEFORE any hoverFn call.
+            hoverMatchByField[fk0] = compileMatch(fieldMap[fk0]);
+          } else {
+            staticFieldMap[fk0] = fieldMap[fk0];
+          }
         }
       }
       var records = Object.keys(staticFieldMap).length
@@ -314,31 +338,63 @@
           // 元素执行捕获，剥标签（hoverPopover）或保留标记
           // （hoverPopoverHtml），match 谓词照常应用（命中→原文，未命中→
           // 空串；捕获原文仍留在 hovercards[].popoverText 供证据回环）。
+          // Code-review P1 (inline mirror of lib/list-extract-ops.js): hover-
+          // read budget — cap candidates, stop scalars at first capture,
+          // reuse anchor-loop captures, fall back to hovercards popoverText.
+          // Mirrors TS_MAX_HOVER_ANCHORS's rationale (a handful of dwells is
+          // the evidence budget that matters).
+          var HR_MAX_FIELD_HOVER_CANDIDATES = 3;
           for (var hf = 0; hf < hoverReadFields.length; hf++) {
             var hfieldName = hoverReadFields[hf];
             var hspec = fieldMap[hfieldName] || {};
             var hsel = typeof hspec.selector === 'string' ? hspec.selector : null;
-            var hre = compileMatch(hspec);
+            var hre = hoverMatchByField[hfieldName] || null;
             var hvals = [];
             var hcands = hsel
               ? Array.prototype.slice.call(container.querySelectorAll(hsel))
               : [container];
+            var capped = 0;
+            if (hcands.length > HR_MAX_FIELD_HOVER_CANDIDATES) {
+              capped = hcands.length - HR_MAX_FIELD_HOVER_CANDIDATES;
+              hcands = hcands.slice(0, HR_MAX_FIELD_HOVER_CANDIDATES);
+            }
+            var readHoverText = function (snip) {
+              return (typeof snip === 'string' && snip)
+                ? ((hspec.read === 'hoverPopoverHtml') ? snip : stripTags(snip))
+                : null;
+            };
             for (var hh = 0; hh < hcands.length; hh++) {
               var htext = null;
-              try {
-                var hr = await hoverFn(hcands[hh], popoverSel, perHoverOpts);
-                htext = (hr && typeof hr.htmlSnippet === 'string' && hr.htmlSnippet)
-                  ? ((hspec.read === 'hoverPopoverHtml') ? hr.htmlSnippet : stripTags(hr.htmlSnippet))
-                  : null;
-              } catch (_) { htext = null; }
+              var reuseIdx = anchors.indexOf(hcands[hh]);
+              if (reuseIdx >= 0 && hovercards[reuseIdx]) {
+                htext = readHoverText(hovercards[reuseIdx].htmlSnippet);
+              } else {
+                try {
+                  var hr = await hoverFn(hcands[hh], popoverSel, perHoverOpts);
+                  htext = readHoverText(hr && hr.htmlSnippet);
+                } catch (_) { htext = null; }
+              }
               if (htext) hvals.push(htext);
+              if (htext && hspec.multi !== true) break;
             }
+            if (capped > 0) records[i][hfieldName + '__capped'] = capped;
             if (hspec.multi === true) {
               records[i][hfieldName] = hvals
                 .map(function (v) { return applyMatch(v, hre); })
                 .filter(Boolean);
             } else {
               records[i][hfieldName] = applyMatch(hvals.length ? hvals[0] : '', hre);
+              if (!hvals.length) {
+                for (var hci = 0; hci < hovercards.length; hci++) {
+                  var hct = (hspec.read === 'hoverPopoverHtml')
+                    ? hovercards[hci].htmlSnippet
+                    : hovercards[hci].popoverText;
+                  if (typeof hct === 'string' && hct) {
+                    records[i][hfieldName] = applyMatch(hct, hre);
+                    break;
+                  }
+                }
+              }
             }
           }
         }

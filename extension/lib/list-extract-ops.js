@@ -30,10 +30,22 @@ function compileMatch(spec) {
 function applyMatch(value, re) {
   if (!re) return value;
   if (Array.isArray(value)) {
-    const hit = value.find((v) => typeof v === 'string' && re.test(v));
-    return hit !== undefined ? hit : '';
+    // Code-review P1: preserve the array envelope — a multi:true input must
+    // yield the FILTERED ARRAY of values that pass (aligned with the
+    // extractWithHover multi path's map+filter), never the first scalar hit.
+    return value.filter((v) => testMatchValue(v, re));
   }
-  return (typeof value === 'string' && re.test(value)) ? value : '';
+  return testMatchValue(value, re) ? value : '';
+}
+// Code-review P2 hardening: (a) reset lastIndex defensively — new RegExp(m)
+// compiles flagless, but user-supplied source could still smuggle state via
+// sticky-ish constructs in some engines; the reset is free. (b) skip .test on
+// >2000-char strings — a catastrophic-backtracking predicate over a 50K-char
+// outerHTML read would hang the whole step budget.
+function testMatchValue(v, re) {
+  if (typeof v !== 'string' || v.length > 2000) return false;
+  re.lastIndex = 0;
+  return re.test(v);
 }
 function isHoverPopoverSpec(spec) {
   return !!(spec && typeof spec === 'object' &&
@@ -212,16 +224,21 @@ function extractListRecords(containers, fieldMap, opts) {
     throw new Error('$extractList: no containers matched');
   }
   const records = [];
+  // Code-review P2: compile each predicate ONCE per call, before any DOM
+  // work — an invalid match throws before the first querySelector instead
+  // of after N containers of reads.
+  const matchByField = {};
+  for (const [field, spec] of Object.entries(fieldMap)) {
+    if (isHoverPopoverSpec(spec)) {
+      throw new Error('$extractList field "' + field + '" uses read:\'hoverPopover\' — hover-mounted popover sources are only valid in $extractWithHover (which has a hover phase); drop the read: here or switch the call to $extractWithHover');
+    }
+    matchByField[field] = compileMatch(spec);
+  }
   for (const container of containers) {
     const rec = {};
     for (const [field, spec] of Object.entries(fieldMap)) {
-      // 机械-语义分离（spec 3.A）：hoverPopover 来源只在 $extractWithHover
-      // 合法（那里才有悬停阶段）——纯 $extractList 教学性报错。
-      if (isHoverPopoverSpec(spec)) {
-        throw new Error('$extractList field "' + field + '" uses read:\'hoverPopover\' — hover-mounted popover sources are only valid in $extractWithHover (which has a hover phase); drop the read: here or switch the call to $extractWithHover');
-      }
       try {
-        rec[field] = applyMatch(readField(container, spec), compileMatch(spec));
+        rec[field] = applyMatch(readField(container, spec), matchByField[field]);
       } catch (err) {
         throw new Error(`$extractList field "${field}" selector invalid: ${err.message}`);
       }
@@ -243,14 +260,20 @@ function extractListMultiRecords(containers, fieldMap, opts) {
     throw new Error('$extractListMulti: no containers matched');
   }
   const records = [];
+  // Code-review P2: compile once per call, before any DOM work (mirrors
+  // extractListRecords).
+  const matchByField = {};
+  for (const [field, spec] of Object.entries(fieldMap)) {
+    if (isHoverPopoverSpec(spec)) {
+      throw new Error('$extractListMulti field "' + field + '" uses read:\'hoverPopover\' — hover-mounted popover sources are only valid in $extractWithHover (which has a hover phase); drop the read: here or switch the call to $extractWithHover');
+    }
+    matchByField[field] = compileMatch(spec);
+  }
   for (const container of containers) {
     const rec = {};
     for (const [field, spec] of Object.entries(fieldMap)) {
-      if (isHoverPopoverSpec(spec)) {
-        throw new Error('$extractListMulti field "' + field + '" uses read:\'hoverPopover\' — hover-mounted popover sources are only valid in $extractWithHover (which has a hover phase); drop the read: here or switch the call to $extractWithHover');
-      }
       try {
-        rec[field] = applyMatch(readFieldAll(container, spec), compileMatch(spec));
+        rec[field] = applyMatch(readFieldAll(container, spec), matchByField[field]);
       } catch (err) {
         throw new Error(`$extractListMulti field "${field}" selector invalid: ${err.message}`);
       }
@@ -380,10 +403,17 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
   // 规格教学性抛错）。
   const staticFieldMap = {};
   const hoverReadFields = [];
+  const hoverMatchByField = {};
   for (const fk in fieldMap) {
     if (Object.prototype.hasOwnProperty.call(fieldMap, fk)) {
-      if (isHoverPopoverSpec(fieldMap[fk])) hoverReadFields.push(fk);
-      else staticFieldMap[fk] = fieldMap[fk];
+      if (isHoverPopoverSpec(fieldMap[fk])) {
+        hoverReadFields.push(fk);
+        // Code-review P2: compile hover-field predicates during the split —
+        // an invalid match throws BEFORE any DOM work / hoverFn call.
+        hoverMatchByField[fk] = compileMatch(fieldMap[fk]);
+      } else {
+        staticFieldMap[fk] = fieldMap[fk];
+      }
     }
   }
   const records = Object.keys(staticFieldMap).length
@@ -490,29 +520,72 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
     // 执行捕获，剥标签（hoverPopover）或保留标记（hoverPopoverHtml），
     // match 谓词照常应用（命中→原文，未命中→空串；捕获原文仍留在
     // hovercards[].popoverText 供证据回环）。
+    // Code-review P1 (hover-read budget): this loop used to hover EVERY
+    // element matching spec.selector with no cap and no reuse — a broad
+    // union selector over a big container burned the whole step budget on
+    // redundant dispatches. Four layered mitigations, mirroring
+    // TS_MAX_HOVER_ANCHORS's rationale in domTimestamp (enumerate
+    // time-ish anchors, hover only up to the first 3 — tooltips mount in
+    // 600-1600ms, so a handful of dwells is the evidence budget that
+    // matters):
+    const HR_MAX_FIELD_HOVER_CANDIDATES = 3;
     for (let hf = 0; hf < hoverReadFields.length; hf++) {
       const hfieldName = hoverReadFields[hf];
       const hspec = fieldMap[hfieldName] || {};
       const hsel = typeof hspec.selector === 'string' ? hspec.selector : null;
-      const hre = compileMatch(hspec);
+      const hre = hoverMatchByField[hfieldName] || null;
       const hvals = [];
-      const hcands = hsel
+      let hcands = hsel
         ? Array.prototype.slice.call(container.querySelectorAll(hsel))
         : [container];
+      // (a) cap candidate hovers per field per container
+      let capped = 0;
+      if (hcands.length > HR_MAX_FIELD_HOVER_CANDIDATES) {
+        capped = hcands.length - HR_MAX_FIELD_HOVER_CANDIDATES;
+        hcands = hcands.slice(0, HR_MAX_FIELD_HOVER_CANDIDATES);
+      }
+      const readHoverText = (snip) =>
+        (typeof snip === 'string' && snip)
+          ? ((hspec.read === 'hoverPopoverHtml') ? snip : stripTags(snip))
+          : null;
       for (let hh = 0; hh < hcands.length; hh++) {
         let htext = null;
-        try {
-          const hr = await hoverFn(hcands[hh], popoverSel, perHoverOpts);
-          htext = (hr && typeof hr.htmlSnippet === 'string' && hr.htmlSnippet)
-            ? ((hspec.read === 'hoverPopoverHtml') ? hr.htmlSnippet : stripTags(hr.htmlSnippet))
-            : null;
-        } catch (_) { htext = null; }
+        // (c) reuse: if the anchor loop already hovered THIS element (same
+        // node — identity via the anchors array), reuse its capture instead
+        // of dispatching a second dwell at the same anchor.
+        const reuseIdx = anchors.indexOf(hcands[hh]);
+        if (reuseIdx >= 0 && hovercards[reuseIdx]) {
+          htext = readHoverText(hovercards[reuseIdx].htmlSnippet);
+        } else {
+          try {
+            const hr = await hoverFn(hcands[hh], popoverSel, perHoverOpts);
+            htext = readHoverText(hr && hr.htmlSnippet);
+          } catch (_) { htext = null; }
+        }
         if (htext) hvals.push(htext);
+        // (b) scalar (non-multi) fields stop at the FIRST non-empty capture
+        if (htext && hspec.multi !== true) break;
       }
+      if (capped > 0) records[i][hfieldName + '__capped'] = capped;
       if (hspec.multi === true) {
         records[i][hfieldName] = hvals.map((v) => applyMatch(v, hre)).filter(Boolean);
       } else {
         records[i][hfieldName] = applyMatch(hvals.length ? hvals[0] : '', hre);
+        // (d) scalar fallback: when the field's own candidates yielded
+        // nothing, fall back to the record's own hovercards captures before
+        // settling '' — the anchor loop's popoverText is the same popover
+        // text the field wanted, already tag-stripped.
+        if (!hvals.length) {
+          for (const hce of hovercards) {
+            const t = (hspec.read === 'hoverPopoverHtml')
+              ? hce.htmlSnippet
+              : hce.popoverText;
+            if (typeof t === 'string' && t) {
+              records[i][hfieldName] = applyMatch(t, hre);
+              break;
+            }
+          }
+        }
       }
     }
   }
