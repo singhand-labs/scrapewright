@@ -480,7 +480,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     // an Enhanced-Mode-off run killed every trusted hover for a whole
     // session and the user had no visible signal (console diagnostics only).
     if (message.type === 'HOVER_SKIPPED_ENHANCED_MODE') {
-      wizardState.hoverSkipCount = (wizardState.hoverSkipCount || 0) + 1;
+      // Code-review P3: the background now forwards ONCE per tab per reason
+      // (deduped) with the real skip tally in payload.skipCount — count the
+      // broadcast, but prefer the payload's number for the tip.
+      wizardState.hoverSkipCount = Math.max(wizardState.hoverSkipCount || 0, 1);
+      const sc = message.payload && typeof message.payload.skipCount === 'number' ? message.payload.skipCount : 0;
+      wizardState.hoverSkipTotal = Math.max(wizardState.hoverSkipTotal || 0, sc);
     }
   });
 
@@ -1671,8 +1676,12 @@ async function presentTestOutcome(out) {
   // all session because the trusted-hover path was opted out, and only the
   // console knew. Surface the same one-toggle remedy to the user directly.
   if ((wizardState.hoverSkipCount || 0) > 0 && !wizardState.testAborted) {
-    const count = wizardState.hoverSkipCount;
-    const tip = 'Hover dispatches failed ' + count + '× — Enhanced Mode is off, so hovercards/popovers can never mount. Enable it under Settings → Enhanced scraping mode if the service needs hover-based enrichment.';
+    // Code-review P3: the broadcast is deduped (one per tab per reason); the
+    // real per-anchor tally rides payload.skipCount — singular tip wording
+    // when the background counted a single broadcast.
+    const total = wizardState.hoverSkipTotal || wizardState.hoverSkipCount;
+    const tip = 'Hover dispatch' + (total > 1 ? 'es failed ' + total + '×' : ' failed') +
+      ' — Enhanced Mode is off, so hovercards/popovers can never mount. Enable it under Settings → Enhanced scraping mode if the service needs hover-based enrichment.';
     appendLog(tip, 'warn');
     showToast(tip, 'info', 8000);
   }
@@ -2322,6 +2331,14 @@ function createWizardObserveBridge() {
   return {
     request(req) {
       return new Promise((resolve) => {
+        // Code-review P3: a second request while one is pending resolves the
+        // FIRST with cancelled/superseded — the old code orphaned the earlier
+        // promise (its panel was overwritten, so it could never be answered).
+        if (pendingResolve) {
+          const old = pendingResolve;
+          pendingResolve = null;
+          old({ cancelled: true, note: 'superseded' });
+        }
         pendingResolve = resolve;
         const r = req && typeof req === 'object' ? req : {};
         const qEl = document.getElementById('userObserveQuestion');
@@ -3068,8 +3085,12 @@ async function presentSessionCompletion() {
   } else if (hasArtifact) {
     appendLog('Session complete. Running a fresh end-to-end verification of the authored steps…', 'success');
     showSessionFeedbackPanel();
-    renderResultReview();
+    // Code-review P2: render AFTER the fresh testScript run — rendering before
+    // showed the STALE last-verify report (this branch exists precisely
+    // because a service.update landed after it), and the fresh run's problems
+    // never reached the user's review panel.
     await testScript();
+    renderResultReview();
   } else {
     appendLog('Session complete. Review the steps and deploy.', 'success');
     goToPhase(5);
@@ -3104,17 +3125,27 @@ function renderResultReview() {
     }
   }
   if (Array.isArray(det.relativeTimestamps) && det.relativeTimestamps.length) {
-    items.push('相对时间戳（非绝对日期）: ' + det.relativeTimestamps.slice(0, 3).join(', '));
+    // Code-review P2: entries are OBJECTS ({field,path,sampleValue}) — naive
+    // join rendered "[object Object]". Map to path=sample first.
+    const rtLines = det.relativeTimestamps.slice(0, 3).map((e) =>
+      (e && typeof e === 'object')
+        ? (e.path || e.field || '?') + '=' + (e.sampleValue != null ? String(e.sampleValue) : '')
+        : String(e));
+    items.push('相对时间戳（非绝对日期）: ' + rtLines.join(', '));
   }
   if (det.countShortfall) {
     items.push('条数缺口: ' + JSON.stringify(det.countShortfall).slice(0, 200));
   }
   if (report.scoreNote) items.push('评分说明（含广告位极性）: ' + String(report.scoreNote).slice(0, 200));
-  const covered = ['partialEmptyFields', 'relativeTimestamps', 'countShortfall'];
+  const covered = ['partialEmptyFields', 'relativeTimestamps', 'countShortfall', 'emptyFields'];
   for (const k of Object.keys(det)) {
     if (covered.indexOf(k) !== -1) continue;
     const v = det[k];
-    if (v && (Array.isArray(v) ? v.length : true)) items.push('检测器 ' + k + ' 有发现');
+    if (!v || (Array.isArray(v) && !v.length)) continue;
+    // Code-review P2: object detectors render a JSON snippet instead of a
+    // bare "has findings" so the user sees WHAT was found.
+    items.push('检测器 ' + k + ' 有发现' +
+      (Array.isArray(v) ? (' (' + v.length + ' 项)') : (': ' + JSON.stringify(v).slice(0, 120))));
   }
   if (!items.length) return;
   const capped = items.slice(0, 8);
