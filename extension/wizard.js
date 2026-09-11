@@ -343,10 +343,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   document.getElementById('btnRestateRetry').addEventListener('click', () => { showRequirementRestatePanel(); });
   document.getElementById('btnPhase2Next').addEventListener('click', () => goToPhase(3));
+  // Back targets follow the stage model (PHASE_LABELS): mainline 1→4→5,
+  // phases 2/3 are post-hoc edit sub-screens under the Review & Deploy
+  // umbrella. From a sub-screen, Back returns to the review (phase 5) when
+  // entered from there (reviewFromPhase5, reset by goToPhase(5)); the legacy
+  // chains (2←1, 3←2) only apply when the sub-screens were reached outside
+  // the review flow. Research (4) backs to Requirements (1) — the old 4→3
+  // chain predates the research-first mainline.
   document.getElementById('btnPhase2Back').addEventListener('click', () => goToPhase(reviewFromPhase5 ? 5 : 1));
   document.getElementById('btnPhase3Test').addEventListener('click', runTestFromStep5);
-  document.getElementById('btnPhase3Back').addEventListener('click', () => goToPhase(2));
-  document.getElementById('btnPhase4Back').addEventListener('click', () => goToPhase(3));
+  document.getElementById('btnPhase3Back').addEventListener('click', () => goToPhase(reviewFromPhase5 ? 5 : 2));
+  document.getElementById('btnPhase4Back').addEventListener('click', () => goToPhase(1));
   document.getElementById('btnPhase5Deploy').addEventListener('click', confirmDeploy);
   document.getElementById('btnPhase5Back').addEventListener('click', () => goToPhase(4));
   document.getElementById('btnPhase5EditSteps').addEventListener('click', () => { reviewFromPhase5 = true; goToPhase(2); });
