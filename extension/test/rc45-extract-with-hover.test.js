@@ -254,7 +254,7 @@ describe('RC45 Task 3: inline fallback mirrors extractWithHoverRecords', () => {
     const fnStart = src.indexOf('function createInlineListExtractOps');
     assert.ok(fnStart > -1, 'createInlineListExtractOps must exist');
     // Slice the function body using a reasonable window.
-    const window = src.slice(fnStart, fnStart + 30000);
+    const window = src.slice(fnStart, fnStart + 36000); // F8/F9 additions grew the factory
     assert.ok(/extractWithHoverRecords/.test(window),
       'inline fallback must define extractWithHoverRecords (drift guard will also enforce this)');
     // Must be returned from the inline api object.

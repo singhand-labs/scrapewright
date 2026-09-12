@@ -447,7 +447,10 @@ describe('sixty-second log F3: hover-capability broadcast + wizard tip (RC25 par
 
   // Code-review P3: broadcast dedupe — the gate is deterministic, so N
   // per-anchor skips are ONE capability fact, not N identical broadcasts.
-  it('repeated gated skips on the same tab broadcast ONCE, with the tally in payload.skipCount', () => {
+  // Sixty-ninth review F3: a strict once-per-tab forward made the tally a
+  // DEAD number (23 skips, tip said 1). The background re-forwards with the
+  // ABSOLUTE skipCount on +5 growth; the wizard sums the per-tab deltas.
+  it('5 gated skips → first broadcast at 1, re-forward at 5 carrying the absolute tally', () => {
     const stub = makeChromeStub();
     loadBackground(stub);
     for (let i = 0; i < 5; i++) {
@@ -458,9 +461,34 @@ describe('sixty-second log F3: hover-capability broadcast + wizard tip (RC25 par
       });
     }
     const msgs = stub._sentMessages.filter((m) => m.type === 'HOVER_SKIPPED_ENHANCED_MODE');
-    assert.equal(msgs.length, 1, 'one broadcast for a deterministic gate');
-    assert.equal(msgs[0].payload.reason, 'enhanced mode disabled', 'reason intact');
-    assert.equal(msgs[0].payload.skipCount, 1, 'tally rides the payload');
+    assert.equal(msgs.length, 2, 'forward at 1 and again at +5');
+    assert.equal(msgs[0].payload.skipCount, 1);
+    assert.equal(msgs[1].payload.skipCount, 5, 'the final broadcast carries the real magnitude');
+    assert.equal(msgs[1].payload.reason, 'enhanced mode disabled', 'reason intact');
+    // below the threshold: no extra broadcasts
+    stub._emit({
+      type: 'CONTENT_SCRIPT_DIAGNOSTIC',
+      category: 'hover_request',
+      payload: { dispatched: false, reason: 'enhanced mode disabled' }
+    });
+    assert.equal(stub._sentMessages.filter((m) => m.type === 'HOVER_SKIPPED_ENHANCED_MODE').length, 2);
+  });
+
+  it('a different-reason diagnostic never enters the gate, and the tally state survives it', () => {
+    const stub = makeChromeStub();
+    loadBackground(stub);
+    stub._emit({ type: 'CONTENT_SCRIPT_DIAGNOSTIC', category: 'hover_request', payload: { dispatched: false, reason: 'enhanced mode disabled' } });
+    stub._emit({ type: 'CONTENT_SCRIPT_DIAGNOSTIC', category: 'hover_request', payload: { dispatched: false, reason: 'anchor_not_hoverable' } });
+    const msgs = stub._sentMessages.filter((m) => m.type === 'HOVER_SKIPPED_ENHANCED_MODE');
+    assert.equal(msgs.length, 1, 'the non-gate reason is per-anchor noise, not a broadcast');
+    assert.equal(msgs[0].payload.reason, 'enhanced mode disabled');
+    // the gate's tally state survives the interleaved non-gate diagnostic
+    for (let i = 0; i < 4; i++) {
+      stub._emit({ type: 'CONTENT_SCRIPT_DIAGNOSTIC', category: 'hover_request', payload: { dispatched: false, reason: 'enhanced mode disabled' } });
+    }
+    const msgs2 = stub._sentMessages.filter((m) => m.type === 'HOVER_SKIPPED_ENHANCED_MODE');
+    assert.equal(msgs2.length, 2, 'the 5th gated skip re-forwards despite the interleave');
+    assert.equal(msgs2[1].payload.skipCount, 5);
   });
 
   it('wizard wiring: listener, tip copy with the one-toggle remedy, and resets at BOTH run sites', () => {
@@ -468,12 +496,12 @@ describe('sixty-second log F3: hover-capability broadcast + wizard tip (RC25 par
     assert.ok(/HOVER_SKIPPED_ENHANCED_MODE/.test(src), 'wizard listens for the broadcast');
     const listenIdx = src.indexOf("message.type === 'HOVER_SKIPPED_ENHANCED_MODE'");
     assert.ok(listenIdx > -1);
-    assert.match(src.slice(listenIdx, listenIdx + 700), /hoverSkipCount/,
+    assert.match(src.slice(listenIdx, listenIdx + 1100), /hoverSkipCount/,
       'the listener touches the counter');
     // Code-review P3: the broadcast is deduped (one per tab per reason) and
     // the real per-anchor tally rides payload.skipCount — the tip counts the
     // dispatches via hoverSkipTotal and reads singular when there was one.
-    assert.match(src.slice(listenIdx, listenIdx + 700), /skipCount/,
+    assert.match(src.slice(listenIdx, listenIdx + 1100), /skipCount/,
       'the listener lifts the payload tally');
     const tipIdx = src.indexOf('Hover dispatch');
     assert.ok(tipIdx > -1, 'the post-run tip exists');

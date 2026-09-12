@@ -95,20 +95,27 @@ async function confirmedTools() {
 }
 
 describe('F3: service.update endgame warning (sixty-seventh log)', () => {
-  it('turns 59/60 → receipt.warning names the unverifiable-update risk', async () => {
+  // Sixty-ninth review F5 off-by-one: spend.turns counts turns ALREADY
+  // taken — afterThis = maxTurns - spend.turns remains AFTER this update.
+  it('turns 59/60 (afterThis 0) → LAST-turn wording: finish honestly, no verify can follow', async () => {
     const t = await confirmedTools();
     const ctx = { session: { state: () => ({ session: { artifactVersions: [] } }), spend: { turns: 59 }, budgets: { maxTurns: 60 } } };
     const upd = await t.tools['service.update']({ steps: STEPS }, ctx);
     assert.equal(upd.updated, true);
     assert.ok(upd.warning, 'warning present');
-    assert.match(String(upd.warning), /turn\(s\) left/);
-    assert.match(String(upd.warning), /cannot verify/);
+    assert.match(String(upd.warning), /LAST turn/);
+    assert.match(String(upd.warning), /no verify can follow/);
+    assert.match(String(upd.warning), /finishing honestly/);
   });
 
-  it('turns 58/60 (turnsLeft=2) still warns; 30/60 does not', async () => {
+  it('turns 58/60 (afterThis 1) and 57/60 (afterThis 2) warn with the verify-cost wording; 30/60 does not', async () => {
     const t = await confirmedTools();
-    const edge = await t.tools['service.update']({ steps: STEPS }, { session: { state: () => ({ session: { artifactVersions: [] } }), spend: { turns: 58 }, budgets: { maxTurns: 60 } } });
-    assert.match(String(edge.warning || ''), /turn\(s\) left/);
+    for (const turns of [58, 57]) {
+      const edge = await t.tools['service.update']({ steps: STEPS }, { session: { state: () => ({ session: { artifactVersions: [] } }), spend: { turns }, budgets: { maxTurns: 60 } } });
+      assert.match(String(edge.warning || ''), /turn\(s\) remain/, 'turns=' + turns);
+      assert.match(String(edge.warning || ''), /verify\.run costs 1/, 'turns=' + turns);
+      assert.match(String(edge.warning || ''), /UNVERIFIED/, 'turns=' + turns);
+    }
     const calm = await t.tools['service.update']({ steps: STEPS }, { session: { state: () => ({ session: { artifactVersions: [] } }), spend: { turns: 30 }, budgets: { maxTurns: 60 } } });
     assert.equal(calm.warning, undefined, 'no endgame warning mid-session');
   });

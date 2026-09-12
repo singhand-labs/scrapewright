@@ -6,8 +6,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
+// F6: the vm harness lives in test/helpers/inline-ops-factory.js, shared
+// with list-extract-ops-review.test.js's dual-execution cases.
+const { loadInline, readSrc } = require('./helpers/inline-ops-factory.js');
+const CS = readSrc('content-script.js');
 
-function readSrc(rel) { return fs.readFileSync(path.join(__dirname, '..', rel), 'utf8'); }
 function sliceFn(src, a, b) {
   const s = src.indexOf(a); assert.ok(s > -1, 'marker ' + a);
   const e = src.indexOf(b, s); assert.ok(e > s, 'end ' + b);
@@ -21,23 +24,6 @@ function makeHoverDom() {
   const el = dom.window.document.querySelector('.a');
   el.getBoundingClientRect = function () { return { left: 10, top: 10, width: 50, height: 20, right: 60, bottom: 30 }; };
   return { dom, el };
-}
-
-// vm 工厂：切出 extractWithHoverRecords（content-script inline 版），注入依赖。
-const CS = readSrc('content-script.js');
-// createInlineListExtractOps IIFE 结束于下一个同级函数 getListExtractOps。
-const INLINE_SLICE = sliceFn(CS, 'function createInlineListExtractOps()', '\n  function getListExtractOps()');
-const RESOLVE_SLICE = sliceFn(CS, 'function resolveLabelledbyText(', '\n  async function domLabelledby');
-
-function loadInline(dom) {
-  const ctx = {
-    document: dom.window.document,
-    resolveLabelledbyText: (el, attr) => ({ text: ((el && el.textContent) || '').trim(), attr, refCount: 0, missingIds: [] }),
-    capElementHtmlRead: (v) => v
-  };
-  vm.createContext(ctx);
-  vm.runInContext(RESOLVE_SLICE + '\n' + INLINE_SLICE + '\nthis.__ops = createInlineListExtractOps();', ctx);
-  return ctx.__ops;
 }
 
 describe('T1: hovercards[].popoverText（原文通道）', () => {
@@ -212,13 +198,13 @@ describe('T4: 未消费捕获普查（观测平权）', () => {
     capturedPopovers: { popoverReadFields: 0, samples: ['Shared · Friday, September 11, 2026 at 1:43 AM'] },
     perField: []
   };
-  function runWithDiag(diag) {
+  function runWithDiag(diag, finalData, outputSchema) {
     const deps = {
       orchestrate: async (service, input, orchDeps, options) => {
         options.onEvent({ type: 'STEP_START', stepId: 's3', maxIterations: 1 });
         options.onEvent({ type: 'STEP_ITERATION', stepId: 's3', iteration: 1, selectorDiagnostics: Array.isArray(diag) ? diag : [diag] });
         options.onEvent({ type: 'STEP_DONE', stepId: 's3', iterations: 1, resultPreview: 'ok' });
-        return { finalResult: { posts: [{ postId: '1' }] }, steps: [{ stepId: 's3', stepName: 'x', result: { done: true } }], pages: [] };
+        return { finalResult: finalData || { posts: [{ postId: '1' }] }, steps: [{ stepId: 's3', stepName: 'x', result: { done: true } }], pages: [] };
       },
       ensureLock: async () => {}, getSignal: () => null, log: () => {}, onEvent: () => {},
       createTab: async (u) => ({ id: 11, url: u }), removeTab: async () => {},
@@ -226,7 +212,7 @@ describe('T4: 未消费捕获普查（观测平权）', () => {
       executeScript: async () => ({ result: 'ok', selectorDiagnostics: [] }),
       captureSnapshot: async () => ({ html: '' }), evaluateCondition: async () => true
     };
-    return createVerifyRunner(deps)({ service: { targetUrl: 'https://e.com', steps: [{ id: 's3', script: 'return 1', onSuccess: 'TERMINATE' }], config: {} }, input: {}, outputSchema: null });
+    return createVerifyRunner(deps)({ service: { targetUrl: 'https://e.com', steps: [{ id: 's3', script: 'return 1', onSuccess: 'TERMINATE' }], config: {} }, input: {}, outputSchema: outputSchema === undefined ? null : outputSchema });
   }
   it('verify 报告携带 unusedCaptures 普查（捕获>0 且 0 字段消费）', async () => {
     const out = await runWithDiag(CAPTURED_DIAG);
@@ -236,12 +222,22 @@ describe('T4: 未消费捕获普查（观测平权）', () => {
     assert.ok(uc.samples.some((s) => s.includes('September 11, 2026')));
     assert.match(uc.note, /hoverPopover/);
   });
-  it('字段已声明（popoverReadFields>0 且捕获>0）→ declaredButEmpty 教学普查（不再静默）', async () => {
+  it('字段已声明且健康消费（无空字段证据）→ 静默（F4：普查只在有空值证据时教）', async () => {
     const out = await runWithDiag(Object.assign({}, CAPTURED_DIAG, {
       capturedPopovers: { popoverReadFields: 1, samples: [] }
-    }));
+    }), { posts: [{ postId: '1', postTime: 'September 11, 2026' }] }, {
+      type: 'object', properties: { posts: { type: 'array', items: { type: 'object', properties: { postId: { type: 'string' }, postTime: { type: 'string' } } } } }
+    });
+    assert.ok(!out.report.detectors.unusedCaptures, 'healthy consuming run is silent');
+  });
+  it('字段已声明 + 空值证据（partialEmpty）→ declaredButEmpty 教学普查', async () => {
+    const out = await runWithDiag(Object.assign({}, CAPTURED_DIAG, {
+      capturedPopovers: { popoverReadFields: 1, samples: [] }
+    }), { posts: [{ postId: '1', postTime: '' }, { postId: '2', postTime: '' }] }, {
+      type: 'object', properties: { posts: { type: 'array', items: { type: 'object', properties: { postId: { type: 'string' }, postTime: { type: 'string' } } } } }
+    });
     const uc = out.report.detectors.unusedCaptures;
-    assert.ok(uc, 'declared+captured → census present');
+    assert.ok(uc, 'declared+captured+empty-evidence → census present');
     assert.equal(uc.declaredButEmpty, true);
     assert.match(uc.note, /match/);
   });
@@ -260,11 +256,19 @@ describe('T4: 未消费捕获普查（观测平权）', () => {
     assert.equal(uc.popoverReadFields, 0);
     assert.equal(uc.totalCaptured, 8, 'both calls counted');
   });
-  it('同一调用跨事件重复 → 只计最后一次（无重复计数）', async () => {
-    const out = await runWithDiag([CAPTURED_DIAG, CAPTURED_DIAG]);
+  it('同一调用跨事件重复 → 聚合（5 捕获后随 0 捕获迭代 → 总计 5，F12：keep-last 不再抹掉证据）', async () => {
+    const five = Object.assign({}, CAPTURED_DIAG, {
+      hoverSummary: { anchorsFound: 5, hovercardsCaptured: 5, hoverFailures: 0 },
+      capturedPopovers: { popoverReadFields: 0, samples: ['Shared · Friday'] }
+    });
+    const zero = Object.assign({}, CAPTURED_DIAG, {
+      hoverSummary: { anchorsFound: 0, hovercardsCaptured: 0, hoverFailures: 0 },
+      capturedPopovers: { popoverReadFields: 0, samples: [] }
+    });
+    const out = await runWithDiag([five, zero]);
     const uc = out.report.detectors.unusedCaptures;
     assert.ok(uc);
-    assert.equal(uc.totalCaptured, 4, 'identical diag events deduped to the last one');
+    assert.equal(uc.totalCaptured, 5, 'per-key aggregation sums captured (a trailing 0 no longer erases it)');
   });
   it('diag.read kind unusedCaptures 透出', async () => {
     const { createSessionTools } = require('../lib/session-tools');
