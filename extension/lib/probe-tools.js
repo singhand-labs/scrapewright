@@ -56,6 +56,23 @@
     // the stash is never interleaved.
     let lastSelectorDiagnostics = null;
 
+    // Sixty-eighth log F1: probe snippets are NOT steps — the rail's
+    // per-step 30s budget had no knob, and a 33-container $extractWithHover
+    // was resent verbatim 3× against it. probe.snippet accepts timeoutMs
+    // (default 30000, capped at 90000); the rail takes no second argument,
+    // so the timeout is a client-side race around executeDsl — the loser
+    // returns an error naming timeoutMs as the knob. The race only gives up
+    // WAITING; the underlying rail call runs on (probes serialize through
+    // ensureLock, so the next probe queues behind it, same as before).
+    const SNIPPET_DEFAULT_TIMEOUT_MS = 30000;
+    const SNIPPET_MAX_TIMEOUT_MS = 90000;
+
+    function snippetTimeoutError(ms) {
+      return {
+        error: 'snippet exceeded ' + ms + 'ms — size the batch (each hovered anchor burns ~5-10s; narrow with maxContainers) or pass a larger timeoutMs (≤' + SNIPPET_MAX_TIMEOUT_MS + ')'
+      };
+    }
+
     async function runSnippet(snippet) {
       lastSelectorDiagnostics = null;
       try {
@@ -70,6 +87,30 @@
       } catch (err) {
         return { error: String((err && err.message) || err) };
       }
+    }
+
+    // F1 race wrapper (see comment above): resolves with runSnippet's value,
+    // or the timeoutMs-naming error when the budget elapses first.
+    function runSnippetWithTimeout(snippet, timeoutMs) {
+      return new Promise((resolve) => {
+        let settled = false;
+        const timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          resolve(snippetTimeoutError(timeoutMs));
+        }, timeoutMs);
+        runSnippet(snippet).then((v) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(v);
+        }, (e) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve({ error: String((e && e.message) || e) });
+        });
+      });
     }
 
     // Dual dispatch: the engine calls every tool as fn(args, ctx) with a
@@ -809,7 +850,16 @@
       if (!code.trim()) return { error: 'code (required) — an async function BODY using the $ API; MUST contain a top-level return' };
       if (code.length > 8000) return { error: 'code too long (' + code.length + ' chars, max 8000) — split the experiment' };
       if (!/\breturn\b/.test(code)) return { error: 'snippet must contain a top-level return statement (STEP_NO_RETURN otherwise)' };
-      const r = await runSnippet(code);
+      let timeoutMs = SNIPPET_DEFAULT_TIMEOUT_MS;
+      if (a.timeoutMs != null) {
+        if (typeof a.timeoutMs !== 'number' || !isFinite(a.timeoutMs) || a.timeoutMs <= 0) {
+          return { error: 'timeoutMs must be a positive number of milliseconds (default ' + SNIPPET_DEFAULT_TIMEOUT_MS + ', max ' + SNIPPET_MAX_TIMEOUT_MS + ')' };
+        }
+        // Cap, don't reject: a caller asking 100000 gets 90000, the most
+        // the probe lane will ever spend on one experiment.
+        timeoutMs = Math.min(Math.floor(a.timeoutMs), SNIPPET_MAX_TIMEOUT_MS);
+      }
+      const r = await runSnippetWithTimeout(code, timeoutMs);
       // Code-review P3: r.error is a failure ONLY when it is the sole own
       // key — a snippet legitimately returning {error:'x', data:1} (e.g. an
       // $openTab result envelope or the model's own shaped return) passed

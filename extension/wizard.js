@@ -2240,7 +2240,16 @@ function createWizardIoBridge() {
         if (tiErrEl) { tiErrEl.textContent = ''; tiErrEl.classList.add('hidden'); }
         if (tiRow && tiEl) {
           const inProps = (r.inputSchema && r.inputSchema.properties && typeof r.inputSchema.properties === 'object') ? r.inputSchema.properties : {};
-          const ti = (r.testInput && typeof r.testInput === 'object' && !Array.isArray(r.testInput)) ? r.testInput : {};
+          // Sixty-eighth log F4: an EMPTY proposal testInput must not
+          // prefill {} when prior values exist — the fallback chain is
+          // proposal → wizard-level current test input → {}. (The session
+          // layer already prefills artifact/session-confirmed values before
+          // the panel; this is the wizard-side second layer for direct
+          // bridge callers. The user can never bless an EMPTY testInput
+          // while confirmed values exist.)
+          const rt = (r.testInput && typeof r.testInput === 'object' && !Array.isArray(r.testInput)) ? r.testInput : null;
+          const wt = (wizardState.testInput && typeof wizardState.testInput === 'object' && !Array.isArray(wizardState.testInput)) ? wizardState.testInput : null;
+          const ti = (rt && Object.keys(rt).length > 0) ? rt : ((wt && Object.keys(wt).length > 0) ? wt : (rt || {}));
           const hasValues = Object.keys(ti).length > 0;
           if (Object.keys(inProps).length > 0 || hasValues) {
             tiEl.value = JSON.stringify(ti, null, 2);
@@ -2404,8 +2413,16 @@ function getSessionMaxTurns() {
 // from existing session events and panel show/hide hooks — no engine or
 // library changes. state ∈ running|waiting|paused|done|crashed; state=null
 // hides the badge and restores the tab title.
+// Sixty-eighth log F3: 'waiting' means a request panel is PARKED asking the
+// user something — the tab title carries a question marker so a background
+// tab shows the ask in the tab strip (the incident parked user.observe for
+// 23 minutes with zero tab-level visibility), and a single +5min reminder
+// toast fires if the panel is still open.
+let parkReminderTimer = null;
+
 function setSessionBadge(state, text) {
   const badge = document.getElementById('sessionStatusBadge');
+  if (parkReminderTimer) { clearTimeout(parkReminderTimer); parkReminderTimer = null; }
   if (!badge) return;
   badge.classList.remove('is-running', 'is-waiting', 'is-paused', 'is-done', 'is-crashed');
   if (!state) {
@@ -2417,7 +2434,14 @@ function setSessionBadge(state, text) {
   badge.classList.add('is-' + state);
   const label = document.getElementById('sessionStatusText');
   if (label) label.textContent = String(text || '');
-  if (state === 'running' || state === 'waiting') document.title = '● researching… — ' + BASE_DOC_TITLE;
+  if (state === 'running') document.title = '● researching… — ' + BASE_DOC_TITLE;
+  else if (state === 'waiting') {
+    document.title = '❓ your answer is needed — ' + BASE_DOC_TITLE;
+    parkReminderTimer = setTimeout(() => {
+      parkReminderTimer = null;
+      if (sessionPanelOpen()) showToast('The research session is still waiting for your answer (panel open for 5 minutes).', 'warn', 8000);
+    }, 5 * 60 * 1000);
+  }
   else if (state === 'paused') document.title = '‖ paused — ' + BASE_DOC_TITLE;
   else document.title = BASE_DOC_TITLE;
 }
@@ -2425,7 +2449,9 @@ function setSessionBadge(state, text) {
 function sessionPanelOpen() {
   const ann = document.getElementById('annotationRequestPanel');
   const io = document.getElementById('ioConfirmPanel');
-  return (ann && !ann.classList.contains('hidden')) || (io && !io.classList.contains('hidden'));
+  const obs = document.getElementById('userObservePanel');
+  return (ann && !ann.classList.contains('hidden')) || (io && !io.classList.contains('hidden')) ||
+    (obs && !obs.classList.contains('hidden'));
 }
 
 // A closed request panel returns the badge to the engine's actual status —

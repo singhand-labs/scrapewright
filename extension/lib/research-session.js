@@ -727,6 +727,15 @@
       segmentStart = now();
       emit('session_start', { sessionId: state.id, resuming: resuming });
       let report = null;
+      // Sixty-eighth log F2: consecutive-identical-failure tracker. The
+      // incident resent the SAME failing 33-container $extractWithHover
+      // snippet 3x against the 30s probe budget — identical input, identical
+      // error, no shape change. Tracks the last FAILED tool call (name +
+      // args serialization) and error prefix; a second consecutive failure
+      // of the same call with the same error prefix (first 80 chars) emits
+      // ONE system transcript note teaching a shape change. Any success or
+      // any args/error change resets the tracker.
+      let lastFail = null;
       try {
         while (true) {
           if (abortFlag) { report = await stop('aborted', abortReason); break; }
@@ -1047,6 +1056,27 @@
           // strings, array counts, tight label.
           const summary = Protocol.compactToolResultForLLM(callLabel, result, toolResultCapChars);
           state.transcript.push({ kind: 'tool', name: turn.tool, ok: !isErrorResult(result), result: result, summary: summary });
+          // Sixty-eighth log F2: nudge on the 2nd consecutive identical
+          // failure (same tool + same args + same error prefix). See the
+          // tracker declaration at loop start for the incident.
+          if (isErrorResult(result)) {
+            const failMsg = typeof result.error === 'string' ? result.error : 'grounding rejected';
+            const callKey = turn.tool + '|' + JSON.stringify(turn.args || {});
+            if (lastFail && lastFail.key === callKey &&
+                String(failMsg).slice(0, 80) === String(lastFail.msg).slice(0, 80)) {
+              if (!lastFail.fired) {
+                lastFail.fired = true;
+                state.transcript.push({ kind: 'system', text:
+                  'REPEATED IDENTICAL FAILURE: this is the 2nd consecutive call of ' + turn.tool +
+                  ' with substantially the same arguments failing the same way — resending the same input cannot change the outcome. ' +
+                  'Change the SHAPE of the attempt per the error teaching (e.g. narrow the batch with maxContainers:1, split the range, shrink the timeout, or probe a single representative container first).' });
+              }
+            } else {
+              lastFail = { key: callKey, msg: failMsg, fired: false };
+            }
+          } else {
+            lastFail = null;
+          }
           // Twenty-second log: slicing the FIRST 200 chars off the
           // transcript summary let a big-args label (service.update echoes
           // 1000+ chars of steps) eat the whole event — two ERRs were

@@ -151,8 +151,9 @@ describe('interaction UX: panels bring the wizard tab to the front', () => {
       assert.ok(idx > -1, anchor + ' must exist');
       // 2500→4000 (forty-sixth log): the io.confirm panel-show moment gained
       // the editable testInput prefill block between the anchor and its
-      // focusWizardTab() call.
-      const chunk = WIZARD_JS.slice(idx, idx + 4000);
+      // focusWizardTab() call. 4000→4600 (sixty-eighth log F4): the prefill
+      // gained the wizardState fallback chain.
+      const chunk = WIZARD_JS.slice(idx, idx + 4600);
       assert.ok(chunk.includes('focusWizardTab()'), anchor + ' context must call focusWizardTab');
     }
   });
