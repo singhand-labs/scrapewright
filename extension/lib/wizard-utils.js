@@ -1386,6 +1386,16 @@ function looksLikeDate(v) {
   return false;
 }
 
+// Sixty-ninth log: full-vs-partial ABSOLUTE classification. "August 2" is a
+// month-day WITHOUT a year — date-shaped, not relative, and the binary
+// relative flag blessed it as a full absolute while the hover tooltip carried
+// "August 2, 2024 at 3:14 PM". Calendar-generic year tokens only: a 4-digit
+// 19xx/20xx number or a CJK 年 year. No site vocabulary.
+function hasYearToken(v) {
+  const s = String(v == null ? '' : v);
+  return /\b(?:19|20)\d{2}\b/.test(s) || /\d{4}\s*年/.test(s);
+}
+
 // Sixty-fourth log: whole-string date predicates (looksLikeDate) answer "is
 // this FIELD plausibly a time field" — containment is enough there. But
 // probe.timestamp used the same predicate as a VALUE gate, and prose that
@@ -3386,8 +3396,10 @@ function detectRelativeTimestamps(data, outputSchema) {
       for (const f of Object.keys(itemProps)) {
         if (!TIME_FIELD.test(f)) continue;
         let relativeCount = 0;
+        let partialCount = 0;
         let total = 0;
         let sample = null;
+        let partialSample = null;
         for (const rec of arr) {
           if (!rec || typeof rec !== 'object') continue;
           total += 1;
@@ -3395,16 +3407,49 @@ function detectRelativeTimestamps(data, outputSchema) {
           if (isRelative(v)) {
             relativeCount += 1;
             if (!sample) sample = v;
+          } else if (typeof v === 'string' && v.trim() && looksLikeDate(v) && !hasYearToken(v)) {
+            // Sixty-ninth log: "August 2" is a PARTIAL absolute — date-shaped,
+            // not a relative age, so the relative census never named it, yet it
+            // lacks the year the hover tooltip usually carries. Mixed
+            // populations render recent items as relative ages and older ones
+            // as month-day.
+            partialCount += 1;
+            if (!partialSample) partialSample = v;
           }
         }
-        if (relativeCount > 0) {
-          out.push({ field: f, path: key + '.' + f, sampleValue: sample, relativeCount: relativeCount, totalRecords: total });
+        if (relativeCount > 0 || partialCount > 0) {
+          const entry = {
+            field: f,
+            path: key + '.' + f,
+            sampleValue: sample || partialSample,
+            relativeCount: relativeCount,
+            partialAbsoluteCount: partialCount,
+            partialSample: partialSample,
+            totalRecords: total
+          };
+          if (partialCount > 0) {
+            entry.note = String(partialSample).slice(0, 60) + ' (no year — partial absolute; the hover tooltip often carries the full date)';
+          }
+          out.push(entry);
         }
       }
     } else if (prop.type === 'string' && TIME_FIELD.test(key)) {
       const v = data[key];
-      if (isRelative(v)) {
-        out.push({ field: key, path: key, sampleValue: v, relativeCount: 1, totalRecords: 1 });
+      const partialOnly = typeof v === 'string' && v.trim() && !isRelative(v) && looksLikeDate(v) && !hasYearToken(v);
+      if (isRelative(v) || partialOnly) {
+        const entry = {
+          field: key,
+          path: key,
+          sampleValue: v,
+          relativeCount: isRelative(v) ? 1 : 0,
+          partialAbsoluteCount: partialOnly ? 1 : 0,
+          partialSample: partialOnly ? v : null,
+          totalRecords: 1
+        };
+        if (partialOnly) {
+          entry.note = String(v).slice(0, 60) + ' (no year — partial absolute; the hover tooltip often carries the full date)';
+        }
+        out.push(entry);
       }
     }
   }
@@ -5381,7 +5426,7 @@ function detectNeverExtractedFields(steps, outputSchema) {
 // direct property access keeps working. test/forty-sixth-log-followups.test.js
 // pins marker-bag keys === module.exports keys so a future export cannot
 // land on one surface only (the inline-fallback drift class, RC8/RC35).
-var WU_EXPORT_BAG = { parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+var WU_EXPORT_BAG = { parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, hasYearToken, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = WU_EXPORT_BAG;

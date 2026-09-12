@@ -2115,6 +2115,16 @@
     /\b\d+\s*(?:second|minute|hour|day|week|month|year)s?\s+ago\b/g,
     /[0-9一二三四五六七八九十百千]+\s*(?:秒|分钟|分|小时|时|天|日|周|月|年)\s*前/g
   ];
+  // Sixty-ninth log: full-vs-partial absolute classification (twin of
+  // wizard-utils hasYearToken — regex parity pinned by the twins test).
+  // "August 2" is date-shaped and not relative, so the binary relative flag
+  // blessed it as a FULL absolute while the tooltip carried the year.
+  var TS_HAS_YEAR_RES = [/\b(?:19|20)\d{2}\b/, /\d{4}\s*年/];
+  function TS_hasYear(v) {
+    const s = String(v == null ? '' : v);
+    for (const re of TS_HAS_YEAR_RES) { if (re.test(s)) return true; }
+    return false;
+  }
   function extractDateSubstringsCS(text) {
     const s = String(text == null ? '' : text);
     if (!s) return [];
@@ -2176,7 +2186,7 @@
         const k = source + '|' + v;
         if (seen.has(k)) return;
         seen.add(k);
-        candidates.push({ value: v.slice(0, 120), source: source, relative: rel });
+        candidates.push({ value: v.slice(0, 120), source: source, relative: rel, partial: !rel && !TS_hasYear(v) });
       };
       if (str.length <= TS_MAX_WHOLE_VALUE_CHARS) {
         for (const re of TS_SHAPE_RES) {
@@ -2196,12 +2206,15 @@
       let lbl = null;
       try { lbl = harvestAnchorLabel(anchor); } catch (_) { lbl = null; }
       if (lbl && lbl.text) push(lbl.text, 'labelledby');
-      // Hover only while no absolute candidate exists yet and the anchor
-      // budget holds — once a date is in hand, remaining anchors cost
-      // nothing but time. Default 4500ms: tooltips mount in 600-1600ms, and
+      // Hover only while no FULL absolute candidate exists yet and the anchor
+      // budget holds — once a year-carrying date is in hand, remaining
+      // anchors cost nothing but time. A PARTIAL absolute ("August 2") does
+      // NOT satisfy this gate: the 69th session's cheap labelledby month-day
+      // stopped the hunt before the tooltip carrying the full date was ever
+      // hovered. Default 4500ms: tooltips mount in 600-1600ms, and
       // narrowing the dwell below that (the 65th session's 1200ms) closes
       // the capture window before the popover appears.
-      const haveAbs = candidates.some((c) => !c.relative);
+      const haveAbs = candidates.some((c) => !c.relative && !c.partial);
       if (haveAbs || hoversDone >= TS_MAX_HOVER_ANCHORS) continue;
       if (TS_SHARED_HOVER_BUDGET_MS <= 0) { hoverBudgetExhausted = true; break; }
       hoversDone += 1;
@@ -2221,11 +2234,13 @@
           const k = 'popoverText|' + sub;
           if (seen.has(k)) continue;
           seen.add(k);
-          candidates.push({ value: sub.slice(0, 120), source: 'popoverText', relative: TS_REL_RE.test(sub) });
+          candidates.push({ value: sub.slice(0, 120), source: 'popoverText', relative: TS_REL_RE.test(sub), partial: !TS_REL_RE.test(sub) && !TS_hasYear(sub) });
         }
       }
     }
-    const absolute = candidates.find((c) => !c.relative) || null;
+    // Pick order (sixty-ninth log): full absolute (year token present) →
+    // partial absolute (year-less month-day) → relative.
+    const absolute = candidates.find((c) => !c.relative && !c.partial) || candidates.find((c) => !c.relative) || null;
     const relative = candidates.find((c) => c.relative) || null;
     const heuristic = absolute ? absolute.value : (relative ? relative.value : '');
     const result = {
@@ -2243,6 +2258,13 @@
     };
     if (!candidates.length) {
       result.note = 'no date-shaped value on this card (labelledby / aria-label / visible text / hover popover text). If the page exposes no timestamp for these cards, renegotiate the field via io.confirm instead of shipping titles or junk as postTime.';
+    } else if (absolute && absolute.partial) {
+      // Sixty-ninth log: distinct from a relative-only harvest — an absolute
+      // WAS found but it lacks a year. $timestamp's own hover phase already
+      // ran over this card's anchors; narrowing anchorSel to the timestamp
+      // link and re-running gives the hover budget to the one anchor that
+      // matters.
+      result.note = 'the absolute candidate lacks a YEAR (month-day only — recent items often render relative ages while older ones render month-day; this population mixes them). If the year or clock time matters, the hover tooltip usually carries the full date — this call\'s own hover phase already ran, so narrow anchorSel to the timestamp link itself and re-run $timestamp, or bind via read:\'hoverPopover\' with your own match regex.';
     }
     if (hoverBudgetExhausted) {
       // F2 note fidelity: only blame EARLIER $timestamp calls when prior

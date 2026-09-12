@@ -1033,7 +1033,9 @@
               ? result.detectors.relativeTimestamps
               : [];
             state.lastVerifyRelativeTimestamps = rtList.length
-              ? rtList.slice(0, 6).map((f) => String(f.path || f.field) + ' ' + (f.relativeCount || 0) + '/' + (f.totalRecords || 0) + ' relative (e.g. ' + JSON.stringify(String(f.sampleValue || '').slice(0, 40)) + ')')
+              ? rtList.slice(0, 6).map((f) => String(f.path || f.field) + ' ' + (f.relativeCount || 0) + '/' + (f.totalRecords || 0) + ' relative' +
+                  ((f.partialAbsoluteCount || 0) > 0 ? ' + ' + f.partialAbsoluteCount + ' partial absolutes (no year, e.g. ' + JSON.stringify(String(f.partialSample || '').slice(0, 40)) + ')' : '') +
+                  ' (e.g. ' + JSON.stringify(String(f.sampleValue || '').slice(0, 40)) + ')')
               : null;
             // Fifty-fifth log: the junk-class censuses must ride the stop
             // disclosures too — the model shipped postTime="Learn More" on

@@ -726,6 +726,18 @@
       const m = String(v == null ? '' : v).match(/\d{4}-\d{1,2}-\d{1,2}/);
       return m ? [m[0]] : [];
     }
+    // Sixty-ninth log: full-vs-partial absolute classification. "August 2"
+    // (labelledby) is date-shaped and not relative, so the binary relative
+    // flag blessed it as a FULL absolute while the hover tooltip carried the
+    // year-carrying date — and the model bound the cheap value, never
+    // touching read:'hoverPopover'. partial marks year-less absolutes; a
+    // full absolute (year token present) outranks them in the pick order.
+    function hasYearTokenRef(v) {
+      if (__wuBag && typeof __wuBag.hasYearToken === 'function') return __wuBag.hasYearToken(v);
+      // Degraded fallback (page context without wizard-utils): 4-digit
+      // 19xx/20xx token only — misses CJK 年 dates but never false-positives.
+      return /\b(?:19|20)\d{2}\b/.test(String(v == null ? '' : v));
+    }
 
     async function timestamp(args0) {
       const a = args0 && typeof args0 === 'object' ? args0 : {};
@@ -766,12 +778,12 @@
         const str = typeof value === 'string' ? value.trim() : '';
         if (!str) return;
         if (str.length <= MAX_WHOLE_VALUE_CHARS) {
-          if (looksLikeDateRef(str)) candidates.push({ value: str.slice(0, 120), source: source, relative: REL.test(str) });
+          if (looksLikeDateRef(str)) candidates.push({ value: str.slice(0, 120), source: source, relative: REL.test(str), partial: !REL.test(str) && !hasYearTokenRef(str) });
           return;
         }
         for (const sub of extractDateSubstringsRef(str)) {
           const v = String(sub).slice(0, 120);
-          candidates.push({ value: v, source: source, relative: REL.test(v) });
+          candidates.push({ value: v, source: source, relative: REL.test(v), partial: !REL.test(v) && !hasYearTokenRef(v) });
         }
       };
       push(rec.__t_label, 'labelledby');
@@ -789,11 +801,14 @@
           const popText = String(h.htmlSnippet).replace(/<[^>]*>/g, ' ');
           for (const sub of extractDateSubstringsRef(popText)) {
             const v = String(sub).slice(0, 120);
-            candidates.push({ value: v, source: 'hover.popoverText', relative: REL.test(v) });
+            candidates.push({ value: v, source: 'hover.popoverText', relative: REL.test(v), partial: !REL.test(v) && !hasYearTokenRef(v) });
           }
         }
       }
-      const absolute = (candidates.find((c) => !c.relative) || null);
+      // Pick order (sixty-ninth log): full absolute (no relative flag, year
+      // token present) → partial absolute (year-less month-day) → relative.
+      const absolute = (candidates.find((c) => !c.relative && !c.partial) ||
+                        candidates.find((c) => !c.relative) || null);
       const relative = (candidates.find((c) => c.relative) || null);
       const out = {
         containerSel: containerSel,
@@ -812,6 +827,11 @@
         out.note = 'no date-shaped value on the anchors THIS call hovered (labelledby / aria-label / text, hover-mounted popover text included). If a second probe.timestamp with a narrower anchorSel over the timestamp element itself also fails, these anchors expose no timestamp — renegotiate the field via io.confirm instead of shipping titles or relative ages as postTime.';
       } else if (!absolute) {
         out.note = 'only RELATIVE ages are date-shaped here — the absolute value needs the hover-mounted tooltip: re-run with a narrower anchorSel over the timestamp link itself; if that also yields only relative ages, renegotiate.';
+      } else if (absolute.partial) {
+        // Distinct from the only-relative case above: an absolute WAS found,
+        // but it lacks a year. Keep both notes mutually exclusive so the
+        // model can tell which situation it is in.
+        out.note = 'the absolute candidate lacks a YEAR (month-day only — recent items often render relative ages while older ones render month-day; this population mixes them). If the year or clock time matters, the hover tooltip usually carries the full date: inspect with probe.hover, then bind the field via read:\'hoverPopover\' with your own match regex.';
       }
       if (observationLog) {
         observationLog.record({
