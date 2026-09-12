@@ -57,6 +57,19 @@
     return false;
   }
 
+  // Sixty-ninth review F10: canonical (key-order-insensitive, recursive) args
+  // serialization — the repeated-failure tracker must see {a:1,b:2} and
+  // {b:2,a:1} as the SAME call.
+  function canonicalizeArgs(v) {
+    if (Array.isArray(v)) return v.map(canonicalizeArgs);
+    if (v && typeof v === 'object') {
+      const o = {};
+      for (const k of Object.keys(v).sort()) o[k] = canonicalizeArgs(v[k]);
+      return o;
+    }
+    return v;
+  }
+
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
   // Eighteenth log: splice a continuation onto a cut-off reply. The final
@@ -194,11 +207,24 @@
     let parkedTotal = 0;
     let parkedThisSegment = 0;
     let parkOpenSince = null;
-    function parkBegin() { if (parkOpenSince == null) parkOpenSince = now(); }
+    // Sixty-ninth review F13: WHAT the session is parked on — a resumed or
+    // inspected session can see "the engine is waiting on the user via
+    // io.confirm / annotate.request / user.observe" instead of a silently
+    // frozen clock. Set by the park callers through the optional descriptor.
+    let awaitingUser = null;
+    function parkBegin(kind, question) {
+      if (parkOpenSince == null) parkOpenSince = now();
+      awaitingUser = {
+        kind: typeof kind === 'string' && kind ? kind.slice(0, 60) : 'user',
+        question: typeof question === 'string' ? question.slice(0, 200) : '',
+        since: now()
+      };
+    }
     function parkEnd() {
-      if (parkOpenSince == null) return;
+      if (parkOpenSince == null) { awaitingUser = null; return; }
       const d = now() - parkOpenSince;
       parkOpenSince = null;
+      awaitingUser = null;
       parkedTotal += d;
       parkedThisSegment += d;
     }
@@ -294,12 +320,15 @@
     }
 
     function stateForPersist() {
-      return {
+      const out = {
         engine: 1,
         session: state,
         observation: observationLog.serialize(),
         ledger: ledger.serialize()
       };
+      // F13: surface an OPEN user park to persistence/resume.
+      if (awaitingUser) out.awaitingUser = awaitingUser;
+      return out;
     }
 
     async function persist() {
@@ -734,8 +763,11 @@
       // args serialization) and error prefix; a second consecutive failure
       // of the same call with the same error prefix (first 80 chars) emits
       // ONE system transcript note teaching a shape change. Any success or
-      // any args/error change resets the tracker.
+      // any args/error change resets the tracker. F10: + a ring of the last
+      // 3 failing canonical keys (non-consecutive repeat within 3 fires too)
+      // and transient-signature errors are exempt (retryable by teaching).
       let lastFail = null;
+      const recentFailKeys = [];
       try {
         while (true) {
           if (abortFlag) { report = await stop('aborted', abortReason); break; }
@@ -1059,23 +1091,46 @@
           // Sixty-eighth log F2: nudge on the 2nd consecutive identical
           // failure (same tool + same args + same error prefix). See the
           // tracker declaration at loop start for the incident.
+          // Sixty-ninth review F10 hardening:
+          //  - the call key uses a CANONICAL args serialization (recursively
+          //    key-sorted) — {a,b} vs {b,a} is the SAME call, not a new one;
+          //  - TRANSIENT-looking errors (network/retry/timeout classes the
+          //    engine already teaches as retryable) never fire the nudge;
+          //  - besides the consecutive slot, a small ring of the last 3
+          //    failing keys fires on a NON-consecutive repeat within 3 —
+          //    fail, one unrelated call, fail-again used to reset the slot
+          //    and silence the nudge.
           if (isErrorResult(result)) {
             const failMsg = typeof result.error === 'string' ? result.error : 'grounding rejected';
-            const callKey = turn.tool + '|' + JSON.stringify(turn.args || {});
-            if (lastFail && lastFail.key === callKey &&
-                String(failMsg).slice(0, 80) === String(lastFail.msg).slice(0, 80)) {
-              if (!lastFail.fired) {
+            const transientRe = /transient|retry|timeout after|network|Failed to fetch/i;
+            const isTransient = transientRe.test(String(failMsg));
+            const callKey = turn.tool + '|' + JSON.stringify(canonicalizeArgs(turn.args || {}));
+            const errPrefix = String(failMsg).slice(0, 80);
+            if (!isTransient) {
+              const consecutive = lastFail && lastFail.tool === turn.tool && lastFail.key === callKey && lastFail.errPrefix === errPrefix;
+              const nonConsecutiveInRange = !consecutive &&
+                recentFailKeys.indexOf(callKey) !== -1;
+              if (lastFail && !lastFail.fired && consecutive) {
                 lastFail.fired = true;
                 state.transcript.push({ kind: 'system', text:
                   'REPEATED IDENTICAL FAILURE: this is the 2nd consecutive call of ' + turn.tool +
                   ' with substantially the same arguments failing the same way — resending the same input cannot change the outcome. ' +
                   'Change the SHAPE of the attempt per the error teaching (e.g. narrow the batch with maxContainers:1, split the range, shrink the timeout, or probe a single representative container first).' });
+              } else if (nonConsecutiveInRange) {
+                state.transcript.push({ kind: 'system', text:
+                  'REPEATED IDENTICAL FAILURE: ' + turn.tool +
+                  ' with these same arguments failed the same way again within the last 3 calls — resending the same input cannot change the outcome. ' +
+                  'Change the SHAPE of the attempt per the error teaching (e.g. narrow the batch with maxContainers:1, split the range, shrink the timeout, or probe a single representative container first).' });
               }
+              recentFailKeys.push(callKey);
+              if (recentFailKeys.length > 3) recentFailKeys.shift();
+              lastFail = consecutive ? lastFail : { tool: turn.tool, key: callKey, errPrefix: errPrefix, fired: !!nonConsecutiveInRange };
             } else {
-              lastFail = { key: callKey, msg: failMsg, fired: false };
+              lastFail = null;
             }
           } else {
             lastFail = null;
+            recentFailKeys.length = 0;
           }
           // Twenty-second log: slicing the FIRST 200 chars off the
           // transcript summary let a big-args label (service.update echoes

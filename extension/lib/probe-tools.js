@@ -59,24 +59,39 @@
     // Sixty-eighth log F1: probe snippets are NOT steps — the rail's
     // per-step 30s budget had no knob, and a 33-container $extractWithHover
     // was resent verbatim 3× against it. probe.snippet accepts timeoutMs
-    // (default 30000, capped at 90000); the rail takes no second argument,
-    // so the timeout is a client-side race around executeDsl — the loser
-    // returns an error naming timeoutMs as the knob. The race only gives up
-    // WAITING; the underlying rail call runs on (probes serialize through
-    // ensureLock, so the next probe queues behind it, same as before).
+    // (default 30000, capped at 90000). Sixty-ninth review F1: the rail now
+    // FORWARDS opts.timeoutMs to the executor, so the knob actually extends
+    // the executor budget (≤90s) instead of only racing it client-side; the
+    // client race stays as a backstop for rails that ignore the option.
+    // Probes serialize through ensureLock, so the next probe queues behind
+    // the current one, same as before.
     const SNIPPET_DEFAULT_TIMEOUT_MS = 30000;
     const SNIPPET_MAX_TIMEOUT_MS = 90000;
 
-    function snippetTimeoutError(ms) {
+    // Sixty-ninth review F11 (queue-wait disclosure): probes serialize on the
+    // rail's exec lock, but the client cannot see WHEN the lock is granted —
+    // a timed-out probe may have burned its whole budget waiting behind the
+    // previous probe, which teaches "shrink the snippet" when the real fix is
+    // "wait your turn". A local promise chain mirrors the rail's
+    // serialization (it is semantics-preserving: the rail serializes anyway)
+    // and measures how long each probe waited in queue.
+    let railTail = Promise.resolve();
+
+    function snippetTimeoutError(ms, queuedMs) {
+      const queuedNote = (typeof queuedMs === 'number' && queuedMs > 2000)
+        ? ' (' + Math.round(queuedMs) + 'ms of that spent waiting behind the previous probe on the serialized rail)'
+        : '';
       return {
-        error: 'snippet exceeded ' + ms + 'ms — size the batch (each hovered anchor burns ~5-10s; narrow with maxContainers) or pass a larger timeoutMs (≤' + SNIPPET_MAX_TIMEOUT_MS + ')'
+        error: 'snippet exceeded ' + ms + 'ms' + queuedNote + ' — size the batch (each hovered anchor burns ~5-10s; narrow with maxContainers) or pass a larger timeoutMs (≤' + SNIPPET_MAX_TIMEOUT_MS + ')'
       };
     }
 
-    async function runSnippet(snippet) {
+    async function runSnippet(snippet, timeoutMs) {
       lastSelectorDiagnostics = null;
+      const opts = (typeof timeoutMs === 'number' && timeoutMs > 0)
+        ? { timeoutMs: Math.min(timeoutMs, SNIPPET_MAX_TIMEOUT_MS) } : undefined;
       try {
-        const env = await executeDsl(snippet);
+        const env = await executeDsl(snippet, opts);
         if (env && typeof env === 'object' && !Array.isArray(env) && typeof env.error === 'string') return env;
         if (env && typeof env === 'object' && !Array.isArray(env) &&
             typeof env.result !== 'undefined' && Array.isArray(env.selectorDiagnostics)) {
@@ -90,25 +105,35 @@
     }
 
     // F1 race wrapper (see comment above): resolves with runSnippet's value,
-    // or the timeoutMs-naming error when the budget elapses first.
+    // or the timeoutMs-naming error when the budget elapses first. The call
+    // first waits its turn on the local serialization chain (rail mirror);
+    // the budget timer starts when the turn begins, so queue wait does not
+    // count against the snippet's own budget — but it IS disclosed in the
+    // timeout error when it exceeds 2s.
     function runSnippetWithTimeout(snippet, timeoutMs) {
       return new Promise((resolve) => {
-        let settled = false;
-        const timer = setTimeout(() => {
-          if (settled) return;
-          settled = true;
-          resolve(snippetTimeoutError(timeoutMs));
-        }, timeoutMs);
-        runSnippet(snippet).then((v) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          resolve(v);
-        }, (e) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          resolve({ error: String((e && e.message) || e) });
+        const tEntry = Date.now();
+        const prev = railTail;
+        let turnDone;
+        railTail = new Promise((r) => { turnDone = r; });
+        prev.then(() => {
+          const queuedMs = Date.now() - tEntry;
+          let settled = false;
+          const timer = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            resolve(snippetTimeoutError(timeoutMs, queuedMs));
+          }, timeoutMs);
+          // The chain slot releases only when the underlying rail call
+          // settles — a timed-out probe's rail call keeps running and the
+          // NEXT probe still queues behind it, exactly like the rail's lock.
+          const p = Promise.resolve().then(() => runSnippet(snippet, timeoutMs));
+          p.then((v) => {
+            if (!settled) { settled = true; clearTimeout(timer); resolve(v); }
+          }, (e) => {
+            if (!settled) { settled = true; clearTimeout(timer); resolve({ error: String((e && e.message) || e) }); }
+          });
+          p.then(turnDone, turnDone);
         });
       });
     }

@@ -39,14 +39,33 @@ function applyMatch(value, re) {
 }
 // Code-review P2 hardening: (a) reset lastIndex defensively — new RegExp(m)
 // compiles flagless, but user-supplied source could still smuggle state via
-// sticky-ish constructs in some engines; the reset is free. (b) skip .test on
-// >2000-char strings — a catastrophic-backtracking predicate over a 50K-char
-// outerHTML read would hang the whole step budget.
+// sticky-ish constructs in some engines; the reset is free. (b) >2000-char
+// strings are matched against their FIRST 2000 chars only — a catastrophic-
+// backtracking predicate over a 50K-char outerHTML read would hang the whole
+// step budget. Sixty-ninth review F8: the guard used to return FALSE
+// silently for long strings (a match early in a long popover HTML read was
+// invisible); it now tests the bounded prefix and counts the skipped guard
+// so diagnostics can disclose it (getMatchGuardSkips).
+const MATCH_GUARD_LIMIT = 2000;
+let matchGuardSkips = 0;
 function testMatchValue(v, re) {
-  if (typeof v !== 'string' || v.length > 2000) return false;
+  if (typeof v !== 'string') return false;
+  let s = v;
+  if (s.length > MATCH_GUARD_LIMIT) {
+    matchGuardSkips += 1;
+    s = s.slice(0, MATCH_GUARD_LIMIT);
+  }
   re.lastIndex = 0;
-  return re.test(v);
+  return re.test(s);
 }
+function getMatchGuardSkips() { return matchGuardSkips; }
+function resetMatchGuardSkips() { matchGuardSkips = 0; }
+// Sixty-ninth review F9: hover-read candidate caps moved OUT of records
+// (records[i][field+'__capped'] polluted the output schema consumers read)
+// into this per-call map, lifted into _diagnostics.hoverReadCapped by the
+// caller. extractWithHoverRecords resets it at call start.
+let hoverReadCappedByField = null;
+function getHoverReadCapped() { return hoverReadCappedByField; }
 function isHoverPopoverSpec(spec) {
   return !!(spec && typeof spec === 'object' &&
     (spec.read === 'hoverPopover' || spec.read === 'hoverPopoverHtml'));
@@ -395,6 +414,8 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
     if (opts && opts.allowEmpty) return [];
     throw new Error('$extractWithHover: no containers matched');
   }
+  // F9: per-call cap accumulator reset (see getHoverReadCapped).
+  hoverReadCappedByField = {};
   // Step 1: extract fields per container via the existing helper. allowEmpty
   // is forced on here because we already validated containers.length > 0;
   // per-field emptiness is signaled via diagnostics, not by throwing.
@@ -566,7 +587,11 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
         // (b) scalar (non-multi) fields stop at the FIRST non-empty capture
         if (htext && hspec.multi !== true) break;
       }
-      if (capped > 0) records[i][hfieldName + '__capped'] = capped;
+      if (capped > 0) {
+        // F9: caps live in diagnostics, never in records — a
+        // field__capped key in the output shape is schema pollution.
+        hoverReadCappedByField[hfieldName] = (hoverReadCappedByField[hfieldName] || 0) + capped;
+      }
       if (hspec.multi === true) {
         records[i][hfieldName] = hvals.map((v) => applyMatch(v, hre)).filter(Boolean);
       } else {
@@ -854,7 +879,10 @@ const api = {
   computeExtractListDiagnostics,
   computeClickInListDiagnostics,
   computeSimpleSelectorDiagnostics,
-  isVisibleForDiagnostics
+  isVisibleForDiagnostics,
+  getMatchGuardSkips,
+  resetMatchGuardSkips,
+  getHoverReadCapped
 };
 
 if (typeof module !== 'undefined' && module.exports) module.exports = api;

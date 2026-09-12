@@ -523,25 +523,38 @@
         // Code-review P1 (a)+(b): the old run-level gate (declared===0 across
         // the WHOLE run) let one consuming call whitewash every non-consuming
         // call in the same run. Per-call gate now: ANY single diagnostic with
-        // captured>0 and popoverReadFields===0 fires. Totals dedupe by
-        // stepId+containerSelector keeping only the LAST diagnostics object —
-        // iteration spam from the same call double-counted hovercardsCaptured.
+        // captured>0 and popoverReadFields===0 fires.
+        // Sixty-ninth review F12: keep-last dedupe let a trailing zero-capture
+        // iteration erase the evidence (5 captured then 0 → 0). Aggregate per
+        // stepId+container instead: SUM captured, MAX popoverReadFields
+        // (nonzero wins), union samples (≤3).
         const byCall = new Map();
         for (const ev of events) {
           for (const d of ((ev && Array.isArray(ev.selectorDiagnostics)) ? ev.selectorDiagnostics : [])) {
             if (!d || d.api !== 'extractWithHover') continue;
             if (!d.capturedPopovers) continue;
-            byCall.set(String((ev && ev.stepId) || '') + '|' + (d.containerSelector || ''), d);
+            const k = String((ev && ev.stepId) || '') + '|' + (d.containerSelector || '');
+            const cp = d.capturedPopovers;
+            const captured = (d.hoverSummary && d.hoverSummary.hovercardsCaptured) || cp.captured || 0;
+            const read = cp.popoverReadFields || 0;
+            const prev = byCall.get(k);
+            if (!prev) {
+              byCall.set(k, { captured: captured, readFields: read, samples: (cp.samples || []).slice(0, 3) });
+            } else {
+              prev.captured += captured;
+              prev.readFields = Math.max(prev.readFields, read);
+              for (const s of (cp.samples || [])) {
+                if (typeof s === 'string' && s && prev.samples.length < 3) prev.samples.push(s);
+              }
+            }
           }
         }
-        for (const d of byCall.values()) {
-          const cp = d.capturedPopovers;
-          const captured = (d.hoverSummary && d.hoverSummary.hovercardsCaptured) || cp.captured || 0;
-          total += captured;
-          readFields += cp.popoverReadFields || 0;
-          if (captured > 0 && !(cp.popoverReadFields > 0)) nonConsumingCall = true;
-          if (captured > 0 && cp.popoverReadFields > 0) declaredCall = true;
-          for (const s of (cp.samples || [])) {
+        for (const agg of byCall.values()) {
+          total += agg.captured;
+          readFields += agg.readFields;
+          if (agg.captured > 0 && !(agg.readFields > 0)) nonConsumingCall = true;
+          if (agg.captured > 0 && agg.readFields > 0) declaredCall = true;
+          for (const s of agg.samples) {
             if (typeof s === 'string' && s && samples.length < 3) samples.push(s);
           }
         }
@@ -557,6 +570,14 @@
           // match/selector actually consumed anything (an over-strict match
           // predicate or a non-matching field selector ships '' while the
           // raw capture sits in hovercards[].popoverText).
+          // Sixty-ninth review F4: fire ONLY when the run has independent
+          // emptiness evidence (partialEmptyFields / emptyFieldDiagnostics
+          // censused something) — a healthy consuming run with every
+          // hover-read field populated is silent, not advisory spam.
+          const hasEmptyEvidence =
+            !!(detectors.partialEmptyFields && detectors.partialEmptyFields.length) ||
+            !!(detectors.emptyFieldDiagnostics && detectors.emptyFieldDiagnostics.length);
+          if (!hasEmptyEvidence) return null;
           return {
             totalCaptured: total, popoverReadFields: readFields, samples: samples,
             declaredButEmpty: true,

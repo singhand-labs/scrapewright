@@ -178,13 +178,13 @@
       };
     }
 
-    async function executeDsl(snippet) {
+    async function executeDsl(snippet, opts) {
       if (typeof snippet !== 'string' || !snippet.trim()) return { error: 'snippet required' };
       if (!currentTab) return { error: 'no page open — call page.open first' };
       await ensureLock();
       // best-effort: if the lock could not be taken, background is usually unreachable and execute() will fail with its own error
       try {
-        return await d.execute(currentTab.id, snippet);
+        return await d.execute(currentTab.id, snippet, opts);
       } catch (e) {
         return { error: String((e && e.message) || e) };
       }

@@ -214,6 +214,11 @@
     // contract automatically and the DRIFT error quote it verbatim.
     let ioConfirmedSchemas = null;
     let ioConfirmedTestInput = null;
+    // Sixty-ninth review F7(a): the inputSchema SHAPE at confirmation time.
+    // Prefilling prior-confirmed test values into a RENEGOTIATED contract
+    // (different input shape) blessed stale parameters for fields that may
+    // no longer exist — the prefill chain is shape-keyed now.
+    let ioConfirmedTestInputShape = null;
     const IO_LEDGER_MARKER = 'I/O CONTRACT CONFIRMED';
 
     // Forty-sixth log: the test request values are part of the confirmed
@@ -471,7 +476,7 @@
       }
       const liveTestInput = (typeof d.getTestInput === 'function') ? d.getTestInput() : null;
       const liveHasValues = isPlainObjectValue(liveTestInput) && Object.keys(liveTestInput).length > 0;
-      // Sixty-eighth log F4: the fallback chain must reach the SESSION's
+      // Sixty-ninth review F7: the fallback chain must reach the SESSION's
       // confirmed values too — at the incident turn the artifact did not
       // exist yet, so liveTestInput was empty and the panel prefilled {},
       // which the user then blessed; TEST_INPUT_UNCONFIRMED persisted from
@@ -479,9 +484,27 @@
       // confirmed values from THIS session (runtime flag, then ledger
       // marker). The user can never bless an EMPTY testInput when prior
       // confirmed values exist anywhere.
-      const priorTI = ioConfirmedTestInput || ledgerConfirmedTestInput(ctx);
+      // F7(a) shape-key: prior confirmed values prefill ONLY when the
+      // proposal's inputSchema shape matches the shape recorded at
+      // confirmation time — a renegotiated contract gets no stale prefill
+      // (the panel shows the proposal as-is).
+      // F7(b) explicit-empty: a PRESENT-but-empty {} testInput is treated as
+      // omitted for the prefill chain (the model virtually never means to
+      // bless {}) — {} stays the proposal only when inputSchema declares
+      // zero properties (a genuinely parameterless service).
+      const incomingInputShape = schemaShape(a.inputSchema);
+      const ledgerPriorShape = ledgerConfirmedShape(ctx);
+      const priorTI = (
+        (ioConfirmedTestInput && ioConfirmedTestInputShape === incomingInputShape) ? ioConfirmedTestInput : null
+      ) || (
+        (ledgerPriorShape && ledgerPriorShape.input === incomingInputShape) ? ledgerConfirmedTestInput(ctx) : null
+      );
       const priorHasValues = isPlainObjectValue(priorTI) && Object.keys(priorTI).length > 0;
-      const proposedTestInput = isPlainObjectValue(a.testInput) ? a.testInput : (liveHasValues ? liveTestInput : (priorHasValues ? priorTI : null));
+      const inPropCount = Object.keys((a.inputSchema && a.inputSchema.properties) || {}).length;
+      const modelTI = isPlainObjectValue(a.testInput)
+        ? ((Object.keys(a.testInput).length > 0 || inPropCount === 0) ? a.testInput : null)
+        : null;
+      const proposedTestInput = modelTI || (liveHasValues ? liveTestInput : (priorHasValues ? priorTI : null));
       // Dedup: a contract the user already confirmed is NOT re-prompted while
       // its shape is unchanged (rejections of revisions leave the original
       // standing). Only a materially different proposal pops the panel again.
@@ -502,6 +525,7 @@
         // by which a resumed legacy session starts attaching the contract).
         ioConfirmedSchemas = { inputSchema: a.inputSchema, outputSchema: a.outputSchema };
         if (proposedTestInput) ioConfirmedTestInput = proposedTestInput;
+        if (ioConfirmedTestInput) ioConfirmedTestInputShape = incomingInputShape;
         const recoveredAttached = attachConfirmedSchemas(ioConfirmedSchemas);
         return {
           confirmed: true,
@@ -511,7 +535,7 @@
       }
       const sess = (ctx && ctx.session) || null;
       let res;
-      if (sess && typeof sess.parkBegin === 'function') sess.parkBegin();
+      if (sess && typeof sess.parkBegin === 'function') sess.parkBegin('io.confirm', typeof a.note === 'string' ? a.note.slice(0, 200) : 'contract confirmation');
       try {
         // Thirty-first log: a renegotiation must show the user WHAT changes
         // against the confirmed contract (a field leaving items.required is
@@ -524,6 +548,10 @@
           inputSchema: a.inputSchema,
           outputSchema: a.outputSchema,
           testInput: proposedTestInput || {},
+          // F7(c): whether the MODEL supplied testInput on this proposal —
+          // the wizard-side second-layer prefill substitutes its stored
+          // values ONLY when this is false.
+          testInputProvided: modelTI != null,
           note: typeof a.note === 'string' ? a.note : '',
           diffLines: diffLines
         });
@@ -540,6 +568,7 @@
         const userTestInput = isPlainObjectValue(res.testInput) ? res.testInput : null;
         const confirmedTestInput = userTestInput || proposedTestInput || null;
         ioConfirmedTestInput = confirmedTestInput;
+        ioConfirmedTestInputShape = incomingInputShape;
         const ledger = (ctx && ctx.ledger) || null;
         if (ledger) {
           try {
@@ -584,7 +613,7 @@
         return { error: 'user observation bridge not wired in this host' };
       }
       const sess = (ctx && ctx.session) || null;
-      if (sess && typeof sess.parkBegin === 'function') sess.parkBegin();
+      if (sess && typeof sess.parkBegin === 'function') sess.parkBegin('user.observe', q.slice(0, 200));
       let res;
       try {
         // Code-review P3 (reliability): a bridge crash (panel DOM missing,
@@ -596,7 +625,10 @@
       } finally {
         if (sess && typeof sess.parkEnd === 'function') sess.parkEnd();
       }
-      if (!res || res.cancelled) return { cancelled: true, note: 'user dismissed the question — fall back to probing, never guess' };
+      // F14: a cancel REASON from the bridge (e.g. 'superseded' by a newer
+      // request) propagates — the model reading "superseded" retries the
+      // observation instead of concluding the user dismissed it.
+      if (!res || res.cancelled) return { cancelled: true, note: (res && typeof res.note === 'string' && res.note) ? res.note : 'user dismissed the question — fall back to probing, never guess' };
       const ledger = (ctx && ctx.ledger) || null;
       if (ledger && res.answer) ledger.add({ finding: 'user observation: ' + q + ' → ' + String(res.answer).slice(0, 300), evidence: 'user.observe', confidence: 'high', provenance: 'user', selectors: [] });
       return { answer: String(res.answer || '') };
@@ -756,7 +788,7 @@
       }
       const sess = (ctx && ctx.session) || null;
       let res;
-      if (sess && typeof sess.parkBegin === 'function') sess.parkBegin();
+      if (sess && typeof sess.parkBegin === 'function') sess.parkBegin('annotate.request', 'annotation window');
       try {
         res = await bridge.request({
           why: typeof a.why === 'string' ? a.why : '',
@@ -1067,9 +1099,17 @@
       const spend = ctx && ctx.session && ctx.session.spend;
       const budgets = ctx && ctx.session && ctx.session.budgets;
       if (!spend || !budgets || typeof spend.turns !== 'number' || typeof budgets.maxTurns !== 'number') return {};
-      const turnsLeft = Math.max(0, budgets.maxTurns - spend.turns);
-      if (turnsLeft > 2) return {};
-      return { warning: 'only ' + turnsLeft + ' turn(s) left — an update you cannot verify leaves CURRENT ARTIFACT UNVERIFIED; prefer refining toward the next verify.run (1 turn) over another blind rewrite, or finish honestly with disclosed limits' };
+      // Sixty-ninth review F5 (off-by-one): spend.turns counts turns ALREADY
+      // taken including THIS one — after THIS update N = maxTurns -
+      // spend.turns - 1 remain. The old `turnsLeft > 2` gate fired a
+      // "N left" warning the turn BEFORE the last usable verify and said
+      // "0 left" on the still-usable last turn.
+      const afterThis = Math.max(0, budgets.maxTurns - spend.turns - 1);
+      if (afterThis > 2) return {};
+      if (afterThis >= 1) {
+        return { warning: 'after this update ' + afterThis + ' turn(s) remain — the next verify.run costs 1; an update you cannot verify leaves CURRENT ARTIFACT UNVERIFIED; prefer refining toward the next verify.run, or finish honestly with disclosed limits' };
+      }
+      return { warning: 'this is the LAST turn — no verify can follow this update; prefer finishing honestly with disclosed limits over an unverifiable rewrite' };
     }
 
     // Ninth-log M3: the research tab must never open a LITERAL {{param}}
