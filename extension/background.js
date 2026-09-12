@@ -1292,23 +1292,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // times and the user never learned the one-toggle remedy. The
     // hover_request diagnostic carries dispatched:false + the gate reason on
     // every gated attempt (per anchor inside $extractWithHover batches).
-    // Code-review P3 dedupe: forward ONCE per tabId (per reason) — the gate
-    // is deterministic, so N per-anchor skips were N identical broadcasts
-    // the wizard counted one-by-one. The stored count is included in the
-    // forwarded payload; a reason CHANGE re-forwards (a different gate is a
-    // new fact). Cleared on tab close below.
+    // Code-review P3 dedupe: forward sparsely per tabId (per reason) — the
+    // gate is deterministic, so N per-anchor skips were N identical
+    // broadcasts the wizard counted one-by-one. Sixty-ninth review F3: a
+    // strict once-per-tab forward made the tally a DEAD number (23 skips,
+    // tip said 1) — the background now RE-FORWARDS with the ABSOLUTE
+    // skipCount whenever it grows past the last forwarded count by ≥5 (or on
+    // a reason change, which resets state above), and the wizard sums the
+    // deltas. Cleared on tab close below.
     if (cat === 'hover_request' && message.payload && message.payload.dispatched === false &&
         message.payload.reason === 'enhanced mode disabled') {
       const tabIdHs = tabId;
       let stHs = hoverSkipForwarded.get(tabIdHs);
       if (!stHs || stHs.reason !== message.payload.reason) {
-        stHs = { reason: message.payload.reason, count: 0 };
+        stHs = { reason: message.payload.reason, count: 0, lastForwardedCount: 0 };
         hoverSkipForwarded.set(tabIdHs, stHs);
-        stHs.shouldForward = true;
       }
       stHs.count += 1;
-      if (stHs.shouldForward) {
-        stHs.shouldForward = false;
+      // +4 growth (1→5, 5→9, …): the first skip surfaces immediately, then
+      // re-forwards carry the growing absolute tally.
+      if (stHs.count === 1 || stHs.count >= stHs.lastForwardedCount + 4) {
+        stHs.lastForwardedCount = stHs.count;
         try {
           chrome.runtime.sendMessage({
             type: 'HOVER_SKIPPED_ENHANCED_MODE',

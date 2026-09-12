@@ -480,11 +480,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     // an Enhanced-Mode-off run killed every trusted hover for a whole
     // session and the user had no visible signal (console diagnostics only).
     if (message.type === 'HOVER_SKIPPED_ENHANCED_MODE') {
-      // Code-review P3: the background now forwards ONCE per tab per reason
-      // (deduped) with the real skip tally in payload.skipCount — count the
-      // broadcast, but prefer the payload's number for the tip.
-      wizardState.hoverSkipCount = Math.max(wizardState.hoverSkipCount || 0, 1);
+      // Code-review P3 + sixty-ninth review F3: the background forwards
+      // sparsely (on +5 growth or reason change) with the ABSOLUTE tally in
+      // payload.skipCount — sum the PER-TAB deltas so 23 skips say 23, not 1.
+      if (!wizardState.hoverSkipPrevByTab || typeof wizardState.hoverSkipPrevByTab !== 'object') {
+        wizardState.hoverSkipPrevByTab = {};
+      }
+      const tabKey = (message.tabId !== undefined && message.tabId !== null) ? String(message.tabId) : '_';
+      const prev = Number(wizardState.hoverSkipPrevByTab[tabKey]) || 0;
       const sc = message.payload && typeof message.payload.skipCount === 'number' ? message.payload.skipCount : 0;
+      const delta = sc > prev ? (sc - prev) : 1;
+      wizardState.hoverSkipPrevByTab[tabKey] = Math.max(prev, sc);
+      wizardState.hoverSkipCount = (wizardState.hoverSkipCount || 0) + delta;
       wizardState.hoverSkipTotal = Math.max(wizardState.hoverSkipTotal || 0, sc);
     }
   });
@@ -1583,6 +1590,7 @@ async function testScript() {
   sessionAbortRequested = false; // A1: an aborted session must not poison manual tests
   wizardState.trustedWheelSkipCount = 0;
   wizardState.hoverSkipCount = 0;
+  wizardState.hoverSkipPrevByTab = {};
   debugLogger.log('info', 'wizard', 'testScript start', {
     targetUrl: wizardState.targetUrl,
     stepCount: wizardState.steps ? wizardState.steps.length : 0,
@@ -2051,9 +2059,12 @@ function makeWizardRail() {
       }
       return false;
     },
-    execute: async (tabId, snippet) => {
+    execute: async (tabId, snippet, opts) => {
       const executor = new OffscreenExecutor(tabId);
-      executor.timeoutMs = 30000;
+      // Sixty-ninth review F1: the hardcoded 30s made probe.snippet's
+      // timeoutMs knob dead — the rail forwards per-call opts.timeoutMs here
+      // and the executor budget follows it (capped at 90s).
+      executor.timeoutMs = (opts && Number(opts.timeoutMs) > 0) ? Math.min(Math.floor(Number(opts.timeoutMs)), 90000) : 30000;
       const r = await executor.execute(snippet, {});
       // Twenty-third log: return the {result, selectorDiagnostics} envelope —
       // unwrapping here discarded selectorDiagnostics for every probe, so the
@@ -2208,8 +2219,7 @@ function createWizardIoBridge() {
         pendingResolve = resolve;
         const r = req && typeof req === 'object' ? req : {};
         const noteEl = document.getElementById('ioConfirmNote');
-        if (noteEl) noteEl.textContent = String(r.note || '');
-        // Thirty-first log: a renegotiation that moved a field OUT of
+        if (noteEl) noteEl.textContent = String(r.note || '');        // Thirty-first log: a renegotiation that moved a field OUT of
         // items.required was rubber-stamped from raw JSON — render the diff
         // lines (computed by the session layer against the confirmed
         // contract) above the schemas so the requirement change is the first
@@ -2247,9 +2257,21 @@ function createWizardIoBridge() {
           // the panel; this is the wizard-side second layer for direct
           // bridge callers. The user can never bless an EMPTY testInput
           // while confirmed values exist.)
+          // Sixty-ninth review F7(c): the wizard-level substitution applies
+          // ONLY when the proposal did NOT carry a testInput of its own
+          // (testInputProvided !== true) — an explicit value (even an empty
+          // object the session layer deliberately passed for a renegotiated
+          // shape) is shown AS-IS, and a substitution is annotated in the
+          // panel so the user knows the values' provenance.
           const rt = (r.testInput && typeof r.testInput === 'object' && !Array.isArray(r.testInput)) ? r.testInput : null;
+          const provided = r.testInputProvided === true;
           const wt = (wizardState.testInput && typeof wizardState.testInput === 'object' && !Array.isArray(wizardState.testInput)) ? wizardState.testInput : null;
-          const ti = (rt && Object.keys(rt).length > 0) ? rt : ((wt && Object.keys(wt).length > 0) ? wt : (rt || {}));
+          const rtHasValues = !!(rt && Object.keys(rt).length > 0);
+          const substituteWizardTI = !rtHasValues && !provided && !!(wt && Object.keys(wt).length > 0);
+          const ti = rtHasValues ? rt : (substituteWizardTI ? wt : (rt || {}));
+          if (substituteWizardTI && noteEl) {
+            noteEl.textContent = (noteEl.textContent ? noteEl.textContent + '\n' : '') + '测试参数预填自上次确认值（模型未随本提案提交 testInput）';
+          }
           const hasValues = Object.keys(ti).length > 0;
           if (Object.keys(inProps).length > 0 || hasValues) {
             tiEl.value = JSON.stringify(ti, null, 2);
@@ -2457,10 +2479,23 @@ function sessionPanelOpen() {
 // A closed request panel returns the badge to the engine's actual status —
 // 'running' normally, 'paused' when the user parked the session first.
 function badgeAfterPanelClose() {
-  if (!wizardSession) return;
+  if (!wizardSession) {
+    // F15 (❓ title linger): no session — nothing can still be waiting on
+    // the user; the title resets with the badge.
+    document.title = BASE_DOC_TITLE;
+    return;
+  }
   const status = wizardSession.state().session.status;
   if (status === 'running') setSessionBadge('running', 'thinking…');
   else if (status === 'paused') setSessionBadge('paused', 'paused — Resume when ready');
+  else if (!sessionPanelOpen()) {
+    // F15: every panel is hidden and the engine is not running/paused — a
+    // leftover ❓ title (set when a panel opened) must not linger. Only a
+    // badge still in the waiting state may keep it.
+    const badge = document.getElementById('sessionStatusBadge');
+    const waiting = !!(badge && badge.classList.contains('is-waiting'));
+    if (!waiting) document.title = BASE_DOC_TITLE;
+  }
 }
 
 // Run-scope elapsed clock beside the badge. Wall-clock from the run start
@@ -3103,6 +3138,7 @@ async function presentSessionCompletion() {
   wizardState.testAborted = false;
   wizardState.trustedWheelSkipCount = 0;
   wizardState.hoverSkipCount = 0;
+  wizardState.hoverSkipPrevByTab = {};
   if (lv && lv.raw && !lv.staleArtifact) {
     appendLog('Session complete — presenting the last verified run. Review the result, send feedback to continue fixing, or deploy.', 'success');
     showSessionFeedbackPanel();

@@ -62,12 +62,28 @@
       return testMatchValue(value, re) ? value : '';
     }
     // Code-review P2 hardening (inline mirror): defensive lastIndex reset +
-    // skip .test on >2000-char strings (backtracking hang guard).
+    // >2000-char strings matched against their FIRST 2000 chars only
+    // (backtracking hang guard). Sixty-ninth review F8 (inline mirror): the
+    // guard used to return FALSE silently for long strings; it now tests the
+    // bounded prefix and counts the skipped guard for diagnostics.
+    const MATCH_GUARD_LIMIT = 2000;
+    let matchGuardSkips = 0;
     function testMatchValue(v, re) {
-      if (typeof v !== 'string' || v.length > 2000) return false;
+      if (typeof v !== 'string') return false;
+      let s = v;
+      if (s.length > MATCH_GUARD_LIMIT) {
+        matchGuardSkips += 1;
+        s = s.slice(0, MATCH_GUARD_LIMIT);
+      }
       re.lastIndex = 0;
-      return re.test(v);
+      return re.test(s);
     }
+    // F9 (inline mirror): hover-read candidate caps move out of records
+    // into this per-call map, lifted into _diagnostics.hoverReadCapped.
+    let hoverReadCappedByField = null;
+    function getMatchGuardSkips() { return matchGuardSkips; }
+    function resetMatchGuardSkips() { matchGuardSkips = 0; }
+    function getHoverReadCapped() { return hoverReadCappedByField; }
     function isHoverPopoverSpec(spec) {
       return !!(spec && typeof spec === 'object' &&
         (spec.read === 'hoverPopover' || spec.read === 'hoverPopoverHtml'));
@@ -234,6 +250,8 @@
         if (opts && opts.allowEmpty) return [];
         throw new Error('$extractWithHover: no containers matched');
       }
+      // F9 (inline mirror): per-call cap accumulator reset.
+      hoverReadCappedByField = {};
       // 机械-语义分离（spec 3.A）：read:hoverPopover 字段在悬停阶段后填
       // 充——预提取用过滤后的 fieldMap（这些字段的值不来自静态 DOM；
       // extractListRecords 现在对 hoverPopover 规格教学性抛错）。
@@ -377,7 +395,12 @@
               if (htext) hvals.push(htext);
               if (htext && hspec.multi !== true) break;
             }
-            if (capped > 0) records[i][hfieldName + '__capped'] = capped;
+            if (capped > 0) {
+              // F9 (inline mirror): caps live in diagnostics, never in
+              // records — a field__capped key in the output is schema
+              // pollution.
+              hoverReadCappedByField[hfieldName] = (hoverReadCappedByField[hfieldName] || 0) + capped;
+            }
             if (hspec.multi === true) {
               records[i][hfieldName] = hvals
                 .map(function (v) { return applyMatch(v, hre); })
@@ -682,7 +705,10 @@
       computeExtractListDiagnostics,
       computeClickInListDiagnostics,
       computeSimpleSelectorDiagnostics,
-      isVisibleForDiagnostics
+      isVisibleForDiagnostics,
+      getMatchGuardSkips,
+      resetMatchGuardSkips,
+      getHoverReadCapped
     };
   }
 
@@ -2059,7 +2085,18 @@
   // for free. The budget is shared per content-script instance (per page) and
   // only covers the HOVER dwells; when exhausted, remaining hovers are
   // skipped (label harvest continues) and the result's note explains.
-  var TS_SHARED_HOVER_BUDGET_MS = 30000;
+  // Sixty-ninth review F2 (budget ratchet): the budget RECHARGES when
+  // location.href changes (a real navigation or SPA route change means a new
+  // page population; letting the budget ratchet to zero forever starves
+  // long sessions — over-fresh beats never-fresh). TS_currentHref is a
+  // helper so tests can stub it.
+  var TS_HOVER_BUDGET_FULL_MS = 30000;
+  var TS_SHARED_HOVER_BUDGET_MS = TS_HOVER_BUDGET_FULL_MS;
+  var TS_SHARED_HOVER_PRIOR_SPEND_MS = 0;
+  var TS_LAST_HREF = null;
+  function TS_currentHref() {
+    try { return String((typeof location !== 'undefined' && location && location.href) || ''); } catch (_) { return ''; }
+  }
   var TS_REL_RE = /\b(?:second|minute|hour|day|week|month|year)s?\s+ago\b|[0-9一二三四五六七八九十百千]+\s*(?:秒|分钟|分|小时|时|天|日|周|月|年)\s*前/i;
   var TS_SHAPE_RES = [
     /(?:january|february|march|april|may|june|july|august|september|october|november|december)/i,
@@ -2100,6 +2137,17 @@
     const anchorSel = (typeof o.anchorSel === 'string' && o.anchorSel.trim()) ? o.anchorSel.trim()
       : 'a:has(span[aria-labelledby]), [aria-labelledby], abbr[aria-label], time';
     const timeoutMs = (typeof o.timeoutMs === 'number' && o.timeoutMs > 0) ? o.timeoutMs : 4500;
+    // F2 recharge: a changed href means the page navigated (SPA route change
+    // included) — restore the full budget and forget prior spend.
+    {
+      const hrefNow = TS_currentHref();
+      if (TS_LAST_HREF !== null && hrefNow !== TS_LAST_HREF) {
+        TS_SHARED_HOVER_BUDGET_MS = TS_HOVER_BUDGET_FULL_MS;
+        TS_SHARED_HOVER_PRIOR_SPEND_MS = 0;
+      }
+      TS_LAST_HREF = hrefNow;
+    }
+    const spendAtCallStart = TS_SHARED_HOVER_PRIOR_SPEND_MS;
     const index = (typeof o.index === 'number' && o.index >= 0) ? Math.floor(o.index) : 0;
     // Code-review P3 (selector hygiene): querySelectorAllDeep swallows
     // SyntaxError internally — an invalid container selector would come back
@@ -2162,7 +2210,9 @@
       try { hv = await domHover(anchor, null, { timeoutMs: timeoutMs }); } catch (_) { hv = null; }
       // Code-review P2: charge the measured dwell to the shared budget (min
       // 1ms so uninstrumented fast returns cannot make it infinite).
-      TS_SHARED_HOVER_BUDGET_MS -= Math.max(1, Date.now() - __hvT0);
+      const __hvSpend = Math.max(1, Date.now() - __hvT0);
+      TS_SHARED_HOVER_BUDGET_MS -= __hvSpend;
+      TS_SHARED_HOVER_PRIOR_SPEND_MS += __hvSpend;
       if (hv && hv.htmlSnippet) {
         // Popover text is structurally prose ("Shared with Public ·
         // Friday, …") — never a whole-value candidate; extract substrings.
@@ -2195,8 +2245,14 @@
       result.note = 'no date-shaped value on this card (labelledby / aria-label / visible text / hover popover text). If the page exposes no timestamp for these cards, renegotiate the field via io.confirm instead of shipping titles or junk as postTime.';
     }
     if (hoverBudgetExhausted) {
+      // F2 note fidelity: only blame EARLIER $timestamp calls when prior
+      // calls actually consumed budget; a first-call exhaustion means this
+      // card's own anchors spent it.
+      const who = spendAtCallStart > 0
+        ? 'shared hover budget exhausted on this page after earlier $timestamp calls'
+        : "this card's own anchors exhausted the shared hover budget";
       result.note = (result.note ? result.note + ' ' : '') +
-        'hovering stopped (shared hover budget exhausted on this page after earlier $timestamp calls) — narrow anchorSel to the time-bearing anchor(s) via probe, or renegotiate the field via io.confirm; do not widen the budget';
+        'hovering stopped (' + who + ') — narrow anchorSel to the time-bearing anchor(s) via probe, or renegotiate the field via io.confirm; labels are still harvested without hovering; the budget recharges when the page navigates';
     }
     notifyBackgroundDiagnostic('timestamp_done', {
       selector: sel, anchors: anchors.length, hoversDispatched: hoversDone, absoluteFound: !!absolute
@@ -2365,10 +2421,15 @@
         }
       };
     }
+    if (typeof ops.resetMatchGuardSkips === 'function') ops.resetMatchGuardSkips();
     const records = ops.extractListRecords(containers, fieldMap, opts || {});
     const _diagnostics = ops && ops.computeExtractListDiagnostics
       ? ops.computeExtractListDiagnostics(containers, fieldMap, containerSel)
       : { api: 'extractList', containerSelector: containerSel, containerMatches: containers.length, perField: [] };
+    if (_diagnostics && typeof ops.getMatchGuardSkips === 'function') {
+      const _mgSkips = ops.getMatchGuardSkips();
+      if (_mgSkips > 0) _diagnostics.matchGuardSkips = _mgSkips;
+    }
     attachClauseCostCensus(_diagnostics, containerSel);
     notifyBackgroundDiagnostic('extractList_entry', {
       containerSelector: containerSel,
@@ -2446,6 +2507,10 @@
     const _diagnostics = ops && ops.computeExtractListDiagnostics
       ? ops.computeExtractListDiagnostics(containers, fieldMap, containerSel, true)
       : { api: 'extractList', containerSelector: containerSel, containerMatches: containers.length, perField: [] };
+    if (_diagnostics && typeof ops.getMatchGuardSkips === 'function') {
+      const _mgSkips = ops.getMatchGuardSkips();
+      if (_mgSkips > 0) _diagnostics.matchGuardSkips = _mgSkips;
+    }
     if (_diagnostics && _diagnostics.api === 'extractList') _diagnostics.api = 'extractListMulti';
     attachClauseCostCensus(_diagnostics, containerSel);
     notifyBackgroundDiagnostic('extractListMulti_entry', {
@@ -4006,6 +4071,7 @@
     // Delegate the per-container iteration to the pure helper. Inject the
     // real domHover (refactor in Task 1 lets domHover accept the anchor
     // element directly, bypassing global querySelector).
+    if (typeof ops.resetMatchGuardSkips === 'function') ops.resetMatchGuardSkips();
     var records = await ops.extractWithHoverRecords(
       processed,
       fieldMap,
@@ -4021,6 +4087,20 @@
     _diagnostics.api = 'extractWithHover';
     _diagnostics.processedContainers = processed.length;
     attachClauseCostCensus(_diagnostics, containerSel);
+    // F8/F9 disclosures: how many match-predicate guards skipped past the
+    // 2000-char prefix this call, and which hover-read fields had candidate
+    // hovers capped (counts, never record keys).
+    if (typeof ops.getMatchGuardSkips === 'function') {
+      var _mgSkips = ops.getMatchGuardSkips();
+      if (_mgSkips > 0) {
+        _diagnostics.matchGuardSkips = _mgSkips;
+        _diagnostics.matchGuardNote = 'match predicates were applied to the FIRST 2000 chars of ' + _mgSkips + ' over-long value(s) — a match living past char 2000 is invisible; narrow the field selector or read a shorter source';
+      }
+    }
+    if (typeof ops.getHoverReadCapped === 'function') {
+      var _hrc = ops.getHoverReadCapped();
+      if (_hrc && typeof _hrc === 'object' && Object.keys(_hrc).length) _diagnostics.hoverReadCapped = _hrc;
+    }
     var anchorsFound = 0;
     var hovercardsCaptured = 0;
     var hoverFailures = 0;
