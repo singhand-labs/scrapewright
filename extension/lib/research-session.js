@@ -743,6 +743,31 @@
       }
     }
 
+    // Seventieth log F3: per-tool wall time around dispatchTool (timeouts
+    // included — a timed-out call burns real budget). Surfaced on the
+    // wallClock/maxTurns stop detail so the user sees WHERE the time went.
+    // Session-closure scope: loop() records, the stop path and the public
+    // timing API read the same accumulator.
+    const toolTimings = new Map();
+    function recordToolTiming(tool, ms, timedOut) {
+      const k = String(tool || 'unknown');
+      const e = toolTimings.get(k) || { ms: 0, calls: 0, timeouts: 0 };
+      e.ms += Math.max(0, Number(ms) || 0);
+      e.calls += 1;
+      if (timedOut) e.timeouts += 1;
+      toolTimings.set(k, e);
+    }
+    function formatTimeBudgetSuffix() {
+      if (toolTimings.size === 0) return '';
+      const rows = Array.from(toolTimings.entries())
+        .sort((a, b) => b[1].ms - a[1].ms).slice(0, 3)
+        .map(([t, d]) => t + ' ' + Math.round(d.ms / 1000) + 's/' + d.calls + ' call' + (d.calls === 1 ? '' : 's') +
+          (d.timeouts ? ' (' + d.timeouts + ' timed out)' : ''));
+      if (!rows.length) return '';
+      const suffix = ' [TIME BUDGET — top consumers: ' + rows.join(', ') + ']';
+      return suffix.length <= 240 ? suffix : suffix.slice(0, 237) + '...]';
+    }
+
     async function loop() {
       if (running) return buildReport();
       if (state.stopped && state.stopped.reason !== 'paused') return buildReport();
@@ -768,6 +793,11 @@
       // and transient-signature errors are exempt (retryable by teaching).
       let lastFail = null;
       const recentFailKeys = [];
+      // Seventieth log F2: error-CLASS tracker. The incident saw 11
+      // probe.snippet SCRIPT_TIMEOUTs with VARIED arguments — the exact-args
+      // rule above never fired because every call key differed. The SHAPE
+      // (same tool, same error class, different args) is the signal.
+      let lastClassFail = null;
       try {
         while (true) {
           if (abortFlag) { report = await stop('aborted', abortReason); break; }
@@ -784,12 +814,12 @@
           }
           if (state.spend.turns >= budgets.maxTurns) {
             report = await stop('maxTurns', state.spend.turns > 0
-              ? 'budget exhausted at ' + state.spend.turns + '/' + budgets.maxTurns + ' turns — raise the budget (maxTurns) in the resume seed to continue' + verifyStopSuffix()
+              ? 'budget exhausted at ' + state.spend.turns + '/' + budgets.maxTurns + ' turns — raise the budget (maxTurns) in the resume seed to continue' + verifyStopSuffix() + formatTimeBudgetSuffix()
               : null);
             break;
           }
           if (state.elapsedMs + netSegmentMs() >= budgets.wallClockMs) {
-            report = await stop('wallClock', 'time budget exhausted after ~' + Math.round((state.elapsedMs + netSegmentMs()) / 1000) + 's (parked ' + Math.round(parkedTotal / 1000) + 's excluded) — raise the budget (wallClockMs) in the resume seed to continue' + verifyStopSuffix());
+            report = await stop('wallClock', 'time budget exhausted after ~' + Math.round((state.elapsedMs + netSegmentMs()) / 1000) + 's (parked ' + Math.round(parkedTotal / 1000) + 's excluded) — raise the budget (wallClockMs) in the resume seed to continue' + verifyStopSuffix() + formatTimeBudgetSuffix());
             break;
           }
           if (state.spend.promptTokens + state.spend.completionTokens >= budgets.tokenCap) { report = await stop('tokenCap'); break; }
@@ -979,7 +1009,12 @@
             break;
           }
           emit('tool_call', { tool: turn.tool, args: turn.args });
+          // Seventieth log F3: time the dispatch (failures included) and
+          // count SCRIPT_TIMEOUT-class results as timeouts for the suffix.
+          const __t0 = Date.now();
           let result = await dispatchTool(turn.tool, turn.args);
+          recordToolTiming(turn.tool, Date.now() - __t0,
+            isErrorResult(result) && /^SCRIPT_TIMEOUT\b/.test(String(result && result.error)));
           let verifyDigest = null;
           if (turn.tool === 'verify.run') {
             // Twenty-eighth log: verify2 and verify3 returned IDENTICAL
@@ -1108,6 +1143,10 @@
             const isTransient = transientRe.test(String(failMsg));
             const callKey = turn.tool + '|' + JSON.stringify(canonicalizeArgs(turn.args || {}));
             const errPrefix = String(failMsg).slice(0, 80);
+            // Seventieth log F2: first whitespace-delimited token of the
+            // error message, uppercased to [A-Z_]+ — the engine's stable
+            // error classes (SCRIPT_TIMEOUT, ELEMENT_NOT_FOUND, ...).
+            const errorClass = (String(failMsg).trim().split(/\s+/)[0] || '').toUpperCase().replace(/[^A-Z_]/g, '');
             if (!isTransient) {
               const consecutive = lastFail && lastFail.tool === turn.tool && lastFail.key === callKey && lastFail.errPrefix === errPrefix;
               const nonConsecutiveInRange = !consecutive &&
@@ -1127,11 +1166,34 @@
               recentFailKeys.push(callKey);
               if (recentFailKeys.length > 3) recentFailKeys.shift();
               lastFail = consecutive ? lastFail : { tool: turn.tool, key: callKey, errPrefix: errPrefix, fired: !!nonConsecutiveInRange };
+              // Seventieth log F2: same tool + same error class on 2
+              // consecutive calls with DIFFERENT arguments. Fired only when
+              // the exact-args nudge did not already cover this turn —
+              // identical args get the (stronger) identical-failure text.
+              const classConsecutive = lastClassFail && lastClassFail.tool === turn.tool &&
+                errorClass && lastClassFail.errorClass === errorClass;
+              if (classConsecutive && !consecutive && !nonConsecutiveInRange) {
+                let teaching = '';
+                if (/TIMEOUT/.test(errorClass)) {
+                  teaching = ' For timeouts: narrow the batch (containerRange/maxContainers/maxWallMs).';
+                } else if (/NOT_FOUND/.test(errorClass)) {
+                  teaching = ' For NOT_FOUND: re-probe the selector against the real DOM before retrying.';
+                } else {
+                  teaching = ' Change the SHAPE of the attempt per the error teaching.';
+                }
+                state.transcript.push({ kind: 'system', text:
+                  'REPEATED FAILURE CLASS: ' + turn.tool + ' failed with ' + (errorClass || 'UNKNOWN') +
+                  ' twice in a row with different arguments — the ARGUMENTS are not the problem; the SHAPE is.' +
+                  teaching });
+              }
+              lastClassFail = classConsecutive ? { tool: turn.tool, errorClass: errorClass, fired: true } : { tool: turn.tool, errorClass: errorClass, fired: false };
             } else {
               lastFail = null;
+              lastClassFail = null;
             }
           } else {
             lastFail = null;
+            lastClassFail = null;
             recentFailKeys.length = 0;
           }
           // Twenty-second log: slicing the FIRST 200 chars off the
@@ -1168,8 +1230,16 @@
     }
     function pause() { pauseFlag = true; }
 
+    // Seventieth log F3: exposed for direct unit tests of the accumulation
+    // and the suffix formatting (driving the full engine loop is costly).
+    const timingApi = {
+      recordToolTiming: recordToolTiming,
+      formatTimeBudgetSuffix: formatTimeBudgetSuffix,
+      toolTimingEntries: () => Array.from(toolTimings.entries()).map(([t, d]) => Object.assign({ tool: t }, d))
+    };
     const publicApi = {
       run: loop,
+      timings: timingApi,
       abort: abort,
       pause: pause,
       parkBegin: parkBegin,
