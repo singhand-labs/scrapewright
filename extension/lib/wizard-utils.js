@@ -370,6 +370,16 @@ Signature: \$extractWithHover(containerSel, fieldMap, opts) → Promise<Array<Re
     which containers get processed (only one may be set). Use containerRange
     to slice a large batch across orchestrator iterations when the total
     time would exceed the step timeout.
+  - opts.maxWallMs: wall-clock budget for the hover batch (default 25000ms).
+    Each hovered anchor burns ~5-10s even when no popover appears, so a long
+    feed can outlive the step budget with ZERO results. When the budget is
+    hit, the call does NOT error — it resolves to the partial envelope:
+      { records: [...processed so far...],
+        partial: { processed: K, total: N, maxWallMs: M,
+                   note: 'wall budget reached — K of N containers processed; re-run with containerRange:[K,N] (or maxContainers) to continue, or raise opts.maxWallMs' } }
+    Resume by re-running with containerRange:[K,N] (already-processed containers are NOT re-hovered).
+    When ALL containers fit the budget, the call returns the plain records
+    array exactly as before (check partial first; Array.isArray means all-fit).
 
 Returned records (one per processed container, in document order):
   [

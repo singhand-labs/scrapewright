@@ -454,7 +454,19 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
   } else {
     perHoverOpts.dismiss = true;
   }
+  // Seventieth log F1: wall budget. A hover batch over N containers burns
+  // ~5-10s per hovered anchor even when no popover appears — over a 30+
+  // container feed the call outlives BOTH the probe rail (30s) and the step
+  // budget (120s), dying as a zombie with zero partial results. Before
+  // processing container i>0, check elapsed; a budget hit returns the
+  // processed records wrapped in a { records, partial } envelope (all-fit
+  // runs keep returning the plain array — consumers' Array.isArray path is
+  // unchanged).
+  const maxWallMs = (opts && typeof opts.maxWallMs === 'number' && opts.maxWallMs > 0) ? opts.maxWallMs : 25000;
+  const wallStart = Date.now();
+  let processedCount = 0;
   for (let i = 0; i < containers.length; i++) {
+    if (i > 0 && (Date.now() - wallStart) > maxWallMs) break;
     const container = containers[i];
     let anchors = [];
     try {
@@ -613,6 +625,7 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
         }
       }
     }
+    processedCount = i + 1;
   }
   // Forty-fourth log: the field extraction above ran BEFORE the hover batch,
   // but on a cold tab the batch is exactly what hydrates lazily-mounted ARIA
@@ -621,11 +634,15 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
   // fine. Re-read labelledby fields whose pre-hover read came back empty;
   // fill from the post-hover DOM. Non-empty values are never overwritten and
   // non-labelledby fields are never re-read (attr/text reads don't hydrate).
-  for (let i = 0; i < containers.length; i++) {
+  // Seventieth log F1: the re-read pass covers only PROCESSED containers —
+  // records past the wall-budget cut carry no hovercards and no post-batch
+  // hydration is possible for them anyway (their hovers never ran).
+  const outRecords = records.slice(0, processedCount);
+  for (let i = 0; i < outRecords.length; i++) {
     for (const [field, spec] of Object.entries(fieldMap)) {
       const refAttr = normalizeLabelledby(typeof spec === 'string' ? null : spec);
       if (!refAttr) continue;
-      const cur = records[i][field];
+      const cur = outRecords[i][field];
       // Forty-eighth log: multi:true fields arrive here as arrays. Heal only
       // when EVERY match resolved empty (a partially-populated array was
       // never hydration-starved); refill via the same multi read so the
@@ -636,17 +653,34 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
         let av;
         try { av = readField(containers[i], spec); } catch (_) { continue; }
         if (Array.isArray(av) && av.some((x) => typeof x === 'string' && x)) {
-          records[i][field] = av;
+          outRecords[i][field] = av;
         }
         continue;
       }
       if (cur !== undefined && cur !== null && String(cur) !== '') continue;
       let v;
       try { v = readField(containers[i], spec); } catch (_) { continue; }
-      if (typeof v === 'string' && v) records[i][field] = v;
+      if (typeof v === 'string' && v) outRecords[i][field] = v;
     }
   }
-  return records;
+  // Seventieth log F1: budget-hit runs return the partial envelope instead
+  // of the bare array — the resume advice names the caller-side range opts
+  // (containerRange is applied by the content-script wrapper BEFORE this
+  // helper, so [processed, total) composes natively without re-hovering).
+  if (processedCount < containers.length) {
+    return {
+      records: outRecords,
+      partial: {
+        processed: processedCount,
+        total: containers.length,
+        maxWallMs: maxWallMs,
+        note: 'wall budget reached — ' + processedCount + ' of ' + containers.length +
+          ' containers processed; re-run with containerRange:[' + processedCount + ',' + containers.length +
+          '] (or maxContainers) to continue, or raise opts.maxWallMs'
+      }
+    };
+  }
+  return outRecords;
 }
 
 // computeExtractListDiagnostics(containers, fieldMap, containerSelector) → object

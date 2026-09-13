@@ -280,10 +280,18 @@
         perHoverOpts.timeoutMs = hoverConfig.timeoutMs;
       }
       perHoverOpts.dismiss = (typeof hoverConfig.dismiss === 'boolean') ? hoverConfig.dismiss : true;
+      // Seventieth log F1 (inline mirror of lib/list-extract-ops.js): wall
+      // budget — a hover batch over a long feed outlives the probe rail and
+      // the step budget; a budget hit returns { records, partial } with the
+      // resume cursor instead of dying as a zombie.
+      var maxWallMs = (opts && typeof opts.maxWallMs === 'number' && opts.maxWallMs > 0) ? opts.maxWallMs : 25000;
+      var wallStart = Date.now();
+      var processedCount = 0;
       // Sequential hover iteration. Only one popover can be on screen at a
       // time on most sites; parallel dispatch would race.
       return (async function () {
         for (var i = 0; i < containers.length; i++) {
+          if (i > 0 && (Date.now() - wallStart) > maxWallMs) break;
           var container = containers[i];
           var anchors = [];
           try {
@@ -420,21 +428,24 @@
               }
             }
           }
+          processedCount = i + 1;
         }
         // Forty-fourth log (inline mirror of lib/list-extract-ops.js): field
         // extraction ran BEFORE the hover batch, but on a cold tab the batch
         // is exactly what hydrates lazily-mounted ARIA label chains. Re-read
         // labelledby fields whose pre-hover read came back empty; fill from
         // the post-hover DOM. Non-empty values are never overwritten and
-        // non-labelledby fields are never re-read.
-        for (var ri = 0; ri < containers.length; ri++) {
+        // non-labelledby fields are never re-read. Seventieth log F1: only
+        // PROCESSED containers are re-read.
+        var outRecords = records.slice(0, processedCount);
+        for (var ri = 0; ri < outRecords.length; ri++) {
           for (var fk in fieldMap) {
             var specR = fieldMap[fk];
             var lbR = (specR && typeof specR === 'object') ? specR.labelledby : undefined;
             var refAttrR = lbR === true ? 'aria-labelledby'
               : (typeof lbR === 'string' && lbR.trim() ? lbR.trim() : null);
             if (!refAttrR) continue;
-            var curR = records[ri][fk];
+            var curR = outRecords[ri][fk];
             // Forty-eighth log (inline mirror): multi:true fields arrive as
             // arrays — heal only when EVERY match resolved empty, and refill
             // through the multi read so the envelope stays an array.
@@ -444,7 +455,7 @@
               try {
                 var arrV = readField(containers[ri], specR);
                 if (Array.isArray(arrV) && arrV.some(function (x) { return typeof x === 'string' && x; })) {
-                  records[ri][fk] = arrV;
+                  outRecords[ri][fk] = arrV;
                 }
               } catch (_) {}
               continue;
@@ -452,10 +463,25 @@
             if (curR !== undefined && curR !== null && String(curR) !== '') continue;
             var vR;
             try { vR = readField(containers[ri], specR); } catch (_) { continue; }
-            if (typeof vR === 'string' && vR) records[ri][fk] = vR;
+            if (typeof vR === 'string' && vR) outRecords[ri][fk] = vR;
           }
         }
-        return records;
+        // Seventieth log F1 (inline mirror): budget-hit runs return the
+        // partial envelope; all-fit runs keep the plain array.
+        if (processedCount < containers.length) {
+          return {
+            records: outRecords,
+            partial: {
+              processed: processedCount,
+              total: containers.length,
+              maxWallMs: maxWallMs,
+              note: 'wall budget reached — ' + processedCount + ' of ' + containers.length +
+                ' containers processed; re-run with containerRange:[' + processedCount + ',' + containers.length +
+                '] (or maxContainers) to continue, or raise opts.maxWallMs'
+            }
+          };
+        }
+        return outRecords;
       })();
     }
 
@@ -4094,13 +4120,24 @@
     // real domHover (refactor in Task 1 lets domHover accept the anchor
     // element directly, bypassing global querySelector).
     if (typeof ops.resetMatchGuardSkips === 'function') ops.resetMatchGuardSkips();
-    var records = await ops.extractWithHoverRecords(
+    // Seventieth log F1: forward opts.maxWallMs; a budget-hit run resolves
+    // to the { records, partial } envelope (the Array.isArray consumer path is
+    // unchanged for all-fit runs). The census lanes read the flag via
+    // _diagnostics.partialWallBudget.
+    var ret = await ops.extractWithHoverRecords(
       processed,
       fieldMap,
       hoverConfig,
       domHover,
-      { allowEmpty: true }
+      { allowEmpty: true, maxWallMs: opts.maxWallMs }
     );
+    var partialEnvelope = null;
+    var records = ret;
+    if (ret && typeof ret === 'object' && !Array.isArray(ret) &&
+        Array.isArray(ret.records) && ret.partial && typeof ret.partial === 'object') {
+      records = ret.records;
+      partialEnvelope = ret;
+    }
     // Compute diagnostics: reuse the extractList diagnostics shape for
     // per-field match data, then layer on a hover summary.
     var _diagnostics = (ops && typeof ops.computeExtractListDiagnostics === 'function')
@@ -4210,6 +4247,13 @@
         }
       }
     } catch (_) { /* diagnostics must never break the scrape path */ }
+    if (partialEnvelope) {
+      _diagnostics.partialWallBudget = {
+        processed: partialEnvelope.partial.processed,
+        total: partialEnvelope.partial.total
+      };
+      _diagnostics.partialNote = partialEnvelope.partial.note;
+    }
     notifyBackgroundDiagnostic('extractWithHover_done', {
       containerSelector: containerSel,
       processed: processed.length,
@@ -4219,7 +4263,7 @@
       failureReasons: failureReasons,
       observedPopoverCount: observedPopoverCount
     });
-    return { result: records, _diagnostics: _diagnostics };
+    return { result: partialEnvelope || records, _diagnostics: _diagnostics };
   }
 
   const openTabPending = new Map();
