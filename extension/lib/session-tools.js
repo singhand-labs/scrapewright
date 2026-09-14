@@ -643,6 +643,13 @@
     // THIRD identical consecutive signature.
     let verifySignatureHistory = [];
     let probesSinceLastVerify = 0;
+    // Seventy-first log F1: rolling verify.run wall-cost history (per
+    // session-tools instance = per session) — feeds the economics disclosure
+    // (medianVerifyCostMs + the scarcity advisory when the remaining wall
+    // budget fits fewer than ~1.5 more verifies). The incident: 6 verify.run
+    // calls ate 2927s of a 3438s budget (~8min each, 85% total) while the
+    // model iterated v1→v9 with zero cost awareness.
+    const verifyCostHistory = [];
 
     // Fifty-second log: wrap every probe so the stagnation census can see
     // research activity between verifies.
@@ -667,9 +674,45 @@
       // outputSchema.
       const outputSchema = d.getOutputSchema() ||
         ((ioConfirmedSchemas || ledgerConfirmedSchemas(ctx) || {}).outputSchema) || null;
+      const __verifyT0 = Date.now();
       const out = await d.runVerify({ service: service, input: input, outputSchema: outputSchema });
+      const wallCostMs = Date.now() - __verifyT0;
       lastVerify = { events: out.events || [], report: out.report, raw: out.raw, at: Date.now() };
       const report = out.report || {};
+      // Seventy-first log F1: verify economics on the receipt — this call's
+      // measured cost, the remaining wall budget (live via ctx.session
+      // getters, net of parked/llm waits), and the session's median verify
+      // cost. When the remainder fits < ~1.5 more verifies, the scarcity
+      // advisory redirects diagnosis to the (free) research tab and reserves
+      // the last slot for the final green confirmation.
+      try {
+        if (report && typeof report === 'object' && !Array.isArray(report)) {
+          report.wallCostMs = wallCostMs;
+          verifyCostHistory.push(wallCostMs);
+          if (verifyCostHistory.length > 8) verifyCostHistory.shift();
+          const sess = ctx && ctx.session;
+          const bud = sess && sess.budgets;
+          const elapsed = sess && typeof sess.elapsedMs === 'number' ? sess.elapsedMs : null;
+          if (bud && typeof bud.wallClockMs === 'number' && typeof elapsed === 'number') {
+            const remainingMs = Math.max(0, bud.wallClockMs - elapsed);
+            report.wallBudgetRemainingMs = remainingMs;
+            const prior = verifyCostHistory.slice(0, -1);
+            if (prior.length) {
+              const sorted = prior.slice().sort((x, y) => x - y);
+              report.medianVerifyCostMs = sorted.length % 2
+                ? sorted[(sorted.length - 1) / 2]
+                : Math.round((sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2);
+            }
+            const refCost = Math.max(report.medianVerifyCostMs || 0, wallCostMs);
+            if (refCost > 0 && remainingMs < 1.5 * refCost) {
+              const fits = Math.floor(remainingMs / refCost);
+              const econNote = 'VERIFY ECONOMICS: this verify cost ' + Math.round(wallCostMs / 1000) +
+                's; roughly ' + fits + ' more fit' + (fits === 1 ? '' : 's') + ' in the remaining wall budget — diagnose on the RESEARCH tab with probe.snippet before spending another verify; reserve the last slot for the final green confirmation.';
+              report.note = (typeof report.note === 'string' && report.note) ? report.note + ' ' + econNote : econNote;
+            }
+          }
+        }
+      } catch (_) { /* the economics disclosure must never break the verify result */ }
       // Fifty-second log stagnation census: the signature is the sorted
       // partial-empty paths+counts, the junk field set, and the relative
       // timestamp paths — unchanged across three consecutive verifies means

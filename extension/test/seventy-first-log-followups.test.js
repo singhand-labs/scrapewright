@@ -46,6 +46,62 @@ function fakeSession(budgets, elapsedGetter) {
   };
 }
 
+// ---------- F1: verify.run economics ----------
+describe('71st log F1: verify.run economics disclosure', () => {
+  it('receipt carries wallCostMs + wallBudgetRemainingMs when the session exposes budgets/elapsedMs', async () => {
+    const { deps, state } = makeDeps({ runVerify: async () => { await sleep(5); return { report: { ok: true, events: [] }, events: [], raw: {} }; } });
+    state.draft = { targetUrl: 'https://example.com', steps: GOOD_STEPS };
+    const t = createSessionTools(deps);
+    const r = await t.tools['verify.run']({}, { session: fakeSession({ wallClockMs: 600000 }, () => 100000) });
+    assert.equal(typeof r.wallCostMs, 'number');
+    assert.ok(r.wallCostMs >= 0);
+    assert.equal(r.wallBudgetRemainingMs, 500000);
+    assert.equal(r.medianVerifyCostMs, undefined, 'no median before a PRIOR verify exists');
+    assert.ok(!/VERIFY ECONOMICS/.test(String(r.note || '')), 'no scarcity note while the budget is ample');
+  });
+
+  it('scarcity advisory fires when remaining < 1.5 x max(median, thisCall) and names the research-tab route', async () => {
+    const { deps, state } = makeDeps({ runVerify: async () => { await sleep(20); return { report: { ok: true, events: [] }, events: [], raw: {} }; } });
+    state.draft = { targetUrl: 'https://example.com', steps: GOOD_STEPS };
+    const t = createSessionTools(deps);
+    // wallClockMs 1000, elapsed getter reports 990 → remaining 10ms < 1.5 × thisCall(~20ms)
+    const r = await t.tools['verify.run']({}, { session: fakeSession({ wallClockMs: 1000 }, () => 990) });
+    assert.ok(r.wallBudgetRemainingMs < 30);
+    assert.match(r.note, /VERIFY ECONOMICS: this verify cost \d+s; roughly \d+ more fit/);
+    assert.match(r.note, /probe\.snippet/);
+    assert.match(r.note, /reserve the last slot/);
+  });
+
+  it('medianVerifyCostMs appears from the second verify and uses the rolling prior history', async () => {
+    const costs = [100, 300, 200];
+    let i = 0;
+    const { deps, state } = makeDeps({ runVerify: async () => { await sleep(costs[Math.min(i, costs.length - 1)]); i += 1; return { report: { ok: true, events: [] }, events: [], raw: {} }; } });
+    state.draft = { targetUrl: 'https://example.com', steps: GOOD_STEPS };
+    const t = createSessionTools(deps);
+    const s = fakeSession({ wallClockMs: 100000000 }, () => 0);
+    const r1 = await t.tools['verify.run']({}, { session: s });
+    assert.equal(r1.medianVerifyCostMs, undefined, 'first call has no prior history');
+    const r2 = await t.tools['verify.run']({}, { session: s });
+    assert.equal(typeof r2.medianVerifyCostMs, 'number', 'second call carries the prior median');
+    const r3 = await t.tools['verify.run']({}, { session: s });
+    const priors = [r1.wallCostMs, r2.wallCostMs].sort((a, b) => a - b);
+    assert.ok(Math.abs(r3.medianVerifyCostMs - Math.round((priors[0] + priors[1]) / 2)) <= 2,
+      'median over prior costs (got ' + r3.medianVerifyCostMs + ', priors ' + JSON.stringify(priors) + ')');
+  });
+
+  it('omits budget fields when the session budget is unknown (no wallClockMs / no elapsedMs)', async () => {
+    const { deps, state } = makeDeps();
+    state.draft = { targetUrl: 'https://example.com', steps: GOOD_STEPS };
+    const t = createSessionTools(deps);
+    const rNoBudget = await t.tools['verify.run']({}, { session: { spend: { turns: 1 }, budgets: { maxTurns: 50 }, get elapsedMs() { return 10; } } });
+    assert.equal(typeof rNoBudget.wallCostMs, 'number', 'cost is measurable without a budget');
+    assert.equal(rNoBudget.wallBudgetRemainingMs, undefined);
+    const rNoElapsed = await t.tools['verify.run']({}, { session: { spend: { turns: 1 }, budgets: { wallClockMs: 5000 } } });
+    assert.equal(rNoElapsed.wallBudgetRemainingMs, undefined, 'no elapsed getter → no remaining');
+    assert.ok(!/VERIFY ECONOMICS/.test(String(rNoElapsed.note || '')));
+  });
+});
+
 // ---------- F2: llm waits excluded from wallClock ----------
 describe('71st log F2: llm/provider waits excluded from wallClock', () => {
   it('computeEffectiveElapsed subtracts llm waits and parked windows, floored at 0', () => {
