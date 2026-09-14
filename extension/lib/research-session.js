@@ -207,6 +207,13 @@
     let parkedTotal = 0;
     let parkedThisSegment = 0;
     let parkOpenSince = null;
+    // Seventy-first log F2: time the engine spends WAITING ON THE PROVIDER
+    // (llm call round-trips + retry backoffs — rate-limit stalls included)
+    // is environmental, not research time. Same exclusion semantics as
+    // parkedMs: netSegmentMs subtracts it, the wallClock stop detail
+    // discloses it, and the TIME BUDGET suffix carries it as a line item.
+    let llmWaitTotal = 0;
+    let llmWaitThisSegment = 0;
     // Sixty-ninth review F13: WHAT the session is parked on — a resumed or
     // inspected session can see "the engine is waiting on the user via
     // io.confirm / annotate.request / user.observe" instead of a silently
@@ -228,10 +235,27 @@
       parkedTotal += d;
       parkedThisSegment += d;
     }
+    // Seventy-first log F2: netSegmentMs = raw segment time MINUS llm/provider
+    // waits MINUS parked (user) windows — clamped at 0. The math itself lives
+    // in the module-level computeEffectiveElapsed (exported for unit tests).
     function netSegmentMs() {
-      let seg = now() - segmentStart - parkedThisSegment;
+      let seg = computeEffectiveElapsed(now(), segmentStart, llmWaitThisSegment, parkedThisSegment);
       if (parkOpenSince != null) seg -= (now() - parkOpenSince);
       return Math.max(0, seg);
+    }
+    // Seventy-first log F2: wraps one provider wait (call or backoff sleep)
+    // and books it out of the wall clock. Takes a THUNK — capturing t0 after
+    // `llmWait(llm(...))` would evaluate the call (and its clock advance)
+    // before the timer starts.
+    async function llmWait(fn) {
+      const t0 = now();
+      try {
+        return await fn();
+      } finally {
+        const d = now() - t0;
+        llmWaitTotal += d;
+        llmWaitThisSegment += d;
+      }
     }
 
     function emit(type, data) {
@@ -254,7 +278,7 @@
         stopped: state.stopped,
         openQuestions: openQuestions(),
         turns: state.spend.turns,
-        spend: Object.assign({}, state.spend, { parkedMs: parkedTotal }),
+        spend: Object.assign({}, state.spend, { parkedMs: parkedTotal, llmWaitMs: llmWaitTotal }),
         artifactVersions: state.artifactVersions.length,
         ledgerEntries: ledger.serialize().entries.length,
         observations: observationLog.size()
@@ -650,7 +674,7 @@
         let res = null;
         let err = null;
         try {
-          res = await llm({ messages: messages, maxTokens: budgets.maxTokensPerCall });
+          res = await llmWait(() => llm({ messages: messages, maxTokens: budgets.maxTokensPerCall }));
         } catch (e) { err = e; }
         if (err) {
           // Fifty-fourth log: the llm client already owns timeout/retry
@@ -702,7 +726,7 @@
         if (state.elapsedMs + netSegmentMs() >= budgets.wallClockMs - 120000) {
           throw Object.assign(new Error('time budget nearly exhausted inside an LLM retry loop — raise the budget (wallClockMs) in the resume seed to continue'), { code: 'WALL_CLOCK_RETRY' });
         }
-        if (retry.backoffMs > 0) await sleep(retry.backoffMs * Math.pow(2, attempt - 1));
+        if (retry.backoffMs > 0) await llmWait(() => sleep(retry.backoffMs * Math.pow(2, attempt - 1)));
       }
     }
 
@@ -758,13 +782,20 @@
       toolTimings.set(k, e);
     }
     function formatTimeBudgetSuffix() {
-      if (toolTimings.size === 0) return '';
-      const rows = Array.from(toolTimings.entries())
-        .sort((a, b) => b[1].ms - a[1].ms).slice(0, 3)
-        .map(([t, d]) => t + ' ' + Math.round(d.ms / 1000) + 's/' + d.calls + ' call' + (d.calls === 1 ? '' : 's') +
-          (d.timeouts ? ' (' + d.timeouts + ' timed out)' : ''));
-      if (!rows.length) return '';
-      const suffix = ' [TIME BUDGET — top consumers: ' + rows.join(', ') + ']';
+      // Seventy-first log F2: llm/provider waits are their own line item —
+      // they are excluded from wallClock, so naming them here closes the
+      // "where did the clock go" question the 71st-log session died on.
+      const parts = [];
+      if (toolTimings.size > 0) {
+        const rows = Array.from(toolTimings.entries())
+          .sort((a, b) => b[1].ms - a[1].ms).slice(0, 3)
+          .map(([t, d]) => t + ' ' + Math.round(d.ms / 1000) + 's/' + d.calls + ' call' + (d.calls === 1 ? '' : 's') +
+            (d.timeouts ? ' (' + d.timeouts + ' timed out)' : ''));
+        if (rows.length) parts.push('top consumers: ' + rows.join(', '));
+      }
+      if (llmWaitTotal > 0) parts.push('llm/provider waits ' + Math.round(llmWaitTotal / 1000) + 's (excluded from wallClock)');
+      if (!parts.length) return '';
+      const suffix = ' [TIME BUDGET — ' + parts.join('; ') + ']';
       return suffix.length <= 240 ? suffix : suffix.slice(0, 237) + '...]';
     }
 
@@ -805,6 +836,7 @@
             pauseFlag = false;
             state.elapsedMs += netSegmentMs();
             parkedThisSegment = 0;
+            llmWaitThisSegment = 0;
             state.status = 'paused';
             state.stopped = { reason: 'paused', detail: null };
             emit('paused', {});
@@ -819,7 +851,7 @@
             break;
           }
           if (state.elapsedMs + netSegmentMs() >= budgets.wallClockMs) {
-            report = await stop('wallClock', 'time budget exhausted after ~' + Math.round((state.elapsedMs + netSegmentMs()) / 1000) + 's (parked ' + Math.round(parkedTotal / 1000) + 's excluded) — raise the budget (wallClockMs) in the resume seed to continue' + verifyStopSuffix() + formatTimeBudgetSuffix());
+            report = await stop('wallClock', 'time budget exhausted after ~' + Math.round((state.elapsedMs + netSegmentMs()) / 1000) + 's (parked ' + Math.round(parkedTotal / 1000) + 's excluded) [LLM/provider waits ' + Math.round(llmWaitTotal / 1000) + 's excluded] — raise the budget (wallClockMs) in the resume seed to continue' + verifyStopSuffix() + formatTimeBudgetSuffix());
             break;
           }
           if (state.spend.promptTokens + state.spend.completionTokens >= budgets.tokenCap) { report = await stop('tokenCap'); break; }
@@ -1251,12 +1283,22 @@
       get spend() { return state.spend; },
       get budgets() { return budgets; },
       get observationLog() { return observationLog; },
-      get ledger() { return ledger; }
+      get ledger() { return ledger; },
+      // Seventy-first log F1: live wallClock consumption (elapsed state +
+      // current segment, net of parked/llm waits) for verify.run economics.
+      get elapsedMs() { return state.elapsedMs + netSegmentMs(); }
     };
     return publicApi;
   }
 
-  const api = { createResearchSession };
+  // Seventy-first log F2: pure wallClock accounting — raw span MINUS llm/
+  // provider waits MINUS parked (user) windows, clamped at 0. Exported so the
+  // exclusion semantics are unit-testable without driving the engine loop.
+  function computeEffectiveElapsed(nowMs, startMs, llmWaitMs, parkedMs) {
+    return Math.max(0, nowMs - startMs - Math.max(0, Number(llmWaitMs) || 0) - Math.max(0, Number(parkedMs) || 0));
+  }
+
+  const api = { createResearchSession, computeEffectiveElapsed: computeEffectiveElapsed };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.ResearchSessionLib = api;
 })(typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : self));
