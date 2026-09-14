@@ -758,6 +758,12 @@
       // positional), so dispatch every user tool uniformly as fn(args, ctx).
       const fn = tools[name];
       if (typeof fn !== 'function') {
+        // Seventy-second log backstop: if a tool:"finish" turn ever reaches
+        // dispatch (e.g. alongside a finish key in some other route), teach
+        // the shape instead of the bare unknown-tool error.
+        if (name === 'finish') {
+          return { error: 'finish is the protocol-level action, not a tool: resend this turn as {"finish":{"summary":"…"}} (top-level, exactly one of tool/finish)' };
+        }
         return { error: 'unknown tool: ' + name, available: availableToolNames() };
       }
       try {
@@ -884,7 +890,7 @@
               if (p.violation === 'missing-action' && /think/.test(String(p.detail || ''))) {
                 return head + 'your reply REASONED but never committed an action — it ended after "think". ' +
                   (round >= 2 ? 'FINAL CHANCE. ' : '') +
-                  'Resend now: keep your think, then ADD exactly one of "tool": "<name>" + "args": {…} or "finish": { "summary": "…" }. ' +
+                  'Resend now: keep your think, then ADD exactly one of "tool": "<name>" + "args": {…} or "finish": { "summary": "…" } (finish goes at the top level, not in the tool slot). ' +
                   'Your think already names the next step — commit it as the action.';
               }
               if (p.violation === 'ambiguous-action') {
@@ -971,6 +977,15 @@
             }
           }
           const turn = parsed.turn;
+          // Seventy-second log (session-2): parseAssistantTurn coerced a
+          // {"tool":"finish","args":{…}} turn into the protocol finish
+          // action. Log the teaching note (visible to resume/next session)
+          // and proceed with the finish flow — the coercion IS the recovery,
+          // no extra LLM round.
+          if (turn.coercedFinish) {
+            state.transcript.push({ kind: 'system', text:
+              'shape note: finish was sent as a tool — coerced to the protocol finish action; finish lives at the TOP LEVEL of the turn JSON ({"finish":{"summary":"…"}}), exactly one of "tool"/"finish".' });
+          }
           applyTurnState(turn);
           state.spend.turns += 1;
 

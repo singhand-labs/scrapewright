@@ -27,6 +27,9 @@
     'To end the session replace tool/args with "finish": { "summary": "..." }.',
     'Rules:',
     '- Exactly one of "tool" or "finish" per turn; "args" defaults to {}.',
+    '- finish is the TOP-LEVEL action {"finish":{"summary":"…"}} — NEVER a',
+    '  tool name. There is no "finish" tool: finish is the protocol-level',
+    '  end action, not something you dispatch.',
     '- "think" alone is not a turn: a reply that ends after think has no',
     '  action and will be rejected — commit the step your think leads to as',
     '  tool/args (or finish). Never end the reply inside your reasoning.',
@@ -239,6 +242,21 @@
       const detail = ((parseErr ? String(parseErr).slice(0, 140) : 'parsed to null') + cut + ' | tail: ' + tail).slice(0, 300);
       return { ok: false, violation: 'not-object', detail: detail };
     }
+    // Seventy-second log (session-2): the model put finish in the TOOL slot
+    // ({"tool":"finish","args":{"summary":…}}) — the available-tools list
+    // rightly omits finish, so dispatchTool replied "unknown tool: finish"
+    // and the resend round nearly died in a provider outage with a
+    // verified-green artifact aboard. finish is a protocol action, never a
+    // dispatched tool: coerce the shape here (the coercion IS the recovery —
+    // no extra LLM round) and flag it so the engine can log a teaching note.
+    let coercedFinish = false;
+    if (obj.tool === 'finish' && !obj.finish) {
+      obj.finish = (obj.args && typeof obj.args === 'object' && !Array.isArray(obj.args)) ? obj.args
+        : { summary: (typeof obj.args === 'string' ? obj.args : '') };
+      delete obj.tool;
+      delete obj.args;
+      coercedFinish = true;
+    }
     if (obj.args !== undefined && (typeof obj.args !== 'object' || obj.args === null || Array.isArray(obj.args))) {
       return { ok: false, violation: 'bad-args' };
     }
@@ -260,6 +278,7 @@
     }
     if (turn.tool && !/^[a-z][\w]*(\.[\w]+)*$/i.test(turn.tool)) return { ok: false, violation: 'bad-tool-name' };
     if (turn.finish && typeof turn.finish.summary !== 'string') turn.finish.summary = '';
+    if (coercedFinish) turn.coercedFinish = true;
     return { ok: true, turn: turn };
   }
 
