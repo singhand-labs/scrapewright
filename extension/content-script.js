@@ -3170,12 +3170,52 @@
     // sixty-second log's deterministic gate: report the structural fact,
     // skip everything, keep the label harvest (hidden elements are
     // perfectly readable — reading needs no box).
+    // G1 (seventy-second log): an ATTACHED zero-box anchor is not
+    // necessarily display:none — a VIRTUALIZED feed reclaims the boxes of
+    // off-screen cards while the nodes stay in the tree. The 72nd session's
+    // timestamp anchor hover was refused as anchor_not_hoverable on a
+    // 0×0 rect, the popover could never mount, and the model quoted the
+    // tool-blindness as a page fact ("no year exists anywhere"). ONE
+    // remount retry: walk up to ~8 ancestor levels for anything with a
+    // nonzero box, scroll THAT into view (a recycled anchor's own
+    // scrollIntoView is a no-op — its box was reclaimed), wait for
+    // re-layout, re-read the anchor's rect. If the box came back, fall
+    // through to the normal pipeline with the refreshed rect. A display:none
+    // node in a live subtree also retries here — harmlessly: its rect stays
+    // 0×0 and the existing early-out below still fires.
+    var gateReasonDetail = null;
+    if ((rect.width <= 0 || rect.height <= 0) && anchor.isConnected) {
+      var remountTarget = null;
+      var walkNode = anchor;
+      for (var wl = 0; wl < 8 && walkNode && walkNode.nodeType === 1; wl++) {
+        var wr = walkNode.getBoundingClientRect();
+        if (wr.width > 0 && wr.height > 0) { remountTarget = walkNode; break; }
+        walkNode = walkNode.parentElement;
+      }
+      if (remountTarget && typeof remountTarget.scrollIntoView === 'function') {
+        try { remountTarget.scrollIntoView({ block: 'center', behavior: 'instant' }); }
+        catch (_) { try { remountTarget.scrollIntoView(); } catch (_2) { remountTarget = null; } }
+        if (remountTarget) {
+          await new Promise(function (r) { setTimeout(r, 250); });
+          rect = anchor.getBoundingClientRect();
+          // Only an ATTEMPTED remount that still yields 0×0 earns the
+          // attached/virtualized reasonDetail — a box-less walk with no
+          // scrollable ancestor (the classic display:none-in-a-live-tree
+          // case, and the JSDOM all-zero-rect world) keeps the original
+          // deterministic note.
+          if (rect.width <= 0 || rect.height <= 0) {
+            gateReasonDetail = 'attached, box-less after scroll retry (virtualized or hidden subtree)';
+          }
+        }
+      }
+    }
     if (rect.width <= 0 || rect.height <= 0) {
       notifyBackgroundDiagnostic('hover_request', {
         selector: selectorForLog,
         popoverSelector: popoverSel || null,
         hoverX: null, hoverY: null,
         dispatched: false, ok: false, reason: 'anchor_not_hoverable',
+        reasonDetail: gateReasonDetail,
         anchorRect: { width: rect.width, height: rect.height },
         // Same shape as the dispatch-path diagnostic so SW-log readers never
         // fork on which fields exist — baselines are honestly false here
@@ -3193,8 +3233,17 @@
         hoverDispatched: false,
         hoverReason: 'anchor_not_hoverable',
         reason: 'anchor_not_hoverable',
+        reasonDetail: gateReasonDetail,
         anchorRect: { width: rect.width, height: rect.height },
-        budgetNote: 'the anchor element has no rendered box (display:none or zero size — typically a hidden tooltip span a broad union anchorSel matched), so no mouse dispatch can ever target it — this is a property of the anchor, not a transient and not evidence about popovers: do NOT retry it. Narrow anchorSel to VISIBLE interactive elements, or read the value through the non-hover routes — labelledby/attr/text reads work on hidden elements (the anchor-label harvest ran; its result is attached when the references resolve).'
+        // G2 (seventy-second log): the note branches on the CAUSE. An
+        // attached-but-box-less node (virtualization reclaimed the box
+        // off-screen) is RECOVERABLE by scrolling and re-resolving; a
+        // display:none node is not — pick a different anchor. The old
+        // single note taught NO-retry unconditionally, which the 72nd log
+        // falsified for the virtualized case.
+        budgetNote: gateReasonDetail
+          ? 'the anchor element is attached but rendered box-less — off-screen virtualized cards reclaim boxes: scroll the card into view and RE-RESOLVE the anchor (re-query after scroll), then retry; a display:none element (this note absent) instead means pick a different, visible anchor'
+          : 'the anchor element has no rendered box (display:none or zero size — typically a hidden tooltip span a broad union anchorSel matched), so no mouse dispatch can ever target it — this is a property of the anchor, not a transient and not evidence about popovers: do NOT retry it. Narrow anchorSel to VISIBLE interactive elements, or read the value through the non-hover routes — labelledby/attr/text reads work on hidden elements (the anchor-label harvest ran; its result is attached when the references resolve).'
       };
       if (notHoverableLabel) {
         if (notHoverableLabel.text) {
