@@ -2197,6 +2197,18 @@
       return { result: { error: 'ELEMENT_NOT_FOUND: ' + sel + ' — $timestamp takes the repeating card container selector', note: 'no containers matched — cold tab? await $wait(sel) first' }, _diagnostics: { api: 'timestamp', selector: sel, containers: 0 } };
     }
     const container = containers[Math.min(index, containers.length - 1)];
+    // G1 (seventy-second log): scroll the CONTAINER into view once before
+    // enumerating anchors. Today only each anchor gets scrolled (inside
+    // domHover), and a virtualized/recycled anchor's own scrollIntoView is
+    // a no-op — its box was reclaimed off-screen, so no pixel target ever
+    // comes back and every hover is refused as anchor_not_hoverable.
+    // Scrolling the container first forces the virtualizer to remount the
+    // card (and re-lay-out its anchors) before enumeration begins.
+    if (typeof container.scrollIntoView === 'function') {
+      try { container.scrollIntoView({ block: 'center', behavior: 'instant' }); }
+      catch (_) { try { container.scrollIntoView(); } catch (_2) { /* no layout surface */ } }
+      await new Promise(function (r) { setTimeout(r, 250); });
+    }
     let anchors = [];
     // Code-review P3: same hygiene for anchorSel — the old catch swallowed
     // the SyntaxError into anchors=[] (a silent "no timestamp here" for what
@@ -2223,6 +2235,7 @@
       for (const sub of extractDateSubstringsCS(str)) add(sub, TS_REL_RE.test(sub));
     };
     let hoversDone = 0;
+    let hoversReal = 0;
     let hoverBudgetExhausted = false;
     for (let ai = 0; ai < anchors.length; ai++) {
       const anchor = anchors[ai];
@@ -2252,6 +2265,12 @@
       const __hvSpend = Math.max(1, Date.now() - __hvT0);
       TS_SHARED_HOVER_BUDGET_MS -= __hvSpend;
       TS_SHARED_HOVER_PRIOR_SPEND_MS += __hvSpend;
+      // G3: hoversDone counts ATTEMPTS; hoversReal counts hovers that
+      // actually dispatched (box present). The 72nd log's incident had
+      // hoversDone=3 with all three refused at the degenerate-rect gate —
+      // the receipt read "hovers dispatched" while the popover route was
+      // never exercised once.
+      if (hv && (hv.hovered === true || hv.hoverDispatched === true)) hoversReal += 1;
       if (hv && hv.htmlSnippet) {
         // Popover text is structurally prose ("Shared with Public ·
         // Friday, …") — never a whole-value candidate; extract substrings.
@@ -2301,6 +2320,19 @@
         : "this card's own anchors exhausted the shared hover budget";
       result.note = (result.note ? result.note + ' ' : '') +
         'hovering stopped (' + who + ') — narrow anchorSel to the time-bearing anchor(s) via probe, or renegotiate the field via io.confirm; labels are still harvested without hovering; the budget recharges when the page navigates';
+    }
+    // G3 (seventy-second log): zero-hover negative firewall. When NO hover
+    // actually dispatched (all anchors box-less or dispatch-refused) and the
+    // candidates came only from non-popover sources, the popover route was
+    // never exercised — a negative conclusion about popover-borne values is
+    // tool-blindness, not page fact. The 72nd session shipped "no year
+    // exists anywhere on the page" off exactly this shape. Skipped when a
+    // FULL absolute is already in hand (the hover loop deliberately stops
+    // early there — the notice would be noise).
+    if (hoversReal === 0 && candidates.length > 0 && !(absolute && !absolute.partial) &&
+        !candidates.some((c) => c.source === 'popoverText')) {
+      result.note = (result.note ? result.note + '\n' : '') +
+        'NOTICE: zero anchors were actually hovered this call (all anchors box-less or dispatch-refused) — the popover route is UNVERIFIED for this card; do NOT conclude the page lacks a popover-borne value: scroll the card into view and re-run, or inspect manually with $hover before claiming absence.';
     }
     notifyBackgroundDiagnostic('timestamp_done', {
       selector: sel, anchors: anchors.length, hoversDispatched: hoversDone, absoluteFound: !!absolute

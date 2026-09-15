@@ -805,6 +805,14 @@
           }
         }
       }
+      // G3 (seventy-second log): zero-hover negative firewall. When every
+      // hovercards entry failed (hovered:false / no dispatch) and none
+      // captured a popover (htmlSnippet), the popover route was NEVER
+      // exercised — a "no popover-borne value exists" conclusion from this
+      // run is tool-blindness quoted as page fact, not evidence.
+      const cards = Array.isArray(rec.hovercards) ? rec.hovercards : [];
+      const anyHoverEvidence = cards.some((h) => h && (h.hovered === true || h.hoverDispatched === true || h.htmlSnippet));
+      const zeroHoverBlind = !anyHoverEvidence && candidates.length > 0;
       // Pick order (sixty-ninth log): full absolute (no relative flag, year
       // token present) → partial absolute (year-less month-day) → relative.
       const absolute = (candidates.find((c) => !c.relative && !c.partial) ||
@@ -832,6 +840,10 @@
         // but it lacks a year. Keep both notes mutually exclusive so the
         // model can tell which situation it is in.
         out.note = 'the absolute candidate lacks a YEAR (month-day only — recent items often render relative ages while older ones render month-day; this population mixes them). If the year or clock time matters, the hover tooltip usually carries the full date: inspect with probe.hover, then bind the field via read:\'hoverPopover\' with your own match regex.';
+      }
+      if (zeroHoverBlind) {
+        out.note = (out.note ? out.note + '\n' : '') +
+          'NOTICE: zero anchors were actually hovered this call (all anchors box-less or dispatch-refused) — the popover route is UNVERIFIED for this card; do NOT conclude the page lacks a popover-borne value: scroll the card into view and re-run, or inspect manually with probe.hover before claiming absence.';
       }
       if (observationLog) {
         observationLog.record({
