@@ -32,7 +32,10 @@ function fnBody(src, name) {
 describe('DSL $labelledby returns the self-describing object (RC-C)', () => {
   it('domLabelledby returns the resolveLabelledbyText object as the result, not the flattened text', () => {
     const body = fnBody(SRC, 'domLabelledby');
-    assert.match(body, /const resolved = resolveLabelledbyText\(found\.element, refAttr\)/);
+    // Seventy-third log: resolution now RETRIES on the shared timeoutMs
+    // deadline (`let resolved` + the re-resolve loop) — the envelope pin
+    // below is unchanged.
+    assert.match(body, /let resolved = resolveLabelledbyText\(found\.element, refAttr\)/);
     assert.match(body, /return \{ result: resolved, _diagnostics \}/,
       'the DSL resolves to {text, attr, refCount, missingIds, note?} — exactly the shape probe.labelledby shows');
     assert.ok(!/result: resolved\.text/.test(body), 'the old bare-string flattening is gone');

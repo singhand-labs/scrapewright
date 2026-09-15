@@ -2061,10 +2061,37 @@
 
   async function domLabelledby(sel, attr, timeoutMs) {
     const refAttr = (attr === 'aria-describedby' || attr === 'aria-labelledby') ? attr : 'aria-labelledby';
-    await domQuerySelector(sel, (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs : 5000);
+    // Seventy-third log follow-up: deep-feed cold-mounted cards carry
+    // aria-labelledby reference chains whose referenced nodes are NOT yet
+    // hydrated at read time (the 44th-log post-batch re-read covers only
+    // $extractWithHover-labelledby fields). Resolution RETRIES within the
+    // SAME timeoutMs budget — one deadline shared by element-wait and
+    // resolution retries, so a caller's budget is never doubled.
+    const budget = (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs : 5000;
+    const deadline = Date.now() + budget;
+    await domQuerySelector(sel, budget);
     const found = querySelectorDeep(sel);
     if (!found) throw new Error('ELEMENT_NOT_FOUND: ' + sel);
-    const resolved = resolveLabelledbyText(found.element, refAttr);
+    let resolved = resolveLabelledbyText(found.element, refAttr);
+    // Retry ONLY when the chain is present but unresolvable/empty:
+    // refCount>0 with no text, or referenced ids that resolve to nothing.
+    // An absent attribute is structural — retrying cannot change it.
+    const retryable = () =>
+      ((resolved.refCount > 0 && !resolved.text) ||
+       (resolved.missingIds && resolved.missingIds.length));
+    let retriedUntilDeadline = false;
+    while (retryable()) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) { retriedUntilDeadline = true; break; }
+      await new Promise((r) => setTimeout(r, Math.min(150, remaining)));
+      const again = querySelectorDeep(sel);
+      if (!again) throw new Error('ELEMENT_NOT_FOUND: ' + sel);
+      resolved = resolveLabelledbyText(again.element, refAttr);
+    }
+    if (retriedUntilDeadline && retryable()) {
+      resolved.note = (resolved.note ? resolved.note + ' ' : '') +
+        '— reference chain not hydrated after retrying until the timeout; the referenced nodes mount lazily: scroll the card into view / hover the anchor (a hover-mounted popover hydrates the chain), then re-read';
+    }
     const _diagnostics = {
       api: 'labelledby',
       selector: sel,
