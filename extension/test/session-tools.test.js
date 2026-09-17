@@ -1265,3 +1265,94 @@ describe('twenty-first log: the confirmed contract lands in the artifact', () =>
     assert.ok(!/facebook|twitter|linkedin|tiktok|reddit|\bfb\b/i.test(t.systemPromptBase), 'no site tokens');
   });
 });
+
+// Seventy-fourth log F1/F2: mechanical testInput seed from URL-template
+// params + post-confirm research-tab resync teaching.
+describe('io.confirm first-time testInput seed (F1)', () => {
+  const TMPL_URL = 'https://x.example/search/top?q={{keyword}}';
+  const IN_KW = { type: 'object', required: ['keyword'], properties: { keyword: { type: 'string' } } };
+  const OUT_POSTS = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } };
+
+  function freshDeps(railUrl, bridgeCapture) {
+    return makeDeps({
+      rail: {
+        pageOpen: async () => ({}), pageState: async () => ({ open: true, tabId: 1, url: railUrl }),
+        executeDsl: async () => 1, ensureLock: async () => {}, releaseLock: async () => {}, dispose: async () => {}
+      },
+      getDraftService: () => ({ targetUrl: TMPL_URL, steps: [], config: {} }),
+      getTestInput: () => ({}),
+      ioConfirmBridge: { request: async (p) => { if (bridgeCapture) bridgeCapture.push(p); return { confirmed: true }; } }
+    });
+  }
+
+  it('seedTestInputFromUrls aligns {{param}} query keys against the rail URL', async () => {
+    const { seedTestInputFromUrls } = require('../lib/session-tools');
+    assert.deepEqual(seedTestInputFromUrls('https://x/search/top?q={{keyword}}', 'https://x/search/top?q=beauty'), { keyword: 'beauty' });
+    assert.equal(seedTestInputFromUrls('https://x/search/top?q={{keyword}}', 'https://x/other'), null, 'no query on rail URL → no seed');
+    assert.equal(seedTestInputFromUrls('https://x/search?q=static', 'https://x/search?q=beauty'), null, 'no template params → no seed');
+  });
+
+  it('first confirm prefills the rail-researched values instead of {}', async () => {
+    const seen = [];
+    const { deps } = freshDeps('https://x.example/search/top?q=beauty', seen);
+    const t = createSessionTools(deps);
+    const r = await t.tools['io.confirm']({ inputSchema: IN_KW, outputSchema: OUT_POSTS }, { ledger: { add: () => {} } });
+    assert.equal(r.confirmed, true);
+    assert.deepEqual(seen[0].testInput, { keyword: 'beauty' }, 'panel prefilled from the rail URL');
+    assert.match(r.note, /keyword":"beauty"/);
+  });
+
+  it('no matching rail URL keeps the empty panel (chain unchanged)', async () => {
+    const seen = [];
+    const { deps } = freshDeps('https://x.example/home', seen);
+    const t = createSessionTools(deps);
+    const r = await t.tools['io.confirm']({ inputSchema: IN_KW, outputSchema: OUT_POSTS }, { ledger: { add: () => {} } });
+    assert.equal(r.confirmed, true);
+    assert.deepEqual(seen[0].testInput, {}, 'no seed when the rail URL carries no matching query values');
+  });
+
+  it('seed restricted to declared inputSchema properties', async () => {
+    const seen = [];
+    const { deps } = freshDeps('https://x.example/search/top?q=beauty', seen);
+    const t = createSessionTools(deps);
+    await t.tools['io.confirm']({
+      inputSchema: { type: 'object', properties: { other: { type: 'string' } } },
+      outputSchema: OUT_POSTS
+    }, { ledger: { add: () => {} } });
+    assert.deepEqual(seen[0].testInput, {}, 'undeclared property dropped from the seed');
+  });
+});
+
+describe('io.confirm research-tab resync note (F2)', () => {
+  const TMPL_URL = 'https://x.example/search?q={{keyword}}';
+  const IN_KW = { type: 'object', required: ['keyword'], properties: { keyword: { type: 'string' } } };
+  const OUT_POSTS = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } };
+
+  function depsWith(railUrl) {
+    return makeDeps({
+      rail: {
+        pageOpen: async () => ({}), pageState: async () => ({ open: true, tabId: 1, url: railUrl }),
+        executeDsl: async () => 1, ensureLock: async () => {}, releaseLock: async () => {}, dispose: async () => {}
+      },
+      getDraftService: () => ({ targetUrl: TMPL_URL, steps: [], config: {} }),
+      ioConfirmBridge: { request: async () => ({ confirmed: true }) }
+    });
+  }
+
+  it('flags a rail tab left on the old keyword', async () => {
+    const { deps } = depsWith('https://x.example/search?q=machine+learning');
+    const t = createSessionTools(deps);
+    const r = await t.tools['io.confirm']({ inputSchema: IN_KW, outputSchema: OUT_POSTS, testInput: { keyword: 'beauty' } }, { ledger: { add: () => {} } });
+    assert.equal(r.confirmed, true);
+    assert.match(r.note, /research tab is still on https:\/\/x\.example\/search\?q=machine\+learning/);
+    assert.match(r.note, /call page\.open with the resolved URL/);
+  });
+
+  it('no note when the rail tab already matches the confirmed input', async () => {
+    const { deps } = depsWith('https://x.example/search?q=beauty');
+    const t = createSessionTools(deps);
+    const r = await t.tools['io.confirm']({ inputSchema: IN_KW, outputSchema: OUT_POSTS, testInput: { keyword: 'beauty' } }, { ledger: { add: () => {} } });
+    assert.equal(r.confirmed, true);
+    assert.doesNotMatch(r.note, /research tab is still on/);
+  });
+});

@@ -3004,6 +3004,21 @@ async function startResearchSession(seedOverride) {
       }
     } catch (e) { /* edit-mode ledger seed is best-effort */ }
   }
+  if (!seed && !wizardState.editingServiceId) {
+    // Seventy-fourth log F3: a FRESH session on the same target site should
+    // not re-discover what a deployed service already learned — seed the
+    // ledger from any persisted service with the exact same targetUrl that
+    // carries findings (e.g. author/time hovercards work), best-effort like
+    // the edit path.
+    try {
+      const registry = new ServiceRegistry();
+      const svc = await seedLedgerFromSameSite(registry, wizardState.targetUrl);
+      if (svc) {
+        seed = { ledger: svc.findingsLedger };
+        appendLog('Ledger seeded from service ' + svc.name + ' (same target site) — prior findings carry forward');
+      }
+    } catch (e) { /* cross-session ledger seed is best-effort */ }
+  }
 
   appendLog(resumeNote || 'Starting research session — the AI will open the page, probe it, author the steps, and verify.');
   wizardSession = ResearchSessionLib.createResearchSession({

@@ -21,6 +21,31 @@
     return (typeof global !== 'undefined' && global[globalName]) || null;
   }
 
+  // Seventy-fourth log F1: mechanical testInput seed — a query key in the
+  // target URL template whose value is exactly {{param}} takes the same
+  // key's live value from the research tab's current URL. Pure string work,
+  // no page knowledge; exported for tests.
+  function seedTestInputFromUrls(targetUrl, railUrl) {
+    try {
+      if (!targetUrl || !railUrl || typeof targetUrl !== 'string' || typeof railUrl !== 'string') return null;
+      const tmplQuery = targetUrl.split('#')[0].split('?')[1];
+      const railQuery = railUrl.split('#')[0].split('?')[1];
+      if (!tmplQuery || !railQuery) return null;
+      const railParams = new URLSearchParams(railQuery);
+      const out = {};
+      for (const pair of tmplQuery.split('&')) {
+        const eq = pair.indexOf('=');
+        if (eq === -1) continue;
+        const key = pair.slice(0, eq);
+        const m = pair.slice(eq + 1).match(/^\{\{\s*(\w+)\s*\}\}$/);
+        if (!m) continue;
+        const live = railParams.get(key);
+        if (live != null && live !== '') out[m[1]] = live;
+      }
+      return Object.keys(out).length ? out : null;
+    } catch (e) { return null; }
+  }
+
   function resolveWU() {
     const m = resolveLib('./wizard-utils', '__wizardUtilsModuleMarker__');
     if (m && typeof m.validateChain === 'function') return m;
@@ -414,6 +439,51 @@
       } catch (e) { return false; }
     }
 
+    // Seventy-fourth log F1: the FIRST io.confirm of a fresh session popped
+    // with EMPTY test params because no prior confirmed values existed
+    // anywhere — the user hand-typed the keyword the model had already been
+    // researching with. Mechanical seed: when the prefill chain yields
+    // nothing, align the target URL's template placeholders against the
+    // research tab's CURRENT URL — a query key whose template value is
+    // exactly {{param}} takes the same key's live value from the rail URL.
+    // Pure string work, no page knowledge. (File-scope pure helper; the
+    // ioConfirm wiring below applies it.)
+    async function railPageUrl() {
+      try {
+        if (!d.rail || typeof d.rail.pageState !== 'function') return null;
+        const ps = await d.rail.pageState();
+        return (ps && typeof ps.url === 'string' && ps.url) ? ps.url : null;
+      } catch (e) { return null; }
+    }
+
+    function draftTargetUrl() {
+      try {
+        const draft = (typeof d.getDraftService === 'function') ? d.getDraftService() : null;
+        return (draft && typeof draft.targetUrl === 'string') ? draft.targetUrl : null;
+      } catch (e) { return null; }
+    }
+
+    // Seventy-fourth log F2: the confirmed test input resolves to a DIFFERENT
+    // URL than the research tab is sitting on (rail tab persisted from the
+    // old keyword) — teach the resync instead of letting early findings come
+    // from the wrong input class.
+    async function researchTabResyncNote(confirmedTestInput) {
+      try {
+        const targetUrl = draftTargetUrl();
+        if (!targetUrl || !/\{\{\s*\w+\s*\}\}/.test(targetUrl)) return '';
+        if (!isPlainObjectValue(confirmedTestInput) || !Object.keys(confirmedTestInput).length) return '';
+        const UT = resolveLib('./url-template', 'UrlTemplate');
+        if (!UT || typeof UT.resolveTargetUrl !== 'function') return '';
+        const railUrl = await railPageUrl();
+        if (!railUrl) return '';
+        const stripHash = (u) => String(u).split('#')[0];
+        const resolvedUrl = UT.resolveTargetUrl(targetUrl, confirmedTestInput);
+        if (stripHash(resolvedUrl) === stripHash(railUrl)) return '';
+        return 'NOTE: the research tab is still on ' + railUrl + ' — the confirmed test input resolves to ' + resolvedUrl +
+          ': call page.open with the resolved URL before further research so findings match the verified input class (findings from a different keyword mislead the artifact)';
+      } catch (e) { return ''; }
+    }
+
     async function ioConfirm(args, ctx) {
       const a = args && typeof args === 'object' ? args : {};
       const bridge = d.ioConfirmBridge;
@@ -504,7 +574,28 @@
       const modelTI = isPlainObjectValue(a.testInput)
         ? ((Object.keys(a.testInput).length > 0 || inPropCount === 0) ? a.testInput : null)
         : null;
-      const proposedTestInput = modelTI || (liveHasValues ? liveTestInput : (priorHasValues ? priorTI : null));
+      let proposedTestInput = modelTI || (liveHasValues ? liveTestInput : (priorHasValues ? priorTI : null));
+      if (!proposedTestInput) {
+        // Seventy-fourth log F1: first-time mechanical seed — the values the
+        // model ACTUALLY researched with (rail URL query values aligned to
+        // the target URL's {{param}} placeholders) prefill the first panel
+        // instead of an empty {} the user must hand-type. Restricted to
+        // declared inputSchema properties; any failure keeps the chain.
+        try {
+          const targetUrl = draftTargetUrl();
+          const railUrl = await railPageUrl();
+          const seeded = seedTestInputFromUrls(targetUrl, railUrl);
+          if (seeded) {
+            const props = (a.inputSchema && a.inputSchema.properties) || null;
+            if (props) {
+              for (const k of Object.keys(seeded)) {
+                if (!Object.prototype.hasOwnProperty.call(props, k)) delete seeded[k];
+              }
+            }
+            if (Object.keys(seeded).length) proposedTestInput = seeded;
+          }
+        } catch (e) { /* mechanical seed is best-effort */ }
+      }
       // Dedup: a contract the user already confirmed is NOT re-prompted while
       // its shape is unchanged (rejections of revisions leave the original
       // standing). Only a materially different proposal pops the panel again.
@@ -587,12 +678,16 @@
         }
         const attachedNow = attachConfirmedSchemas(ioConfirmedSchemas);
         const attachedTI = attachConfirmedTestInput(confirmedTestInput);
+        // Seventy-fourth log F2: research-tab resync teaching (see
+        // researchTabResyncNote) — '' when the tab already matches.
+        const resyncNote = await researchTabResyncNote(confirmedTestInput);
         return {
           confirmed: true,
           note: 'contract approved — author the steps and call service.update (schemas optional: the confirmed contract attaches automatically)'
             + (confirmedTestInput ? '; test request parameters confirmed: ' + JSON.stringify(confirmedTestInput) : '')
             + (attachedNow ? '; amended contract applied to the current artifact — verify.run scores against it now' : '')
             + (attachedTI ? '; confirmed test values applied to the current artifact' : '')
+            + (resyncNote ? '; ' + resyncNote : '')
         };
       }
       return {
@@ -1292,7 +1387,7 @@
     };
   }
 
-  const api = { createSessionTools, buildDslContractPrompt };
+  const api = { createSessionTools, buildDslContractPrompt, seedTestInputFromUrls };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.SessionTools = api;
 })(typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : self));
