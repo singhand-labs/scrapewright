@@ -1612,6 +1612,85 @@ function detectLabelPrefixedCounts(data, schema) {
   return out.length ? out : null;
 }
 
+// Seventy-fourth log: the container selector kept AI-image-prompt junk cards
+// (long prompt text as content, NO postId/postTime) mixed with real posts —
+// verify went red REQUIRED_FIELD_EMPTY on identity fields the junk cards
+// structurally lack, and the model burned the remaining turns rewriting
+// identity extraction for a subpopulation that never carries the values.
+// Identity-ish required fields: time-named (TIME_FIELD_NAME_RE above) or
+// id/permalink-named.
+const JUNK_IDENTITY_FIELD_RE = /(^|_)id$|postid|permalink/i;
+
+// Returns one entry per array field whose records split into a junk-shaped
+// subpopulation (ALL identity-ish required fields empty AND a single content
+// string field > 500 chars) alongside at least one non-junk record, when the
+// junk share reaches 1/3. Report-only: the shape is a population split, not
+// an extraction bug — the fix is the container selector or the contract.
+function detectJunkShapeRecords(data, schema) {
+  if (!data || typeof data !== 'object') return null;
+  const props = (schema && schema.properties) || {};
+  const out = [];
+  for (const arrField of Object.keys(props)) {
+    const prop = props[arrField];
+    if (!prop || prop.type !== 'array' || !prop.items || prop.items.type !== 'object') continue;
+    const records = data[arrField];
+    if (!Array.isArray(records) || records.length < 2) continue;
+    const itemProps = (prop.items.properties && typeof prop.items.properties === 'object') ? prop.items.properties : {};
+    const declaredRequired = Array.isArray(prop.items.required) ? prop.items.required.map(String) : Object.keys(itemProps);
+    const identityFields = declaredRequired.filter((f) => TIME_FIELD_NAME_RE.test(f) || JUNK_IDENTITY_FIELD_RE.test(f));
+    if (!identityFields.length) continue;
+    const junkIdx = [];
+    let realCount = 0;
+    let contentLenSum = 0;
+    records.forEach((r, i) => {
+      const rec = (r && typeof r === 'object' && !Array.isArray(r)) ? r : {};
+      const allIdEmpty = identityFields.every((f) => rec[f] == null || String(rec[f]).trim() === '');
+      let maxContentLen = 0;
+      for (const f of Object.keys(itemProps)) {
+        if (identityFields.indexOf(f) !== -1) continue;
+        const v = rec[f];
+        if (typeof v === 'string' && v.length > maxContentLen) maxContentLen = v.length;
+      }
+      contentLenSum += maxContentLen;
+      if (allIdEmpty && maxContentLen > 500) junkIdx.push(i);
+      else realCount += 1;
+    });
+    if (!junkIdx.length || realCount < 1) continue; // no contrast → nothing to teach
+    if ((junkIdx.length / records.length) < (1 / 3)) continue;
+    out.push({
+      field: arrField,
+      junkCount: junkIdx.length,
+      totalCount: records.length,
+      sampleIndexes: junkIdx.slice(0, 3).map((i) => i + 1),
+      markers: {
+        avgContentLen: Math.round(contentLenSum / records.length),
+        identityFieldsAllEmpty: true
+      },
+      note: 'a subpopulation shares the junk shape (overlong text content, no identity links/timestamps — e.g. machine-generated prompt/media cards): tighten the container selector to exclude that shape, or make identity fields optional for it via io.confirm — do NOT keep rewriting identity extraction; the junk cards structurally lack the values'
+    });
+  }
+  return out.length ? out : null;
+}
+
+// Seventy-fourth log: a FRESH session on a new keyword rebuilt the site's
+// knowledge from scratch even though a deployed service for the SAME
+// targetUrl already carried a findings ledger (author/time hovercards work).
+// Cross-session seeding by exact targetUrl match — same site, same page
+// structure, prior findings carry forward. Registry injected (best-effort:
+// callers wrap in try/catch like the edit-mode seed).
+async function seedLedgerFromSameSite(registry, targetUrl) {
+  if (!registry || typeof registry.getAll !== 'function') return null;
+  if (!targetUrl || typeof targetUrl !== 'string') return null;
+  let all = null;
+  try { all = await registry.getAll(); } catch (e) { return null; }
+  const list = Array.isArray(all) ? all : [];
+  for (const svc of list) {
+    if (!svc || svc.targetUrl !== targetUrl) continue;
+    if (svc.findingsLedger && Array.isArray(svc.findingsLedger.entries) && svc.findingsLedger.entries.length) return svc;
+  }
+  return null;
+}
+
 // Fifty-ninth log: the model's CONTRACT RENEGOTIATION carried
 // "postId": {"type": "type", "description": "placeholder"} — a literal
 // unfilled stub — and io.confirm's validation admitted it, surfacing the
@@ -5436,7 +5515,7 @@ function detectNeverExtractedFields(steps, outputSchema) {
 // direct property access keeps working. test/forty-sixth-log-followups.test.js
 // pins marker-bag keys === module.exports keys so a future export cannot
 // land on one surface only (the inline-fallback drift class, RC8/RC35).
-var WU_EXPORT_BAG = { parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, hasYearToken, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+var WU_EXPORT_BAG = { parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, hasYearToken, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectJunkShapeRecords, seedLedgerFromSameSite, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = WU_EXPORT_BAG;

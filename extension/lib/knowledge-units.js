@@ -13,7 +13,8 @@
 // AD_MARKER_SELECTOR, SELECTOR_OVERFILTERED, OUTPUT_FIELD_SIZE,
 // PARTIAL_EMPTY_FIELDS, RELATIVE_TIMESTAMP, CLICK_CONTAINERS_TRANSIENT,
 // REQUIRED_FIELD_EMPTY (67th log — the red gate's own tag), JUNK_VALUES,
-// JUNK_DOMINATED, SCHEMA_STRAY_FIELD_DECLS.
+// JUNK_DOMINATED, SCHEMA_STRAY_FIELD_DECLS, JUNK_SHAPE_RECORDS (74th log —
+// the junk-shape subpopulation census).
 //
 // Write path: sessions PROPOSE units; the user approves; the universality
 // guard test runs on every change to this file.
@@ -190,6 +191,13 @@
       matchEvents: ['REQUIRED_FIELD_EMPTY', 'PARTIAL_EMPTY_FIELDS', 'JUNK_VALUES', 'JUNK_DOMINATED', 'COUNT_SHORTFALL', 'TIME_FIELD_IMPLAUSIBLE', 'SCHEMA_STRAY_FIELD_DECLS'],
       origin: '2026-09-11 sixty-seventh live log; 8 blind service.update calls + 4 verify rounds burned all 60 turns while probe.snippet — the test-before-artifact tool — got ZERO uses; the postId regex was written against a digit-only hoped-for shape on non-numeric ids and stayed empty 2/2 through every rewrite, and the final turn wrote an artifact that could never be verified',
       body: 'A red verify means the artifact\'s extraction does not match the page\'s REAL data shapes. Do not iterate blindly: (1) read the failing records\' source values from the verify report (resultPreview / emptyRecordSamples contexts) or diag.read; (2) DRY-RUN the corrected extraction with probe.snippet on the research tab — one snippet round against the real values replaces a blind service.update + verify.run pair that costs 2 turns and ~90s each cycle; (3) only when the snippet returns the expected shape, write it into service.update and verify once. Regexes and fieldMap selectors must be written against OBSERVED values — id-like fields are often non-numeric, labels carry prefixes, and anti-scrape text interleaves combining marks; the raw values, not your assumption of them, decide the pattern.'
+    },
+    {
+      id: 'junk-shape-split',
+      title: 'A junk-shaped record subpopulation is a population split — exclude it or split the contract, do not keep rewriting identity extraction',
+      matchEvents: ['JUNK_SHAPE_RECORDS', 'REQUIRED_FIELD_EMPTY'],
+      origin: '2026-09-15 seventy-fourth live log; AI-image-prompt junk cards (long prompt text as content, no postId/postTime) mixed with real posts, and the session burned to maxTurns rewriting identity extraction for values the junk cards structurally lack',
+      body: 'When a subset of extracted records carries ONLY overlong text content while EVERY identity-ish required field (postId/postTime/permalink and friends) is empty, and the rest of the records populate normally, the container selector matched two different card shapes — typically machine-generated prompt/media cards interleaved with organic posts. The junk cards do not HIDE the identity values; they never carry them, so no selector rewrite, anchor change, or hover route will fill the fields. Two exits: (1) tighten the container selector so the junk shape stops matching (the census markers avgContentLen + identityFieldsAllEmpty fingerprint it — probe one junk record via sampleIndexes to find the excluding structural difference); (2) keep the wider selector and renegotiate with io.confirm — make the identity fields optional, or model the junk shape as its own optional subpopulation, and disclose it. Which exit fits is a REQUIREMENT question, not an extraction question.'
     }
   ];
 

@@ -49,6 +49,7 @@
       detectImplausibleTimeFields: w.detectImplausibleTimeFields,
       detectPositionLikeIds: w.detectPositionLikeIds,
       detectLabelPrefixedCounts: w.detectLabelPrefixedCounts,
+      detectJunkShapeRecords: w.detectJunkShapeRecords,
       detectDuplicateIdValues: w.detectDuplicateIdValues,
       detectFieldMatchZero: w.detectFieldMatchZero,
       detectContainerMatchZero: w.detectContainerMatchZero,
@@ -499,7 +500,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, siblingCountContrast: null, implausibleTimeFields: null, positionLikeIds: null, labelPrefixedCounts: null, unusedCaptures: null };
+      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, siblingCountContrast: null, implausibleTimeFields: null, positionLikeIds: null, labelPrefixedCounts: null, junkShapeRecords: null, unusedCaptures: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -886,6 +887,17 @@
           const lpc = WU.detectLabelPrefixedCounts(finalData, outputSchema) || [];
           if (lpc.length) detectors.labelPrefixedCounts = lpc;
         }
+        if (typeof WU.detectJunkShapeRecords === 'function') {
+          // Seventy-fourth log: report-only. A subpopulation of records
+          // sharing the junk shape (overlong text content, every
+          // identity-ish required field empty) next to real records is a
+          // POPULATION SPLIT — machine-generated prompt/media cards mixed
+          // into the real feed. Rewriting identity extraction cannot fill
+          // fields the junk cards structurally lack; the census teaches the
+          // container-selector tightening or the contract split.
+          const jsr = WU.detectJunkShapeRecords(finalData, outputSchema) || [];
+          if (jsr.length) detectors.junkShapeRecords = jsr;
+        }
         if (typeof WU.detectSiblingCountContrast === 'function') {
           // Fiftieth log: report-only. A count-named field empty on most
           // records while a SIBLING count field extracts real values from the
@@ -1135,6 +1147,7 @@
         if (detectors.implausibleTimeFields) add('TIME_FIELD_IMPLAUSIBLE');
         if (detectors.positionLikeIds) add('POSITION_LIKE_ID');
         if (detectors.labelPrefixedCounts) add('LABEL_PREFIXED_COUNT');
+        if (detectors.junkShapeRecords) add('JUNK_SHAPE_RECORDS');
         if (detectors.duplicateIdValues) add('DUPLICATE_ID_VALUES');
         if (detectors.shapeDistribution) add('CARD_POLICY');
         if (detectors.stepNoReturn) add('STEP_NO_RETURN');

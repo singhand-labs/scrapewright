@@ -2394,3 +2394,87 @@ describe('detectNeverExtractedFields (thirty-first log)', () => {
     assert.deepEqual(detectNeverExtractedFields([{ id: 's', script: 'comments: ""' }], null), []);
   });
 });
+
+// Seventy-fourth log F4: junk-shape census — a subpopulation with overlong
+// content and no identity values is a population split, not an extraction
+// bug. Plus F3's cross-session ledger seed helper.
+describe('detectJunkShapeRecords (F4)', () => {
+  const { detectJunkShapeRecords, seedLedgerFromSameSite } = require('../lib/wizard-utils');
+  const SCHEMA = {
+    type: 'object', required: ['posts'],
+    properties: { posts: { type: 'array', items: { type: 'object', required: ['postId', 'postTime'], properties: {
+      postId: { type: 'string' }, postTime: { type: 'string' }, content: { type: 'string' }
+    } } } }
+  };
+  const long = 'x'.repeat(800);
+
+  it('fires on a mixed population (2 junk + 1 real) with markers and samples', () => {
+    const data = { posts: [
+      { postId: '', postTime: '', content: long },
+      { postId: '', postTime: '', content: long },
+      { postId: 'abc123', postTime: '2026-09-01', content: 'hello world' }
+    ] };
+    const out = detectJunkShapeRecords(data, SCHEMA);
+    assert.ok(out, 'fires');
+    assert.equal(out[0].field, 'posts');
+    assert.equal(out[0].junkCount, 2);
+    assert.equal(out[0].totalCount, 3);
+    assert.deepEqual(out[0].sampleIndexes, [1, 2]);
+    assert.equal(out[0].markers.identityFieldsAllEmpty, true);
+    assert.ok(out[0].markers.avgContentLen > 0);
+    assert.match(out[0].note, /do NOT keep rewriting identity extraction/);
+  });
+
+  it('null when all records are good', () => {
+    const data = { posts: [{ postId: 'a', postTime: '2026-09-01', content: 'hi' }, { postId: 'b', postTime: '2026-09-02', content: 'yo' }] };
+    assert.equal(detectJunkShapeRecords(data, SCHEMA), null);
+  });
+
+  it('null when ALL records are junk (no contrast to teach)', () => {
+    const data = { posts: [{ postId: '', postTime: '', content: long }, { postId: '', postTime: '', content: long }] };
+    assert.equal(detectJunkShapeRecords(data, SCHEMA), null);
+  });
+
+  it('null below the 1/3 junk share', () => {
+    const data = { posts: [
+      { postId: '', postTime: '', content: long },
+      { postId: 'a', postTime: 't1', content: 'x' },
+      { postId: 'b', postTime: 't2', content: 'y' },
+      { postId: 'c', postTime: 't3', content: 'z' }
+    ] };
+    assert.equal(detectJunkShapeRecords(data, SCHEMA), null);
+  });
+
+  it('no site tokens in the census note (universality)', () => {
+    const data = { posts: [
+      { postId: '', postTime: '', content: long },
+      { postId: '', postTime: '', content: long },
+      { postId: 'a', postTime: 't', content: 'x' }
+    ] };
+    const note = detectJunkShapeRecords(data, SCHEMA)[0].note;
+    assert.ok(!/facebook|twitter|linkedin|tiktok|reddit|\bfb\b/i.test(note), 'no site tokens');
+  });
+});
+
+describe('seedLedgerFromSameSite (F3)', () => {
+  const { seedLedgerFromSameSite } = require('../lib/wizard-utils');
+  const LEDGER = { entries: [{ finding: 'author hovercard works' }] };
+
+  it('returns the service whose targetUrl matches exactly and carries findings', async () => {
+    const registry = { getAll: async () => [
+      { name: 'other', targetUrl: 'https://other.example/?q={{k}}', findingsLedger: LEDGER },
+      { name: 'same-site', targetUrl: 'https://x.example/search?q={{keyword}}', findingsLedger: LEDGER }
+    ] };
+    const svc = await seedLedgerFromSameSite(registry, 'https://x.example/search?q={{keyword}}');
+    assert.equal(svc.name, 'same-site');
+  });
+
+  it('null for a different URL, an empty ledger, or a failing registry', async () => {
+    const registry = { getAll: async () => [{ name: 's', targetUrl: 'https://y.example', findingsLedger: { entries: [] } }] };
+    assert.equal(await seedLedgerFromSameSite(registry, 'https://x.example'), null);
+    assert.equal(await seedLedgerFromSameSite(registry, 'https://y.example'), null, 'empty ledger is not a seed');
+    assert.equal(await seedLedgerFromSameSite({ getAll: async () => { throw new Error('boom'); } }, 'https://x.example'), null);
+    assert.equal(await seedLedgerFromSameSite(null, 'https://x.example'), null);
+    assert.equal(await seedLedgerFromSameSite(registry, ''), null);
+  });
+});
