@@ -657,14 +657,18 @@ describe('LLMClient.chat response content chunked logging', () => {
     assert.equal(parts.map((l) => l[2]).join(''), content, 'chunks concatenate losslessly');
   });
 
-  it('beyond 32000 chars the tail elision is disclosed with a count', async () => {
+  it('beyond 32000 chars the response logs IN FULL — chunked, never elided (86th-round user directive: full-fidelity LLM interaction logging)', async () => {
     const content = 'z'.repeat(40000);
     global.fetch = async () => mockResponse({ body: successBody(content) });
     const client = makeClient();
     await client.chat([{ role: 'user', content: 'go' }]);
+    const parts = consoleStub.filter((l) => l[0] === 'log' && /^\[LLMClient\] Response content \(\d+\/\d+\):$/.test(l[1]));
+    assert.ok(parts.length >= 26, 'content split across lines, got ' + parts.length);
+    const n = parseInt(/^\[LLMClient\] Response content \((\d+)\/(\d+)\):$/.exec(parts[0][1])[2], 10);
+    assert.equal(parts.length, n, 'exactly N parts');
+    assert.equal(parts.map((l) => l[2]).join(''), content, 'chunks concatenate losslessly to the FULL 40K content');
     const elided = consoleStub.filter((l) => l[0] === 'log' && l[1] === '[LLMClient] Response content (tail elided):');
-    assert.equal(elided.length, 1, 'elision disclosure line present');
-    assert.match(elided[0][2], /\[\+8000 chars not shown\]/);
+    assert.equal(elided.length, 0, 'no elision line — nothing may be hidden');
   });
 
   it('a short response logs in one part with no preview cut', async () => {
@@ -711,8 +715,9 @@ describe('LLMClient request body chunked logging', () => {
   }
 
   it('logs the request body as (i/N) one-line JSON chunks, never a pretty-printed object', async () => {
-    // Payload must stay under the 8000-char mirror cap so the losslessness
-    // assertion (a full uninterrupted q-run in the joined chunks) can hold.
+    // Losslessness holds at ANY size now (the 86th-round user directive
+    // removed the mirror cap): a full uninterrupted q-run must survive the
+    // joined chunks.
     const bigMsg = 'q'.repeat(6000);
     global.fetch = async () => mockResponse({ body: successBody('{"tool":"probe.count","args":{}}') });
     const client = makeClient();
@@ -730,17 +735,18 @@ describe('LLMClient request body chunked logging', () => {
     assert.match(joined, /q{6000}/);
   });
 
-  it('caps the request mirror at 8000 chars with a disclosed elision count', async () => {
+  it('a 30000-char request mirrors IN FULL — no elision, the tail carries the system prompt/dossier layer', async () => {
     const bigMsg = 'w'.repeat(30000);
     global.fetch = async () => mockResponse({ body: successBody('{"tool":"probe.count","args":{}}') });
     const client = makeClient();
-    await client.chat([{ role: 'user', content: bigMsg }]);
+    await client.chat([{ role: 'user', content: bigMsg }, { role: 'system', content: 'TAIL_MARKER_zz' }]);
     const parts = consoleStub.filter((l) => l[0] === 'log' && /^\[LLMClient\] Request body \(\d+\/\d+\):$/.test(l[1]));
-    const shown = parts.map((l) => l[2]).join('');
-    assert.ok(shown.length <= 8000, 'mirror respects the cap, got ' + shown.length);
+    const joined = parts.map((l) => l[2]).join('');
+    assert.ok(joined.length > 30000, 'the mirror exceeds the old 8000 cap, got ' + joined.length);
+    assert.match(joined, /w{30000}/, 'the full payload survives');
+    assert.match(joined, /TAIL_MARKER_zz/, 'the serialization TAIL (where system/dossier rides) is present');
     const elided = consoleStub.filter((l) => l[0] === 'log' && l[1] === '[LLMClient] Request body (tail elided):');
-    assert.equal(elided.length, 1, 'elision disclosure line present');
-    assert.match(elided[0][2], /\[\+\d+ chars not shown\]/);
+    assert.equal(elided.length, 0, 'no elision line — nothing may be hidden');
   });
 });
 

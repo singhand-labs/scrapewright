@@ -82,9 +82,15 @@ const MESSAGES_LANE_BY_CHAT_LANE = {
 // Thirty-second log (user directive): the 300-char response preview hid the
 // model's think + tool-call — exported logs could not show WHAT the model
 // decided, only that it replied. Chunk the full content across console lines
-// (one output per line, (i/N) parts); 32000 caps pathological echoes.
+// (one output per line, (i/N) parts).
+// Eighty-sixth-round user directive (2026-09-19): EVERYTHING exchanged with
+// the LLM must reach the console in full — the 8000/32000 caps cut the
+// request tail where the system prompt, EVIDENCE DOSSIER ([STEP PLAN]),
+// USER FEEDBACK entries, and knowledge units ride, making three feedback
+// rounds in one log unrecoverable for review. No cap: long content just
+// produces more (i/N) segments.
 const CONTENT_LOG_CHUNK = 1500;
-const CONTENT_LOG_CAP = 32000;
+const CONTENT_LOG_CAP = Infinity;
 function logContentChunks(label, content, capOverride) {
   const cap = (typeof capOverride === 'number' && capOverride > 0) ? capOverride : CONTENT_LOG_CAP;
   const s = String(content == null ? '' : content);
@@ -430,7 +436,7 @@ class LLMClient {
     // Thirty-third log D4: one-line chunked strings survive DevTools
     // "Save as…" (response path, 32nd log). Tighter cap than the response:
     // the transcript itself is already mirrored at the wizard layer.
-    logContentChunks('[LLMClient] Request body', JSON.stringify(body), 8000);
+    logContentChunks('[LLMClient] Request body', JSON.stringify(body));
 
     const timeoutMs = options.timeoutMs ?? this.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const response = await this._fetchWithTimeout(url, {
@@ -549,7 +555,7 @@ class LLMClient {
     // read empty). One-line chunked strings survive DevTools "Save as…"
     // (response path, 32nd log). Tighter cap than the response: the
     // transcript itself is already mirrored at the wizard layer.
-    logContentChunks('[LLMClient] Request body', JSON.stringify(body), 8000);
+    logContentChunks('[LLMClient] Request body', JSON.stringify(body));
 
     const timeoutMs = options.timeoutMs ?? this.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const response = await this._fetchWithTimeout(url, {
