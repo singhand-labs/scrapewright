@@ -1135,7 +1135,65 @@
   // activation succeeded (graceful degradation — fgPath already active,
   // cross-window refusals, missing chrome.tabs, etc.). Errors in the message
   // channel do NOT abort `fn`.
-  async function withTabActivation(label, fn) {
+  // Graduated activation (spec §3.A, 2026-09-18): once-per-tab lazy-load
+  // profile probe. UNIVERSAL feature measurement — page-height growth across
+  // two probe scrolls, or a feed-shaped MutationObserver mount count — never
+  // a site list. The result is cached for the tab's lifetime and rides every
+  // TAB_ACTIVATION_REQUEST so background picks the tier: static pages finish
+  // in the background (zero activation), lazy pages keep the full
+  // forty-ninth-log sticky activation + window-focus enforcement.
+  // The probe itself does NOT activate anything.
+  function detectLazyLoadProfile() {
+    try {
+      if (window.__scrapewrightPageProfile) return Promise.resolve(window.__scrapewrightPageProfile);
+    } catch (_) { /* fall through to the live probe */ }
+    return new Promise((resolve) => {
+      try {
+        if (typeof document === 'undefined' || !document.documentElement ||
+            typeof window.scrollBy !== 'function') {
+          resolve(undefined); return; // conservative: caller treats undefined as unknown
+        }
+        let mutations = 0;
+        let observer = null;
+        try {
+          observer = new MutationObserver(function (records) { mutations += records.length; });
+          observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
+        } catch (_) { /* observer is a secondary signal only */ }
+        const startHeight = document.documentElement.scrollHeight;
+        let maxHeight = startHeight;
+        let scrolledBy = 0;
+        const step = () => {
+          try { window.scrollBy(0, 300); scrolledBy += 300; } catch (_) {}
+          try { maxHeight = Math.max(maxHeight, document.documentElement.scrollHeight); } catch (_) {}
+        };
+        step();
+        setTimeout(function () {
+          step();
+          setTimeout(function () {
+            try { if (observer) observer.disconnect(); } catch (_) {}
+            try { if (scrolledBy) window.scrollBy(0, -scrolledBy); } catch (_) {} // best-effort restore
+            let profile = 'static';
+            if (startHeight > 0 && (maxHeight - startHeight) / startHeight > 0.05) profile = 'lazy';
+            else if (mutations > 20) profile = 'lazy';
+            window.__scrapewrightPageProfile = profile;
+            resolve(profile);
+          }, 500);
+        }, 500);
+      } catch (e) { resolve(undefined); }
+    });
+  }
+
+  let pageProfilePromise = null;
+  async function getPageProfile() {
+    try {
+      if (window.__scrapewrightPageProfile) return window.__scrapewrightPageProfile;
+      if (!pageProfilePromise) pageProfilePromise = detectLazyLoadProfile();
+      const p = await pageProfilePromise;
+      return p || undefined; // probe failure → unknown → conservative tier
+    } catch (_) { return undefined; }
+  }
+
+  async function withTabActivation(label, fn, opts) {
     // Forty-ninth log: real page focus evidence, read from THIS (isolated)
     // world — the MAIN-world visibility-keepalive override cannot lie on
     // this side. A page that reports itself hidden/unfocused cannot produce
@@ -1150,15 +1208,35 @@
         ? document.hasFocus() : true;
       needsWindowFocus = !!(vis && vis !== 'visible') || focused === false;
     } catch (_) { /* evidence is best-effort */ }
+    // Graduated activation (§3.A): the tier need comes from the call site
+    // (default 'frame'; hover/dispatch paths pass 'hover' — CDP input needs
+    // the active tab but not a window-focus steal on the first attempt).
+    // The lazy-load profile is probed BEFORE the request (the probe itself
+    // never activates); a prior frame-starvation receipt upgrades one tier.
+    const need = (opts && opts.need) || 'frame';
+    let pageProfile;
+    try { pageProfile = await getPageProfile(); } catch (_) { pageProfile = undefined; }
+    let upgradeFrameStarved = false;
+    try { upgradeFrameStarved = !!window.__scrapewrightFrameStarved; } catch (_) {}
     let req = null;
     try {
-      req = await chrome.runtime.sendMessage({ type: 'TAB_ACTIVATION_REQUEST', needsWindowFocus: needsWindowFocus });
+      req = await chrome.runtime.sendMessage({
+        type: 'TAB_ACTIVATION_REQUEST',
+        needsWindowFocus: needsWindowFocus,
+        pageProfile: pageProfile,
+        need: need,
+        upgrade: upgradeFrameStarved
+      });
       notifyBackgroundDiagnostic('tabActivation_request', {
         label: label,
         ok: !!(req && req.ok),
         activated: !!(req && req.ok && req.activated),
         crossWindow: !!(req && req.crossWindow),
         focusedWindow: !!(req && req.focusedWindow),
+        skippedActivation: !!(req && req.skippedActivation),
+        upgradedActivation: !!(req && req.upgradedActivation),
+        pageProfile: pageProfile || null,
+        need: need,
         needsWindowFocus: needsWindowFocus,
         reason: (req && req.reason) || null
       });
@@ -1222,6 +1300,13 @@
       result.frameSample = await sampleFrameProduction(300);
       result.throttleNote = 'page reports ' + JSON.stringify(pageState) +
         ' while the scroll made no progress — the renderer is not producing frames for this tab, so lazy-load callbacks cannot fire. Window focus is re-asserted automatically by every scroll op; if this persists check `scrapewright throttle on` (occluded-window launch flags).';
+      // Graduated activation §3.A rollback: frame starvation on a
+      // background-completed (static-profile) op upgrades the NEXT
+      // activation for this tab one tier — a wrong probe costs one
+      // upgraded retry, not a lost run.
+      if (result.frameSample && (result.frameSample.rAFTicks || 0) <= 2) {
+        try { window.__scrapewrightFrameStarved = true; } catch (_) { /* best-effort */ }
+      }
     }
     return result;
   }
@@ -3439,7 +3524,7 @@
           type: 'TRUSTED_HOVER_REQUEST',
           x: x, y: y
         });
-      });
+      }, { need: 'hover' });
       hoverResp = hoverResult || { dispatched: false, reason: 'no response from background' };
     } catch (e) {
       hoverError = e && e.message || String(e);
@@ -3984,7 +4069,7 @@
       try {
         await withTabActivation('hoverDismiss', async function () {
           await chrome.runtime.sendMessage({ type: 'TRUSTED_HOVER_DISMISS' });
-        });
+        }, { need: 'hover' });
         notifyBackgroundDiagnostic('hover_dismiss', { selector: selectorForLog, ok: true });
       } catch (e) {
         notifyBackgroundDiagnostic('hover_dismiss', {

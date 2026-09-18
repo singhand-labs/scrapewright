@@ -1199,6 +1199,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           hoverY: result.hoverY,
           reason: result.reason
         });
+        // Graduated activation (§3.A): an environmental dispatch failure
+        // (timeout / debugger contention) escalates the same tab's NEXT
+        // hover-tier request to full window focus. Deterministic gates
+        // ("enhanced mode disabled") do not escalate — they teach no-retry.
+        if (!result.dispatched && TabActivation &&
+            typeof TabActivation.noteHoverDispatchFailure === 'function') {
+          const escalatedNow = TabActivation.noteHoverDispatchFailure(tabId, result.reason || '');
+          debugLogger.log('info', 'background', 'Hover dispatch failure recorded', {
+            tabId, reason: result.reason, escalatedNextAttempt: escalatedNow
+          });
+        }
         sendResponse(result);
       } catch (e) {
         debugLogger.log('error', 'background', 'Trusted hover dispatcher threw', {
@@ -1356,8 +1367,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // Forty-ninth log: the content script's isolated-world evidence
         // (page reports itself hidden/unfocused) must reach the lib even when
         // Chrome's window APIs cannot see the occlusion/other-app focus.
+        // Graduated activation (§3.A): pageProfile/need pick the tier;
+        // upgrade carries the frame-starvation rollback.
         const result = await TabActivation.requestActivation(tabId, {
-          forceWindowFocus: !!(message && message.needsWindowFocus)
+          forceWindowFocus: !!(message && message.needsWindowFocus),
+          pageProfile: message && message.pageProfile,
+          need: message && message.need,
+          upgrade: !!(message && message.upgrade)
         });
         debugLogger.log('info', 'background', 'Tab activation request', {
           tabId, ok: result.ok, activated: result.activated,

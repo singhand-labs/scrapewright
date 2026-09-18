@@ -27,7 +27,59 @@
   let activeByWindow = new Map();     // windowId -> active tabId (every onActivated)
   const suppressTabs = new Set();     // tabIds of our own pending activations
   const suppressTimers = new Map();   // tabId -> safety timer
+  const escalatedTabs = new Set();    // tabIds upgraded to window focus (graduated activation)
   let hydratePromise = null;          // once-only storage.session hydrate
+
+  // Graduated activation (spec §3.A, 2026-09-18): tier decision driven by the
+  // content-script's once-per-tab lazy-load profile probe. The profile is a
+  // UNIVERSAL feature measurement (page-height growth / MutationObserver feed
+  // mount counts) — no site lists.
+  //
+  //   'static' → zero activation: background tabs complete reads/extracts fine
+  //              (visibility-keepalive covers page-JS self-checks); activating
+  //              here was pure focus-stealing noise on non-lazy pages.
+  //   'lazy'   → frame need: current sticky activation + window-focus
+  //              enforcement (the forty-ninth-log user authorization is
+  //              RETAINED for the tier that actually needs compositor frames).
+  //              hover need: tab activation WITHOUT the window-focus steal on
+  //              the first attempt — CDP input needs the active tab, but the
+  //              user keeps their OS focus unless evidence says otherwise.
+  //   undefined (probe failed / not yet probed / legacy stubs) → conservative
+  //              current behavior, exactly as before this layer existed.
+  const HOVER_ESCALATE_ON = ['dispatch-timeout', 'cdp-contention'];
+
+  function decideActivation(pageProfile, need) {
+    if (pageProfile === 'static') return { activate: false, reason: 'static page' };
+    if (pageProfile === 'lazy') {
+      if (need === 'hover') {
+        return { activate: true, focusWindow: false, escalateOn: HOVER_ESCALATE_ON.slice() };
+      }
+      return { activate: true, focusWindow: true };
+    }
+    // Unknown profile: keep the pre-graduated default (activate + window
+    // focus when cross-window/hidden-evidence demands it). This is the path
+    // every pre-existing stub takes, so RC20/RC56/49th-log behavior is intact.
+    return { activate: true, focusWindow: true };
+  }
+
+  // A hover dispatch-failure receipt escalates the SAME tab's NEXT hover-tier
+  // request to full window focus. Only environmental contention shapes
+  // (timeout / debugger attach contention) escalate; deterministic capability
+  // gates ("enhanced mode disabled") teach no-retry, not escalation.
+  function matchesEscalateReason(reason) {
+    if (typeof reason !== 'string') return false;
+    return /timeout/i.test(reason) ||
+           /attach failed/i.test(reason) ||
+           /chrome\.debugger/i.test(reason) ||
+           /cdp contention/i.test(reason);
+  }
+
+  function noteHoverDispatchFailure(tabId, reason) {
+    if (typeof tabId !== 'number') return false;
+    if (!matchesEscalateReason(reason)) return false;
+    escalatedTabs.add(tabId);
+    return true;
+  }
 
   function hasTabsApi() {
     return typeof chrome !== 'undefined' && chrome.tabs &&
@@ -112,6 +164,7 @@
 
   async function handleTabRemoved(tabId, removeInfo) {
     await hydrate();
+    escalatedTabs.delete(tabId); // graduated activation: escalation dies with the tab
     if (removeInfo && removeInfo.isWindowClosing) {
       // The window is gone — its activeByWindow entry is stale.
       if (activeByWindow.delete(removeInfo.windowId)) persist();
@@ -149,6 +202,25 @@
   async function requestActivation(tabId, opts) {
     if (!hasTabsApi()) return { ok: false, reason: 'chrome.tabs unavailable' };
     if (typeof tabId !== 'number' || tabId <= 0) return { ok: false, reason: 'invalid tabId' };
+
+    // Graduated activation (§3.A): the content script's lazy-load profile
+    // picks the tier. Escalation sources: a prior hover dispatch failure with
+    // a contention/timeout reason (noteHoverDispatchFailure ledger), or a
+    // frame-starvation receipt from a background-completed op (content-script
+    // __scrapewrightFrameStarved flag → payload.upgrade). A wrong probe costs
+    // one upgraded retry, not a lost run.
+    const decision = decideActivation(opts && opts.pageProfile, opts && opts.need);
+    const escalated = escalatedTabs.has(tabId) || !!(opts && opts.upgrade);
+    if (!decision.activate && !escalated) {
+      return {
+        ok: true, activated: false,
+        skippedActivation: true, reason: decision.reason,
+        pageProfile: (opts && opts.pageProfile) || undefined
+      };
+    }
+    // Window-focus tier: the decision's tier, upgraded when evidence demands.
+    const allowWindowFocus = decision.focusWindow || escalated;
+    const upgradedActivation = (!decision.focusWindow && allowWindowFocus) ? true : undefined;
 
     let scrapeTab;
     try { scrapeTab = await chrome.tabs.get(tabId); }
@@ -199,13 +271,14 @@
       // forty-ninth log supersedes that: frame production requires the
       // focused window, and the user explicitly authorized focus priority
       // for correct execution over manual focus.
-      if (crossWindow || forceWindowFocus) {
+      if ((crossWindow || forceWindowFocus) && allowWindowFocus) {
         focusedProps = await focusScrapeWindow(scrapeTab.windowId);
       }
       return {
         ok: true, activated: true, // sticky: no restore
         crossWindow: crossWindow || undefined,
-        focusedWindow: focusedProps ? true : undefined
+        focusedWindow: focusedProps ? true : undefined,
+        upgradedActivation: upgradedActivation
       };
     }
 
@@ -215,12 +288,13 @@
     // answering "already active" while the feed froze at count 2 then 8.
     // Re-assert window focus when the evidence says the page is not
     // visible/focused.
-    if (crossWindow || forceWindowFocus) {
+    if ((crossWindow || forceWindowFocus) && allowWindowFocus) {
       focusedProps = await focusScrapeWindow(scrapeTab.windowId);
       return {
         ok: true, activated: false,
         focusedWindow: focusedProps ? true : undefined,
-        reason: focusedWindowReason(focusedProps)
+        reason: focusedWindowReason(focusedProps),
+        upgradedActivation: upgradedActivation
       };
     }
     return { ok: true, activated: false, reason: 'already active' };
@@ -233,6 +307,8 @@
   const api = {
     requestActivation: requestActivation,
     initTabActivationListeners: initTabActivationListeners,
+    decideActivation: decideActivation,
+    noteHoverDispatchFailure: noteHoverDispatchFailure,
     _getUserState: function () { return { lastUserTabId: lastUserTabId, activeByWindow: activeByWindow }; }
   };
 
