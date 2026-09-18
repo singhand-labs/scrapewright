@@ -881,7 +881,31 @@
         candidates: candidates
       };
       if (!candidates.length) {
-        out.note = 'no date-shaped value on the anchors THIS call hovered (labelledby / aria-label / text, hover-mounted popover text included). If a second probe.timestamp with a narrower anchorSel over the timestamp element itself also fails, these anchors expose no timestamp — renegotiate the field via io.confirm instead of shipping titles or relative ages as postTime.';
+        // Eighty-fifth log: a zero-anchor run is a VACUOUS negative — all
+        // three probe layers (labelledby/aria/text reads + the hover batch)
+        // key on the SAME anchorSel, so a selector that matches nothing
+        // inside the container reads nothing and hovers nothing, and the
+        // old "these anchors expose no timestamp" note read as a page fact
+        // (the feedback session shipped partial absolutes off exactly this
+        // shape). The 84th-round anchor census already rides the
+        // extractWithHover diagnostics — surface it in the receipt and
+        // teach the descendant-direction trap.
+        if (!cards.length) {
+          const ehDiag = (lastSelectorDiagnostics || []).filter((d) => d && d.api === 'extractWithHover')[0] || null;
+          const anchorCensus = (ehDiag && ehDiag.anchorCensus) || null;
+          let censusText = '';
+          if (anchorCensus && anchorCensus.families && typeof anchorCensus.families === 'object') {
+            out.anchorCensus = anchorCensus;
+            const fam = Object.keys(anchorCensus.families).map((k) => k + '×' + anchorCensus.families[k]).join(', ');
+            censusText = ' ANCHOR CENSUS (this container): ' + fam + '.' +
+              (Array.isArray(anchorCensus.hrefSamples) && anchorCensus.hrefSamples.length
+                ? ' href samples: ' + JSON.stringify(anchorCensus.hrefSamples.slice(0, 5)) + '.' : '');
+          }
+          out.note = 'VACUOUS NEGATIVE — anchorSel matched 0 anchors inside the container, so nothing was read or hovered; this is a selector miss, not a page fact.' + censusText +
+            ' Rewrite anchorSel against the census families — mind the descendant direction: a:has(span[aria-labelledby]) is the link CONTAINING the labelledby span, while span[aria-labelledby] a demands an <a> INSIDE the span and usually matches nothing — or drop anchorSel entirely to run the default union.';
+        } else {
+          out.note = 'no date-shaped value on the anchors THIS call hovered (labelledby / aria-label / text, hover-mounted popover text included). If a second probe.timestamp with a narrower anchorSel over the timestamp element itself also fails, these anchors expose no timestamp — renegotiate the field via io.confirm instead of shipping titles or relative ages as postTime.';
+        }
       } else if (!absolute) {
         out.note = 'only RELATIVE ages are date-shaped here — the absolute value needs the hover-mounted tooltip: re-run with a narrower anchorSel over the timestamp link itself; if that also yields only relative ages, renegotiate — or bind the relative age itself with a finish disclosure: the verify RELATIVE_TIMESTAMP tag is report-only and an empty required field is worse than a disclosed relative value.';
       } else if (absolute.partial) {

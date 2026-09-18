@@ -129,11 +129,13 @@ describe('F2: probe.timestamp (fifty-sixth log capability add)', () => {
   });
 
   it('no date-shaped value anywhere → honest note, empty absolute (the fifty-sixth-log wall made visible in ONE call)', async () => {
+    // hovercards carries a (failed) entry so the anchors EXISTED — a zero-
+    // anchor run is the 85th log's VACUOUS-negative lane, not this one.
     const { tools } = makeTools(null, async () => [{
       __t_label: 'Learn More',
       __t_aria: '',
       __t_text: 'See more',
-      hovercards: []
+      hovercards: [{ hovered: false, htmlSnippet: null, labelledbyText: 'Learn More' }]
     }]);
     const r = await tools.timestamp({ containerSel: 'div.card' });
     assert.equal(r.absolute, null);

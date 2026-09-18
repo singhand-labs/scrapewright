@@ -2464,7 +2464,29 @@
       hoversDispatched: hoversDone
     };
     if (!candidates.length) {
-      result.note = 'no date-shaped value on this card (labelledby / aria-label / visible text / hover popover text). If the page exposes no timestamp for these cards, renegotiate the field via io.confirm instead of shipping titles or junk as postTime.';
+      if (!anchors.length) {
+        // Eighty-fifth log: a zero-anchor enumeration is a VACUOUS negative —
+        // nothing was read or hovered, yet the old receipt read as "this card
+        // exposes no timestamp". The feedback session's model wrote the
+        // inverted "span[aria-labelledby] a" (an <a> INSIDE the labelledby
+        // span), matched 0 anchors, concluded 没有找到绝对日期, and shipped
+        // partial absolutes the user had explicitly rejected. Census the
+        // container's anchor families so the next anchorSel is written
+        // against observed forms. (typeof guard: slice-based vm tests
+        // concatenate selected functions; degrade to note-only there.)
+        const census = (typeof computeAnchorCensus === 'function')
+          ? computeAnchorCensus([container], anchorSel) : null;
+        if (census) result.anchorCensus = census;
+        const fam = census
+          ? Object.keys(census.families).map((k) => k + '×' + census.families[k]).join(', ') : null;
+        result.note = 'VACUOUS NEGATIVE — anchorSel matched 0 anchors inside the container, so nothing was read or hovered; this is a selector miss, not a page fact. ' +
+          (fam ? ('ANCHOR CENSUS (this container): ' + fam + '.' +
+            (census.hrefSamples.length ? ' href samples: ' + JSON.stringify(census.hrefSamples.slice(0, 5)) + '.' : '') +
+            ' Rewrite anchorSel against the census families — mind the descendant direction: a:has(span[aria-labelledby]) is the link CONTAINING the labelledby span, while span[aria-labelledby] a demands an <a> INSIDE the span and usually matches nothing — or drop anchorSel to run the default union.')
+            : 'Rewrite anchorSel (mind the descendant direction: a:has(span[aria-labelledby]) is the link CONTAINING the labelledby span, while span[aria-labelledby] a demands an <a> INSIDE the span and usually matches nothing) — or drop anchorSel to run the default union.');
+      } else {
+        result.note = 'no date-shaped value on this card (labelledby / aria-label / visible text / hover popover text). If the page exposes no timestamp for these cards, renegotiate the field via io.confirm instead of shipping titles or junk as postTime.';
+      }
     } else if (absolute && absolute.partial) {
       // Sixty-ninth log: distinct from a relative-only harvest — an absolute
       // WAS found but it lacks a year. $timestamp's own hover phase already
