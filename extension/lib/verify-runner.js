@@ -932,7 +932,29 @@
           // shared value instead of a per-record identifier — the census
           // names the value and the record ordinals to re-probe.
           const dupIds = WU.detectDuplicateIdValues(finalData, outputSchema) || [];
-          if (dupIds.length) detectors.duplicateIdValues = dupIds;
+          if (dupIds.length) {
+            // Eighty-fifth log promotion: the feedback session shipped a
+            // GREEN v13 whose records #2/#5 carried the IDENTICAL required
+            // postId (an author-scoped story token). A REQUIRED identity
+            // field that repeats across records breaks record identity —
+            // veto; optional id fields keep the report-only lane (the
+            // human may have confirmed a contract that tolerates repeats).
+            for (const dup of dupIds) {
+              const reqFields = (typeof WU.schemaItemRequiredForPath === 'function')
+                ? WU.schemaItemRequiredForPath(outputSchema, dup.path) : null;
+              const isRequired = Array.isArray(reqFields) && reqFields.indexOf(dup.field) !== -1;
+              if (isRequired && !error) {
+                error = new Error(
+                  'DUPLICATE_ID_REQUIRED: ' + dup.path + ' carries the same value in ' + dup.count + '/' + dup.totalRecords +
+                  ' records ("' + dup.value + '" on records ' + dup.indices.join(', ') + ') but the confirmed contract lists it as REQUIRED — a required identity field that repeats is a broken binding, not a page fact. ' +
+                  'The usual cause is a fallback to a shared/author-scoped value (the list owner id, a base64 story token) instead of a per-record identifier: per-record ids live on per-record elements — a card link\'s own href often carries the numeric id right beside any token. ' +
+                  'Re-probe ONE listed record (probe.snippet over its link hrefs), bind the per-record source, and dry-run before the next service.update. If the page legitimately repeats the record itself, dedup in the step or renegotiate via io.confirm — a required id may not ship duplicated.'
+                );
+                break;
+              }
+            }
+            detectors.duplicateIdValues = dupIds;
+          }
         }
         if (RSD && typeof RSD.formatShapeDistributionFromData === 'function') {
           // Report-only: 2+ field-population signatures across the extracted

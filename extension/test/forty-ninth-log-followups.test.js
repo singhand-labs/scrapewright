@@ -390,7 +390,7 @@ describe('F2+F4: verify-runner wiring', () => {
     assert.ok(out.report.events.includes('SCROLL_COUNT_FROZEN'), 'tags: ' + JSON.stringify(out.report.events));
   });
 
-  it('repeated postId values across records → DUPLICATE_ID_VALUES advisory, run stays green', async () => {
+  it('repeated REQUIRED postId values across records → census + (85th-log promotion) run turns red', async () => {
     const dup = { posts: [
       { postId: '61584838476257', content: 'a' },
       { postId: '61584838476257', content: 'b' },
@@ -398,13 +398,31 @@ describe('F2+F4: verify-runner wiring', () => {
     ] };
     const runner = makeRunner([], dup);
     const out = await runner({ service: SERVICE, input: {}, outputSchema: SCHEMA });
-    assert.equal(out.report.ok, true, 'report-only');
+    // 85th log: a REQUIRED identity field that repeats across records broke
+    // record identity and shipped green (author-scoped story token on #2/#5)
+    // — the census is still attached, but the verdict vetoes.
+    assert.equal(out.report.ok, false, 'required duplicated id vetoes');
+    assert.match(out.report.error.message, /DUPLICATE_ID_REQUIRED/);
     const d = out.report.detectors.duplicateIdValues;
     assert.ok(Array.isArray(d) && d.length === 1);
     assert.equal(d[0].path, 'posts.postId');
     assert.equal(d[0].count, 3);
     assert.deepEqual(d[0].indices, [1, 2, 3]);
     assert.ok(out.report.events.includes('DUPLICATE_ID_VALUES'));
+  });
+
+  it('repeated values on a NON-required id-like field stay advisory-green', async () => {
+    const optSchema = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object', properties: {
+      postId: { type: 'string' }, content: { type: 'string' }
+    } } } } };
+    const dup = { posts: [
+      { postId: 'same', content: 'a' },
+      { postId: 'same', content: 'b' }
+    ] };
+    const runner = makeRunner([], dup);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: optSchema });
+    assert.equal(out.report.ok, true, 'optional identity fields keep the report-only lane');
+    assert.ok(Array.isArray(out.report.detectors.duplicateIdValues) && out.report.detectors.duplicateIdValues.length === 1);
   });
 
   it('unique ids on a healthy run → no duplicate census', async () => {
