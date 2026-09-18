@@ -205,6 +205,13 @@
       matchEvents: ['REQUIRED_FIELD_EMPTY', 'FIELD_MATCH_ZERO', 'EMPTY_EXTRACTION', 'SELECTOR_ZERO_MATCH', 'HOVER_NO_SIGNAL', 'PARTIAL_EMPTY_FIELDS', 'EMPTY_FIELDS'],
       origin: '2026-09-18 seventy-eighth live log; deep-thinking Q&A page with build-hash class names — the model made ~26 blind [class*=message]-style selector guesses (extractList census) while calling probe.skeleton exactly once, and the session died at maxTurns',
       body: 'On framework SPAs whose class names are build-hash gibberish or semantic-soup, STOP iterating class-substring selectors: each [class*=guess] round costs a turn and proves nothing — the next redeploy renames the hash and the guess dies with it. Call probe.skeleton({sel}) on the repeating container (or its stable ANCESTOR with a role/aria/id anchor) to get the NUMBERED structure — then bind fields to structural facts: role/aria-*/data-* attributes, heading/order relationships, and the node numbers from the dossier CONTAINER SKELETON. A selector anchored on [role=...]/[data-*]/tag-structure survives redeploys; [class*=guess] does not. If nothing structural exists at the container, ONE probe.skeleton of the page root (capChars 20000) shows what does exist to anchor on. Skeleton FIRST, selector SECOND — never the reverse on an obfuscated page.'
+    },
+    {
+      id: 'no-evidence-no-conclusion',
+      title: 'No conclusion without evidence — re-probe, ask the user, or renegotiate; never re-derive',
+      matchEvents: ['FIELD_MATCH_ZERO', 'REQUIRED_FIELD_EMPTY', 'STAGNANT_DISCLOSURES', 'SELECTOR_ZERO_MATCH', 'HOVER_NO_SIGNAL'],
+      origin: '2026-09-18 graduated-activation spec §3.B; the 78th log\'s 26 blind [class*=] guesses were only the latest instance — the principle needs a ROUTING moment (injected at the exact guessing instant), not more preaching in the system prompt',
+      body: 'Before asserting that the page HAS or LACKS anything, the current context must hold matching evidence: a red-verify field → re-fetch THAT record\'s fragment (probe.sample / probe.skeleton against the DOSSIER node numbers); popover behavior → prove it with ONE probe.hover — and when you can see it render but the tool cannot, user.observe (the human sensor); counts/distributions → probe.count / probe.attrStats. RE-PROBE, do not RE-DERIVE: the SECOND time the same assertion appears without new evidence, STOP deriving and pick exactly one of three exits — (1) re-fetch the fragment with a probe tool, (2) user.observe, (3) io.confirm renegotiation of the contract — then execute it. Deriving from memory is how a session burns twenty turns rewriting a selector for a value that was never on the page.'
     }
   ];
 

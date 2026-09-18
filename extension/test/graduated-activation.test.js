@@ -380,7 +380,7 @@ describe('evidence-first routing: REQUIRED_FIELD_EMPTY evidence-action tail', ()
     const at = vsrc.indexOf('REQUIRED_FIELD_EMPTY: ');
     assert.ok(at > -1);
     const msg = vsrc.slice(at, at + 3000);
-    assert.match(msg, /re-fetch ONE failing record's fragment/, 'evidence action must be concrete');
+    assert.match(msg, /re-fetch ONE failing record\\?'s fragment/, 'evidence action must be concrete');
     assert.match(msg, /probe\.skeleton/, 'names the tool');
     assert.match(msg, /user\.observe/, 'names the human-sensor exit');
     assert.match(msg, /probe\.snippt|probe\.snippet/, 'snippet dry-run teaching survives the merge');
@@ -390,5 +390,116 @@ describe('evidence-first routing: REQUIRED_FIELD_EMPTY evidence-action tail', ()
     const at = vsrc.indexOf('REQUIRED_FIELD_EMPTY: ');
     const msg = vsrc.slice(at, at + 3000);
     assert.equal((msg.match(/re-fetch ONE failing record/g) || []).length, 1, 'exactly one evidence-action tail');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §3.C — step-plan continuity (state.stepPlan + dossier [STEP PLAN] section)
+
+const Dossier = require(path.join(__dirname, '..', 'lib', 'evidence-dossier.js'));
+const { createResearchSession } = require(path.join(__dirname, '..', 'lib', 'research-session.js'));
+
+function scriptedLlm(replies, calls) {
+  let i = 0;
+  return async (req) => {
+    calls.push(req);
+    const r = replies[Math.min(i, replies.length - 1)];
+    i++;
+    return r;
+  };
+}
+function reply(content) { return { content, finish_reason: 'stop', usage: { prompt_tokens: 100, completion_tokens: 10 } }; }
+function envelope(tool, args) { return JSON.stringify({ think: 't', tool, args: args || {} }); }
+function finishEnvelope(s) { return JSON.stringify({ think: 'done', finish: { summary: s || 'done' } }); }
+
+describe('step plan: buildDossier [STEP PLAN] section', () => {
+  it('renders one line per step + the fixed teaching line when stepPlan is provided', () => {
+    const text = Dossier.buildDossier({
+      stepPlan: [
+        { stepId: 's1', name: 'extract cards', status: 'grounded', note: 'probe.count' },
+        { stepId: 's2', name: 'hover time', status: 'planned', note: '' }
+      ]
+    });
+    assert.match(text, /\[STEP PLAN\]/);
+    assert.match(text, /s1 \(extract cards\): grounded — probe\.count/);
+    assert.match(text, /s2 \(hover time\): planned/);
+    assert.match(text, /research the FIRST non-grounded step; re-probe grounded steps only when their selector family fails in verify/);
+  });
+
+  it('no [STEP PLAN] section when the plan is empty/absent (pre-artifact sessions)', () => {
+    const text = Dossier.buildDossier({});
+    assert.ok(!/\[STEP PLAN\]/.test(text));
+  });
+});
+
+describe('step plan: engine lifecycle (spec §3.C)', () => {
+  function makeSession(replies, calls, tools) {
+    return createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm(replies, calls),
+      tools: tools,
+      dossierFeeds: { containerHtml: () => null, popovers: () => [], lastVerify: () => null }
+    });
+  }
+
+  it('service.update rebuilds the plan (planned); probe receipt grounds; verify marks tested', async () => {
+    const calls = [];
+    const script1 = "return await $extractList('div.card', { title: { selector: 'h3' } })";
+    const session = makeSession([
+      reply(envelope('probe.count', { sel: 'div.card' })),
+      reply(envelope('service.update', { steps: [{ id: 's1', name: 'extract cards', script: script1 }] })),
+      reply(envelope('verify.run', {})),
+      reply(finishEnvelope())
+    ], calls, {
+      'probe.count': async () => ({ count: 5 }),
+      'verify.run': async () => ({ ok: true, steps: [{ stepId: 's1', result: { posts: [1, 2] } }] })
+    });
+    await session.run();
+    const lastDossier = calls[calls.length - 1].messages
+      .filter((m) => m.role === 'system' && m.content.includes('EVIDENCE DOSSIER'))[0].content;
+    assert.match(lastDossier, /\[STEP PLAN\]/, 'section rides the dossier');
+    assert.match(lastDossier, /s1 \(extract cards\): tested/, 'verify success → tested');
+  });
+
+  it('probe grounding marks grounded before any verify; verify failure marks failed', async () => {
+    const calls = [];
+    const script1 = "return await $extractList('div.row', { title: { selector: 'h3' } })";
+    const session = makeSession([
+      reply(envelope('probe.count', { sel: 'div.row' })),
+      reply(envelope('service.update', { steps: [{ id: 's1', name: 'x', script: script1 }] })),
+      reply(envelope('probe.count', { sel: 'div.row' })),
+      reply(envelope('verify.run', {})),
+      reply(finishEnvelope())
+    ], calls, {
+      'probe.count': async () => ({ count: 3 }),
+      'verify.run': async () => ({ ok: false, error: { message: 'boom' }, steps: [{ stepId: 's1', error: 'ELEMENT_NOT_FOUND' }] })
+    });
+    await session.run();
+    const dossiers = calls.map((c) => c.messages
+      .filter((m) => m.role === 'system' && m.content.includes('EVIDENCE DOSSIER'))[0].content);
+    const afterProbe = dossiers[3]; // turn following the post-update probe.count
+    assert.match(afterProbe, /s1 \(x\): grounded — probe\.count/, 'probe receipt on a selector in the step script → grounded');
+    const last = dossiers[dossiers.length - 1];
+    assert.match(last, /s1 \(x\): failed/, 'verify step failure → failed');
+  });
+
+  it('rebuild preserves same-stepId status/note; new steps start planned', async () => {
+    const calls = [];
+    const s1 = "return await $extractList('div.k', { title: { selector: 'h3' } })";
+    const session = makeSession([
+      reply(envelope('probe.count', { sel: 'div.k' })),
+      reply(envelope('service.update', { steps: [{ id: 's1', name: 'one', script: s1 }] })),
+      reply(envelope('probe.count', { sel: 'div.k' })),
+      reply(envelope('service.update', { steps: [
+        { id: 's1', name: 'one', script: s1 },
+        { id: 's2', name: 'two', script: "return await $count('div.k')" }
+      ] })),
+      reply(finishEnvelope())
+    ], calls, { 'probe.count': async () => ({ count: 2 }) });
+    await session.run();
+    const lastDossier = calls[calls.length - 1].messages
+      .filter((m) => m.role === 'system' && m.content.includes('EVIDENCE DOSSIER'))[0].content;
+    assert.match(lastDossier, /s1 \(one\): grounded/, 'surviving step keeps its status across the rebuild');
+    assert.match(lastDossier, /s2 \(two\): planned/, 'new step starts planned');
   });
 });

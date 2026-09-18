@@ -1052,15 +1052,19 @@
             error = new Error(
               'REQUIRED_FIELD_EMPTY: ' + pe.path + ' is empty in ' + pe.emptyCount + '/' + pe.totalCount +
               ' records' + whereNote + ' but the confirmed contract lists it as REQUIRED for every record. ' +
-              'Match the named record(s) against steps[].resultPreview in THIS report to see which step lost the value, ' +
-              'then probe THOSE records on the research tab before touching the selector. Either fix the extraction ' +
+              'Match the named record(s) against steps[].resultPreview in THIS report to see which step lost the value. ' +
+              // Graduated-activation spec §3.B (2026-09-18): the 67th-log
+              // snippet-first teaching merged with the evidence-ACTION tail —
+              // one concrete re-fetch instruction instead of generalized advice.
+              'Before rewriting the binding, re-fetch ONE failing record\'s fragment (probe.skeleton on its container) ' +
+              'and confirm the value\'s actual source; if tools cannot see what you can, user.observe. Then dry-run the ' +
+              'corrected extraction with probe.snippet on the research tab before the next service.update — one snippet ' +
+              'round beats a blind update+verify pair (2 turns), and regexes written against hoped-for shapes (e.g. digit-only id ' +
+              'patterns on non-numeric ids) fail every record. A second empty run without new evidence means STOP ' +
+              'deriving and pick one: re-fetch / user.observe / io.confirm renegotiate. Either fix the extraction ' +
               '(the field is contractually demanded — ground a selector for it, re-check the fieldMap anchor and the ' +
               'record assembly), or renegotiate the contract with io.confirm (move the field out of required / drop it) ' +
-              'when it genuinely never exists on these cards. Before the next service.update, test the corrected ' +
-              'extraction against the REAL values — fetch what the step actually produced (this report\'s resultPreview ' +
-              '/ diag.read) and dry-run the corrected regex/assembly with probe.snippet on the research tab: one snippet ' +
-              'round beats a blind update+verify pair (2 turns), and regexes written against hoped-for shapes (e.g. ' +
-              'digit-only id patterns on non-numeric ids) fail every record. Optional-field emptiness stays advisory; a required one does not.'
+              'when it genuinely never exists on these cards. Optional-field emptiness stays advisory; a required one does not.'
             );
             break;
           }
