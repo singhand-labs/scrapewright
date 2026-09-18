@@ -591,10 +591,18 @@ describe('forty-sixth log F4 — relative timestamps in time-like fields', () =>
 
   it('verify.run populates detectors.relativeTimestamps and tags RELATIVE_TIMESTAMP (report-only, ok stays green)', async () => {
     const SERVICE = { targetUrl: 'https://example.com', steps: [{ id: 's1', name: 'one', script: 'return 1', onSuccess: 'TERMINATE' }], config: {} };
-    const runner = VR_HARNESS.makeRunner(orchReturning({ posts: [
-      { postTime: 'a day ago', title: 'x' },
-      { postTime: '2 hrs ago', title: 'y' }
-    ] }));
+    // Eighty-first log: required time fields carrying relative values with
+    // NO popover-route evidence are now gated TIME_SOURCE_UNEXERCISED — this
+    // report-only assertion keeps its meaning by supplying a tooltip receipt.
+    const runner = VR_HARNESS.makeRunner(async (service, input, d3, hooks) => {
+      const emit = (hooks && typeof hooks.onEvent === 'function') ? hooks.onEvent : ((d3 && d3.onEvent) || function () {});
+      emit({ type: 'STEP_ITERATION', stepId: 's1', resultPreview: '{"done":true}',
+        selectorDiagnostics: [{ api: 'extractWithHover', capturedPopovers: { captured: 1, samples: ['yesterday at 5 PM'] } }] });
+      return { finalResult: { posts: [
+        { postTime: 'a day ago', title: 'x' },
+        { postTime: '2 hrs ago', title: 'y' }
+      ] }, steps: [{ stepId: 's1', stepName: 'one', result: { done: true }, snapshot: null }], pages: [], pagesTruncated: false };
+    });
     const out = await runner({ service: SERVICE, input: {}, outputSchema: TIME_SCHEMA });
     assert.equal(out.report.ok, true, 'disclosure, not a gate');
     assert.ok(out.report.detectors.relativeTimestamps);

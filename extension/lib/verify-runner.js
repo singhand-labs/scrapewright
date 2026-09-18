@@ -500,7 +500,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, siblingCountContrast: null, implausibleTimeFields: null, positionLikeIds: null, labelPrefixedCounts: null, junkShapeRecords: null, unusedCaptures: null };
+      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, siblingCountContrast: null, implausibleTimeFields: null, positionLikeIds: null, labelPrefixedCounts: null, junkShapeRecords: null, unusedCaptures: null, timeSourceUnexercised: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -1071,6 +1071,70 @@
         }
       }
 
+      // Eighty-first log / user directive 2026-09-18: postTime comes from
+      // the hover tooltip, not the page-visible label. The 81st session
+      // shipped visible-label values ("4 days ago"/"June 3") with
+      // probe.timestamp called ZERO times — the 69th-round machinery MARKED
+      // them partial and the 76th-round ladder allowed the disclosed ship,
+      // but nothing required the tooltip route to be EXERCISED first. The
+      // teaching is advisory and the model short-circuits, so the popover
+      // route becomes a GATE: a REQUIRED time-named field carrying relative
+      // or partial values with NO popover-route evidence this session is an
+      // UNEXERCISED source, not a page fact. Red only for required fields;
+      // optional time fields keep the advisory path. Full absolutes pass
+      // untouched (detectRelativeTimestamps never lists them).
+      if (Array.isArray(detectors.relativeTimestamps) && detectors.relativeTimestamps.length) {
+        // Popover-route evidence = ANY of: (a) this run's diagnostics
+        // captured ≥1 popover (the 64th-round capturedPopovers plumbing),
+        // (b) an event preview carrying a probe.timestamp receipt marker
+        // (the tool name or its distinctive result keys).
+        let popoverRouteEvidence = false;
+        for (const ev of events) {
+          if (popoverRouteEvidence) break;
+          const diags = (ev && Array.isArray(ev.selectorDiagnostics)) ? ev.selectorDiagnostics : [];
+          for (const dg of diags) {
+            const cp = (dg && dg.capturedPopovers) || null;
+            const captured = (dg && dg.hoverSummary && dg.hoverSummary.hovercardsCaptured) ||
+              (cp ? (cp.captured || 0) : 0);
+            const samples = cp && Array.isArray(cp.samples) ? cp.samples.length : 0;
+            if (captured > 0 || samples > 0) { popoverRouteEvidence = true; break; }
+          }
+          if (!popoverRouteEvidence) {
+            const pv = String((ev && ev.resultPreview) || '');
+            if (/probe\.timestamp/.test(pv)) { popoverRouteEvidence = true; break; }
+            const p = previewJson(pv);
+            if (p && typeof p === 'object' && (p.anchorsProbed != null || p.hoversDispatched != null)) {
+              popoverRouteEvidence = true;
+            }
+          }
+        }
+        if (!popoverRouteEvidence) {
+          for (const rt of detectors.relativeTimestamps) {
+            if (!rt) continue;
+            let itemRequired = null;
+            if (typeof WU.schemaItemRequiredForPath === 'function') {
+              itemRequired = WU.schemaItemRequiredForPath(outputSchema, String(rt.path || ''));
+            }
+            if (!itemRequired || itemRequired.indexOf(rt.field) === -1) continue;
+            const gateMsg =
+              'TIME_SOURCE_UNEXERCISED: ' + rt.path + ' carries page-visible labels (relative/partial; sample "' +
+              String(rt.sampleValue || '').slice(0, 40) + '") but the contract source is the hover tooltip, ' +
+              'and NO tooltip evidence exists this session: call probe.timestamp({containerSel}) once ' +
+              '(it hovers the time anchors and returns popover-text candidates) or bind the field via ' +
+              'read:\'hoverPopover\' with your own match — only after that receipt is partial/relative an ' +
+              'honest disclosed ship; without it, this is an unexercised source, not a page fact.';
+            detectors.timeSourceUnexercised = detectors.timeSourceUnexercised || [];
+            detectors.timeSourceUnexercised.push({ field: rt.field, path: rt.path, sampleValue: rt.sampleValue, relativeCount: rt.relativeCount, partialAbsoluteCount: rt.partialAbsoluteCount });
+            if (!error) {
+              error = new Error(gateMsg);
+            } else if (!/TIME_SOURCE_UNEXERCISED/.test(String(error.message))) {
+              error.message += ' | ' + gateMsg;
+            }
+            break; // one gate names the field; the detector rows carry the rest
+          }
+        }
+      }
+
       const oc = (result ? WU.validateOutputAgainstSchema(finalData, outputSchema) : { ok: true, missing: [] }) || { ok: true, missing: [] };
 
       // Twenty-eighth log: the report showed {stepId, iterations} only — the
@@ -1146,6 +1210,10 @@
         // nagged — the report and the finish ladder disclose the rest.
         if (detectors.countShortfall && detectors.countShortfall.severe) add('COUNT_SHORTFALL');
         if (detectors.relativeTimestamps) add('RELATIVE_TIMESTAMP');
+        // Eighty-first log: tag on the red gate itself so the
+        // relative-timestamp knowledge unit (with the exercise-first ladder)
+        // auto-attaches on TIME_SOURCE_UNEXERCISED runs.
+        if (detectors.timeSourceUnexercised) add('TIME_SOURCE_UNEXERCISED');
         if (detectors.scrollCountFrozen) add('SCROLL_COUNT_FROZEN');
         if (detectors.siblingCountContrast) add('COUNT_FIELD_HIDDEN_VALUE');
         if (detectors.implausibleTimeFields) add('TIME_FIELD_IMPLAUSIBLE');
