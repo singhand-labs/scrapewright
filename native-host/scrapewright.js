@@ -106,7 +106,14 @@ function cmdInstall(opts) {
     });
     ok('service installed on port ' + port);
     if (opts.autostart) {
-      ok('auto-start enabled');
+      // Start NOW on every platform — Windows registers an -AtLogOn trigger
+      // (next LOGON, not now), so without an immediate start the host stays
+      // down after install and every extension poll gets ERR_CONNECTION_REFUSED
+      // (2026-09-18 user report: doctor showed service_installed ✓ but
+      // host_reachable ✗). Linux's `enable --now` and macOS kickstart are
+      // idempotent no-ops on an already-running unit.
+      serviceInstall.start();
+      ok('auto-start enabled (service started)');
     } else {
       info('auto-start disabled; start manually with: scrapewright start');
     }

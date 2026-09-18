@@ -24,3 +24,13 @@ test('paths and port interpolate; --no-autostart flips the state flag', () => {
   assert.ok(s.includes('-Argument \'"D:\\x\\host.js" --port=9123\''));
   assert.ok(s.includes('-State Disabled'));
 });
+
+test('CLI install with autostart starts the service immediately (Windows -AtLogOn asymmetry)', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const cli = fs.readFileSync(path.join(__dirname, '..', 'scrapewright.js'), 'utf8');
+  const i = cli.indexOf("ok('service installed on port ' + port)");
+  assert.ok(i > -1);
+  const block = cli.slice(i, i + 900);
+  assert.match(block, /serviceInstall\.start\(\)/, 'install(autostart) must start NOW — the Windows -AtLogOn trigger fires at NEXT logon, leaving the host down after install');
+});
