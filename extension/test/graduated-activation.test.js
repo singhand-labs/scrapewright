@@ -118,6 +118,15 @@ describe('graduated activation: decideActivation(profile, need)', () => {
     assert.match(d.reason, /static page/);
   });
 
+  it('static page + hover need → tab activation WITHOUT window focus (84th log: CDP input needs the active tab even on a static page — the skip made every first dispatch deterministically time out)', () => {
+    const ctx = loadTabActivation();
+    const d = ctx.api.decideActivation('static', 'hover');
+    assert.equal(d.activate, true, 'static + hover must still activate the tab');
+    assert.equal(d.focusWindow, false, 'window focus stays graduated — no steal on the first attempt');
+    assert.ok(Array.isArray(d.escalateOn) && d.escalateOn.indexOf('dispatch-timeout') !== -1,
+      'escalateOn must name dispatch-timeout so the receipt matcher can key on it');
+  });
+
   it('lazy page + frame need → current behavior (sticky tab + window focus)', () => {
     const ctx = loadTabActivation();
     const d = ctx.api.decideActivation('lazy', 'frame');
@@ -159,6 +168,20 @@ describe('graduated activation: requestActivation tiers', () => {
     assert.match(r.reason, /static page/);
     assert.equal(ctx.calls.tabsUpdate.length, 0, 'static page: background completion, no focus steal');
     assert.equal(ctx.calls.windowsUpdate.length, 0);
+  });
+
+  it('static page + hover: tab activated, window focus NOT stolen (84th log: skip → mouseMoved timeout 2000ms on every first hover, escalation ledger cleaned up after it)', async () => {
+    const ctx = loadTabActivation();
+    ctx.setFocusedWindow(2);
+    ctx.tabsById.set(101, { id: 101, windowId: 1, active: false });
+    ctx.windowsById.set(1, { id: 1, state: 'normal' });
+    const r = await ctx.api.requestActivation(101, { pageProfile: 'static', need: 'hover', forceWindowFocus: true });
+    assert.equal(r.ok, true);
+    assert.equal(r.activated, true, 'CDP input requires the active tab — static profile only graduates the WINDOW focus');
+    assert.notEqual(r.skippedActivation, true);
+    assert.equal(ctx.calls.tabsUpdate.length, 1, 'tab activation happens on the first hover attempt');
+    assert.equal(ctx.calls.windowsUpdate.length, 0, 'first hover attempt: window focus degraded, user keeps their focus');
+    assert.notEqual(r.focusedWindow, true);
   });
 
   it('lazy page + hover: tab activated but window focus NOT stolen on the first attempt', async () => {

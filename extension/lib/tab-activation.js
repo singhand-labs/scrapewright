@@ -49,7 +49,17 @@
   const HOVER_ESCALATE_ON = ['dispatch-timeout', 'cdp-contention'];
 
   function decideActivation(pageProfile, need) {
-    if (pageProfile === 'static') return { activate: false, reason: 'static page' };
+    if (pageProfile === 'static') {
+      // Eighty-fourth log: CDP hover input requires the ACTIVE tab (the
+      // RC20 architectural rule) even on a static page — the blanket skip
+      // made every first dispatch deterministically time out (2000ms) and
+      // ride the escalation ledger. Static graduates only the WINDOW
+      // focus; frame-need reads still finish in the background.
+      if (need === 'hover') {
+        return { activate: true, focusWindow: false, escalateOn: HOVER_ESCALATE_ON.slice() };
+      }
+      return { activate: false, reason: 'static page' };
+    }
     if (pageProfile === 'lazy') {
       if (need === 'hover') {
         return { activate: true, focusWindow: false, escalateOn: HOVER_ESCALATE_ON.slice() };
