@@ -46,7 +46,14 @@ let wizardState = {
   stepAnnotationTabs: {},
   testAbortController: null,
   testAborted: false,
-  subtreeSelector: null
+  subtreeSelector: null,
+  // Seventy-fifth log: last-verified artifact bookkeeping. The completion
+  // panel used to present the LAST VERIFY's outcome while wizardState.steps
+  // held whatever the FINAL service.update wrote — a cap-time v4 written
+  // after the last (red v3) verify deployed behind a green-looking panel.
+  currentArtifactVersion: 0,
+  artifactsByVersion: {},
+  lastVerified: null
 };
 
 function buildSystemMessageWithGlobalContext(baseSystemContent) {
@@ -1622,6 +1629,23 @@ async function testScript() {
 // the research-session completion path (presentSessionCompletion): stores the
 // outcome into wizardState, renders phase 5, and lands on it.
 async function presentTestOutcome(out) {
+  // Seventy-fifth log: a GREEN verify report blesses the artifact version it
+  // executed (research-session stamps executedArtifactVersion onto verify.run
+  // reports). Record it — the completion panel's rollback/deploy gate compares
+  // this against the current artifact version. Manual (non-session) runs carry
+  // no stamp and leave the bookkeeping untouched. Best-effort.
+  try {
+    const rep = out && out.report;
+    if (rep && rep.ok === true && typeof rep.executedArtifactVersion === 'number') {
+      const v = rep.executedArtifactVersion;
+      const vSteps = wizardState.artifactsByVersion[v];
+      wizardState.lastVerified = {
+        version: v,
+        steps: Array.isArray(vSteps) ? vSteps
+          : (Array.isArray(wizardState.steps) ? JSON.parse(JSON.stringify(wizardState.steps)) : [])
+      };
+    }
+  } catch (e) { /* bookkeeping is best-effort */ }
   wizardState.lastExecutionEvents = out.events;
   wizardState.countShortfall = out.report.detectors.countShortfall || null;
   wizardState.shapeDistribution = out.report.detectors.shapeDistribution || null;
@@ -1880,6 +1904,14 @@ async function confirmDeploy() {
   if (!tested) deployReasons.push('the test was never run');
   else if (tested.finalResult == null) deployReasons.push('the test produced no final result');
   else if (outCheck && !outCheck.ok) deployReasons.push('required output fields are missing/empty: ' + outCheck.missing.join(', '));
+  // Seventy-fifth log: the deploy path binds wizardState.steps, which may be
+  // a NEWER artifact than anything a verify report blessed — name that.
+  try {
+    const ua = (typeof unverifiedArtifactState === 'function') ? unverifiedArtifactState(wizardState) : null;
+    if (ua && ua.unverified) {
+      deployReasons.push('即将部署的工件 v' + ua.currentV + ' 从未验证（最后验证通过 ' + (ua.verifiedV > 0 ? 'v' + ua.verifiedV : '无') + '）');
+    }
+  } catch (e) { /* gate text is best-effort; the banner carries the primary signal */ }
   if (deployReasons.length) {
     if (!confirm('Deploy this service despite:\n - ' + deployReasons.join('\n - ') + '\n\nProceed?')) return;
   }
@@ -2670,6 +2702,18 @@ function handleSessionEvent(ev) {
         appendLog('Knowledge attached: ' + ev.id + ' (trigger: ' + ev.trigger + ').');
         break;
       case 'artifact_version':
+        // Seventy-fifth log: snapshot THIS version's steps so a later
+        // one-click rollback can restore the last VERIFIED artifact.
+        // applySessionArtifact ran just before this event (service.update
+        // applies the artifact, then the engine appends artifact_version),
+        // so wizardState.steps IS v<ev.version>'s steps. Cap the map at the
+        // last 3 versions.
+        wizardState.currentArtifactVersion = ev.version;
+        if (Array.isArray(wizardState.steps)) {
+          wizardState.artifactsByVersion[ev.version] = JSON.parse(JSON.stringify(wizardState.steps));
+          const vKeys = Object.keys(wizardState.artifactsByVersion).map(Number).sort((x, y) => x - y);
+          while (vKeys.length > 3) delete wizardState.artifactsByVersion[vKeys.shift()];
+        }
         renderStepList();
         appendLog('Artifact v' + ev.version + ' saved.', 'success');
         break;
@@ -2873,6 +2917,26 @@ async function showRequirementRestatePanel() {
 
 let sessionBooting = false; // re-entrancy guard for the await-config window
 
+// Seventy-fifth log: rebuild the artifact version bookkeeping (map capped at
+// the last 3 versions + lastVerified from the engine's verify state) when a
+// parked session resumes, so the unverified-artifact banner/deploy gate keep
+// working after a reload. Call BEFORE assigning wizardState.steps — the map
+// copies st.artifactVersions, not the live draft.
+function seedArtifactVersionBookkeeping(st) {
+  wizardState.artifactsByVersion = {};
+  const vers = st.artifactVersions.slice(-3);
+  vers.forEach((av, i) => {
+    wizardState.artifactsByVersion[st.artifactVersions.length - vers.length + i + 1] =
+      JSON.parse(JSON.stringify(av.steps || []));
+  });
+  wizardState.currentArtifactVersion = st.artifactVersions.length;
+  wizardState.lastVerified = null;
+  if (st.lastVerifyOk === true && typeof st.lastVerifyArtifactVersion === 'number' &&
+      Array.isArray(wizardState.artifactsByVersion[st.lastVerifyArtifactVersion])) {
+    wizardState.lastVerified = { version: st.lastVerifyArtifactVersion, steps: wizardState.artifactsByVersion[st.lastVerifyArtifactVersion] };
+  }
+}
+
 async function startResearchSession(seedOverride) {
   if (sessionBooting) {
     showToast('Session is already starting — please wait.', 'warn', 3000);
@@ -2922,6 +2986,7 @@ async function startResearchSession(seedOverride) {
     // page.open recorded in the transcript.
     const st = seed.session;
     if (Array.isArray(st.artifactVersions) && st.artifactVersions.length) {
+      seedArtifactVersionBookkeeping(st);
       wizardState.steps = JSON.parse(JSON.stringify(st.artifactVersions[st.artifactVersions.length - 1].steps || []));
       renderStepList();
     }
@@ -2940,6 +3005,12 @@ async function startResearchSession(seedOverride) {
     wizardState.description = String(st.requirement || '') || buildRequirementsBlock(wizardState.requirements, wizardState.targetUrl);
     resumeNote = 'Resuming the parked research session' + (st.stopped && st.stopped.reason ? ' (interrupted: ' + st.stopped.reason + ')' : '') + '.';
   } else {
+    // Fresh session: the engine's artifact counter restarts at v1 — reset
+    // the seventy-fifth-log bookkeeping so a prior session's versions
+    // cannot leak into this one's banner/deploy gate.
+    wizardState.currentArtifactVersion = 0;
+    wizardState.artifactsByVersion = {};
+    wizardState.lastVerified = null;
     wizardState.requirements = { inputParams, pageOps, outputStruct };
     wizardState.description = buildRequirementsBlock(wizardState.requirements, wizardState.targetUrl);
     // Inline follow-up answers from the restatement gate ride into the
@@ -3167,6 +3238,12 @@ async function presentSessionCompletion() {
     // because a service.update landed after it), and the fresh run's problems
     // never reached the user's review panel.
     await testScript();
+    // The fresh end-to-end run executed the CURRENT draft steps — a green
+    // outcome blesses the current version for the banner/deploy gate.
+    const fr = wizardState.testResult;
+    if (fr && fr.finalResult != null && wizardState.currentArtifactVersion > 0 && Array.isArray(wizardState.steps)) {
+      wizardState.lastVerified = { version: wizardState.currentArtifactVersion, steps: JSON.parse(JSON.stringify(wizardState.steps)) };
+    }
     renderResultReview();
   } else {
     appendLog('Session complete. Review the steps and deploy.', 'success');
@@ -3188,6 +3265,41 @@ function renderResultReview() {
   const listEl = document.getElementById('resultReviewList');
   if (!listEl) return;
   listEl.innerHTML = '';
+  // Seventy-fifth log: the completion panel presented the LAST verify's
+  // outcome while wizardState.steps held the FINAL (possibly never-verified)
+  // artifact — a cap-time v4 deployed behind green-era results. Prepend a
+  // prominent banner whenever the current artifact is newer than the last
+  // verify-verified version, with a one-click rollback to the verified steps.
+  try {
+    const ua = (typeof unverifiedArtifactState === 'function') ? unverifiedArtifactState(wizardState) : null;
+    if (ua && ua.unverified) {
+      const banner = document.createElement('div');
+      banner.className = 'result-review-item';
+      banner.setAttribute('data-unverified-banner', 'v' + ua.currentV);
+      const span = document.createElement('span');
+      if (ua.verifiedV > 0 && wizardState.lastVerified && Array.isArray(wizardState.lastVerified.steps)) {
+        span.textContent = '⚠ 部署候选为未验证版本 v' + ua.currentV + '（最后验证通过：v' + ua.verifiedV + '）——建议回滚到最后验证版本';
+        const btn = document.createElement('button');
+        btn.id = 'btnRollbackToVerified';
+        btn.textContent = '使用 v' + ua.verifiedV + ' 的已验证 steps';
+        btn.addEventListener('click', () => {
+          const lv = wizardState.lastVerified;
+          if (!lv || !Array.isArray(lv.steps)) return;
+          wizardState.steps = JSON.parse(JSON.stringify(lv.steps));
+          wizardState.currentArtifactVersion = lv.version;
+          renderStepList();
+          showToast('已回滚到最后验证版本 v' + lv.version + ' 的 steps', 'success');
+          renderResultReview();
+        });
+        banner.appendChild(span);
+        banner.appendChild(btn);
+      } else {
+        span.textContent = '⚠ 部署候选为未验证版本 v' + ua.currentV + '——当前工件从未验证通过，部署前请先验证';
+        banner.appendChild(span);
+      }
+      listEl.appendChild(banner);
+    }
+  } catch (e) { /* banner is best-effort; the deploy gate below is the hard stop */ }
   const lv = (wizardToolsBag && typeof wizardToolsBag.getLastVerify === 'function')
     ? wizardToolsBag.getLastVerify() : null;
   const report = lv && lv.report;
