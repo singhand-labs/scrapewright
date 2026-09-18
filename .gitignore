@@ -20,3 +20,8 @@ docs/annotation-req.md
 docs/req.md
 docs/roadmap.zh-CN.md
 docs/technical-introduction.md
+
+# Local-only technical whitepapers (2026-09-18: removed from remote & history;
+# kept locally + full pre-removal history backed up at ../scrapewright-history-backup.git)
+docs/technical-whitepaper.md
+docs/technical-whitepaper.en.md
