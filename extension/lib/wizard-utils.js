@@ -1753,7 +1753,7 @@ function detectHoverAnchorsBlind(events) {
         perStep.set(stepId, {
           stepId: stepId, calls: 0, processedCalls: 0, anchorsFound: 0,
           hovercardsCaptured: 0, containersProcessed: 0,
-          anchorSel: null, containerSelector: null
+          anchorSel: null, containerSelector: null, anchorCensus: null
         });
       }
       const agg = perStep.get(stepId);
@@ -1763,6 +1763,10 @@ function detectHoverAnchorsBlind(events) {
       agg.hovercardsCaptured += (hs.hovercardsCaptured || 0);
       if (!agg.anchorSel && d.anchorSel) agg.anchorSel = d.anchorSel;
       if (!agg.containerSelector && d.containerSelector) agg.containerSelector = d.containerSelector;
+      // Eighty-fourth log: the blind-container anchor census rides the same
+      // diagnostics — verify embeds it so the next anchorSel is written
+      // against the verify population's observed anchor forms.
+      if (!agg.anchorCensus && d.anchorCensus) agg.anchorCensus = d.anchorCensus;
       if ((d.processedContainers || 0) > 0) {
         agg.processedCalls += 1;
         agg.containersProcessed += d.processedContainers;

@@ -1998,6 +1998,56 @@
   // (later entries are weaker), or null when the selector has no strippable
   // trailing clause / is a comma list / cannot be counted. Best-effort: an
   // invalid intermediate stage stops the walk, keeping earlier stages.
+  // Eighty-fourth log: HOVER_ANCHORS_BLIND fired with teaching text but no
+  // inventory of what anchor forms DO exist inside the failing containers —
+  // the verify tab is the only place that truth lives (the research tab may
+  // render another scroll/mount state), so the model re-grounded on a fresh
+  // UNSCROLLED tab, read its un-hydrated shell census as a "population
+  // variant", and blind-widened the anchor union. Census the universal
+  // anchor families inside the BLIND containers and sample the observed
+  // href/aria-label values: the next anchorSel is written against observed
+  // elements. Families are generic HTML/ARIA forms; samples are the page's
+  // own values — no site words in code.
+  function computeAnchorCensus(blindContainers, anchorSel) {
+    const FAMILIES = ['a', 'a[href]', '[aria-labelledby]', '[aria-label]', 'abbr', 'time', '[role=link]', '[role=button]'];
+    const families = {};
+    for (let fi = 0; fi < FAMILIES.length; fi++) families[FAMILIES[fi]] = 0;
+    const hrefSamples = [];
+    const ariaLabelSamples = [];
+    const arr = Array.isArray(blindContainers) ? blindContainers : [];
+    for (let i = 0; i < arr.length; i++) {
+      const c = arr[i];
+      if (!c || typeof c.querySelectorAll !== 'function') continue;
+      for (let fi = 0; fi < FAMILIES.length; fi++) {
+        try { families[FAMILIES[fi]] += c.querySelectorAll(FAMILIES[fi]).length; } catch (_) {}
+      }
+      if (hrefSamples.length < 5) {
+        let links = [];
+        try { links = c.querySelectorAll('a[href]'); } catch (_) {}
+        for (let li = 0; li < links.length && hrefSamples.length < 5; li++) {
+          const h = links[li].getAttribute('href');
+          if (h && String(h).length > 0) hrefSamples.push(String(h).slice(0, 140));
+        }
+      }
+      if (ariaLabelSamples.length < 5) {
+        let lbls = [];
+        try { lbls = c.querySelectorAll('[aria-label]'); } catch (_) {}
+        for (let li = 0; li < lbls.length && ariaLabelSamples.length < 5; li++) {
+          const a = lbls[li].getAttribute('aria-label');
+          if (a && String(a).trim()) ariaLabelSamples.push(String(a).trim().slice(0, 140));
+        }
+      }
+    }
+    return {
+      anchorSel: anchorSel || null,
+      blindContainers: arr.length,
+      families: families,
+      hrefSamples: hrefSamples,
+      ariaLabelSamples: ariaLabelSamples,
+      note: 'census of universal anchor forms inside the containers where anchorSel matched 0 — a family with count 0 does not exist in this population; write the next anchorSel against the families that ARE present (samples are observed values)'
+    };
+  }
+
   function computeSelectorDifferential(sel) {
     if (typeof sel !== 'string' || !sel) return null;
     // Fifty-first log: a comma is only a LIST SEPARATOR at paren depth 0.
@@ -4385,6 +4435,22 @@
       failureReasons: failureReasons,
       observedPopoverCount: observedPopoverCount
     };
+    // Eighty-fourth log: a fully anchor-blind call carries the census of
+    // what anchor forms DO exist inside the blind containers. The
+    // verify-side HOVER_ANCHORS_BLIND error embeds it, so the next
+    // anchorSel is authored against THIS population's observed elements
+    // instead of research-tab guesses misread from un-scrolled shells.
+    if (anchorsFound === 0) {
+      var _blindContainers = [];
+      for (var ai = 0; ai < processed.length; ai++) {
+        var _am = null;
+        try { _am = processed[ai].querySelectorAll(hoverConfig.anchorSel); } catch (_) {}
+        if (!_am || _am.length === 0) _blindContainers.push(processed[ai]);
+      }
+      if (_blindContainers.length > 0) {
+        _diagnostics.anchorCensus = computeAnchorCensus(_blindContainers, hoverConfig.anchorSel);
+      }
+    }
     // Sixty-second log: a gate failure in the tally is not one anchor's bad
     // luck — the Enhanced Mode opt-out disables EVERY dispatch in the session
     // deterministically. Name it at the aggregate so a verify-time reader of

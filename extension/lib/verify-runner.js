@@ -720,6 +720,23 @@
           const hoverBlind = WU.detectHoverAnchorsBlind(events);
           if (hoverBlind) {
             const stepDefHB = stepsDefs.find((s) => String(s.id) === String(hoverBlind.stepId));
+            // Eighty-fourth log: embed the blind-container anchor census so
+            // the rewrite targets THIS verify population's observed anchor
+            // forms — re-grounding on the research tab drifted into
+            // un-scrolled fresh-tab censuses misread as population variants.
+            let censusText = '';
+            const ac = hoverBlind.anchorCensus;
+            if (ac && ac.families && typeof ac.families === 'object') {
+              const fam = Object.keys(ac.families).map((k) => k + '×' + ac.families[k]).join(', ');
+              censusText = ' ANCHOR CENSUS (computed inside the failing containers on THIS verify tab): ' + fam + '.';
+              if (Array.isArray(ac.hrefSamples) && ac.hrefSamples.length) {
+                censusText += ' href samples: ' + JSON.stringify(ac.hrefSamples.slice(0, 5)) + '.';
+              }
+              if (Array.isArray(ac.ariaLabelSamples) && ac.ariaLabelSamples.length) {
+                censusText += ' aria-label samples: ' + JSON.stringify(ac.ariaLabelSamples.slice(0, 5)) + '.';
+              }
+              censusText += ' A family with ×0 does not exist in this population — write the next anchorSel against the families that ARE present (samples are observed values from the failing containers, not research-tab guesses).';
+            }
             error = toError(
               'HOVER_ANCHORS_BLIND: step "' + (stepDefHB ? stepDefHB.name : hoverBlind.stepId) + '" called $extractWithHover' +
               (hoverBlind.anchorSel ? ' with opts.hover.anchorSel ' + JSON.stringify(hoverBlind.anchorSel) : '') +
@@ -727,7 +744,8 @@
               hoverBlind.processedCalls + ' call(s), ' + hoverBlind.containersProcessed + ' container(s) total), so hover never ran and every record got hovercards:[] with ZERO entries. ' +
               'This is NOT "hovered but no card appeared" — the anchor was never found. anchorSel is evaluated as container.querySelectorAll(anchorSel): it must match INSIDE each container subtree. ' +
               'The real interactive link is often nested inside wrapper elements (e.g. an <object> wrapper or an aria-hidden shell around the visible link), or sits in a different branch than the intermediate block named in the selector chain — ' +
-              "prefer a short, container-scoped tag+[attr] form and verify it against one container's HTML in SELECTOR DIAGNOSTICS. Fix anchorSel and propagate the fix to every step that uses the same anchor, or drop the hover option and use $extractList if hovercard data is not required.",
+              "prefer a short, container-scoped tag+[attr] form and verify it against one container's HTML in SELECTOR DIAGNOSTICS." + censusText +
+              ' Fix anchorSel and propagate the fix to every step that uses the same anchor, or drop the hover option and use $extractList if hovercard data is not required.',
               hoverBlind.stepId);
           }
         }
