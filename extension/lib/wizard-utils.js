@@ -2809,6 +2809,30 @@ function detectEmptyOutputFieldsByRatio(data, outputSchema, options) {
     : {};
 
   const result = [];
+  // Seventy-eighth log: single-object output contracts. The census used to
+  // walk ONLY array-typed properties, so a {answer,question,...} single-record
+  // schema produced zero census entries — a missing required key had no
+  // REQUIRED_FIELD_EMPTY path at all. When the schema declares NO top-level
+  // array property, the result OBJECT itself is the one record: census each
+  // declared top-level key against it.
+  const propNames = Object.keys(props);
+  const hasArrayProp = propNames.some((k) => props[k] && props[k].type === 'array');
+  if (!hasArrayProp && propNames.length > 0) {
+    for (const key of propNames) {
+      if (!isEmptyValue(data[key])) continue;
+      result.push({
+        field: key,
+        path: key,
+        emptyCount: 1,
+        totalCount: 1,
+        emptyRatio: 1,
+        sampleNonEmpty: [],
+        emptyRecordSamples: [{ index: 1, hint: contentHint(data, key) }]
+      });
+    }
+    return result;
+  }
+
   for (const key of Object.keys(props)) {
     const prop = props[key];
     const fieldKeys = schemaArrayItemFieldKeys(prop);
@@ -3376,7 +3400,18 @@ function schemaItemRequiredForPath(outputSchema, path) {
   if (!outputSchema || typeof outputSchema !== 'object' || !outputSchema.properties || typeof outputSchema.properties !== 'object' || Array.isArray(outputSchema.properties)) return null;
   if (typeof path !== 'string' || !path.length) return null;
   const segs = path.split('.');
-  if (segs.length < 2) return null;
+  if (segs.length < 2) {
+    // Seventy-eighth log: single-segment paths arise from the single-object
+    // output contract census (path = the top-level key itself). The requiring
+    // node for a non-array top-level property is the ROOT schema's required
+    // array. Array-typed keys keep the null (their census paths are dotted
+    // 'a.b' forms resolved by the walk below).
+    const name = segs[0].replace(/\[\]$/, '');
+    if (!name) return null;
+    const prop = outputSchema.properties[name];
+    if (!prop || prop.type === 'array') return null;
+    return Array.isArray(outputSchema.required) ? outputSchema.required.map(String) : null;
+  }
   let node = outputSchema;
   for (let i = 0; i < segs.length - 1; i++) {
     const name = segs[i].replace(/\[\]$/, '');
@@ -4468,6 +4503,20 @@ function scoreAttemptResult(result, outputSchema) {
           ? ratios.reduce((a, b) => a + b, 0) / ratios.length
           : 0;
       }
+    }
+
+    // Seventy-eighth log: single-object output contracts. A Q&A/deep-thinking
+    // service whose schema is {type:object, required:[...], properties:{...}}
+    // with NO top-level array property scored 0/listItemCount 0/isData-flagged
+    // weirdly on a fully populated result — the list machinery found no array
+    // and every list metric died. Score the OBJECT itself: listItemCount=1
+    // when any property carries data, avgFieldsPerItem = fraction of declared
+    // property keys non-empty (same semantics as per-item field coverage).
+    if (!arrayKey && outputSchema.type === 'object' && Object.keys(props).length > 0) {
+      const propKeys = Object.keys(props);
+      const nonEmptyKeys = propKeys.filter(k => !isEmptyValue(result[k]));
+      listItemCount = nonEmptyKeys.length > 0 ? 1 : 0;
+      avgFieldsPerItem = nonEmptyKeys.length / propKeys.length;
     }
 
     const score = requiredCoverage * 100 + listItemCount * 10 + avgFieldsPerItem * 5;
