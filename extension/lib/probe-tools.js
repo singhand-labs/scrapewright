@@ -46,6 +46,36 @@
       return html;
     }
 
+    // Skeleton-dossier (2026-09-18 spec §3.C): HTML results DEFAULT to the
+    // numbered skeleton view; opts.raw:true keeps the original. Model-directed
+    // cleaning — opts (stripTags/keepAttrs/maxTextLen/maxDepth/capChars) pass
+    // straight through to DomCleaner.skeletonView. Degrades to cleanHtmlForLLM
+    // then raw HTML when no cleaner/parser is resolvable (never a gate).
+    const skeletonFn = (deps && typeof deps.skeletonView === 'function')
+      ? deps.skeletonView
+      : (() => {
+        const dc = (typeof DomCleaner !== 'undefined') ? DomCleaner
+          : ((typeof window !== 'undefined' && window.DomCleaner) || null);
+        return (dc && typeof dc.skeletonView === 'function') ? dc.skeletonView.bind(dc) : null;
+      })();
+
+    function applySkeleton(html, opts) {
+      if (skeletonFn) {
+        try {
+          const o = (opts && typeof opts === 'object') ? opts : {};
+          const out = skeletonFn(html, {
+            stripTags: Array.isArray(o.stripTags) ? o.stripTags : undefined,
+            keepAttrs: Array.isArray(o.keepAttrs) ? o.keepAttrs : undefined,
+            maxTextLen: typeof o.maxTextLen === 'number' ? o.maxTextLen : undefined,
+            maxDepth: typeof o.maxDepth === 'number' ? o.maxDepth : undefined,
+            capChars: typeof o.capChars === 'number' ? o.capChars : (o.full ? 20000 : 8000)
+          });
+          if (typeof out === 'string' && out) return out;
+        } catch (e) { /* degrade below */ }
+      }
+      return null; // caller decides (applyClean or raw)
+    }
+
     // OffscreenExecutor resolves with an envelope {result, selectorDiagnostics};
     // the wizard rail used to unwrap to `result` at the boundary, silently
     // discarding selectorDiagnostics for every probe (twenty-third log — the
@@ -283,6 +313,13 @@
       return out;
     }
 
+    // Dossier feed: the most recent HTML a probe actually fetched (raw,
+    // capped) — session-tools stashes this as the dossier's container source.
+    let lastFetchedHtml = null;
+    function stashHtml(html) {
+      if (typeof html === 'string' && html) lastFetchedHtml = html.slice(0, 60000);
+    }
+
     async function sample(sel0, opts0) {
       let sel = sel0, opts = opts0;
       if (sel && typeof sel === 'object' && !Array.isArray(sel)) {
@@ -326,8 +363,20 @@
           const recs = Array.isArray(r2) ? r2 : (r2 && Array.isArray(r2.records) ? r2.records : []);
           const rec = recs[index];
           if (rec && typeof rec.h === 'string' && rec.h) {
-            const html = o.clean === true ? applyClean(rec.h) : rec.h;
+            let html;
+            if (o.raw === true) {
+              html = rec.h;
+            } else if (o.clean === true) {
+              // Explicit tier choice stays honored verbatim.
+              html = applyClean(rec.h);
+            } else {
+              // Spec §3.C: skeleton view is the DEFAULT for HTML results; a
+              // failed skeleton pass degrades to raw, never errors.
+              html = applySkeleton(rec.h, o.skeleton || o);
+              if (html === null) html = rec.h;
+            }
             out.html = html.slice(0, 30000);
+            stashHtml(rec.h);
           } else out.htmlError = 'no outerHTML for match ' + index + ' (' + recs.length + ' match(es))';
         }
       }
@@ -922,6 +971,29 @@
       // $openTab result envelope or the model's own shaped return) passed
       // through as data before; the old check swallowed it into a tool error.
       if (r && typeof r.error === 'string' && Object.keys(r).length === 1) return { error: r.error };
+      // Spec §3.C passthrough: HTML-bearing result fields default to the
+      // skeleton view too (raw:true opts out) — a snippet returning
+      // outerHTML samples reads as a numbered skeleton, not 4K of noise.
+      let skeletonized = false;
+      if (a.raw !== true) {
+        const skel = (v) => {
+          if (typeof v === 'string' && v.length > 300 && v.indexOf('<') !== -1) {
+            const s = applySkeleton(v, { capChars: 4000 });
+            if (typeof s === 'string' && s) { skeletonized = true; return s; }
+          }
+          return v;
+        };
+        const walk = (node, depth) => {
+          if (!node || typeof node !== 'object' || depth > 6) return node;
+          if (Array.isArray(node)) return node.map(x => walk(x, depth + 1));
+          const out = {};
+          for (const k of Object.keys(node)) {
+            out[k] = /^(h|html|outerHTML|htmlSnippet)$/i.test(k) ? skel(node[k]) : walk(node[k], depth + 1);
+          }
+          return out;
+        };
+        try { r = walk(r, 0); } catch (e) { /* passthrough untouched */ }
+      }
       let out;
       try { out = JSON.stringify(r, null, 1); } catch (e) { out = String(r); }
       const capped = out.length > 4000;
@@ -935,10 +1007,40 @@
       if (observationLog) observationLog.record({ tool: 'probe.snippet', selectors: [], summary: 'snippet ' + code.length + ' chars hash=' + codeHash + ' head=' + JSON.stringify(codeHead) });
       const res = { result: capped ? out.slice(0, 2000) + '…[+' + (out.length - 4000) + ' chars]…' + out.slice(-2000) : out, truncated: capped };
       if (passthrough) res.note = 'result carried an error field; passed through';
+      if (skeletonized) res.skeletonized = true;
       return res;
     }
 
-    return { count, text, attrStats, labelledby, sample, hover, scroll, scrollUntil, extract, timestamp, loginState, snippet };
+    // Skeleton-dossier (2026-09-18 spec §3.A exposure): model-directed
+    // cleaning as a TOOL — the numbered skeleton of the Nth match of sel,
+    // with the full cleaning-capability knob set passed through. This is the
+    // view the dossier's CONTAINER SKELETON section is built from, available
+    // on demand for any selector with per-call cleaning parameters.
+    async function skeleton(args0) {
+      let a = args0 && typeof args0 === 'object' && !Array.isArray(args0) ? args0 : {};
+      const sel = typeof a.sel === 'string' ? a.sel.trim() : '';
+      if (!sel) return { error: 'sel required' };
+      const index = typeof a.index === 'number' && a.index >= 0 ? Math.floor(a.index) : 0;
+      const o = (a.opts && typeof a.opts === 'object') ? a.opts : a;
+      const fieldMap = { h: { attr: 'outerHTML' } };
+      const r = await runSnippet('return $extractList(' + JSON.stringify(sel) + ', ' + JSON.stringify(fieldMap) + ');');
+      if (r && typeof r.error === 'string') return r;
+      const recs = Array.isArray(r) ? r : (r && Array.isArray(r.records) ? r.records : []);
+      const rec = recs[index];
+      if (!rec || typeof rec.h !== 'string' || !rec.h) return { error: 'no match ' + index + ' for ' + JSON.stringify(sel) + ' (' + recs.length + ' match(es))' };
+      if (observationLog) {
+        observationLog.record({ tool: 'probe.skeleton', selectors: [sel], summary: 'skeleton index=' + index });
+      }
+      if (o.raw === true) { stashHtml(rec.h); return { total: recs.length, match: index, raw: rec.h.slice(0, 30000) }; }
+      const sk = applySkeleton(rec.h, o);
+      stashHtml(rec.h);
+      if (typeof sk !== 'string' || !sk) {
+        return { total: recs.length, match: index, error: 'skeleton view unavailable (no cleaner/parser wired) — retry with opts.raw:true' };
+      }
+      return { total: recs.length, match: index, skeleton: sk };
+    }
+
+    return { count, text, attrStats, labelledby, sample, hover, scroll, scrollUntil, extract, timestamp, loginState, snippet, skeleton, getLastSelectorDiagnostics: () => lastSelectorDiagnostics, getLastFetchedHtml: () => lastFetchedHtml };
   }
 
   const api = { createProbeTools };

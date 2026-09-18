@@ -193,7 +193,9 @@
       '7. Scrolling is available DURING research via probe.scroll and probe.scrollUntil (session tools — do NOT call the $scroll DSL primitives as tools). REQUIREMENT-BOUNDED SCROLLING: when the requirement names a count (N items / 条数), the scroll loop is BOUNDED by that count — call probe.scrollUntil({sel, targetCount: N}) which scrolls one viewport, settles, and re-counts each round, stopping the MOMENT the population reaches N; never scroll to the end of the feed for a bounded requirement, and never spend turns on manual scroll→count cycles the tool performs in one call (scroll-to-exhaustion wastes budget on feeds that never end). READ THE TRACE it returns: a count that NEVER changes while page height grows means sel matches static page chrome instead of the growing population — a wrong selector, not missing data; re-target sel at what actually grows before scrolling again. A count AND height that both stop changing means the SCROLL ROOT TESTED is exhausted — that is all this path yields (some sites scroll the feed inside an inner overflow container while the window sits still; the at_bottom note and the $scrollBy fallback:"inner-container" disclosure say when to retry with scrollSel). A count frozen at a NONZERO value while scroll makes no progress is ambiguous between renderer gating and real exhaustion — read the scroll diagnostics\' pageState/frameSample (hidden/unfocused + ~0 rAF ticks = throttled tab: activation and window focus are automatic, `scrapewright throttle on` covers occlusion; normal frames = exhausted, accept the count or renegotiate with io.confirm) instead of rewriting the scroll step. A container selector you scroll or count becomes an observation receipt, grounding a later $scrollToBottom(sel)/$scrollBy(n, sel) in steps.',
       '8. Iterate the fieldMap in the LIVE tab with probe.extract BEFORE writing steps: one probe turn per revision, warm DOM, empty-field census included. Reserve service.update + verify.run for the end-to-end check — verify opens a FRESH tab, so cold-load divergence (fewer/different items than the research tab) is expected; investigate counts with probes on the research tab, not by re-verifying. Run the FIRST verify with the SAME input values that drove the research page: a different input value can change the result-card population ENTIRELY (a field selector grounded on the researched query may match 0 items under another query — population divergence, not a rendering failure; the verify error FIELD_MATCH_ZERO names the census). Only after a green verify, spot-check one other input. When verify reports INPUT_VALUE_SUSPECT (zero containers on the page — no result items at all), the input VALUE itself is the prime suspect: the site may simply have no content for it (an obscure keyword, an over-specific filter) — that is not a selector bug. Re-run verify.run with {"input": {<param>: <a DIFFERENT, more common value>}} BEFORE hardening selectors; if the alternate value succeeds, adopt it with service.update({testInput: {...}}) (steps-less update is allowed for adoption) and re-verify without an override; note the input-value sensitivity in the ledger. BUT read the differential first: when the error says SELECTOR_OVERFILTERED (or the census carries [differential: ...] showing the stripped base selector matched >0), the page HAS items and your own trailing :not()/:has() clause(s) removed them — that is a selector problem, NOT an input-value problem: census each clause (count with/without it; attrStats descendant form) and drop or fix the fatal clause instead of re-testing input values. A "no containers matched" probe error carries the same differential inline.',
       '9. EARLY contract confirmation: right after the first page.open and a coarse look at the repeating item\'s structure (list card, table row, or detail block), propose the input/output contract with io.confirm({inputSchema, outputSchema, testInput, note}) and WAIT for the user — service.update is REJECTED until the user confirms. Before that coarse look, make sure the page is RENDERED, not just loaded: ready/bodyTextChars from page.open says the tab loaded; a shell-sized body or empty-looking page on a JS-heavy site is usually still hydrating — call page.settle and only then probe (probing an unhydrated shell yields "empty page" evidence about timing, not about the page). annotate.request is likewise rejected until the confirmation lands: user annotation picks elements for output FIELDS, so settle the contract first. Apply every revision the user returns and re-confirm. Once confirmed, do NOT re-propose the same contract — a re-proposal whose shape AND test values match the confirmed ones auto-confirms without prompting the user; propose again only when the user asks for a change or evidence forces a MATERIAL renegotiation. Adding/renaming/removing fields or changing types later is a MATERIAL change: call io.confirm again with the new schemas before service.update (description-only edits are exempt). After confirmation you may send service.update with steps only — the confirmed schemas attach to the artifact automatically; a schema-only service.update ({inputSchema, outputSchema} alone, no steps) also lands the contract when the artifact already exists. PROPOSE THE TEST REQUEST VALUES TOGETHER WITH THE SCHEMAS: pass testInput ({keyword:"...",count:N} — the concrete values every verify.run sends) in the same io.confirm; the user confirms or edits them in the same panel and they become the artifact\'s testInput. Propose the values you actually researched with; omitting testInput shows the artifact\'s current values for blessing. Changing test values later is a MATERIAL change: service.update({testInput:...}) with values differing from the confirmed ones is rejected with TEST_INPUT_UNCONFIRMED — re-confirm via io.confirm with the same schemas and the new testInput first.',
-      '10. Ship real values only. A green verify can still carry junk: bare query strings ("?a=b…") posing as ids, data: URIs polluting url/media arrays (inline UI icons — filter arrays to http(s) entries inside the step script), raw HTML dumps in data fields, and OBFUSCATED text (anti-scrape decoy characters mixed into textContent — interleaved/scrambled runs, reversed fragments, combining marks, zero-width chars). If a text value reads scrambled, the clean value usually lives in an ATTRIBUTE on the same element (aria-label, title, datetime) — probe it (attrStats, or extract with attr) and bind the field to that attribute; never ship an obfuscated "best-effort" value in a confirmed field. Check detectors.junkValues in the verify report. If research proves a confirmed field is unextractable or only junk-reachable, renegotiate the contract with io.confirm (drop or redefine the field) instead of shipping it empty/junk. Scalar or single-value outputs skip the array filters but still go through detectors.junkValues. An empty string is not a value either: check detectors.partialEmptyFields — a confirmed field empty in EVERY record (emptyRatio 1) is a binding failure or the page lacks the data, so fix the binding (attribute fallback) or renegotiate with io.confirm; a field empty in only SOME records may legitimately vary (a text-only item has no media) — if it does and the field is required, move it to optional in the contract. Never rationalize a persistent empty as timing or "acceptable", and never hardcode an empty-string placeholder for a confirmed field. Do not declare synthetic bookkeeping fields (an index, serialNumber, a loop counter) in outputSchema: declare only fields the requirement asks for — a populated synthetic field masks the empty-data signals (a record whose only filled field is index reads as non-empty).'
+      '10. Ship real values only. A green verify can still carry junk: bare query strings ("?a=b…") posing as ids, data: URIs polluting url/media arrays (inline UI icons — filter arrays to http(s) entries inside the step script), raw HTML dumps in data fields, and OBFUSCATED text (anti-scrape decoy characters mixed into textContent — interleaved/scrambled runs, reversed fragments, combining marks, zero-width chars). If a text value reads scrambled, the clean value usually lives in an ATTRIBUTE on the same element (aria-label, title, datetime) — probe it (attrStats, or extract with attr) and bind the field to that attribute; never ship an obfuscated "best-effort" value in a confirmed field. Check detectors.junkValues in the verify report. If research proves a confirmed field is unextractable or only junk-reachable, renegotiate the contract with io.confirm (drop or redefine the field) instead of shipping it empty/junk. Scalar or single-value outputs skip the array filters but still go through detectors.junkValues. An empty string is not a value either: check detectors.partialEmptyFields — a confirmed field empty in EVERY record (emptyRatio 1) is a binding failure or the page lacks the data, so fix the binding (attribute fallback) or renegotiate with io.confirm; a field empty in only SOME records may legitimately vary (a text-only item has no media) — if it does and the field is required, move it to optional in the contract. Never rationalize a persistent empty as timing or "acceptable", and never hardcode an empty-string placeholder for a confirmed field. Do not declare synthetic bookkeeping fields (an index, serialNumber, a loop counter) in outputSchema: declare only fields the requirement asks for — a populated synthetic field masks the empty-data signals (a record whose only filled field is index reads as non-empty).',
+      '# Skeleton view & model-directed cleaning',
+      'HTML evidence rides as a NUMBERED SKELETON view ([n1], [n1.2] hierarchical node numbers; noise tags stripped, anonymous div/span wrappers collapsed, semantic attributes + visible text kept; hidden-but-readable aria carrier spans KEPT — they hold labelledby values). probe.sample/probe.snippet return HTML fields as skeletons by default (opts.raw:true keeps the original HTML). probe.skeleton({sel, index?, opts?}) gives any selector\'s numbered skeleton with CLEANING KNOBS YOU DIRECT: opts.stripTags (tags to delete, default script/style/noscript/template/svg/path/link/meta/iframe), opts.keepAttrs (attribute names to keep; default id, first-3 classes, role, aria-*, href, data-*, title, alt, type, name, value), opts.maxTextLen (per-node text cap, default 200), opts.maxDepth (default 30), opts.capChars (default 8000 per container, 20000 full). Cite nodes by number ([n3.2]) in findings and regexes; the EVIDENCE DOSSIER block (rebuilt every turn) carries the representative container skeleton, all captured popover texts, the last verify census, and the current artifact\'s FULL step scripts — write regexes and bindings against the dossier skeleton, not an imagined shape.'
     ].join('\n');
   }
 
@@ -738,6 +740,42 @@
     // THIRD identical consecutive signature.
     let verifySignatureHistory = [];
     let probesSinceLastVerify = 0;
+    // Skeleton-dossier (2026-09-18 spec §3.B feeds): session-scoped
+    // accumulators the engine's per-turn dossier rebuild reads. Popover
+    // captures LRU (≤15, evictions counted for disclosure) + the last raw
+    // HTML a probe fetched (capped) for the container skeleton.
+    const DossierLib = resolveLib('./evidence-dossier', 'EvidenceDossier');
+    const popoverCaptureLru = [];
+    let lastContainerHtml = null;
+    function harvestDossierFeeds(name, result) {
+      try {
+        if (typeof probes.getLastSelectorDiagnostics === 'function') {
+          const diags = probes.getLastSelectorDiagnostics();
+          for (const dg of (Array.isArray(diags) ? diags : [])) {
+            const cp = dg && dg.capturedPopovers;
+            if (cp && Array.isArray(cp.samples)) {
+              for (const s of cp.samples) {
+                if (DossierLib) DossierLib.pushPopoverCapture(popoverCaptureLru, {
+                  anchor: dg.containerSelector || dg.anchorSelector || dg.selector || name,
+                  text: s
+                });
+              }
+            }
+          }
+        }
+        // probe.hover's observed popover html snippet is a capture too.
+        if (name === 'probe.hover' && result && typeof result.htmlSnippet === 'string' && result.htmlSnippet) {
+          if (DossierLib) DossierLib.pushPopoverCapture(popoverCaptureLru, {
+            anchor: (result && result.popoverSelector) || 'probe.hover',
+            text: result.htmlSnippet
+          });
+        }
+        if (typeof probes.getLastFetchedHtml === 'function') {
+          const h = probes.getLastFetchedHtml();
+          if (typeof h === 'string' && h) lastContainerHtml = h;
+        }
+      } catch (e) { /* dossier feeding is best-effort, never a probe failure */ }
+    }
     // Seventy-first log F1: rolling verify.run wall-cost history (per
     // session-tools instance = per session) — feeds the economics disclosure
     // (medianVerifyCostMs + the scarcity advisory when the remaining wall
@@ -748,10 +786,12 @@
 
     // Fifty-second log: wrap every probe so the stagnation census can see
     // research activity between verifies.
-    function wrapProbe(fn) {
+    function wrapProbe(fn, name) {
       return async function (args, ctx) {
         probesSinceLastVerify += 1;
-        return fn(args, ctx);
+        const r = await fn(args, ctx);
+        harvestDossierFeeds(name, r);
+        return r;
       };
     }
 
@@ -1333,18 +1373,19 @@
       // Fifty-second log: the stagnation advisory needs to know whether ANY
       // research-tab probe ran between two verifies — a bare update↔verify
       // loop with zero probes is the exact shape that burned 60 turns.
-      'probe.count': wrapProbe(probes.count),
-      'probe.text': wrapProbe(probes.text),
-      'probe.attrStats': wrapProbe(probes.attrStats),
-      'probe.labelledby': wrapProbe(probes.labelledby),
-      'probe.sample': wrapProbe(probes.sample),
-      'probe.hover': wrapProbe(probes.hover),
-      'probe.scroll': wrapProbe(probes.scroll),
-      'probe.scrollUntil': wrapProbe(probes.scrollUntil),
-      'probe.extract': wrapProbe(probes.extract),
-      'probe.timestamp': wrapProbe(probes.timestamp),
-      'probe.loginState': wrapProbe(probes.loginState),
-      'probe.snippet': wrapProbe(probes.snippet),
+      'probe.count': wrapProbe(probes.count, 'probe.count'),
+      'probe.text': wrapProbe(probes.text, 'probe.text'),
+      'probe.attrStats': wrapProbe(probes.attrStats, 'probe.attrStats'),
+      'probe.labelledby': wrapProbe(probes.labelledby, 'probe.labelledby'),
+      'probe.sample': wrapProbe(probes.sample, 'probe.sample'),
+      'probe.hover': wrapProbe(probes.hover, 'probe.hover'),
+      'probe.scroll': wrapProbe(probes.scroll, 'probe.scroll'),
+      'probe.scrollUntil': wrapProbe(probes.scrollUntil, 'probe.scrollUntil'),
+      'probe.extract': wrapProbe(probes.extract, 'probe.extract'),
+      'probe.timestamp': wrapProbe(probes.timestamp, 'probe.timestamp'),
+      'probe.loginState': wrapProbe(probes.loginState, 'probe.loginState'),
+      'probe.snippet': wrapProbe(probes.snippet, 'probe.snippet'),
+      'probe.skeleton': wrapProbe(probes.skeleton, 'probe.skeleton'),
       'diag.read': diagRead,
       'verify.run': verifyRun,
       'annotate.request': annotateRequest,
@@ -1372,7 +1413,8 @@
       { name: 'verify.run', args: '{input?} — optional object overriding the test input for THIS run (the mechanism for alternate-value re-tests when INPUT_VALUE_SUSPECT says the site may have no content for the current value)', returns: '{ok,score,scoreNote?,error,detectors,steps,resultDebug?,finalResult,schemaOk} — detectors.partialEmptyFields lists confirmed fields that came back empty with their emptyRatio (empty/total records): ratio 1 means fix the binding or renegotiate the contract, not ship it. Each entry also carries emptyRecordSamples — WHICH records are empty (1-based ordinal + a content hint from that record; nested paths use parentIndex.subIndex) — so "postId 2/4" becomes "empty: #2 (photo post), #4 (text-only note)": match the named records against steps[].resultPreview, then probe THOSE record shapes on the research tab instead of blind-rewriting the selector. detectors.emptyFieldDiagnostics (beside it) carries per-field falsification crumbs lifted from the owning step\'s LAST iteration diagnostics — an aria reference that resolves to nothing (missingIds), a sub-selector matching 0 containers, an absent attribute — read it BEFORE re-probing: it names WHERE and WHY the empty field died. resultDebug surfaces your step result\'s SMALL non-record keys (debug payloads you attached to the return) ahead of the sampled records, so you can read your own instrumentation. A field you SAW populated on the research tab but empty in verify means the mechanism depends on page state the research tab ACCUMULATED (earlier hovers mounting hidden spans, long dwell hydrating extras) — a fresh load does not reproduce it: re-derive the read on a freshly opened page, do not iterate the same binding blind' },
       { name: 'annotate.request', args: '{why, fields?, containerSel?}', returns: '{annotations[{selector,purpose,outputField}]} | {cancelled} — REQUIRES a confirmed I/O contract (io.confirm first)' },
       { name: 'user.observe', args: '{question, hint?}', returns: '{answer} | {cancelled} — ASK THE USER what they observe on the page when the harness cannot perceive it (popovers that never visibly mount, login/geo variance, count variance between runs). Their eyes are the best sensor available; quote the answer as evidence (it lands in the ledger). AVOID GUESSING page behavior: if two probes disagree or a receipt is blind to what matters, one user.observe beats rounds of blind re-probing. The wait does not consume the session clock.' },
-      { name: 'probe.snippet', args: '{code, timeoutMs?}', returns: '{result, truncated?} — run an ARBITRARY $-DSL snippet (async function body, top-level await + return) on the research tab and get the RAW result (JSON, capped). Test-before-artifact: verify extraction/assembly logic here BEFORE writing it into service.update — a broken fieldMap or regex shows its actual output in one call instead of a red verify round. timeoutMs (default 30000, max 90000) sizes the budget to the work: each hovered anchor burns ~5-10s, so a 30-container hover batch needs maxContainers narrowing or a larger timeoutMs — resending the identical oversized snippet cannot change the outcome.' },
+      { name: 'probe.snippet', args: '{code, timeoutMs?}', returns: '{result, truncated?} — run an ARBITRARY $-DSL snippet (async function body, top-level await + return) on the research tab and get the RAW result (JSON, capped). Test-before-artifact: verify extraction/assembly logic here BEFORE writing it into service.update — a broken fieldMap or regex shows its actual output in one call instead of a red verify round. timeoutMs (default 30000, max 90000) sizes the budget to the work: each hovered anchor burns ~5-10s, so a 30-container hover batch needs maxContainers narrowing or a larger timeoutMs — resending the identical oversized snippet cannot change the outcome. HTML-bearing result fields (html/outerHTML/htmlSnippet/h) return as NUMBERED SKELETONS by default; pass raw:true to keep original HTML.' },
+      { name: 'probe.skeleton', args: '{sel, index?, opts?, raw?}', returns: '{total, match, skeleton} — the NUMBERED SKELETON VIEW ([n1], [n1.2] node numbers) of the Nth match of sel. Model-directed cleaning: opts.{stripTags[], keepAttrs[], maxTextLen, maxDepth, capChars} choose what the skeleton strips/keeps (defaults: strips script/style/noscript/template/svg/path/link/meta/iframe; keeps id, first-3 classes, role, aria-*, href, data-*, title, alt, type, name, value; text 200/node; depth 30; 8000 chars/container, 20000 full page). raw:true returns the original outerHTML instead. Write regexes and bindings against THIS view (and the dossier CONTAINER SKELETON), never an imagined shape.' },
       { name: 'io.confirm', args: '{inputSchema, outputSchema, testInput?, note?}', returns: '{confirmed:true} | {confirmed:false, feedback} — propose the contract EARLY and wait for the user; service.update is rejected until a confirmation lands; a SAME-shape re-proposal (schemas AND test values unchanged) auto-confirms without prompting. testInput carries the CONCRETE test request values (e.g. {"keyword":"machine learning","count":5}) — propose the values you actually researched with; the user confirms or edits them in the SAME panel and they become the artifact\'s testInput (omit testInput and the artifact\'s current values are shown for blessing). Changing test values later is a MATERIAL change: service.update({testInput:...}) with values differing from the confirmed ones is rejected with TEST_INPUT_UNCONFIRMED until re-confirmed here. outputSchema MUST declare its fields (properties + required); a fieldless {"type":"object"} verifies blind and is rejected' }
     ];
 
@@ -1383,7 +1425,15 @@
       bindEngine: function (session) {
         if (session && session.observationLog) engineLog = session.observationLog;
       },
-      getLastVerify: function () { return lastVerify; }
+      getLastVerify: function () { return lastVerify; },
+      // Dossier feeds (2026-09-18 spec §3.B): the engine rebuilds the
+      // evidence dossier EVERY turn from these live views — never persisted
+      // in the transcript, so compaction cannot eat it.
+      dossierFeeds: {
+        containerHtml: () => lastContainerHtml,
+        popovers: () => popoverCaptureLru,
+        lastVerify: () => lastVerify
+      }
     };
   }
 
