@@ -2,12 +2,14 @@
 //
 // Evidence dossier (2026-09-18 spec §3.B): a compact, AUTHORITATIVE evidence
 // block the research-session engine rebuilds and injects EVERY turn — never
-// stored in the transcript, so compaction can never eat it. Five sections:
+// stored in the transcript, so compaction can never eat it. Six sections:
 //   [CONTAINER SKELETON]   numbered skeleton of the representative container
 //   [POPOVER CAPTURES]     LRU (≤15) of captured popover texts w/ anchors
 //   [LAST VERIFY CENSUS]   the most recent verify report's detector census
 //   [ARTIFACT LINEAGE]     current version's step scripts IN FULL (user
 //                          directive) + old versions as one-liners
+//   [STEP PLAN]            per-step grounded/tested status (2026-09-18
+//                          graduated-activation spec §3.C — cross-turn memory)
 //   [BUDGET]               the dossier's own cost estimate + trim disclosure
 //
 // Hard cap ~30K chars; overflow trims the OLDEST evidence first and the BUDGET
@@ -112,6 +114,23 @@
       }
     }
 
+    // [STEP PLAN] (spec §3.C): one line per step of the CURRENT artifact —
+    // status planned|grounded|tested|failed with the last-transition note.
+    // The fixed teaching line closes the section. Empty/absent plan (pre-
+    // artifact sessions) renders nothing.
+    let stepPlanText = '';
+    if (Array.isArray(a.stepPlan) && a.stepPlan.length) {
+      const lines = a.stepPlan.slice(0, 20).map((e) => {
+        const id = String((e && e.stepId) || '?');
+        const name = (e && e.name) ? ' (' + String(e.name).slice(0, 60) + ')' : '';
+        const status = String((e && e.status) || 'planned');
+        const note = (e && e.note) ? ' — ' + String(e.note).slice(0, 80) : '';
+        return '- ' + id + name + ': ' + status + note;
+      });
+      stepPlanText = '[STEP PLAN]\n' + lines.join('\n') +
+        '\nresearch the FIRST non-grounded step; re-probe grounded steps only when their selector family fails in verify';
+    }
+
     function assemble(popCount, skel, cens, scripts) {
       const parts = ['<EVIDENCE DOSSIER (authoritative, rebuilt each turn)>'];
       parts.push('[CONTAINER SKELETON]\n' + (skel || '(no representative container captured yet — probe.sample wantHtml or probe.skeleton to capture one)'));
@@ -123,6 +142,7 @@
       parts.push('[ARTIFACT LINEAGE] current: ' + (current ? 'v' + current.version : '(none)') +
         (lineageLines.length ? '\nolder: ' + lineageLines.join(' | ') : '') +
         (scripts ? '\nCURRENT STEPS (full scripts):\n' + scripts : ''));
+      if (stepPlanText) parts.push(stepPlanText);
       return parts;
     }
 

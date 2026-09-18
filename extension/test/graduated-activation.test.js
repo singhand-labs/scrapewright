@@ -452,6 +452,7 @@ describe('step plan: engine lifecycle (spec §3.C)', () => {
       reply(finishEnvelope())
     ], calls, {
       'probe.count': async () => ({ count: 5 }),
+      'service.update': async () => ({ updated: true }),
       'verify.run': async () => ({ ok: true, steps: [{ stepId: 's1', result: { posts: [1, 2] } }] })
     });
     await session.run();
@@ -472,6 +473,7 @@ describe('step plan: engine lifecycle (spec §3.C)', () => {
       reply(finishEnvelope())
     ], calls, {
       'probe.count': async () => ({ count: 3 }),
+      'service.update': async () => ({ updated: true }),
       'verify.run': async () => ({ ok: false, error: { message: 'boom' }, steps: [{ stepId: 's1', error: 'ELEMENT_NOT_FOUND' }] })
     });
     await session.run();
@@ -495,7 +497,7 @@ describe('step plan: engine lifecycle (spec §3.C)', () => {
         { id: 's2', name: 'two', script: "return await $count('div.k')" }
       ] })),
       reply(finishEnvelope())
-    ], calls, { 'probe.count': async () => ({ count: 2 }) });
+    ], calls, { 'probe.count': async () => ({ count: 2 }), 'service.update': async () => ({ updated: true }) });
     await session.run();
     const lastDossier = calls[calls.length - 1].messages
       .filter((m) => m.role === 'system' && m.content.includes('EVIDENCE DOSSIER'))[0].content;

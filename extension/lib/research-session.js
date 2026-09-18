@@ -189,6 +189,7 @@
       stopped: null,
       budgetAdvisories: [],
       waivedSelectors: [],
+      stepPlan: [],
       priorVerifyReport: null
     };
     if (cfg.seed && cfg.seed.session) {
@@ -196,6 +197,7 @@
       state.status = 'idle';
       state.stopped = null;
       if (!Array.isArray(state.waivedSelectors)) state.waivedSelectors = []; // legacy seeds predate sticky waivers
+      if (!Array.isArray(state.stepPlan)) state.stepPlan = []; // legacy seeds predate the step plan (§3.C)
     }
 
     let abortFlag = false, abortReason = 'user';
@@ -498,6 +500,71 @@
       return list.filter(s => typeof s === 'string' && s);
     }
 
+    // Step plan (spec §3.C, 2026-09-18): cross-turn, step-level progress
+    // memory. Rebuilt from the persisted artifact's steps at every
+    // service.update; status transitions ride tool receipts — probe receipts
+    // ground a step whose script contains a probed selector, verify reports
+    // mark steps tested/failed. The dossier carries the plan every turn, so
+    // the model never re-researches an already-grounded step.
+    function rebuildStepPlan(steps) {
+      const prev = new Map((state.stepPlan || []).map((e) => [e.stepId, e]));
+      state.stepPlan = (Array.isArray(steps) ? steps : []).map((s, i) => {
+        const id = String((s && s.id) || ('step' + (i + 1)));
+        const old = prev.get(id);
+        return {
+          stepId: id,
+          name: (s && s.name) ? String(s.name) : '',
+          status: old ? old.status : 'planned',
+          note: old ? old.note : '',
+          sinceTurn: old ? old.sinceTurn : state.spend.turns
+        };
+      });
+    }
+
+    function setStepPlanStatus(stepId, status, note) {
+      const e = (state.stepPlan || []).find((p) => p.stepId === String(stepId));
+      if (!e) return;
+      if (e.status === status && !note) return;
+      e.status = status;
+      if (note) e.note = String(note).slice(0, 80);
+      e.sinceTurn = state.spend.turns;
+    }
+
+    // Receipt-driven transitions. verify.run reports carry steps[]; probe
+    // tools ground steps whose script contains a selector the probe touched
+    // (the cheap form of the GroundingGate receipt match — the same string
+    // the gate statically extracts from $-API call positions).
+    function updateStepPlanFromResult(toolName, args, result) {
+      if (!Array.isArray(state.stepPlan) || !state.stepPlan.length) return;
+      if (toolName === 'verify.run' && result && typeof result === 'object' && Array.isArray(result.steps)) {
+        for (const s of result.steps) {
+          if (!s || s.stepId == null) continue;
+          const failed = !!(s.error) || !!(s.result && (s.result.error || s.result.failed));
+          setStepPlanStatus(s.stepId, failed ? 'failed' : 'tested',
+            failed ? ('verify: ' + String(s.error || (s.result && s.result.error) || 'failed').slice(0, 60)) : 'verify ok');
+        }
+        return;
+      }
+      if (/^probe\./.test(String(toolName)) && args && typeof args === 'object' && !resultHasError(result)) {
+        const sels = [args.sel, args.selector, args.containerSel, args.anchorSel, args.scopeSel]
+          .filter((x) => typeof x === 'string' && x);
+        if (!sels.length) return;
+        for (const entry of state.stepPlan) {
+          if (entry.status !== 'planned') continue;
+          const step = (state.artifactVersions[state.artifactVersions.length - 1] || {}).steps || [];
+          const match = step.find((st) => st && st.id === entry.stepId);
+          const script = (match && match.script) || '';
+          if (script && sels.some((sel) => script.indexOf(sel) !== -1)) {
+            setStepPlanStatus(entry.stepId, 'grounded', toolName);
+          }
+        }
+      }
+    }
+
+    function resultHasError(result) {
+      return !!(result && typeof result === 'object' && typeof result.error === 'string');
+    }
+
     async function handleServiceUpdate(args) {
       const a = args || {};
       const steps = Array.isArray(a.steps) ? a.steps : [];
@@ -556,6 +623,7 @@
       if (out && typeof out === 'object' && typeof out.error === 'string') return out;
       const version = state.artifactVersions.length + 1;
       state.artifactVersions.push({ version: version, steps: steps, at: now() });
+      rebuildStepPlan(steps); // §3.C: the persisted artifact defines the plan
       emit('artifact_version', { version: version });
       return (out && typeof out === 'object') ? out : { version: version };
     }
@@ -716,7 +784,8 @@
           popovers: popovers,
           evictedPopovers: evicted,
           lastVerify: (typeof feeds.lastVerify === 'function') ? feeds.lastVerify() : null,
-          artifactVersions: state.artifactVersions.slice(-3)
+          artifactVersions: state.artifactVersions.slice(-3),
+          stepPlan: Array.isArray(state.stepPlan) ? state.stepPlan : []
         });
         return (typeof text === 'string' && text) ? { role: 'system', content: text } : null;
       } catch (e) {
@@ -1137,6 +1206,9 @@
           let result = await dispatchTool(turn.tool, turn.args);
           recordToolTiming(turn.tool, Date.now() - __t0,
             isErrorResult(result) && /^SCRIPT_TIMEOUT\b/.test(String(result && result.error)));
+          // §3.C: receipt-driven step-plan transitions (probe grounding,
+          // verify tested/failed). Best-effort — never kills the turn.
+          try { updateStepPlanFromResult(turn.tool, turn.args, result); } catch (e) { /* plan is advisory */ }
           let verifyDigest = null;
           if (turn.tool === 'verify.run') {
             // Twenty-eighth log: verify2 and verify3 returned IDENTICAL
