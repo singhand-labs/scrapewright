@@ -24,6 +24,7 @@
   const LedgerLib = resolveLib('./findings-ledger', 'FindingsLedgerLib');
   const KB = resolveLib('./knowledge-base', 'KnowledgeBase');
   const VR = resolveLib('./verify-runner', 'VerifyRunner');
+  const Dossier = resolveLib('./evidence-dossier', 'EvidenceDossier');
 
   const INTERNAL_TOOL_SPECS = [
     { name: 'ledger.add', args: '{finding, evidence?, confidence?, selectors?}', returns: '{added:true, id}' },
@@ -125,6 +126,24 @@
       text: (used, max) => 'BUDGET ADVISORY (90% of the turn budget spent: ' + used + ' of ' + max + ' — only ' + (max - used) + ' left): FINALIZE — submit your best-grounded artifact via service.update immediately and run verify.run; spend what remains ONLY on defects verify reports. (If the contract is still unconfirmed, io.confirm comes first.) If the next verify is red and ≤1 turn remains, do NOT write another update you cannot verify — finish with the last verified artifact and disclose.'
     }
   ];
+
+  // Window-dedup helper (2026-09-18 user directive): blocks of repeated
+  // instruction text (DSL guide, tool catalogs) are replaced by a one-line
+  // marker wherever they appear in HISTORY, so only the current system prompt
+  // carries the full text.
+  function makeInstructionStripper(blocks) {
+    const list = (Array.isArray(blocks) ? blocks : [])
+      .filter(b => b && typeof b.text === 'string' && b.text.length > 200 && typeof b.label === 'string' && b.label);
+    return function (text) {
+      let t = String(text == null ? '' : text);
+      for (const b of list) {
+        if (t.indexOf(b.text) !== -1) {
+          t = t.split(b.text).join('[stripped instruction block: ' + b.label + ' — current copy lives in the system prompt]');
+        }
+      }
+      return t;
+    };
+  }
 
   function createResearchSession(config) {
     const cfg = config || {};
@@ -639,14 +658,70 @@
       ];
       const block = buildSessionStateBlock();
       if (block) messages.push({ role: 'system', content: block });
+      // Skeleton-dossier (2026-09-18 spec §3.B): the evidence dossier is
+      // REBUILT here every turn from live feeds + artifact bookkeeping and
+      // injected as its own system message — it is never appended to the
+      // transcript, so compaction can never fold it away (exemption by
+      // construction, not by a transcript kind check).
+      const dossierMsg = buildDossierMessage();
+      if (dossierMsg) messages.push(dossierMsg);
       const messages2 = messages.concat(
         state.transcript.map(entry => {
-          if (entry.kind === 'assistant') return { role: 'assistant', content: entry.text };
-          if (entry.kind === 'tool') return { role: 'user', content: 'TOOL RESULT ' + entry.summary };
-          return { role: 'user', content: entry.text };
+          // Window-dedup directive (2026-09-18): big instruction blocks (DSL
+          // guide, tool catalog) ride ONLY the current turn's system prompt;
+          // historical copies are stripped to a one-line marker so N turns of
+          // history do not carry N copies of the same guide.
+          if (entry.kind === 'assistant') return { role: 'assistant', content: stripHistoryBlocks(entry.text) };
+          if (entry.kind === 'tool') return { role: 'user', content: 'TOOL RESULT ' + stripHistoryBlocks(entry.summary) };
+          return { role: 'user', content: stripHistoryBlocks(entry.text) };
         })
       );
+      // Window budget directive: design input for 128K tokens — warn inside
+      // the dossier when the assembled prompt estimate exceeds it.
+      if (dossierMsg) {
+        let chars = 0;
+        for (const m of messages2) chars += String((m && m.content) || '').length;
+        if (Dossier && chars / 4 > Dossier.PROMPT_WINDOW_TOKENS) {
+          dossierMsg.content += '\nWINDOW WARNING: assembled prompt ~' + Math.round(chars / 4) +
+            ' tokens exceeds the ' + Dossier.PROMPT_WINDOW_TOKENS +
+            '-token window design — compact evidence (smaller test input, fewer probed pages) before the next call.';
+        }
+      }
       return messages2;
+    }
+
+    // History stripper over cfg.stripBlocks: exact-substring replacement of
+    // known instruction blocks with a one-line reference marker. Exported for
+    // unit tests.
+    const stripHistoryBlocks = makeInstructionStripper(cfg.stripBlocks);
+
+    function buildDossierMessage() {
+      if (!Dossier) return null;
+      // Inject only when dossier feeds are wired (production wiring always
+      // provides them; bare engine harnesses keep the legacy message shape).
+      const feeds = (cfg.dossierFeeds && typeof cfg.dossierFeeds === 'object') ? cfg.dossierFeeds : null;
+      if (!feeds) return null;
+      let popovers = null;
+      let evicted = 0;
+      try {
+        if (typeof feeds.popovers === 'function') {
+          popovers = feeds.popovers();
+          if (Array.isArray(popovers) && typeof popovers.evicted === 'number') {
+            evicted = popovers.evicted;
+            popovers = popovers.slice();
+          }
+        }
+        const text = Dossier.buildDossier({
+          containerHtml: (typeof feeds.containerHtml === 'function') ? feeds.containerHtml() : null,
+          popovers: popovers,
+          evictedPopovers: evicted,
+          lastVerify: (typeof feeds.lastVerify === 'function') ? feeds.lastVerify() : null,
+          artifactVersions: state.artifactVersions.slice(-3)
+        });
+        return (typeof text === 'string' && text) ? { role: 'system', content: text } : null;
+      } catch (e) {
+        return null; // a dossier failure must never kill the turn
+      }
     }
 
     function accountUsage(messages, res) {
@@ -1313,7 +1388,7 @@
     return Math.max(0, nowMs - startMs - Math.max(0, Number(llmWaitMs) || 0) - Math.max(0, Number(parkedMs) || 0));
   }
 
-  const api = { createResearchSession, computeEffectiveElapsed: computeEffectiveElapsed };
+  const api = { createResearchSession, computeEffectiveElapsed: computeEffectiveElapsed, makeInstructionStripper };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.ResearchSessionLib = api;
 })(typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : self));

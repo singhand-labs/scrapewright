@@ -3099,6 +3099,16 @@ async function startResearchSession(seedOverride) {
     tools: wizardToolsBag.tools,
     toolSpecs: wizardToolsBag.toolSpecs,
     systemPrompt: wizardToolsBag.systemPromptBase,
+    // Skeleton-dossier wiring (2026-09-18): the engine rebuilds the evidence
+    // dossier every turn from the session-tools accumulators (container
+    // skeleton / popover-capture LRU / last verify), and big instruction
+    // blocks repeated in history are stripped to one-line markers — the DSL
+    // guide text exists only in the CURRENT system prompt.
+    dossierFeeds: wizardToolsBag.dossierFeeds,
+    stripBlocks: [
+      { label: 'SCRIPT_DSL_GUIDE', text: (typeof SCRIPT_DSL_GUIDE !== 'undefined' && SCRIPT_DSL_GUIDE) || '' },
+      { label: 'DSL contract prompt', text: wizardToolsBag.systemPromptBase }
+    ],
     knowledge: { units: units, index: KnowledgeBase.buildIndex(units) },
     persistence: wizardPersistence,
     // RC53: the Settings-page maxOutputTokens knob is authoritative; falls
