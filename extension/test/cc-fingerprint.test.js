@@ -17,6 +17,6 @@ test('anthropic lane sends the Claude Code fingerprint trio', () => {
 });
 
 test('metadata.user_id is stable per install (persisted, seeded once)', () => {
-  assert.match(SRC, /localStorage\.getItem\('swCcUserId'\)/);
+  assert.match(SRC, /const k = 'swCcUserId';[\s\S]{0,120}localStorage\.getItem\(k\)/);
   assert.match(SRC, /localStorage\.setItem\('swCcUserId', _ccUserId\)/);
 });
