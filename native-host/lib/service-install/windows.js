@@ -10,25 +10,33 @@ function runPowerShell(script) {
   ], { stdio: 'pipe', encoding: 'utf8' });
 }
 
-function install({ nodePath, hostJsPath, port, autostart }) {
-  // Unregister any existing task so re-install is idempotent.
-  runPowerShell(`Get-ScheduledTask -TaskName '${TASK_NAME}' -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:$false`);
-
-  const action = `New-ScheduledTaskAction -Execute '${nodePath}' -Argument '"${hostJsPath}" --port=${port}'`;
-  const trigger = `New-ScheduledTaskTrigger -AtLogOn`;
-  const settings = `New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)`;
+// Extracted for tests: the generated script must ASSIGN each New-* result to
+// a variable — the day-one bug emitted them as bare statements, so
+// Register-ScheduledTask received $null for -Action ("The argument is null
+// or empty"; install never worked on Windows).
+function buildInstallScript({ nodePath, hostJsPath, port, autostart }) {
+  const action = `$action = New-ScheduledTaskAction -Execute '${nodePath}' -Argument '"${hostJsPath}" --port=${port}'`;
+  const trigger = `$trigger = New-ScheduledTaskTrigger -AtLogOn`;
+  const settings = `$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)`;
   const stateFlag = autostart ? '' : ' -State Disabled';
 
   // Use the current user; no UAC needed.
-  const principal = `New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive`;
+  const principal = `$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive`;
 
-  const script = `
+  return `
 ${action}
 ${trigger}
 ${settings}
 ${principal}
 Register-ScheduledTask -TaskName '${TASK_NAME}' -Action $action -Trigger $trigger -Settings $settings -Principal $principal${stateFlag}
 `.trim();
+}
+
+function install({ nodePath, hostJsPath, port, autostart }) {
+  // Unregister any existing task so re-install is idempotent.
+  runPowerShell(`Get-ScheduledTask -TaskName '${TASK_NAME}' -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:$false`);
+
+  const script = buildInstallScript({ nodePath, hostJsPath, port, autostart });
 
   const r = runPowerShell(script);
   if (r.status !== 0) {
@@ -80,4 +88,4 @@ function readInstallSpec() {
   };
 }
 
-module.exports = { install, uninstall, start, stop, restart, isInstalled, readInstallSpec, TASK_NAME };
+module.exports = { install, uninstall, start, stop, restart, isInstalled, readInstallSpec, buildInstallScript, TASK_NAME };
