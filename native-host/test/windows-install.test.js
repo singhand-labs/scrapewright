@@ -12,7 +12,8 @@ test('every New-* result is ASSIGNED to the variable Register-ScheduledTask refe
   assert.match(s, /\$action = New-ScheduledTaskAction /);
   assert.match(s, /\$trigger = New-ScheduledTaskTrigger /);
   assert.match(s, /\$settings = New-ScheduledTaskSettingsSet /);
-  assert.match(s, /\$principal = New-ScheduledTaskPrincipal /);
+  assert.match(s, /\$principal = New-ScheduledTaskPrincipal -UserId \$env:USERNAME -LogonType S4U/,
+    'S4U principal — non-interactive session so node.exe\'s console window never appears on the desktop');
   // No bare statement form remains.
   assert.ok(!/\nNew-ScheduledTask/.test(s), 'no bare New-* statements');
   assert.match(s, /Register-ScheduledTask -TaskName 'ScrapewrightHost' -Action \$action/);

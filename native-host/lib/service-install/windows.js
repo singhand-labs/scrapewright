@@ -21,7 +21,13 @@ function buildInstallScript({ nodePath, hostJsPath, port, autostart }) {
   const stateFlag = autostart ? '' : ' -State Disabled';
 
   // Use the current user; no UAC needed.
-  const principal = `$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive`;
+  // S4U (run-whether-logged-on, no password stored): launches in a
+  // NON-INTERACTIVE session, so node.exe's console window never appears on
+  // the desktop (the 2026-09-18 user report: a foreground window parked in
+  // the taskbar for as long as the host lives). The host is a pure HTTP
+  // long-poll service — it needs no interactive desktop, and localhost
+  // listening + filesystem work identically under S4U.
+  const principal = `$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType S4U`;
 
   return `
 ${action}
