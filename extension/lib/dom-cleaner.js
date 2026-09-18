@@ -780,6 +780,187 @@ The selector should target the smallest container that holds all the relevant da
     };
   }
 
+  // --- skeletonView ----------------------------------------------------------
+  // Skeleton-dossier (2026-09-18 spec §3.A): a normalized, NUMBERED structural
+  // view of any HTML fragment — noise tags deleted, anonymous wrappers
+  // collapsed, semantic attributes + visible text kept. Distinct from the
+  // cleanPageHtml/cleanHtmlForLLM tiers (which stay untouched): this is a
+  // reference view the model writes regexes/bindings against, with node
+  // numbers ([n1], [n2.3]) so receipts and the dossier can cite shape by
+  // number instead of re-pasting HTML.
+  //
+  // Model-directed cleaning (user directive): every knob below is part of the
+  // cleaning-capability menu the session advertises — the MODEL picks
+  // stripTags/keepAttrs/maxTextLen/maxDepth per diagnosis; this layer obeys.
+  const SKELETON_STRIP_TAGS = ['script', 'style', 'noscript', 'template', 'svg', 'path', 'link', 'meta', 'iframe'];
+  const SKELETON_KEEP_ATTRS = ['id', 'role', 'href', 'title', 'alt', 'type', 'name', 'value'];
+  const SKELETON_DEFAULTS = {
+    stripTags: null,          // null = SKELETON_STRIP_TAGS
+    keepAttrs: null,          // null = SKELETON_KEEP_ATTRS + aria-* + data-* + class[first 3]
+    maxTextLen: 200,
+    maxDepth: 30,
+    capChars: 8000            // per-container cap; callers viewing a full page pass capChars up to 20000
+  };
+
+  function skeletonAttrKept(name, value, keepSet) {
+    if (keepSet) return keepSet.indexOf(name) !== -1;
+    if (name === 'class') return !!filterClasses(value || '');
+    return SKELETON_KEEP_ATTRS.indexOf(name) !== -1 || name.indexOf('aria-') === 0 || name.indexOf('data-') === 0;
+  }
+
+  // The labelledby chain lives in hidden-but-readable spans — a hidden subtree
+  // survives when ANY node in it carries id / role / aria-* (the reference
+  // targets). Without this the skeleton would amputate exactly the evidence
+  // $labelledby needs (spec: 保留 aria-* 载体节点).
+  function skeletonIsAriaCarrier(el) {
+    if (!el.attributes) return false;
+    for (const a of el.attributes) {
+      if (a.name === 'id' || a.name === 'role' || a.name.indexOf('aria-') === 0) return true;
+    }
+    return false;
+  }
+
+  function skeletonSubtreeHasCarrier(el) {
+    if (skeletonIsAriaCarrier(el)) return true;
+    const kids = el.children || [];
+    for (let i = 0; i < kids.length; i++) { if (skeletonSubtreeHasCarrier(kids[i])) return true; }
+    return false;
+  }
+
+  function skeletonIsHidden(el) {
+    const st = el.getAttribute && el.getAttribute('style');
+    if (!st) return false;
+    return /display\s*:\s*none|visibility\s*:\s*hidden/i.test(st);
+  }
+
+  // Anonymous wrapper (collapse candidate): a div/span with NO kept semantic
+  // attribute at all — the layout-only <div><div><div> chains. Mirrors the
+  // anonymous-parent-collapse walk in wizard-utils: bare parents carry no
+  // selector-relevant signal, so they render nothing and their children hoist
+  // to the parent's numbering level.
+  function skeletonIsAnonymousWrapper(el, keepSet) {
+    const tag = String(el.tagName || '').toLowerCase();
+    if (tag !== 'div' && tag !== 'span') return false;
+    if (skeletonDirectText(el, 1)) return false; // carries text → emit it
+    const kids = el.children || [];
+    if (kids.length !== 1) return false; // pure pass-through = exactly one child
+    if (!el.attributes || !el.attributes.length) return true;
+    for (const a of el.attributes) {
+      if (a.name !== 'style' && skeletonAttrKept(a.name, a.value, keepSet)) return false;
+    }
+    return true;
+  }
+
+  function skeletonDirectText(el, maxLen) {
+    let t = '';
+    for (const n of el.childNodes || []) {
+      if (n.nodeType === 3) t += n.nodeValue;
+    }
+    t = t.replace(/\s+/g, ' ').trim();
+    if (t.length > maxLen) t = t.slice(0, maxLen) + '…';
+    return t;
+  }
+
+  function skeletonView(htmlInput, opts) {
+    if (htmlInput == null) return '';
+    const o = Object.assign({}, SKELETON_DEFAULTS, opts || {});
+    const strip = new Set(o.stripTags || SKELETON_STRIP_TAGS);
+    const keepSet = Array.isArray(o.keepAttrs) ? o.keepAttrs : null;
+    const cap = (typeof o.capChars === 'number' && o.capChars > 0) ? o.capChars : SKELETON_DEFAULTS.capChars;
+
+    let root = null;
+    if (typeof htmlInput === 'string') {
+      if (typeof DOMParser === 'undefined') {
+        // No parser (rare embedding): degrade to a capped raw slice, disclosed.
+        return htmlInput.slice(0, cap) + (htmlInput.length > cap ? '\n[skeleton degraded: no DOMParser — raw slice]' : '');
+      }
+      let doc = null;
+      try { doc = new DOMParser().parseFromString('<body>' + htmlInput + '</body>', 'text/html'); } catch (e) { doc = null; }
+      if (!doc || !doc.body) return htmlInput.slice(0, cap);
+      root = doc.body;
+    } else if (htmlInput && htmlInput.nodeType === 1) {
+      root = htmlInput;
+    } else if (htmlInput && htmlInput.body) {
+      root = htmlInput.body;
+    } else {
+      return '';
+    }
+
+    const lines = [];
+    let truncated = false;
+    function renderAttrs(el) {
+      const parts = [];
+      for (const a of el.attributes || []) {
+        if (a.name === 'style') continue;
+        if (!skeletonAttrKept(a.name, a.value, keepSet)) continue;
+        let v = String(a.value || '');
+        if (a.name === 'class') v = filterClasses(v).split(/\s+/).filter(Boolean).slice(0, 3).join(' ');
+        if (!v) continue;
+        parts.push(a.name + '="' + v.slice(0, 120) + '"');
+      }
+      return parts.length ? ' ' + parts.join(' ') : '';
+    }
+    function emit(num, el, depthCapped) {
+      const tag = String(el.tagName || '').toLowerCase();
+      const text = skeletonDirectText(el, o.maxTextLen);
+      lines.push('[' + num + '] <' + tag + renderAttrs(el) + '>' + (depthCapped ? ' [depth-capped]' : '') + (text ? ' "' + text + '"' : ''));
+    }
+    function walk(el, prefix, depth) {
+      if (truncated) return;
+      if (depth >= o.maxDepth) {
+        emit(prefix, el, (el.children || []).length > 0);
+        return;
+      }
+      let idx = 0;
+      for (const child of el.children || []) {
+        if (truncated) return;
+        const tag = String(child.tagName || '').toLowerCase();
+        if (strip.has(tag)) continue;
+        if (skeletonIsHidden(child) && !skeletonSubtreeHasCarrier(child)) continue;
+        idx += 1;
+        const num = prefix ? prefix + '.' + idx : 'n' + idx;
+        if (skeletonIsAnonymousWrapper(child, keepSet)) {
+          // Collapse: no line of its own; children hoist to the same level.
+          walk(child, prefix, depth);
+          continue;
+        }
+        emit(num, child);
+        const joined = () => lines.join('\n').length;
+        if (joined() > cap) { truncated = true; return; }
+        walk(child, num, depth + 1);
+      }
+    }
+    // A fragment with ONE root element numbers that root [n1] and its
+    // children [n1.1], [n1.2] … (a representative container IS a citable
+    // node); a multi-root fragment numbers top elements [n1], [n2], …
+    if (root.nodeType === 1 && String(root.tagName || '').toLowerCase() === 'body') {
+      const kids = root.children || [];
+      if (kids.length === 1) {
+        const only = kids[0];
+        if (!strip.has(String(only.tagName || '').toLowerCase()) &&
+            !(skeletonIsHidden(only) && !skeletonSubtreeHasCarrier(only))) {
+          if (!skeletonIsAnonymousWrapper(only, keepSet)) {
+            emit('n1', only);
+            walk(only, 'n1', 1);
+            return finalize();
+          }
+        }
+      }
+      walk(root, '', 0);
+    } else {
+      emit('n1', root);
+      walk(root, 'n1', 1);
+    }
+    return finalize();
+
+    function finalize() {
+      let out = lines.join('\n');
+      if (out.length > cap) { out = out.slice(0, cap); truncated = true; }
+      if (truncated) out += '\n[skeleton trimmed at ' + cap + ' chars — narrow the selector, lower opts.maxTextLen, or raise opts.capChars]';
+      return out;
+    }
+  }
+
   function getElementsFullHtml(selectors) {
     return selectors.map(getElementFullHtml);
   }
@@ -788,6 +969,7 @@ The selector should target the smallest container that holds all the relevant da
     filterClasses, truncateText, truncateLongTextInNodes, shouldRemoveTag,
     buildIframePrefix, htmlFingerprint,
     cleanPageHtml, normalizeRecordStructure, extractAnnotationContext, compressStructure, cleanHtmlForLLM,
+    skeletonView, SKELETON_STRIP_TAGS, SKELETON_KEEP_ATTRS, SKELETON_DEFAULTS,
     requestSubtreeSelection,
     getCompressedSnapshot, getElementFullHtml, getElementsFullHtml,
   };
