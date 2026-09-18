@@ -1028,7 +1028,7 @@
             }
             if (state.lastVerifyRelativeTimestamps) {
               detail = (detail ? detail + ' ' : '') +
-                '[VERIFY RELATIVE-TIMESTAMPS — time field(s) carrying relative ages, not absolute values: ' + state.lastVerifyRelativeTimestamps.join(', ') + '; rebind to the datetime attribute / labelledby reference / hovercard or renegotiate the contract]';
+                '[VERIFY RELATIVE-TIMESTAMPS — time field(s) carrying relative ages, not absolute values: ' + state.lastVerifyRelativeTimestamps.join(', ') + '; rebind to the datetime attribute / labelledby reference / hovercard, SHIP the relative age with disclosure (report-only — verify passes), or renegotiate the contract via io.confirm]';
             }
             if (state.lastVerifyTimeImplausible) {
               // Fifty-fifth log: postTime shipped as "Learn More" on 5/8

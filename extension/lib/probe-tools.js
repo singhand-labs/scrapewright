@@ -834,7 +834,7 @@
       if (!candidates.length) {
         out.note = 'no date-shaped value on the anchors THIS call hovered (labelledby / aria-label / text, hover-mounted popover text included). If a second probe.timestamp with a narrower anchorSel over the timestamp element itself also fails, these anchors expose no timestamp — renegotiate the field via io.confirm instead of shipping titles or relative ages as postTime.';
       } else if (!absolute) {
-        out.note = 'only RELATIVE ages are date-shaped here — the absolute value needs the hover-mounted tooltip: re-run with a narrower anchorSel over the timestamp link itself; if that also yields only relative ages, renegotiate.';
+        out.note = 'only RELATIVE ages are date-shaped here — the absolute value needs the hover-mounted tooltip: re-run with a narrower anchorSel over the timestamp link itself; if that also yields only relative ages, renegotiate — or bind the relative age itself with a finish disclosure: the verify RELATIVE_TIMESTAMP tag is report-only and an empty required field is worse than a disclosed relative value.';
       } else if (absolute.partial) {
         // Distinct from the only-relative case above: an absolute WAS found,
         // but it lacks a year. Keep both notes mutually exclusive so the
