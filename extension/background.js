@@ -78,6 +78,12 @@ const executionQueue = new ExecutionQueue();
 
 // Communication channels
 let pollingActive = false;
+// Generation token: RECONNECT_NATIVE flips pollingActive false→true, and the
+// OLD loop cannot distinguish 'I was cancelled' from 'a new loop took over'
+// with a shared boolean (the 2026-09-18 option-page log showed two poll loops
+// interleaved at 5s each after one Reconnect click). Each loop captures its
+// generation and exits when a newer one exists.
+let pollGeneration = 0;
 let serverPort = 8765;
 
 // RC16: the current execution's PageTracker, if any. Set by handleExecute
@@ -187,6 +193,7 @@ async function initCommunication() {
 async function startLongPolling() {
   if (pollingActive) return;
   pollingActive = true;
+  const myGeneration = ++pollGeneration;
 
   debugLogger.log('info', 'background', 'Starting long-polling', { port: serverPort });
 
@@ -196,7 +203,7 @@ async function startLongPolling() {
   const DISCONNECT_THRESHOLD = 3;
   let consecutiveFailures = 0;
 
-  while (pollingActive) {
+  while (pollingActive && pollGeneration === myGeneration) {
     try {
       const response = await fetch(`http://localhost:${serverPort}/api/v1/extension/poll`);
 
