@@ -755,6 +755,46 @@
             '-token window design — compact evidence (smaller test input, fewer probed pages) before the next call.';
         }
       }
+      // Eighty-sixth-round audit gap: the console capture retains only the
+      // first 8000 chars of each LLM request (llm-client logContentChunks
+      // cap), so the whole control layer — this dossier ([STEP PLAN]
+      // included), USER FEEDBACK entries, knowledge units, system notes —
+      // rode the elided tail and three user feedback rounds were
+      // unrecoverable for review. Emit ONE compact digest per turn instead
+      // of logging 100K-char prompts: auditable steering, bounded bytes.
+      try {
+        let promptChars = 0;
+        for (const m of messages2) promptChars += String((m && m.content) || '').length;
+        const sysTexts = messages2.filter((m) => m && m.role === 'system').map((m) => String(m.content || ''));
+        const heads = [];
+        for (const t of sysTexts) {
+          for (const line of t.split('\n')) {
+            if (/^(#{1,3} |<EVIDENCE|\[[A-Z]|[A-Z][A-Z -]{4,}:)/.test(line) && heads.indexOf(line) === -1) heads.push(line.slice(0, 90));
+            if (heads.length >= 25) break;
+          }
+          if (heads.length >= 25) break;
+        }
+        let stepPlan = null;
+        for (const t of sysTexts) {
+          const i = t.indexOf('[STEP PLAN]');
+          if (i !== -1) {
+            const j = t.indexOf('[BUDGET]', i);
+            stepPlan = t.slice(i, j === -1 ? i + 1200 : j).slice(0, 1200);
+            break;
+          }
+        }
+        const sysNoteEntries = state.transcript.filter((e) => e && e.kind === 'system');
+        const sysNotes = sysNoteEntries.slice(-3).map((e) => String((e && e.text) || '').split('\n')[0].slice(0, 140));
+        console.log('[session] prompt_digest ' + JSON.stringify({
+          turn: state.spend.turns,
+          promptChars: promptChars,
+          msgCount: messages2.length,
+          systemHeads: heads,
+          stepPlan: stepPlan,
+          sysNotesTotal: sysNoteEntries.length,
+          sysNotes: sysNotes
+        }));
+      } catch (_) { /* the digest must never kill the turn */ }
       return messages2;
     }
 
