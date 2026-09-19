@@ -475,6 +475,26 @@
           '- ' + e.finding + ' (' + e.confidence + (e.selectors.length ? '; ' + e.selectors.join(' ') : '') + ')').join('\n'));
       }
       if (state.digest) parts.push('# Earlier investigation (digest)\n' + state.digest);
+      // 89th-round D3 second guard: re-inject the LAST user feedback line so
+      // the directive is visible even on a fully compacted or resumed
+      // transcript (the pinned entries below the keep window cover recent
+      // sessions; this covers every other shape).
+      try {
+        let lastFeedback = null;
+        for (let i = state.transcript.length - 1; i >= 0; i--) {
+          const e = state.transcript[i];
+          if (e && e.kind === 'system' && String(e.text || '').indexOf('USER FEEDBACK') === 0) {
+            lastFeedback = e.text; break;
+          }
+        }
+        if (!lastFeedback && state.digest) {
+          const m = state.digest.match(/USER FEEDBACK[^\n]*/);
+          if (m) lastFeedback = m[0];
+        }
+        if (lastFeedback) {
+          parts.push('# User feedback (still binding)\n' + String(lastFeedback).slice(0, 240));
+        }
+      } catch (_) { /* best-effort */ }
       if (!parts.length) return '';
       return 'SESSION STATE\n' + parts.join('\n\n');
     }
@@ -674,8 +694,14 @@
       const chars = transcriptChars();
       if (chars <= compaction.thresholdChars) return;
       if (state.transcript.length <= keepEntries) return;
+      // 89th-round D3: USER FEEDBACK directives are the user's fix requests —
+      // rare and small, and folding them to "[protocol nudge]" deleted the
+      // instructions ~6 turns into a feedback session. Pin them: pinned
+      // entries survive below the keep window as whole messages.
+      const isPinned = (e) => !!(e && e.kind === 'system' && String(e.text || '').indexOf('USER FEEDBACK') === 0);
       const keep = state.transcript.slice(-keepEntries);
-      const old = state.transcript.slice(0, state.transcript.length - keepEntries);
+      const pinned = state.transcript.slice(0, state.transcript.length - keepEntries).filter(isPinned);
+      const old = state.transcript.slice(0, state.transcript.length - keepEntries).filter((e) => !isPinned(e));
       const lines = [];
       for (const e of old) {
         if (e.kind === 'assistant') {
@@ -705,7 +731,7 @@
           '\n… ' + elided + ' chars elided (digest cap ' + DIGEST_CAP + ') …\n' +
           state.digest.slice(-tailLen);
       }
-      state.transcript = keep;
+      state.transcript = pinned.concat(keep);
       emit('compaction', { collapsed: old.length, charsBefore: chars });
     }
 
