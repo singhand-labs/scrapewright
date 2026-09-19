@@ -1,0 +1,62 @@
+// Eighty-seventh-round followup (user directive 2026-09-19): the console
+// capture must carry EVERYTHING the research loop exchanges. Four gaps
+// found in the audit:
+//   (1) tool results reached the console ONLY as the model-facing COMPACT
+//       detail (head+tail strings, [+N elided] markers) mirrored at a
+//       12000-char cap — the RAW result never appeared anywhere;
+//   (2) tool-call args mirrored at an 8000-char cap (big service.update
+//       step scripts were tail-elided — 33rd-log class recurrence);
+//   (3) stopped/finish disclosures mirrored at 600 chars (the 87th finish
+//       disclosure showed "[+779 chars elided]" in the console);
+//   (4) the user's feedback text (sendSessionFeedback) was never logged at
+//       submit time — three feedback rounds in the 86th log were
+//       unrecoverable until full request logging landed.
+const { describe, it } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const WIZ_SRC = fs.readFileSync(path.join(__dirname, '..', 'wizard.js'), 'utf8');
+const RS_SRC = fs.readFileSync(path.join(__dirname, '..', 'lib', 'research-session.js'), 'utf8');
+
+describe('87th-round log completeness — source wiring audit', () => {
+  it('the engine attaches the RAW tool result to the tool_result event', () => {
+    assert.match(RS_SRC, /raw:\s*result/, 'toolResultPayload carries raw: result');
+  });
+
+  it('the wizard mirrors the RAW result in full (no cap) as TOOL RESULT FULL', () => {
+    assert.match(WIZ_SRC, /TOOL RESULT FULL /, 'FULL mirror line exists');
+    const i = WIZ_SRC.indexOf("mirrorLines('[session] TOOL RESULT FULL '");
+    assert.ok(i !== -1, 'mirrorLines used for the FULL mirror');
+    const call = WIZ_SRC.slice(i, i + 200);
+    assert.match(call, /Infinity/, 'the FULL mirror passes Infinity (no elision)');
+  });
+
+  it('tool-call args mirror with no cap (the 8000 ceiling is gone)', () => {
+    const i = WIZ_SRC.indexOf("mirrorLines('[session] TOOL '");
+    assert.ok(i !== -1);
+    assert.match(WIZ_SRC.slice(i, i + 160), /Infinity/);
+  });
+
+  it('detail-bearing session events (stopped/finish) mirror in full, not 600-char clips', () => {
+    const i = WIZ_SRC.indexOf("console.log('[session]', ev.type, mirrorClip(JSON.stringify(ev), 600));");
+    assert.equal(i, -1, 'the 600-char clip path is gone');
+    assert.match(WIZ_SRC, /mirrorLines\('\[session\] ' \+ ev\.type,\s*JSON\.stringify\(ev\),\s*Infinity\)/);
+  });
+
+  it('user feedback is logged at submit time', () => {
+    const i = WIZ_SRC.indexOf('USER FEEDBACK (fix request): ');
+    assert.ok(i !== -1);
+    // a console mirror of the raw feedback text near the push
+    assert.match(WIZ_SRC.slice(Math.max(0, i - 600), i + 900), /user_feedback/, 'the feedback text is mirrored');
+  });
+
+  it('mirrorLines callers that still pass a finite cap are the compact-detail lane only', () => {
+    const calls = [...WIZ_SRC.matchAll(/mirrorLines\('\[session\][^;\n]{0,160}?\);/g)].map((m) => m[0]);
+    assert.ok(calls.length >= 4, 'call sites found: ' + calls.length);
+    const capped = calls.filter((c) => !/Infinity/.test(c));
+    for (const c of capped) {
+      assert.match(c, /TOOL RESULT DETAIL/, 'unexpected capped mirror: ' + c.slice(0, 60));
+    }
+  });
+});

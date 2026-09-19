@@ -2660,19 +2660,32 @@ function handleSessionEvent(ev) {
       // v2-v4 mirrors truncated mid-error and the report body the diagnosis
       // needed was invisible in the export.
       if (ev.detail) mirrorLines('[session] TOOL RESULT DETAIL ' + ev.tool, ev.detail, 12000);
+      // Eighty-seventh-round log-completeness audit: the compact detail
+      // elides middles by design (it is the MODEL-facing budget); the raw
+      // result must also reach the console in full or the audit trail has
+      // holes exactly where the evidence lives (the 87th verify reports'
+      // unusedCaptures rows were console-elided).
+      if (ev.raw !== undefined) {
+        try { mirrorLines('[session] TOOL RESULT FULL ' + ev.tool, JSON.stringify(ev.raw), Infinity); }
+        catch (e) { /* best-effort */ }
+      }
     } else if (ev && ev.type === 'tool_call') {
       // Nineteenth log: schemas ride these args and were invisible at 200
       // chars; thirty-second log: even 1200 clip-cut the v2-v5 step scripts
       // (the postTime extraction lived exactly in the elided middle) —
       // chunk the FULL args across lines instead of truncating.
-      mirrorLines('[session] TOOL ' + ev.tool, JSON.stringify(ev.args || {}), 8000);
+      mirrorLines('[session] TOOL ' + ev.tool, JSON.stringify(ev.args || {}), Infinity);
     } else if (ev && ev.type) {
       // Twenty-third log RC-C: 200 chars cut the stopped event's honest-ship
       // disclosure ("[VERIFY PARTIAL-EMPTY — ...fields...]") mid-list in two
       // consecutive live logs — the export read as a clean ship. Detail-
       // bearing events (stopped/error/paused) get the same 600 budget the
       // tool_result mirror uses.
-      console.log('[session]', ev.type, mirrorClip(JSON.stringify(ev), 600));
+      // Eighty-seventh-round log completeness: 600-char clips cut the
+      // stopped event's honest-ship disclosure mid-list (the 87th finish
+      // showed "[+779 chars elided]" in the console). Detail-bearing events
+      // mirror in full.
+      mirrorLines('[session] ' + ev.type, JSON.stringify(ev), Infinity);
     }
   } catch (e) { /* mirror is best-effort */ }
   try {
@@ -3407,6 +3420,10 @@ async function sendSessionFeedback() {
   // container match). The old note taught resume mechanics but never
   // required the finish to CLOSE each named problem — a green verify.run
   // alone passed shape-only checks while the complaint stayed untouched.
+  // Eighty-seventh-round log completeness: the feedback text is the user's
+  // steering input — pin it at submit time (three feedback rounds in the
+  // 86th log were unrecoverable before full request logging landed).
+  try { mirrorLines('[session] user_feedback', text, Infinity); } catch (e) { /* best-effort */ }
   st.transcript.push({ kind: 'system', text: 'USER FEEDBACK (fix request): ' + text + ' — continue: the research tab was closed when the session ended, so page.open the target (with a concrete sample input) first, probe the live page to diagnose the reported problem, fix the artifact via service.update, then verify.run again before finishing. Before finishing you must close EACH named problem: state per reported problem whether it is now fixed, quoting field values from the verify output as evidence, and a problem you could not fix must be disclosed in the finish summary naming what was tried. A green verify.run alone does not close user feedback — empty fields, UI-label junk values, and duplicate records can all pass a shape-only verify, so re-read the complaint and check the actual extracted values.' });
   try {
     await wizardPersistence.save({ session: st, observation: persisted.observation, ledger: persisted.ledger });

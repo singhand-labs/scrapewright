@@ -58,7 +58,7 @@ describe('wizard research-session integration (source audit)', () => {
     for (const ev of ['turn_start', 'tool_call', 'tool_result', 'knowledge_attached', 'artifact_version', 'paused', 'stopped']) {
       assert.ok(SRC.includes("'" + ev + "'"), 'event handled: ' + ev);
     }
-    assert.ok(fnBody('handleSessionEvent').includes("'[session]'"), 'second-live-log D2: session events mirrored to console so exported logs show tool results');
+    assert.ok(fnBody('handleSessionEvent').includes("'[session] ' + ev.type"), 'second-live-log D2: session events mirrored to console so exported logs show tool results');
     for (const id of ['btnSessionPause', 'btnSessionResume', 'btnSessionAbort', 'btnAnnotationFinish', 'btnAnnotationCancel']) {
       assert.ok(SRC.includes("getElementById('" + id + "')"), id + ' wired');
       assert.ok(HTML.includes('id="' + id + '"'), id + ' exists in HTML');
@@ -75,7 +75,8 @@ describe('wizard research-session integration (source audit)', () => {
     const body = fnBody('handleSessionEvent');
     // Thirty-second log: the tool-args mirror moved from mirrorClip(…, 1200)
     // to mirrorLines chunk-logging — full step scripts must reach the export.
-    assert.ok(body.includes("mirrorLines('[session] TOOL ' + ev.tool, JSON.stringify(ev.args || {}), 8000)"),
+    // 87th-round full-fidelity: the args mirror cap moved 8000 → Infinity.
+    assert.ok(body.includes("mirrorLines('[session] TOOL ' + ev.tool, JSON.stringify(ev.args || {}), Infinity)"),
       'io.confirm/service.update args (schemas, full step scripts) chunk-log in full — a clip cut the v2-v5 postTime script exactly where the diagnosis needed it');
     assert.ok(body.includes("mirrorClip(String(ev.summary || ''), 600)"),
       'the UI one-liner summary keeps its 600-char head+tail form');

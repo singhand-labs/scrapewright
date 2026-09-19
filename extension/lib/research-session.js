@@ -1443,7 +1443,12 @@
             // Thirty-second log RC-B: full key-preserving rendering for the
             // console mirror — the one-liner above stays for the UI stream,
             // but the exported log must carry the evidence a diagnosis needs.
-            detail: Protocol.compactToolResultForLLM(callLabel, result, eventDetailCapChars)
+            detail: Protocol.compactToolResultForLLM(callLabel, result, eventDetailCapChars),
+            // Eighty-seventh-round log-completeness audit: the console saw
+            // only the model-facing COMPACT detail — the RAW result (with
+            // every elided middle) never reached any log. The wizard
+            // mirrors this in full as TOOL RESULT FULL.
+            raw: result
           };
           if (verifyDigest) toolResultPayload.verify = verifyDigest;
           emit('tool_result', toolResultPayload);

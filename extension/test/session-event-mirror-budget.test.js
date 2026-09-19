@@ -58,16 +58,13 @@ describe('mirrorClip (twenty-sixth log: tail disclosure must survive)', () => {
   });
 });
 
-describe('wizard.js session-event mirror budgets (RC-C + twenty-sixth log)', () => {
+describe('wizard.js session-event mirror budgets (RC-C + twenty-sixth log; 87th-round full-fidelity update)', () => {
   it('small status events route through mirrorClip, not a bare head slice', () => {
-    assert.match(SRC, /console\.log\('\[session\]', ev\.type, mirrorClip\(JSON\.stringify\(ev\), \d+\)\)/);
     assert.match(SRC, /console\.log\('\[session\] TOOL RESULT', ev\.tool, ev\.ok \? 'ok' : 'ERR', mirrorClip\(String\(ev\.summary \|\| ''\), \d+\)\)/);
   });
 
-  it('detail-bearing events keep ≥600-char budgets', () => {
-    const m = /console\.log\('\[session\]', ev\.type, mirrorClip\(JSON\.stringify\(ev\), (\d+)\)\)/.exec(SRC);
-    assert.ok(m, 'generic event mirror line exists in wizard.js');
-    assert.ok(parseInt(m[1], 10) >= 600, 'stopped/error/paused mirror budget >= 600');
+  it('detail-bearing generic events mirror IN FULL (87th-round user directive — the 600-char clip cut the stopped disclosure mid-list)', () => {
+    assert.match(SRC, /mirrorLines\('\[session\] ' \+ ev\.type,\s*JSON\.stringify\(ev\),\s*Infinity\)/);
   });
 });
 
@@ -110,10 +107,8 @@ describe('mirrorLines (thirty-second log: chunk, never clip, payload mirrors)', 
 });
 
 describe('wizard.js payload mirrors use mirrorLines (source audit)', () => {
-  it('TOOL args chunk-log at a generous cap, not the old 1200 clip', () => {
-    assert.match(SRC, /mirrorLines\('\[session\] TOOL ' \+ ev\.tool, JSON\.stringify\(ev\.args \|\| \{\}\), (\d+)\)/);
-    const cap = parseInt(/mirrorLines\('\[session\] TOOL ' \+ ev\.tool, JSON\.stringify\(ev\.args \|\| \{\}\), (\d+)\)/.exec(SRC)[1], 10);
-    assert.ok(cap >= 8000, 'args budget generous enough to carry full step scripts');
+  it('TOOL args chunk-log with NO cap (87th-round full-fidelity)', () => {
+    assert.match(SRC, /mirrorLines\('\[session\] TOOL ' \+ ev\.tool, JSON\.stringify\(ev\.args \|\| \{\}\), Infinity\)/);
   });
 
   it('TOOL RESULT detail chunk-logs when the engine attached one', () => {
