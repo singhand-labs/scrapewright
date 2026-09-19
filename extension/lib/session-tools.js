@@ -1463,7 +1463,13 @@
       dossierFeeds: {
         containerHtml: () => lastContainerHtml,
         popovers: () => popoverCaptureLru,
-        lastVerify: () => lastVerify
+        // Eighty-ninth-round shape fix (third recurrence of the class): the
+        // dossier reads REPORT-shaped keys (ok/error/score/detectors) — pass
+        // the report, not the {events, report, raw, at} wrapper
+        // getLastVerify() keeps returning for its other consumers.
+        lastVerify: () => (lastVerify && lastVerify.report)
+          ? Object.assign({ at: lastVerify.at }, lastVerify.report)
+          : null
       }
     };
   }

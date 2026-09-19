@@ -2,6 +2,8 @@
 // engine injection/compaction exemption, DSL-guide history dedup, and the
 // 128K window budget warning.
 const { describe, it } = require('node:test');
+const fs = require('node:fs');
+const path = require('node:path');
 const assert = require('node:assert/strict');
 const { JSDOM } = require('jsdom');
 
@@ -311,5 +313,74 @@ describe('DSL-guide history dedup (128K window directive)', () => {
     const d = calls[0].messages.filter(m => m.role === 'system' && m.content.includes('EVIDENCE DOSSIER'));
     assert.equal(d.length, 1);
     assert.match(d[0].content, /WINDOW WARNING/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Eighty-ninth-round audit (shape-mismatch class, THIRD recurrence): the
+// production dossier feed passes the {events, report, raw, at} WRAPPER
+// (session-tools verifyRun's lastVerify), while buildDossier read
+// report-shaped keys — every production session rendered "(no verify run
+// yet)". Tests below feed the PRODUCTION wrapper from the shared fixture.
+const VRF = require('./fixtures/verify-report.js');
+
+describe('LAST VERIFY CENSUS — production wrapper shape (89th-round regression lock)', () => {
+  it('the WRAPPER (what session-tools actually stores) yields a census, not "(no verify run yet)"', () => {
+    const txt = Dossier.buildDossier({ lastVerify: VRF.buildVerifyReportEnvelope() });
+    assert.match(txt, /\[LAST VERIFY CENSUS\]/);
+    assert.ok(!/no verify run yet/.test(txt), 'the wrapper shape must render real census content');
+    assert.match(txt, /ok=false/, 'verdict line renders');
+  });
+
+  it('the FEED side is fixed too: session-tools passes a report-shaped object into the dossier', () => {
+    const stSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'session-tools.js'), 'utf8');
+    const m = stSrc.match(/lastVerify: \(\) => ([^\n]+)/);
+    assert.ok(m, 'dossierFeeds.lastVerify present');
+    assert.notEqual(m[1].trim(), 'lastVerify', 'the raw wrapper must not be passed straight through');
+    assert.match(m[1], /\.report/, 'the feed resolves the report off the wrapper');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T2 (89th-round plan): purpose-built census renderer — deterministic rows
+// for the decision-critical detectors instead of a raw JSON.stringify
+// head-slice that cuts mid-JSON behind prose detectors.
+describe('renderVerifyCensus — purpose-built renderer', () => {
+  const R = VRF.buildVerifyReport();
+
+  it('renders the verdict line + every decision-critical row family', () => {
+    const txt = Dossier.renderVerifyCensus(R);
+    assert.match(txt, /ok=false/);
+    assert.match(txt, /v7/);
+    assert.match(txt, /TIME_SOURCE_UNEXERCISED[^]{0,120}posts\.postTime/);
+    assert.match(txt, /postTime: 1 relative \+ 4 partial/);
+    assert.match(txt, /"August 23 at 8:11 PM"/);
+    assert.match(txt, /empty posts\.location 5\/5/);
+    assert.match(txt, /香織/); // emptyRecordSamples hint survives
+    assert.match(txt, /dup-id posts\.postId 2\/5 on records 2, 5/);
+    assert.match(txt, /6 popovers captured, 0 fields consume/);
+    assert.ok(!/shapeDistribution|Record collection with two signatures/.test(txt), 'prose detectors are dropped');
+  });
+
+  it('green report renders the ok line and no error block', () => {
+    const txt = Dossier.renderVerifyCensus(VRF.buildVerifyReport({ ok: true, error: null, detectors: { partialEmptyFields: [{ field: 'location', path: 'posts.location', emptyCount: 5, totalCount: 5 }] } }));
+    assert.match(txt, /ok=true/);
+    assert.ok(!/ERROR/.test(txt));
+    assert.match(txt, /empty posts\.location 5\/5/);
+  });
+
+  it('overflow drops rows tail-first but never the ok/error line (≤2500 chars)', () => {
+    const big = VRF.buildVerifyReport();
+    big.detectors.partialEmptyFields = Array.from({ length: 60 }, (_, i) => ({ field: 'f' + i, path: 'posts.f' + i, emptyCount: 3, totalCount: 5 }));
+    const txt = Dossier.renderVerifyCensus(big);
+    assert.ok(txt.length <= 2500, 'renderer cap, got ' + txt.length);
+    assert.match(txt, /ok=false/);
+    assert.match(txt, /TIME_SOURCE_UNEXERCISED/);
+  });
+
+  it('unwrap-tolerant: a {events, report, raw, at} wrapper renders its report', () => {
+    const txt = Dossier.renderVerifyCensus(VRF.buildVerifyReportEnvelope());
+    assert.match(txt, /ok=false/);
+    assert.match(txt, /posts\.postTime/);
   });
 });

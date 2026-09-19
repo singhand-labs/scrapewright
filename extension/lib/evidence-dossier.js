@@ -24,6 +24,78 @@
   const LINEAGE_SCRIPTS_MAX = 3;      // versions whose FULL scripts ride the dossier
   const LINEAGE_SCRIPTS_CHARS = 12000; // budget for the current version's full scripts
   const PROMPT_WINDOW_TOKENS = 128000; // user directive: design the input window for 128K
+  const CENSUS_CAP_CHARS = 2500;      // purpose-built verify census budget (89th-round T2)
+
+  // Purpose-built [LAST VERIFY CENSUS] renderer (89th-round audit): the raw
+  // JSON.stringify head-slice cut mid-JSON behind prose detectors, hiding the
+  // rows the model acts on. Unwrap-tolerant: accepts the REPORT shape and the
+  // production {events, report, raw, at} wrapper (the shape-mismatch class
+  // struck three times — never trust one shape again). Overflow drops row
+  // families tail-first; the ok/error line is never dropped.
+  function renderVerifyCensus(reportOrWrapper) {
+    if (!reportOrWrapper || typeof reportOrWrapper !== 'object') return '';
+    const r = (reportOrWrapper.report && typeof reportOrWrapper.report === 'object')
+      ? reportOrWrapper.report : reportOrWrapper;
+    try {
+      const out = [];
+      const scoreNum = r.score && typeof r.score.score === 'number'
+        ? Math.round(r.score.score * 10) / 10 : (typeof r.score === 'number' ? r.score : '?');
+      out.push('ok=' + String(r.ok) + (r.executedArtifactVersion !== undefined ? ' v' + r.executedArtifactVersion : '') +
+        ' score=' + scoreNum + (r.schemaOk !== undefined ? ' schemaOk=' + r.schemaOk : ''));
+      if (r.error && r.error.message) {
+        out.push('ERROR: ' + String(r.error.message).slice(0, 200) + (r.error.stepId ? ' (step: ' + r.error.stepId + ')' : ''));
+      }
+      const d = (r.detectors && typeof r.detectors === 'object') ? r.detectors : {};
+      const rel = Array.isArray(d.relativeTimestamps) ? d.relativeTimestamps : [];
+      for (const row of rel) {
+        if (!row) continue;
+        out.push('time ' + String(row.path || row.field) + ': ' +
+          (row.relativeCount || 0) + ' relative + ' + (row.partialAbsoluteCount || 0) +
+          ' partial' + (row.sampleValue ? ' (sample "' + String(row.sampleValue).slice(0, 40) + '")' : '') +
+          ' of ' + (row.totalRecords || '?'));
+      }
+      const pe = Array.isArray(d.partialEmptyFields) ? d.partialEmptyFields : [];
+      for (const row of pe) {
+        if (!row) continue;
+        let hint = '';
+        if (Array.isArray(row.emptyRecordSamples) && row.emptyRecordSamples.length) {
+          const s = row.emptyRecordSamples[0];
+          hint = ' (e.g. #' + (s.index || (s.parentIndex + '.' + s.subIndex)) + ' "' + String(s.hint || '').slice(0, 30) + '")';
+        }
+        out.push('empty ' + String(row.path || row.field) + ' ' + (row.emptyCount || 0) + '/' + (row.totalCount || '?') + hint);
+      }
+      const tsx = Array.isArray(d.timeSourceUnexercised) ? d.timeSourceUnexercised : [];
+      for (const row of tsx) {
+        if (!row) continue;
+        out.push('time-source-unexercised ' + String(row.path || row.field) +
+          (row.tier ? ' [' + row.tier + ']' : '') + ' (sample "' + String(row.sampleValue || '').slice(0, 30) + '")');
+      }
+      const dup = Array.isArray(d.duplicateIdValues) ? d.duplicateIdValues : [];
+      for (const row of dup) {
+        if (!row) continue;
+        out.push('dup-id ' + String(row.path) + ' ' + (row.count || 0) + '/' + (row.totalRecords || '?') +
+          ' on records ' + (Array.isArray(row.indices) ? row.indices.join(', ') : '?'));
+      }
+      if (d.countShortfall) out.push('count-shortfall: ' + String(d.countShortfall).slice(0, 120));
+      const uc = d.unusedCaptures;
+      if (uc && typeof uc === 'object') {
+        out.push('unused-captures: ' + (uc.totalCaptured || 0) + ' popovers captured, ' +
+          (uc.popoverReadFields || 0) + ' fields consume' +
+          (Array.isArray(uc.samples) && uc.samples.length ? ' (sample "' + String(uc.samples[0]).slice(0, 40) + '")' : ''));
+      }
+      let txt = out.join('\n');
+      if (txt.length > CENSUS_CAP_CHARS) {
+        const lines = out;
+        while (lines.length > 2 && (lines.slice(0, 2).join('\n') + '\n…[+' + (lines.length - 2) + ' census rows elided]').length > CENSUS_CAP_CHARS) {
+          lines.splice(2, 1); // drop the OLDEST row family entry, keep ok/error
+        }
+        lines.splice(2, 0, '…[' + 'census rows trimmed to fit ' + CENSUS_CAP_CHARS + ']');
+        txt = lines.join('\n');
+        if (txt.length > CENSUS_CAP_CHARS) txt = txt.slice(0, CENSUS_CAP_CHARS);
+      }
+      return txt;
+    } catch (e) { return ''; }
+  }
 
   function resolveDomCleaner() {
     if (typeof require !== 'undefined') {
@@ -78,17 +150,15 @@
     let popovers = Array.isArray(a.popovers) ? a.popovers.slice() : [];
     let popoverTrimmed = 0;
 
-    // [LAST VERIFY CENSUS]
+    // [LAST VERIFY CENSUS] — purpose-built renderer (89th-round plan T2):
+    // deterministic rows for the decision-critical detectors. The old raw
+    // JSON.stringify head-slice cut mid-JSON behind prose detectors, hiding
+    // exactly the rows the model acts on (relativeTimestamps sampleValue,
+    // partialEmptyFields emptyRecordSamples, dup ids, unused captures).
     let census = '';
-    const lv = a.lastVerify;
-    if (lv && typeof lv === 'object') {
-      try {
-        const keys = ['ok', 'error', 'score', 'schemaOk'];
-        const head = keys.filter(k => lv[k] !== undefined).map(k => k + '=' + JSON.stringify(lv[k])).join(' ');
-        const detectors = (lv.detectors && typeof lv.detectors === 'object') ? JSON.stringify(lv.detectors) : '';
-        census = (head ? head + '\n' : '') + (detectors ? 'detectors: ' + detectors : '');
-      } catch (e) { census = ''; }
-      if (census.length > 6000) { trims.push('last-verify census trimmed ' + (census.length - 6000) + ' chars'); census = census.slice(0, 6000); }
+    if (a.lastVerify && typeof a.lastVerify === 'object') {
+      census = renderVerifyCensus(a.lastVerify);
+      if (census.length > CENSUS_CAP_CHARS) { trims.push('last-verify census trimmed ' + (census.length - CENSUS_CAP_CHARS) + ' chars'); census = census.slice(0, CENSUS_CAP_CHARS); }
     }
 
     // [ARTIFACT LINEAGE] — current version's scripts IN FULL (user directive:
@@ -179,7 +249,7 @@
     return core + '\n\n' + budget + '\n</EVIDENCE DOSSIER>';
   }
 
-  const api = { buildDossier, pushPopoverCapture, DOSSIER_CAP_CHARS, POPOVER_LRU_MAX, POPOVER_TEXT_HEAD, PROMPT_WINDOW_TOKENS };
+  const api = { buildDossier, pushPopoverCapture, renderVerifyCensus, DOSSIER_CAP_CHARS, POPOVER_LRU_MAX, POPOVER_TEXT_HEAD, PROMPT_WINDOW_TOKENS, CENSUS_CAP_CHARS };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.EvidenceDossier = api;
 })(typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : self));
