@@ -25,6 +25,13 @@
   const KB = resolveLib('./knowledge-base', 'KnowledgeBase');
   const VR = resolveLib('./verify-runner', 'VerifyRunner');
   const Dossier = resolveLib('./evidence-dossier', 'EvidenceDossier');
+  // Eighty-seventh-round live gap: a wizard.html load-order slip left this
+  // const null for the page lifetime and the per-turn evidence dossier
+  // (STEP PLAN included) silently never rode — node tests resolve via
+  // require and stayed green. A null dossier lib must be LOUD.
+  if (!Dossier) {
+    try { console.warn('[research-session] EvidenceDossier lib unresolved — the per-turn evidence dossier ([STEP PLAN]/skeleton/verify census/artifact lineage) is OFF; check script load order in wizard.html'); } catch (e0) { /* best-effort */ }
+  }
 
   const INTERNAL_TOOL_SPECS = [
     { name: 'ledger.add', args: '{finding, evidence?, confidence?, selectors?}', returns: '{added:true, id}' },

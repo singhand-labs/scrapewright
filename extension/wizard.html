@@ -281,13 +281,17 @@
   <script src="lib/probe-tools.js"></script>
   <script src="lib/grounding-gate.js"></script>
   <script src="lib/session-protocol.js"></script>
+  <!-- Load-order dependency (87th-round live gap): research-session.js
+       resolves the dossier lib at IIFE load time — evidence-dossier.js must
+       precede it or the engine runs dossier-less (guarded by
+       test/dossier-load.test.js). -->
+  <script src="lib/evidence-dossier.js"></script>
   <script src="lib/research-session.js"></script>
   <script src="lib/session-persistence.js"></script>
   <script src="lib/live-rail.js"></script>
   <script src="lib/verify-runner.js"></script>
   <script src="lib/session-tools.js"></script>
   <script src="lib/dom-cleaner.js"></script>
-  <script src="lib/evidence-dossier.js"></script>
   <script src="lib/url-template.js"></script>
   <script src="lib/page-tracker.js"></script>
   <script src="lib/step-orchestrator.js"></script>
