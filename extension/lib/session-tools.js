@@ -746,6 +746,10 @@
     // HTML a probe fetched (capped) for the container skeleton.
     const DossierLib = resolveLib('./evidence-dossier', 'EvidenceDossier');
     const popoverCaptureLru = [];
+    // Eighty-seventh log: session-scoped tooltip-route evidence for the
+    // verify-side TIME_SOURCE_UNEXERCISED gate (see the 'probe.timestamp'
+    // wrapper below and verifyRun's sessionEvidence pass-through).
+    const tooltipRoute = { probeTimestampCalls: 0, lastAnchorsProbed: null, lastFullAbsolute: false };
     let lastContainerHtml = null;
     function harvestDossierFeeds(name, result) {
       try {
@@ -810,7 +814,17 @@
       const outputSchema = d.getOutputSchema() ||
         ((ioConfirmedSchemas || ledgerConfirmedSchemas(ctx) || {}).outputSchema) || null;
       const __verifyT0 = Date.now();
-      const out = await d.runVerify({ service: service, input: input, outputSchema: outputSchema });
+      // Eighty-seventh log: session-scoped evidence — the gate must see
+      // research-tab probe.timestamp receipts and the popover-capture LRU,
+      // not just this run's own diagnostics.
+      const sessionEvidence = {
+        probeTimestampCalls: tooltipRoute.probeTimestampCalls,
+        lastFullAbsolute: tooltipRoute.lastFullAbsolute,
+        popoverSamples: popoverCaptureLru
+          .map((e) => (e && typeof e.text === 'string') ? e.text : '')
+          .filter(Boolean)
+      };
+      const out = await d.runVerify({ service: service, input: input, outputSchema: outputSchema, sessionEvidence: sessionEvidence });
       const wallCostMs = Date.now() - __verifyT0;
       lastVerify = { events: out.events || [], report: out.report, raw: out.raw, at: Date.now() };
       const report = out.report || {};
@@ -1382,7 +1396,24 @@
       'probe.scroll': wrapProbe(probes.scroll, 'probe.scroll'),
       'probe.scrollUntil': wrapProbe(probes.scrollUntil, 'probe.scrollUntil'),
       'probe.extract': wrapProbe(probes.extract, 'probe.extract'),
-      'probe.timestamp': wrapProbe(probes.timestamp, 'probe.timestamp'),
+      'probe.timestamp': (async (args2, ctx2) => {
+        // Eighty-seventh log: session-scoped tooltip-route bookkeeping — the
+        // verify-side TIME_SOURCE_UNEXERCISED gate needs to SEE that the
+        // route was exercised on the research tab (its old census scanned
+        // only verify-run events, so a model that HAD called probe.timestamp
+        // could never unlock the documented disclosed-ship exit).
+        const out = await wrapProbe(probes.timestamp, 'probe.timestamp')(args2, ctx2);
+        try {
+          tooltipRoute.probeTimestampCalls += 1;
+          if (out && typeof out === 'object') {
+            if (typeof out.anchorsProbed === 'number') tooltipRoute.lastAnchorsProbed = out.anchorsProbed;
+            const abs = out.absolute;
+            tooltipRoute.lastFullAbsolute = (typeof abs === 'string' && abs &&
+              (WU.hasYearToken ? WU.hasYearToken(abs) : /(?:19|20)\d{2}/.test(abs)));
+          }
+        } catch (_) { /* bookkeeping must never break the tool */ }
+        return out;
+      }),
       'probe.loginState': wrapProbe(probes.loginState, 'probe.loginState'),
       'probe.snippet': wrapProbe(probes.snippet, 'probe.snippet'),
       'probe.skeleton': wrapProbe(probes.skeleton, 'probe.skeleton'),

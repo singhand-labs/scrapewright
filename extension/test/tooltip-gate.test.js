@@ -162,3 +162,125 @@ describe('tooltip gate — universality guard on new strings', () => {
     assert.ok(!/facebook|fb\.com|m\.me\/|instagram|xiaohongshu|weibo/i.test(newStrings), 'no site tokens');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Eighty-seventh log: the gate's evidence census was structurally blind —
+// it scanned ONLY the verify run's own events, so (1) research-tab
+// probe.timestamp receipts were INVISIBLE (branch (b) never fires in
+// production), (2) raw-$hover captures (the artifact's own per-anchor hovers
+// in the step script) were invisible, and (3) the "NO tooltip evidence
+// exists this session" claim was a session-scope assertion backed by
+// run-scope data. The 87th artifact dispatched trusted hovers (author
+// anchors) in every verify and was still told no evidence existed — the
+// model reasonably ignored the gate three times. The documented contract
+// ("only after that receipt is partial/relative an honest disclosed ship")
+// also had no implementation: a model that HAD called probe.timestamp could
+// never unlock the disclosed-ship exit.
+describe('tooltip gate — 87th log: session-scoped evidence + truthful tiers', () => {
+  it('in-run popover captures with NO date shape stay RED but the message tells the truth: popovers were captured, the TIME anchor was never hovered', async () => {
+    const runner = VR_HARNESS.makeRunner(orchWithEvents(
+      { posts: [{ url: '/a', postTime: 'August 23 at 8:11 PM' }, { url: '/b', postTime: 'a day ago' }] },
+      [{ type: 'STEP_ITERATION', stepId: 's1', resultPreview: '{"done":true}',
+         selectorDiagnostics: [{ api: 'extractWithHover', containerSelector: 'div.card', capturedPopovers: { captured: 2, samples: ['CoderMind Lab · 18K Followers · Follow'] } }] }]
+    ));
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: REQ_TIME_SCHEMA });
+    assert.equal(out.report.ok, false, 'author popovers ≠ time-route evidence');
+    assert.match(out.report.error.message, /TIME_SOURCE_UNEXERCISED/);
+    assert.match(out.report.error.message, /popover/i);
+    assert.match(out.report.error.message, /ANY date shape/i);
+    assert.match(out.report.error.message, /probe\.timestamp/);
+  });
+
+  it('raw-$hover step captures (preview markers) count in the census — same truthful tier', async () => {
+    const runner = VR_HARNESS.makeRunner(orchWithEvents(
+      { posts: [{ postTime: 'August 2' }, { postTime: 'August 9' }] },
+      [{ type: 'STEP_ITERATION', stepId: 's1', resultPreview: '{"hovered":true,"htmlSnippet":"<div>Like · Reply</div>","popoverSelector":null}', selectorDiagnostics: [] }]
+    ));
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: REQ_TIME_SCHEMA });
+    assert.equal(out.report.ok, false);
+    assert.match(out.report.error.message, /popover/i);
+    assert.match(out.report.error.message, /ANY date shape/i);
+  });
+
+  it('session evidence: probe.timestamp CALLED but no full absolute → the documented disclosed-ship exit unlocks (no red, no tag)', async () => {
+    const runner = VR_HARNESS.makeRunner(orchWithEvents(
+      { posts: [{ postTime: 'August 2' }, { postTime: 'a day ago' }] }, []
+    ));
+    const out = await runner({
+      service: SERVICE, input: {}, outputSchema: REQ_TIME_SCHEMA,
+      sessionEvidence: { probeTimestampCalls: 1, lastFullAbsolute: false, popoverSamples: [] }
+    });
+    assert.equal(out.report.ok, true, 'route exercised + partial receipt = honest disclosed ship per the gate contract');
+    assert.equal(out.report.events.indexOf('TIME_SOURCE_UNEXERCISED'), -1);
+    assert.ok(out.report.events.indexOf('RELATIVE_TIMESTAMP') !== -1, 'the advisory census still teaches the ladder');
+  });
+
+  it('session evidence: a popover sample carrying a FULL absolute date exempts the run', async () => {
+    const runner = VR_HARNESS.makeRunner(orchWithEvents(
+      { posts: [{ postTime: 'August 2' }, { postTime: 'August 9' }] }, []
+    ));
+    const out = await runner({
+      service: SERVICE, input: {}, outputSchema: REQ_TIME_SCHEMA,
+      sessionEvidence: { probeTimestampCalls: 0, lastFullAbsolute: false, popoverSamples: ['Shared with Public · Friday, September 11, 2026 at 1:43 AM'] }
+    });
+    assert.equal(out.report.ok, true);
+    assert.equal(out.report.events.indexOf('TIME_SOURCE_UNEXERCISED'), -1);
+  });
+
+  it('session evidence: popover samples with NO date shape and no probe calls → red names the session captures truthfully', async () => {
+    const runner = VR_HARNESS.makeRunner(orchWithEvents(
+      { posts: [{ postTime: 'August 2' }, { postTime: 'August 9' }] }, []
+    ));
+    const out = await runner({
+      service: SERVICE, input: {}, outputSchema: REQ_TIME_SCHEMA,
+      sessionEvidence: { probeTimestampCalls: 0, lastFullAbsolute: false, popoverSamples: ['G-Girls Page · Musician/band · 7.1K Followers'] }
+    });
+    assert.equal(out.report.ok, false);
+    assert.match(out.report.error.message, /popover/i);
+    assert.match(out.report.error.message, /ANY date shape/i);
+  });
+
+  it('no session evidence wired (legacy harness) keeps the original unexercised red', async () => {
+    const runner = VR_HARNESS.makeRunner(orchWithEvents(
+      { posts: [{ postTime: 'June 3' }, { postTime: 'June 14' }] }, []
+    ));
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: REQ_TIME_SCHEMA });
+    assert.equal(out.report.ok, false);
+    assert.match(out.report.error.message, /TIME_SOURCE_UNEXERCISED/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// session-tools wiring: the closure tracks probe.timestamp calls and the
+// popover LRU, and verifyRun passes them as sessionEvidence.
+describe('tooltip gate — session-tools sessionEvidence wiring', () => {
+  function makeDeps(runVerifyCapture) {
+    return {
+      rail: { executeDsl: async () => ({ result: [] }) },
+      runVerify: async (args) => {
+        if (runVerifyCapture) runVerifyCapture(args);
+        return { events: [], report: { ok: true, detectors: {} }, raw: {} };
+      },
+      getDraftService: () => ({ targetUrl: 'https://example.com', steps: [{ id: 's1', name: 'one', script: 'return 1', onSuccess: 'TERMINATE' }], config: {} }),
+      applyArtifact: async () => ({ ok: true }),
+      getTestInput: () => ({}),
+      getOutputSchema: () => null,
+      getSteps: () => [],
+      probeFactory: () => ({
+        timestamp: async () => ({ anchorsProbed: 3, hoversDispatched: 2, absolute: 'August 2', relative: null, candidates: [] }),
+        getLastSelectorDiagnostics: () => null
+      })
+    };
+  }
+
+  it('verify.run receives sessionEvidence: probe.timestamp call count + popover samples', async () => {
+    const { createSessionTools } = require('../lib/session-tools');
+    let captured = null;
+    const t = createSessionTools(makeDeps((a) => { captured = a; }));
+    await t.tools['probe.timestamp']({ containerSel: 'div.card' }, { session: {} });
+    await t.tools['verify.run']({}, { session: {} });
+    assert.ok(captured && captured.sessionEvidence, 'sessionEvidence rides the verify call');
+    assert.equal(captured.sessionEvidence.probeTimestampCalls, 1, 'the probe call was counted');
+    assert.ok(Array.isArray(captured.sessionEvidence.popoverSamples), 'popover samples ride along');
+  });
+});

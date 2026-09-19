@@ -61,6 +61,9 @@
       detectOversizedFields: w.detectOversizedFields,
       detectCountShortfall: w.detectCountShortfall,
       detectRelativeTimestamps: w.detectRelativeTimestamps,
+      extractDateSubstrings: w.extractDateSubstrings,
+      hasYearToken: w.hasYearToken,
+      looksLikeDate: w.looksLikeDate,
       validateOutputAgainstSchema: w.validateOutputAgainstSchema,
       scoreAttemptResult: w.scoreAttemptResult,
       stripSnapshotsFromTestResult: w.stripSnapshotsFromTestResult,
@@ -1124,31 +1127,75 @@
       // optional time fields keep the advisory path. Full absolutes pass
       // untouched (detectRelativeTimestamps never lists them).
       if (Array.isArray(detectors.relativeTimestamps) && detectors.relativeTimestamps.length) {
-        // Popover-route evidence = ANY of: (a) this run's diagnostics
-        // captured ≥1 popover (the 64th-round capturedPopovers plumbing),
-        // (b) an event preview carrying a probe.timestamp receipt marker
-        // (the tool name or its distinctive result keys).
-        let popoverRouteEvidence = false;
+        // Eighty-seventh log: the census was structurally blind — it scanned
+        // only THIS run's events, so research-tab probe.timestamp receipts
+        // were invisible (the model could never unlock the documented
+        // disclosed-ship exit) and raw-$hover captures in step scripts were
+        // invisible while the message claimed "NO tooltip evidence exists
+        // this session". Evidence now has three sources and the message
+        // tells the truth about WHICH route was exercised:
+        //   (a) this run's extractWithHover captures (+samples),
+        //   (b) hover-capture markers in step result previews (raw $hover),
+        //   (c) SESSION evidence passed by session-tools (probe.timestamp
+        //       call count/last receipt + the popover-capture LRU texts).
+        const sessionEv = (o.sessionEvidence && typeof o.sessionEvidence === 'object') ? o.sessionEvidence : null;
+        let inRunCaptured = 0;
+        const inRunSamples = [];
+        let previewProbeTimestamp = false;
+        let previewHoverCapture = false;
         for (const ev of events) {
-          if (popoverRouteEvidence) break;
           const diags = (ev && Array.isArray(ev.selectorDiagnostics)) ? ev.selectorDiagnostics : [];
           for (const dg of diags) {
             const cp = (dg && dg.capturedPopovers) || null;
             const captured = (dg && dg.hoverSummary && dg.hoverSummary.hovercardsCaptured) ||
               (cp ? (cp.captured || 0) : 0);
-            const samples = cp && Array.isArray(cp.samples) ? cp.samples.length : 0;
-            if (captured > 0 || samples > 0) { popoverRouteEvidence = true; break; }
-          }
-          if (!popoverRouteEvidence) {
-            const pv = String((ev && ev.resultPreview) || '');
-            if (/probe\.timestamp/.test(pv)) { popoverRouteEvidence = true; break; }
-            const p = previewJson(pv);
-            if (p && typeof p === 'object' && (p.anchorsProbed != null || p.hoversDispatched != null)) {
-              popoverRouteEvidence = true;
+            const samples = cp && Array.isArray(cp.samples) ? cp.samples : [];
+            if (captured > 0) inRunCaptured += captured;
+            for (const s of samples) {
+              if (typeof s === 'string' && s) inRunSamples.push(s);
             }
           }
+          const pv = String((ev && ev.resultPreview) || '');
+          if (/probe\.timestamp/.test(pv)) previewProbeTimestamp = true;
+          const p = previewJson(pv);
+          if (p && typeof p === 'object' && (p.anchorsProbed != null || p.hoversDispatched != null)) {
+            previewProbeTimestamp = true;
+          }
+          if (/"hovered"\s*:\s*true[\s\S]{0,600}?"htmlSnippet"\s*:\s*"</.test(pv)) previewHoverCapture = true;
         }
-        if (!popoverRouteEvidence) {
+        const sessionSamples = (sessionEv && Array.isArray(sessionEv.popoverSamples))
+          ? sessionEv.popoverSamples.filter((s) => typeof s === 'string' && s) : [];
+        const probeTimestampCalls = (sessionEv && typeof sessionEv.probeTimestampCalls === 'number')
+          ? sessionEv.probeTimestampCalls : 0;
+        const allSamples = inRunSamples.concat(sessionSamples);
+        // Date-shape scan over every captured popover text. Three levels:
+        //   FULL absolute (year token) — the tooltip route demonstrably
+        //     produces dates; teach binding it, never veto.
+        //   ANY date shape (relative phrases included — "yesterday at 5 PM"
+        //     is a time tooltip) — the time-route tooltips were captured;
+        //     the exercised-route disclosed-ship contract applies.
+        //   NO date shape (pure author/group cards) — the TIME anchor's
+        //     tooltip was never hovered; red, with the truthful message.
+        const REL_DATE_RE = /\b(?:seconds?|minutes?|hours?|hrs?|days?|weeks?|months?|years?)\s+ago\b|\byesterday\b|\btoday\b|just now|\d+\s*(?:min|sec|hr)\b/i;
+        const sampleDateShape = (t) => {
+          const str = String(t);
+          const subs = (typeof WU.extractDateSubstrings === 'function')
+            ? (WU.extractDateSubstrings(str) || []) : [];
+          return subs.length > 0 || REL_DATE_RE.test(str) ||
+            (typeof WU.looksLikeDate === 'function' && WU.looksLikeDate(str));
+        };
+        const sampleHasFullAbsolute = allSamples.some((t) => {
+          const subs = (typeof WU.extractDateSubstrings === 'function')
+            ? (WU.extractDateSubstrings(String(t)) || []) : [];
+          return subs.some((s) => (typeof WU.hasYearToken === 'function')
+            ? WU.hasYearToken(s) : /(?:19|20)\d{2}/.test(s));
+        });
+        const sampleAnyDateShape = allSamples.some(sampleDateShape);
+        const fullAbsoluteSeen = sampleHasFullAbsolute || !!(sessionEv && sessionEv.lastFullAbsolute);
+        const probedNoAbsolute = (probeTimestampCalls > 0 || previewProbeTimestamp) && !fullAbsoluteSeen;
+        const capturedNoDate = !probedNoAbsolute && !sampleAnyDateShape &&
+          (inRunCaptured > 0 || previewHoverCapture || sessionSamples.length > 0);
+        if (!fullAbsoluteSeen && !probedNoAbsolute && !sampleAnyDateShape) {
           for (const rt of detectors.relativeTimestamps) {
             if (!rt) continue;
             let itemRequired = null;
@@ -1156,15 +1203,17 @@
               itemRequired = WU.schemaItemRequiredForPath(outputSchema, String(rt.path || ''));
             }
             if (!itemRequired || itemRequired.indexOf(rt.field) === -1) continue;
-            const gateMsg =
-              'TIME_SOURCE_UNEXERCISED: ' + rt.path + ' carries page-visible labels (relative/partial; sample "' +
-              String(rt.sampleValue || '').slice(0, 40) + '") but the contract source is the hover tooltip, ' +
-              'and NO tooltip evidence exists this session: call probe.timestamp({containerSel}) once ' +
-              '(it hovers the time anchors and returns popover-text candidates) or bind the field via ' +
-              'read:\'hoverPopover\' with your own match — only after that receipt is partial/relative an ' +
-              'honest disclosed ship; without it, this is an unexercised source, not a page fact.';
+            const gateMsg = capturedNoDate
+              ? 'TIME_SOURCE_UNEXERCISED: ' + rt.path + ' carries page-visible labels (relative/partial; sample "' +
+                String(rt.sampleValue || '').slice(0, 40) + '") and popovers WERE captured this run/session — but none of the captured samples carries ANY date shape (they are author/group cards: the TIME anchor\'s tooltip specifically was never hovered). Call probe.timestamp({containerSel}) once (it hovers the time anchors and returns popover-text candidates) or hover the timestamp element itself — only after that receipt is partial/relative an honest disclosed ship; binding the page-visible label without exercising the time anchor is an unexercised source, not a page fact.'
+              : 'TIME_SOURCE_UNEXERCISED: ' + rt.path + ' carries page-visible labels (relative/partial; sample "' +
+                String(rt.sampleValue || '').slice(0, 40) + '") but the contract source is the hover tooltip, ' +
+                'and no tooltip evidence exists in this run or the session record: call probe.timestamp({containerSel}) once ' +
+                '(it hovers the time anchors and returns popover-text candidates) or bind the field via ' +
+                'read:\'hoverPopover\' with your own match — only after that receipt is partial/relative an ' +
+                'honest disclosed ship; without it, this is an unexercised source, not a page fact.';
             detectors.timeSourceUnexercised = detectors.timeSourceUnexercised || [];
-            detectors.timeSourceUnexercised.push({ field: rt.field, path: rt.path, sampleValue: rt.sampleValue, relativeCount: rt.relativeCount, partialAbsoluteCount: rt.partialAbsoluteCount });
+            detectors.timeSourceUnexercised.push({ field: rt.field, path: rt.path, sampleValue: rt.sampleValue, relativeCount: rt.relativeCount, partialAbsoluteCount: rt.partialAbsoluteCount, tier: capturedNoDate ? 'captured-no-date' : 'unexercised' });
             if (!error) {
               error = new Error(gateMsg);
             } else if (!/TIME_SOURCE_UNEXERCISED/.test(String(error.message))) {
@@ -1173,6 +1222,10 @@
             break; // one gate names the field; the detector rows carry the rest
           }
         }
+        // probedNoAbsolute → the gate's documented contract: the route WAS
+        // exercised and its best receipt is partial/relative — the disclosed
+        // ship is legal. No tag, no veto; RELATIVE_TIMESTAMP (report-only)
+        // already teaches the three exits.
       }
 
       const oc = (result ? WU.validateOutputAgainstSchema(finalData, outputSchema) : { ok: true, missing: [] }) || { ok: true, missing: [] };
