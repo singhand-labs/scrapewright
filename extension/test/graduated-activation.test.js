@@ -528,3 +528,100 @@ describe('step plan: engine lifecycle (spec §3.C)', () => {
     assert.match(lastDossier, /s2 \(two\): planned/, 'new step starts planned');
   });
 });
+
+// ---------------------------------------------------------------------------
+// 89th-round plan T5 (D4): updateStepPlanFromResult read s.error/s.result
+// — but production verify receipts carry compactSteps
+// {stepId,stepName,skipped,iterations,resultPreview} with the verdict at the
+// TOP level ({ok, error:{message,stepId}}) — every step got "tested — verify
+// ok" on RED verifies. Tests below feed the PRODUCTION receipt shape (the
+// shared-fixture rule: never hand-roll shapes again).
+describe('step plan: verify transitions consume the PRODUCTION receipt shape (89th-round D4)', () => {
+  function makeSession2(replies, calls, tools) {
+    return createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm(replies, calls),
+      tools: tools,
+      dossierFeeds: { containerHtml: () => null, popovers: () => [], lastVerify: () => null }
+    });
+  }
+
+  it('RED verify with error.stepId marks THAT step failed — compactSteps carry no per-step error', async () => {
+    const calls = [];
+    const script1 = "return await $extractList('div.p', { title: { selector: 'h3' } })";
+    const session = makeSession2([
+      reply(envelope('probe.count', { sel: 'div.p' })),
+      reply(envelope('service.update', { steps: [{ id: 's1', name: 'extract cards', script: script1 }] })),
+      reply(envelope('verify.run', {})),
+      reply(finishEnvelope())
+    ], calls, {
+      'probe.count': async () => ({ count: 5 }),
+      'service.update': async () => ({ updated: true }),
+      'verify.run': async () => ({
+        ok: false,
+        error: { message: 'REQUIRED_FIELD_EMPTY: posts.postTime is empty in 3/5 records', stepId: 's1' },
+        executedArtifactVersion: 1,
+        steps: [{ stepId: 's1', stepName: 'extract cards', skipped: false, iterations: 1, resultPreview: '{"posts":[…]}' }]
+      })
+    });
+    await session.run();
+    const dossiers = calls.map((c) => c.messages.filter((m) => m.role === 'system' && m.content.includes('EVIDENCE DOSSIER'))[0].content);
+    const last = dossiers[dossiers.length - 1];
+    assert.match(last, /s1 \(extract cards\): failed/, 'red verify + error.stepId → failed');
+    assert.match(last, /REQUIRED_FIELD_EMPTY/, 'the plan note carries the error head');
+  });
+
+  it('RED verify with NO stepId (field-level gate) keeps step statuses and the teaching redirects to the census', async () => {
+    const calls = [];
+    const script1 = "return await $extractList('div.q', { title: { selector: 'h3' } })";
+    const session = makeSession2([
+      reply(envelope('probe.count', { sel: 'div.q' })),
+      reply(envelope('service.update', { steps: [{ id: 's1', name: 'extract', script: script1 }] })),
+      reply(envelope('verify.run', {})),
+      reply(finishEnvelope())
+    ], calls, {
+      'probe.count': async () => ({ count: 5 }),
+      'service.update': async () => ({ updated: true }),
+      'verify.run': async () => ({
+        ok: false,
+        error: { message: 'TIME_SOURCE_UNEXERCISED: posts.postTime …', stepId: null },
+        steps: [{ stepId: 's1', stepName: 'extract', skipped: false, iterations: 1, resultPreview: '{}' }]
+      })
+    });
+    await session.run();
+    const dossiers = calls.map((c) => c.messages.filter((m) => m.role === 'system' && m.content.includes('EVIDENCE DOSSIER'))[0].content);
+    const last = dossiers[dossiers.length - 1];
+    assert.match(last, /s1 \(extract\): tested/, 'step executed fine — not failed');
+    assert.match(last, /failing layer is FIELD-level/, 'the teaching redirects to the census when every step ran');
+    assert.match(last, /\[LAST VERIFY CENSUS\]/);
+  });
+
+  it('skipped steps are not marked tested by a green verify', async () => {
+    const calls = [];
+    const script1 = "return await $extractList('div.r', { title: { selector: 'h3' } })";
+    const session = makeSession2([
+      reply(envelope('probe.count', { sel: 'div.r' })),
+      reply(envelope('service.update', { steps: [
+        { id: 's1', name: 'one', script: script1 },
+        { id: 's2', name: 'two', script: script1 }
+      ] })),
+      reply(envelope('verify.run', {})),
+      reply(finishEnvelope())
+    ], calls, {
+      'probe.count': async () => ({ count: 5 }),
+      'service.update': async () => ({ updated: true }),
+      'verify.run': async () => ({
+        ok: true,
+        steps: [
+          { stepId: 's1', stepName: 'one', skipped: false, iterations: 1, resultPreview: '{}' },
+          { stepId: 's2', stepName: 'two', skipped: true, skipReason: 'condition false', iterations: 0, resultPreview: '' }
+        ]
+      })
+    });
+    await session.run();
+    const dossiers = calls.map((c) => c.messages.filter((m) => m.role === 'system' && m.content.includes('EVIDENCE DOSSIER'))[0].content);
+    const last = dossiers[dossiers.length - 1];
+    assert.match(last, /s1 \(one\): tested/, 'executed step → tested');
+    assert.doesNotMatch(last, /s2 \(two\): tested/, 'skipped step is not blessed');
+  });
+});

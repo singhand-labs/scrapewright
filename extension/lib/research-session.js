@@ -575,12 +575,28 @@
     // the gate statically extracts from $-API call positions).
     function updateStepPlanFromResult(toolName, args, result) {
       if (!Array.isArray(state.stepPlan) || !state.stepPlan.length) return;
-      if (toolName === 'verify.run' && result && typeof result === 'object' && Array.isArray(result.steps)) {
-        for (const s of result.steps) {
+      if (toolName === 'verify.run' && result && typeof result === 'object') {
+        // 89th-round D4: production verify receipts carry compactSteps
+        // {stepId,stepName,skipped,iterations,resultPreview} with the verdict
+        // at the TOP level — the old s.error/s.result reads never matched and
+        // every step got "tested — verify ok" on RED verifies (skipped ones
+        // included). Legacy hand-rolled shapes (steps[].error) still work.
+        const okFlag = result.ok === true;
+        const errStepId = result.error && result.error.stepId ? String(result.error.stepId) : null;
+        const errHead = result.error && result.error.message ? String(result.error.message).slice(0, 80) : 'verify failed';
+        const steps = Array.isArray(result.steps) ? result.steps : [];
+        for (const s of steps) {
           if (!s || s.stepId == null) continue;
-          const failed = !!(s.error) || !!(s.result && (s.result.error || s.result.failed));
-          setStepPlanStatus(s.stepId, failed ? 'failed' : 'tested',
-            failed ? ('verify: ' + String(s.error || (s.result && s.result.error) || 'failed').slice(0, 60)) : 'verify ok');
+          if (s.skipped) continue; // a skipped step was never executed — no blessing
+          const legacyFailed = !!(s.error) || !!(s.result && (s.result.error || s.result.failed));
+          const failed = legacyFailed || (!okFlag && errStepId === String(s.stepId));
+          if (failed) {
+            setStepPlanStatus(s.stepId, 'failed', 'verify: ' + String(legacyFailed ? (s.error || (s.result && s.result.error) || 'failed') : errHead).slice(0, 80));
+          } else {
+            // the step EXECUTED (possibly on a red, field-level verify) —
+            // 'tested' with the redirect note; the census owns the field story.
+            setStepPlanStatus(s.stepId, 'tested', okFlag ? 'verify ok' : 'verify red — field-level, see census');
+          }
         }
         return;
       }

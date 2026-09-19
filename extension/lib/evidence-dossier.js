@@ -197,8 +197,14 @@
         const note = (e && e.note) ? ' — ' + String(e.note).slice(0, 80) : '';
         return '- ' + id + name + ': ' + status + note;
       });
-      stepPlanText = '[STEP PLAN]\n' + lines.join('\n') +
-        '\nresearch the FIRST non-grounded step; re-probe grounded steps only when their selector family fails in verify';
+      // 89th-round T5: the unconditional "research the FIRST non-grounded
+      // step" line misled when every step had executed and the failure was
+      // FIELD-level (red verify, no error.stepId) — redirect to the census.
+      const hasUngrounded = a.stepPlan.some((e) => e && e.status === 'planned');
+      const teaching = hasUngrounded
+        ? 'research the FIRST non-grounded step; re-probe grounded steps only when their selector family fails in verify'
+        : 'all steps executed — the failing layer is FIELD-level: read [LAST VERIFY CENSUS] rows and re-probe the named records/fields';
+      stepPlanText = '[STEP PLAN]\n' + lines.join('\n') + '\n' + teaching;
     }
 
     function assemble(popCount, skel, cens, scripts) {
