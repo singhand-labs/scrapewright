@@ -347,8 +347,23 @@
     return '[' + parts.join(',') + ']';
   }
 
+  // 89th-round T3: decision keys render FIRST under budget pressure — the
+  // uniform insertion-order shares let prose (scoreNote/shapeDistribution)
+  // consume budget while the rows the model acts on (error/detectors/
+  // finalResult/steps) collapsed into "[+N keys elided]" stubs.
+  const PRIORITY_KEYS = ['error', 'ok', 'detectors', 'finalResult', 'steps', 'schemaOk', 'score', 'events'];
+
   function compactObjectForLLM(obj, budget) {
-    const keys = Object.keys(obj);
+    // stable partition: priority keys first (in PRIORITY_KEYS order), then
+    // the remaining keys in their original insertion order — objects whose
+    // keys all fit render EXACTLY as before (byte-stable).
+    const allKeys = Object.keys(obj);
+    const prio = [];
+    for (const pk of PRIORITY_KEYS) {
+      const i = allKeys.indexOf(pk);
+      if (i !== -1) { prio.push(pk); allKeys.splice(i, 1); }
+    }
+    const keys = prio.concat(allKeys);
     const parts = [];
     let left = budget - 2; // braces
     for (let i = 0; i < keys.length; i++) {
@@ -411,7 +426,7 @@
     return label + ' → ' + (s.length > room ? s.slice(0, Math.max(0, room)) + '…[truncated]' : s);
   }
 
-  const api = { PROTOCOL_BLOCK, renderToolCatalog, buildSystemPrompt, extractJsonObject, parseAssistantTurn, summarizeToolResult, compactToolResultForLLM };
+  const api = { PROTOCOL_BLOCK, renderToolCatalog, buildSystemPrompt, extractJsonObject, parseAssistantTurn, summarizeToolResult, compactToolResultForLLM, compactObjectForLLM };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.SessionProtocol = api;
 })(typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : self));

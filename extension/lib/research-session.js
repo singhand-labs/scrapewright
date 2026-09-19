@@ -44,6 +44,10 @@
     retry: { attempts: 3, backoffMs: 400 },
     compaction: { thresholdChars: 60000, keepTurns: 6 },
     toolResultCapChars: 4000,
+    // 89th-round T3: verify.run receipts carry the decision-critical
+    // detectors/finalResult — a verify costs 65-110s, a 20K receipt is
+    // affordable next to a 4K budget that elided exactly those rows.
+    toolResultCaps: { 'verify.run': 20000 },
     // tool_result EVENT summaries ride the console mirror (wizard.js slices
     // at 600), so the event budget matches it exactly.
     eventSummaryCapChars: 600,
@@ -170,6 +174,14 @@
     const retry = Object.assign({}, DEFAULTS.retry, cfg.retry || {});
     const compaction = Object.assign({}, DEFAULTS.compaction, cfg.compaction || {});
     const toolResultCapChars = typeof cfg.toolResultCapChars === 'number' ? cfg.toolResultCapChars : DEFAULTS.toolResultCapChars;
+    const toolResultCaps = Object.assign({}, DEFAULTS.toolResultCaps, (cfg.toolResultCaps && typeof cfg.toolResultCaps === 'object') ? cfg.toolResultCaps : {});
+    // 89th-round T3: per-tool budget resolver — verify.run gets the larger
+    // receipt so detectors rows and finalResult field values survive.
+    function toolResultCapFor(toolName) {
+      const t = String(toolName || '');
+      if (toolResultCaps[t] && typeof toolResultCaps[t] === 'number' && toolResultCaps[t] > 0) return toolResultCaps[t];
+      return toolResultCapChars;
+    }
     const eventSummaryCapChars = typeof cfg.eventSummaryCapChars === 'number' ? cfg.eventSummaryCapChars : DEFAULTS.eventSummaryCapChars;
     const eventDetailCapChars = typeof cfg.eventDetailCapChars === 'number' ? cfg.eventDetailCapChars : DEFAULTS.eventDetailCapChars;
     const knowledge = {
@@ -1364,7 +1376,7 @@
           // invisible and the model guessed DSL shapes for want of evidence)
           // — compact structure-aware instead: all keys alive, head+tail
           // strings, array counts, tight label.
-          const summary = Protocol.compactToolResultForLLM(callLabel, result, toolResultCapChars);
+          const summary = Protocol.compactToolResultForLLM(callLabel, result, toolResultCapFor(turn.tool));
           state.transcript.push({ kind: 'tool', name: turn.tool, ok: !isErrorResult(result), result: result, summary: summary });
           // Sixty-eighth log F2: nudge on the 2nd consecutive identical
           // failure (same tool + same args + same error prefix). See the
