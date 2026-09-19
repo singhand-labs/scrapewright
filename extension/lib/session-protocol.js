@@ -251,10 +251,21 @@
     // no extra LLM round) and flag it so the engine can log a teaching note.
     let coercedFinish = false;
     if (obj.tool === 'finish' && !obj.finish) {
-      obj.finish = (obj.args && typeof obj.args === 'object' && !Array.isArray(obj.args)) ? obj.args
-        : { summary: (typeof obj.args === 'string' ? obj.args : '') };
+      // Eighty-ninth log: the flat variant {"tool":"finish","summary":"…"}
+      // (top-level sibling, NO args) also occurs — harvest it; args (the
+      // richer shape) wins when both are present.
+      let src = null;
+      if (obj.args && typeof obj.args === 'object' && !Array.isArray(obj.args)) {
+        src = obj.args;
+      } else {
+        const s = (typeof obj.args === 'string' && obj.args) ? obj.args
+          : (typeof obj.summary === 'string' ? obj.summary : '');
+        src = { summary: s };
+      }
+      obj.finish = src;
       delete obj.tool;
       delete obj.args;
+      delete obj.summary;
       coercedFinish = true;
     }
     if (obj.args !== undefined && (typeof obj.args !== 'object' || obj.args === null || Array.isArray(obj.args))) {

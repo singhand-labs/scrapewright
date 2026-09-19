@@ -136,3 +136,24 @@ describe('F3: teaching text + dispatch backstop', () => {
     }
   });
 });
+
+// Eighty-ninth log: the model sent the FLAT variant {"tool":"finish",
+// "summary":"…"} — summary as a TOP-LEVEL sibling with no args at all. The
+// coercion harvested only obj.args, so the summary was lost and the stopped
+// detail shipped bare VERIFY-disclosure blocks with no ship note (the user
+// sees a finish with no explanation). Harvest the top-level summary too.
+describe('89th log: flat-finish summary harvest', () => {
+  it('{"tool":"finish","summary":"…"} — top-level summary becomes finish.summary', () => {
+    const p = Protocol.parseAssistantTurn('{"think":"t","tool":"finish","summary":"Facebook 关键词搜索帖子采集服务（v4，verify 绿色…）"}');
+    assert.equal(p.ok, true);
+    assert.equal(p.turn.finish && p.turn.finish.summary, 'Facebook 关键词搜索帖子采集服务（v4，verify 绿色…）');
+    assert.equal(p.turn.tool, null);
+    assert.equal(p.turn.coercedFinish, true);
+  });
+
+  it('args still wins when BOTH are present (the richer shape)', () => {
+    const p = Protocol.parseAssistantTurn('{"tool":"finish","args":{"summary":"from-args"},"summary":"from-top"}');
+    assert.equal(p.ok, true);
+    assert.equal(p.turn.finish.summary, 'from-args');
+  });
+});
