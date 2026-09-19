@@ -506,6 +506,14 @@
     function attachKnowledge(result) {
       const events = (result && Array.isArray(result.events))
         ? result.events.filter(x => typeof x === 'string') : [];
+      // 89th-round D6: plain {error} results carry no events — extract the
+      // leading ALL_CAPS marker from the error message as a pseudo-event so
+      // units keyed on that marker still attach (verify error strings are
+      // 'MARKER: …' by convention; a no-marker error adds nothing).
+      if (!events.length && result && result.error && typeof result.error === 'object' && typeof result.error.message === 'string') {
+        const m = result.error.message.match(/^([A-Z][A-Z_]{4,}):/);
+        if (m) events.push(m[1]);
+      }
       if (!events.length || !knowledge.units.length) return;
       const matched = KB.matchUnits(knowledge.units, events);
       for (const u of matched) {
@@ -882,6 +890,7 @@
         }
         const text = Dossier.buildDossier({
           containerHtml: (typeof feeds.containerHtml === 'function') ? feeds.containerHtml() : null,
+          containerHtmlMeta: (typeof feeds.containerHtmlMeta === 'function') ? feeds.containerHtmlMeta() : null,
           popovers: popovers,
           evictedPopovers: evicted,
           lastVerify: (typeof feeds.lastVerify === 'function') ? feeds.lastVerify() : null,

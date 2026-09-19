@@ -195,7 +195,8 @@
         const name = (e && e.name) ? ' (' + String(e.name).slice(0, 60) + ')' : '';
         const status = String((e && e.status) || 'planned');
         const note = (e && e.note) ? ' — ' + String(e.note).slice(0, 80) : '';
-        return '- ' + id + name + ': ' + status + note;
+        const turn = (e && typeof e.sinceTurn === 'number') ? ' @turn ' + e.sinceTurn : '';
+        return '- ' + id + name + ': ' + status + note + turn;
       });
       // 89th-round T5: the unconditional "research the FIRST non-grounded
       // step" line misled when every step had executed and the failure was
@@ -209,7 +210,17 @@
 
     function assemble(popCount, skel, cens, scripts) {
       const parts = ['<EVIDENCE DOSSIER (authoritative, rebuilt each turn)>'];
-      parts.push('[CONTAINER SKELETON]\n' + (skel || '(no representative container captured yet — probe.sample wantHtml or probe.skeleton to capture one)'));
+      // 89th-round D5: disclose skeleton staleness — captured before a
+      // page.open/verify.run it may describe a page the model no longer sees.
+      let staleNote = '';
+      if (skel && a.containerHtmlMeta && typeof a.containerHtmlMeta === 'object') {
+        const meta = a.containerHtmlMeta;
+        if (meta.staleBy) {
+          const ageS = typeof meta.at === 'number' ? Math.max(0, Math.round((Date.now() - meta.at) / 1000)) : '?';
+          staleNote = '\n(STALE — captured ' + ageS + 's ago; a ' + meta.staleBy + ' has run since)';
+        }
+      }
+      parts.push('[CONTAINER SKELETON]\n' + (skel || '(no representative container captured yet — probe.sample wantHtml or probe.skeleton to capture one)') + staleNote);
       const ps = popovers.slice(0, popCount).map((p, i) =>
         '- #' + (i + 1) + ' anchor=' + JSON.stringify(p.anchor) + ' text=' + JSON.stringify(p.text)).join('\n');
       parts.push('[POPOVER CAPTURES] (' + popCount + (popoverTrimmed ? ', ' + popoverTrimmed + ' oldest trimmed for budget' : '') + ')\n' +

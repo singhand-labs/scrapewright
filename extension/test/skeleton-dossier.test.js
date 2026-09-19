@@ -384,3 +384,32 @@ describe('renderVerifyCensus — purpose-built renderer', () => {
     assert.match(txt, /posts\.postTime/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// T6 (89th-round plan D5): skeleton age/staleness — a skeleton captured
+// before a page.open or verify.run is indistinguishable from a fresh one.
+describe('container skeleton staleness stamp (89th-round D5)', () => {
+  it('a fresh meta renders no marker; a staleBy marker renders with age', () => {
+    const html = '<div id="c"><span>hi</span></div>';
+    const fresh = Dossier.buildDossier({ containerHtml: html, containerHtmlMeta: { at: Date.now(), staleBy: null } });
+    assert.ok(!/STALE/.test(fresh), 'fresh skeleton carries no stale marker');
+    const stale = Dossier.buildDossier({ containerHtml: html, containerHtmlMeta: { at: Date.now() - 120000, staleBy: 'page.open' } });
+    assert.match(stale, /STALE.*page\.open/, 'stale marker names the tool that made it stale');
+  });
+
+  it('session-tools stamps the meta and marks staleness on page.open / verify.run (source audit)', () => {
+    const st = fs.readFileSync(path.join(__dirname, '..', 'lib', 'session-tools.js'), 'utf8');
+    assert.match(st, /containerHtmlMeta/, 'meta tracked');
+    assert.match(st, /staleBy/, 'staleness marked');
+  });
+});
+
+// T7 (89th-round plan D6, minimal): plan lines render sinceTurn.
+describe('step plan renders sinceTurn (89th-round D6 minimal)', () => {
+  it('plan lines carry the @turn age marker', () => {
+    const txt = Dossier.buildDossier({
+      stepPlan: [{ stepId: 's1', name: 'x', status: 'grounded', note: 'probe.count', sinceTurn: 12 }]
+    });
+    assert.match(txt, /s1 \(x\): grounded — probe\.count @turn 12/);
+  });
+});

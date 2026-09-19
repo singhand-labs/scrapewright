@@ -751,6 +751,9 @@
     // wrapper below and verifyRun's sessionEvidence pass-through).
     const tooltipRoute = { probeTimestampCalls: 0, lastAnchorsProbed: null, lastFullAbsolute: false };
     let lastContainerHtml = null;
+    // 89th-round D5: skeleton age/staleness — a skeleton captured before a
+    // page.open or verify.run is indistinguishable from a fresh one.
+    let containerHtmlMeta = null;
     function harvestDossierFeeds(name, result) {
       try {
         if (typeof probes.getLastSelectorDiagnostics === 'function') {
@@ -776,7 +779,10 @@
         }
         if (typeof probes.getLastFetchedHtml === 'function') {
           const h = probes.getLastFetchedHtml();
-          if (typeof h === 'string' && h) lastContainerHtml = h;
+          if (typeof h === 'string' && h) {
+            lastContainerHtml = h;
+            containerHtmlMeta = { at: Date.now(), staleBy: null };
+          }
         }
       } catch (e) { /* dossier feeding is best-effort, never a probe failure */ }
     }
@@ -795,6 +801,8 @@
         probesSinceLastVerify += 1;
         const r = await fn(args, ctx);
         harvestDossierFeeds(name, r);
+        // 89th-round D5: a page.open invalidates the captured skeleton.
+        if (name === 'page.open' && containerHtmlMeta) containerHtmlMeta.staleBy = 'page.open';
         return r;
       };
     }
@@ -814,6 +822,9 @@
       const outputSchema = d.getOutputSchema() ||
         ((ioConfirmedSchemas || ledgerConfirmedSchemas(ctx) || {}).outputSchema) || null;
       const __verifyT0 = Date.now();
+      // 89th-round D5: verify opens a FRESH tab — the research-tab skeleton
+      // predates it; disclose rather than let it read as current.
+      if (containerHtmlMeta) containerHtmlMeta.staleBy = containerHtmlMeta.staleBy || 'verify.run';
       // Eighty-seventh log: session-scoped evidence — the gate must see
       // research-tab probe.timestamp receipts and the popover-capture LRU,
       // not just this run's own diagnostics.
@@ -1462,6 +1473,7 @@
       // in the transcript, so compaction cannot eat it.
       dossierFeeds: {
         containerHtml: () => lastContainerHtml,
+        containerHtmlMeta: () => containerHtmlMeta,
         popovers: () => popoverCaptureLru,
         // Eighty-ninth-round shape fix (third recurrence of the class): the
         // dossier reads REPORT-shaped keys (ok/error/score/detectors) — pass
