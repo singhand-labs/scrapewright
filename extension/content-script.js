@@ -468,18 +468,29 @@
         }
         // Seventieth log F1 (inline mirror): budget-hit runs return the
         // partial envelope; all-fit runs keep the plain array.
+        // Eighty-eighth log (inline mirror kept in sync): the envelope IS
+        // the records array with NON-ENUMERABLE partial/records annotations
+        // — `rs.slice(...)` on a budget-hit result crashed twice (86th v10,
+        // 88th v5).
         if (processedCount < containers.length) {
-          return {
-            records: outRecords,
-            partial: {
-              processed: processedCount,
-              total: containers.length,
-              maxWallMs: maxWallMs,
-              note: 'wall budget reached — ' + processedCount + ' of ' + containers.length +
-                ' containers processed; re-run with containerRange:[' + processedCount + ',' + containers.length +
-                '] (or maxContainers) to continue, or raise opts.maxWallMs'
-            }
-          };
+          try {
+            Object.defineProperty(outRecords, 'partial', {
+              value: {
+                processed: processedCount,
+                total: containers.length,
+                maxWallMs: maxWallMs,
+                note: 'wall budget reached — ' + processedCount + ' of ' + containers.length +
+                  ' containers processed; re-run with containerRange:[' + processedCount + ',' + containers.length +
+                  '] (or maxContainers) to continue, or raise opts.maxWallMs'
+              },
+              enumerable: false, configurable: true
+            });
+            Object.defineProperty(outRecords, 'records', {
+              get() { return outRecords; },
+              enumerable: false, configurable: true
+            });
+          } catch (_) { /* annotations are best-effort */ }
+          return outRecords;
         }
         return outRecords;
       })();
@@ -4398,10 +4409,15 @@
     );
     var partialEnvelope = null;
     var records = ret;
+    // Eighty-eighth log: the budget-hit envelope is the records ARRAY with
+    // non-enumerable partial/records annotations (rs.slice crashed twice on
+    // the old {records, partial} object) — accept both shapes.
     if (ret && typeof ret === 'object' && !Array.isArray(ret) &&
         Array.isArray(ret.records) && ret.partial && typeof ret.partial === 'object') {
       records = ret.records;
       partialEnvelope = ret;
+    } else if (Array.isArray(ret) && ret.partial && typeof ret.partial === 'object') {
+      partialEnvelope = { partial: ret.partial };
     }
     // Compute diagnostics: reuse the extractList diagnostics shape for
     // per-field match data, then layer on a hover summary.

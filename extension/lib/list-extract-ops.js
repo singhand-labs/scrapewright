@@ -667,18 +667,30 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
   // of the bare array — the resume advice names the caller-side range opts
   // (containerRange is applied by the content-script wrapper BEFORE this
   // helper, so [processed, total) composes natively without re-hovering).
+  // Eighty-eighth log (SECOND crash occurrence: 86th v10 + 88th v5 both
+  // died as `rs.slice is not a function`): the envelope IS the records
+  // array now, carrying NON-ENUMERABLE partial/records annotations — array
+  // consumers (slice/map/spread) keep working, envelope consumers keep
+  // working, and JSON serialization of the records stays clean.
   if (processedCount < containers.length) {
-    return {
-      records: outRecords,
-      partial: {
-        processed: processedCount,
-        total: containers.length,
-        maxWallMs: maxWallMs,
-        note: 'wall budget reached — ' + processedCount + ' of ' + containers.length +
-          ' containers processed; re-run with containerRange:[' + processedCount + ',' + containers.length +
-          '] (or maxContainers) to continue, or raise opts.maxWallMs'
-      }
-    };
+    try {
+      Object.defineProperty(outRecords, 'partial', {
+        value: {
+          processed: processedCount,
+          total: containers.length,
+          maxWallMs: maxWallMs,
+          note: 'wall budget reached — ' + processedCount + ' of ' + containers.length +
+            ' containers processed; re-run with containerRange:[' + processedCount + ',' + containers.length +
+            '] (or maxContainers) to continue, or raise opts.maxWallMs'
+        },
+        enumerable: false, configurable: true
+      });
+      Object.defineProperty(outRecords, 'records', {
+        get() { return outRecords; },
+        enumerable: false, configurable: true
+      });
+    } catch (_) { /* annotations are best-effort */ }
+    return outRecords;
   }
   return outRecords;
 }

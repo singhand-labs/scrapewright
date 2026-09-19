@@ -61,21 +61,29 @@ for (const [label, getOps] of opsFactories()) {
       const { dom, containers } = feedDom(10);
       const out = await getOps(dom).extractWithHoverRecords(
         containers, FIELD_MAP, HOVER_CONFIG, slowHover(), { maxWallMs: 60 });
-      assert.ok(out && !Array.isArray(out), 'partial run wraps in an envelope');
-      assert.ok(Array.isArray(out.records));
-      assert.ok(out.partial.processed >= 1, 'at least one container processed');
+      // Eighty-eighth log (SECOND occurrence of the crash, 86th v10 + 88th
+      // v5 both died as `rs.slice is not a function`): the envelope IS the
+      // records array now, with non-enumerable partial/records annotations —
+      // array consumers (slice/map) keep working, envelope consumers too.
+      assert.ok(Array.isArray(out), 'the budget-hit envelope is the records ARRAY');
+      assert.ok(out.partial && out.partial.processed >= 1, 'non-enumerable partial rides the array');
       assert.ok(out.partial.processed < 10, 'budget stopped before the end');
       assert.equal(out.partial.total, 10);
       assert.equal(out.partial.maxWallMs, 60);
-      assert.equal(out.records.length, out.partial.processed);
+      assert.equal(out.length, out.partial.processed);
+      assert.equal(out.records, out, 'legacy .records alias resolves to the array itself');
       assert.match(out.partial.note, /wall budget reached/);
       assert.match(out.partial.note, /containerRange:\[\d+,10\]/);
       // processed records are complete: fields + hovercards attached.
-      for (const r of out.records) {
+      for (const r of out) {
         assert.ok(typeof r.title === 'string');
         assert.equal(r.hovercards.length, 1);
         assert.equal(r.hovercards[0].hovered, true);
       }
+      // THE 86th/88th crash shape: array methods on the budget-hit result
+      // must not throw.
+      assert.equal(out.slice(0, 1).length, 1, 'rs.slice works on the partial result');
+      assert.equal(out.map((r) => r.title).length, out.length, 'rs.map works too');
     });
 
     it('all containers fit → plain records array, no envelope', async () => {
@@ -108,7 +116,7 @@ for (const [label, getOps] of opsFactories()) {
       // Pass 1: wall budget cut at K.
       const first = await getOps(dom).extractWithHoverRecords(
         containers, FIELD_MAP, HOVER_CONFIG, countingHover, { maxWallMs: 60 });
-      assert.ok(!Array.isArray(first) && first.partial);
+      assert.ok(Array.isArray(first) && first.partial, 'array envelope with partial annotation');
       const K = first.partial.processed;
       const hoversAfterFirst = hovers;
       // Pass 2: the resume range [K, N) — exactly what the content-script
