@@ -102,3 +102,23 @@ describe('93rd-round: unusedCaptures note distinguishes enrichment cards from fe
     assert.match(note, /exclusion|exclude/i, 'the note names the exclusion distinction');
   });
 });
+
+// Ninety-fourth-round: anchorLog showed addedNodes:3 with reason
+// no_hover_signal_early_exit — nodes MOUNTED but all were rejected by the
+// picker, and the receipt could not show WHAT the journal captured. The
+// model concluded "no absolute year on these cards" without seeing the
+// journal contents. anchorLog entries now carry the journal texts.
+describe('94th-round: anchorLog carries journal text samples', () => {
+  it('probe.timestamp anchorLog entries include addedTexts (tag-stripped heads of addedNodesHtml)', () => {
+    const i = PT_SRC.indexOf('const anchorLog = cards.slice(0, 5).map');
+    assert.ok(i !== -1, 'anchorLog builder found');
+    const block = PT_SRC.slice(i, i + 900);
+    assert.match(block, /addedTexts/, 'entries sample the journal texts');
+  });
+  it('$timestamp anchorLog entries include addedTexts too', () => {
+    const ts = CS_SRC.slice(CS_SRC.indexOf('async function domTimestamp('), CS_SRC.indexOf('async function domExists('));
+    const i = ts.indexOf('anchorLog.push({');
+    assert.ok(i !== -1);
+    assert.match(ts.slice(i, i + 600), /addedTexts/, 'the DSL-side log samples journal texts');
+  });
+});

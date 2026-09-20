@@ -2495,12 +2495,23 @@
       // Ninety-first-round anchorLog entry: this anchor's hover reality.
       let __desc = '';
       try { __desc = String((lbl && lbl.text) || anchor.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 40); } catch (_) { __desc = ''; }
+      // Ninety-fourth-round: sample the journal texts (counts alone cannot
+      // adjudicate "never mounts" — mounted-but-rejected looks the same).
+      let __addedTexts = [];
+      try {
+        if (hv && Array.isArray(hv.addedNodesHtml)) {
+          __addedTexts = hv.addedNodesHtml.slice(0, 2)
+            .map((h2) => String(h2 || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100))
+            .filter(Boolean);
+        }
+      } catch (_) { __addedTexts = []; }
       anchorLog.push({
         desc: __desc || null,
         hovered: !!(hv && (hv.hovered === true || hv.hoverDispatched === true)),
         captured: !!(hv && hv.htmlSnippet),
         reason: (hv && hv.reason) || null,
-        addedNodes: (hv && Array.isArray(hv.addedNodesHtml)) ? hv.addedNodesHtml.length : 0
+        addedNodes: (hv && Array.isArray(hv.addedNodesHtml)) ? hv.addedNodesHtml.length : 0,
+        addedTexts: __addedTexts
       });
     }
     // Pick order (sixty-ninth log): full absolute (year token present) →

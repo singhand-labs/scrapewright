@@ -887,6 +887,11 @@
       // Ninety-first-round anchorLog: per-anchor hover reality — what was
       // hovered, what mounted, what the picker did — so a tooltip that
       // never yields is diagnosable from the receipt instead of guessed at.
+      // Ninety-fourth-round: addedNodes COUNTS alone cannot adjudicate "the
+      // tooltip never mounts" — nodes may mount and ALL get rejected by the
+      // picker (live: addedNodes:3 + reason no_hover_signal_early_exit).
+      // Sample the journal texts so the receipt shows WHAT mounted.
+      const stripTagsLocal = (t) => String(t || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
       const anchorLog = cards.slice(0, 5).map((h, i) => ({
         anchor: i,
         desc: String((h && h.anchorText) || (h && h.labelledbyText) || '').slice(0, 40) || null,
@@ -894,7 +899,10 @@
         hovered: !!(h && (h.hovered === true || h.hoverDispatched === true)),
         captured: !!(h && h.htmlSnippet),
         reason: (h && h.reason) || null,
-        addedNodes: Array.isArray(h && h.addedNodesHtml) ? h.addedNodesHtml.length : 0
+        addedNodes: Array.isArray(h && h.addedNodesHtml) ? h.addedNodesHtml.length : 0,
+        addedTexts: Array.isArray(h && h.addedNodesHtml)
+          ? h.addedNodesHtml.slice(0, 2).map((html) => stripTagsLocal(html).slice(0, 100)).filter(Boolean)
+          : []
       }));
       const out = {
         containerSel: containerSel,
