@@ -4657,6 +4657,22 @@ function validateForExecution(steps) {
         error: `Step ${i + 1} (${step.id}) has a pending annotation placeholder. Annotate it before deploying.`
       };
     }
+    // Ninety-eighth round: update-time SYNTAX gate. The final artifact of a
+    // live session shipped a step script contaminated by pasted evidence
+    // text — validateForExecution never parsed scripts, so syntax errors
+    // surfaced only at verify (or NEVER, when the budget died first) and a
+    // broken script became the deployable version behind a prose
+    // disclosure. Parse with the same async-body shape the executor uses;
+    // reject with the twentieth-log locator teaching.
+    try {
+      // eslint-disable-next-line no-new-func
+      new Function('__input__', '__stepResults__', '__lastResult__', 'return (async function(__input__) { ' + step.script + '\n })(__input__)');
+    } catch (e) {
+      return {
+        valid: false,
+        error: `Step ${i + 1} (${step.id}) script is NOT parseable JavaScript (caught at UPDATE time — paste errors and mixed-in prose are rejected before the artifact ever lands): ${(e && e.message) || String(e)}. Rewrite the step script as executable JS; evidence notes belong in think/finish, never inside the script.`
+      };
+    }
     // WS3.2: a poll/wait step (maxIterations>1) must emit a retry/done signal so
     // it can actually loop and terminate. Without one it runs once and advances
     // (no retry) — the most common silent misconfiguration under Model A.

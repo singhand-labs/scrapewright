@@ -144,3 +144,30 @@ describe('97th-round: openTab fn-source wrap invokes the function', () => {
     return wrapped({}).then((r) => assert.deepEqual(r, { ran: true }));
   });
 });
+
+// Ninety-eighth-round (ce-debug): the session's FINAL v5 artifact carried a
+// step script with pasted evidence-text (not JS) — service.update accepted
+// it (validateForExecution never PARSES scripts; syntax errors only surface
+// at verify/run), and with no budget left the broken artifact became the
+// deployable version behind a prose disclosure. Gate: update-time parse.
+describe('98th-round: update-time syntax gate', () => {
+  const WU = require('../lib/wizard-utils');
+  it('validateForExecution REJECTS a syntactically invalid step script with a locator message', () => {
+    const steps = [{ id: 's1', name: 'x', script: 'const a = 1;)\nreturn a;', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }];
+    const out = WU.validateForExecution(steps);
+    assert.equal(out.valid, false);
+    assert.match(out.error, /SYNTAX|parse/i);
+    assert.match(out.error, /s1/);
+  });
+  it('a pasted-evidence-text script (multi-line prose, no return) is rejected too', () => {
+    const steps = [{ id: 's2', name: 'y', script: 'v4 修复意图：isDate 非锚定正则\naria-label 评论计数回退\n如需部署请重写', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }];
+    const out = WU.validateForExecution(steps);
+    assert.equal(out.valid, false);
+    assert.match(out.error, /SYNTAX|parse/i);
+  });
+  it('a valid async-body script with top-level await/$ calls passes', () => {
+    const steps = [{ id: 's3', name: 'z', script: 'const r = await $extractList(".c",{t:{selector:".t"}}); return r;', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }];
+    const out = WU.validateForExecution(steps);
+    assert.equal(out.valid, true, JSON.stringify(out));
+  });
+});

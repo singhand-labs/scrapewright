@@ -1933,6 +1933,17 @@ async function confirmDeploy() {
       deployReasons.push('即将部署的工件 v' + ua.currentV + ' 从未验证（最后验证通过 ' + (ua.verifiedV > 0 ? 'v' + ua.verifiedV : '无') + '）');
     }
   } catch (e) { /* gate text is best-effort; the banner carries the primary signal */ }
+  // Ninety-eighth round: syntax-broken artifacts are undeployable, full stop —
+  // not a confirm-and-proceed warning. The live session's final v5 carried a
+  // script contaminated by pasted evidence text; the unverified banner alone
+  // let it ride a prose disclosure to the deploy button.
+  try {
+    const gate = validateForExecution(wizardState.steps || []);
+    if (gate && gate.valid === false && /parseable|SYNTAX|Update/i.test(String(gate.error))) {
+      alert('无法部署：工件步骤脚本不是可解析的 JavaScript（更新时语法门拒绝）——请先修复或回滚到最后验证版本。\n' + String(gate.error).slice(0, 300));
+      return;
+    }
+  } catch (e) { /* the hard gate is best-effort; the update-time gate is the primary defense */ }
   if (deployReasons.length) {
     if (!confirm('Deploy this service despite:\n - ' + deployReasons.join('\n - ') + '\n\nProceed?')) return;
   }
