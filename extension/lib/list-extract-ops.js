@@ -529,6 +529,10 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
           // tooltip's full date lives here when the 50×50 gate turns the
           // strip away). Bindable via read:'hoverPopover'-style routing.
           rejectedAddedTexts: (r && Array.isArray(r.rejectedAddedTexts) && r.rejectedAddedTexts.length) ? r.rejectedAddedTexts.slice(0, 3) : undefined,
+          // Ninety-first-round user directive: the dynamic-DOM journal rides
+          // every hovercard — the page unmounts hover-rendered nodes on
+          // mouse-out; this window is the only cache of them.
+          addedNodesHtml: (r && Array.isArray(r.addedNodesHtml) && r.addedNodesHtml.length) ? r.addedNodesHtml.slice(0, 3).map((h) => (h.length > 1200 ? h.slice(0, 1200) + '<!--capped-->' : h)) : undefined,
           labelledbyAttr: (r && typeof r.labelledbyAttr === 'string' && r.labelledbyAttr) ? r.labelledbyAttr : null,
           labelledbyNote: (r && typeof r.labelledbyNote === 'string' && r.labelledbyNote) ? r.labelledbyNote : null,
           // 机械-语义分离（spec 3.B）：剥标签原文，模型免写 DOM 解析。

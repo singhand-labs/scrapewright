@@ -336,6 +336,7 @@
                 // anchor-label harvest forwarding, failed entries included.
                 labelledbyText: (r && typeof r.labelledbyText === 'string' && r.labelledbyText) ? r.labelledbyText : null,
                 rejectedAddedTexts: (r && Array.isArray(r.rejectedAddedTexts) && r.rejectedAddedTexts.length) ? r.rejectedAddedTexts.slice(0, 3) : undefined,
+                addedNodesHtml: (r && Array.isArray(r.addedNodesHtml) && r.addedNodesHtml.length) ? r.addedNodesHtml.slice(0, 3).map((h) => (h.length > 1200 ? h.slice(0, 1200) + '<!--capped-->' : h)) : undefined,
                 labelledbyAttr: (r && typeof r.labelledbyAttr === 'string' && r.labelledbyAttr) ? r.labelledbyAttr : null,
                 labelledbyNote: (r && typeof r.labelledbyNote === 'string' && r.labelledbyNote) ? r.labelledbyNote : null,
                 // 机械-语义分离（spec 3.B）：剥标签原文，模型免写 DOM 解析。
@@ -2411,6 +2412,7 @@
     let hoversDone = 0;
     let hoversReal = 0;
     let hoverBudgetExhausted = false;
+    const anchorLog = [];
     for (let ai = 0; ai < anchors.length; ai++) {
       const anchor = anchors[ai];
       if (!anchor || anchor.nodeType !== 1) continue;
@@ -2474,6 +2476,32 @@
           }
         }
       }
+      // Ninety-first-round user directive: the dynamic-DOM journal — every
+      // node rendered during the dwell and serialized before mouse-out
+      // unmounted it. The tooltip's full-absolute date is in here even when
+      // the visual picker rejected the strip or nothing was "captured".
+      if (hv && Array.isArray(hv.addedNodesHtml)) {
+        for (const jhtml of hv.addedNodesHtml) {
+          const jtxt = String(jhtml || '').replace(/<[^>]*>/g, ' ');
+          if (!jtxt.trim()) continue;
+          for (const sub of extractDateSubstringsCS(jtxt)) {
+            const k = 'addedDom|' + sub;
+            if (seen.has(k)) continue;
+            seen.add(k);
+            candidates.push({ value: sub.slice(0, 120), source: 'addedDom', relative: TS_REL_RE.test(sub), partial: !TS_REL_RE.test(sub) && !TS_hasYear(sub) });
+          }
+        }
+      }
+      // Ninety-first-round anchorLog entry: this anchor's hover reality.
+      let __desc = '';
+      try { __desc = String((lbl && lbl.text) || anchor.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 40); } catch (_) { __desc = ''; }
+      anchorLog.push({
+        desc: __desc || null,
+        hovered: !!(hv && (hv.hovered === true || hv.hoverDispatched === true)),
+        captured: !!(hv && hv.htmlSnippet),
+        reason: (hv && hv.reason) || null,
+        addedNodes: (hv && Array.isArray(hv.addedNodesHtml)) ? hv.addedNodesHtml.length : 0
+      });
     }
     // Pick order (sixty-ninth log): full absolute (year token present) →
     // partial absolute (year-less month-day) → relative.
@@ -2491,7 +2519,8 @@
       relative: relative ? relative.value : null,
       candidates: candidates,
       anchorsProbed: anchors.length,
-      hoversDispatched: hoversDone
+      hoversDispatched: hoversDone,
+      anchorLog: anchorLog.slice(0, 5)
     };
     if (!candidates.length) {
       if (!anchors.length) {
@@ -4147,6 +4176,34 @@
     // the payload the visual picker could not see (zero-height/hidden).
     var rejectedAddedTexts = collectRejectedAddedTexts(rejectedAddedNodes);
 
+    // Ninety-first-round user directive (manual page investigation): hover
+    // popovers are rendered DYNAMICALLY on mouse-over and REMOVED from the
+    // DOM on mouse-out — expecting to read the tab's data in one pass after
+    // the operations finish is impossible. The dwell window is the ONLY
+    // moment the dynamic DOM exists, so journal EVERY added candidate's
+    // HTML here (INCLUDING nodes the visual picker rejected — a one-line
+    // date strip loses the scoring cascade to bigger chrome, but its text
+    // is exactly the payload). This rides the result for immediate use and
+    // feeds the session-side capture LRU for later analysis.
+    var addedNodesHtml = [];
+    try {
+      var journaled = new Set();
+      var journalSources = candidatePool.concat(rejectedAddedNodes);
+      // newest-mounted last: the tooltip tends to mount LAST (after portal
+      // chrome), so walk the pool backwards to surface it first.
+      for (var ji = journalSources.length - 1; ji >= 0 && addedNodesHtml.length < 5; ji--) {
+        var jn = journalSources[ji];
+        if (!jn || jn.nodeType !== 1) continue;
+        var jhtml = '';
+        try { jhtml = String(jn.outerHTML || ''); } catch (_) { jhtml = ''; }
+        if (!jhtml) continue;
+        var jkey = jhtml.slice(0, 120);
+        if (journaled.has(jkey)) continue;
+        journaled.add(jkey);
+        addedNodesHtml.push(jhtml.length > 2000 ? jhtml.slice(0, 2000) + '<!--JOURNAL:node capped at 2000 of ' + jhtml.length + '-->' : jhtml);
+      }
+    } catch (_) { /* journaling is best-effort; the picker result stands */ }
+
     // Forty-second log (user design directive: dynamic content triggered by
     // a simulated action must be read back into THIS tool in the SAME
     // operation, before later actions can wash it away): resolve the
@@ -4282,6 +4339,13 @@
     if (!htmlSnippet && rejectedAddedTexts.length) {
       result.rejectedAddedTexts = rejectedAddedTexts;
       result.rejectedAddedNote = "no visible popover was captured, but the hover mounted node(s) whose text was READ out of the visual filter's rejects (hidden or zero-height mounts). reads are not visibility-gated: if the value you need appears in rejectedAddedTexts, bind the field from it directly instead of waiting for a visible popover.";
+    }
+    // Ninety-first-round user directive: the dynamic DOM journal rides EVERY
+    // result (captured or not) — the page unmounts hover-rendered nodes on
+    // mouse-out, so this window is the only chance to cache them.
+    if (addedNodesHtml.length) {
+      result.addedNodesHtml = addedNodesHtml;
+      result.addedNodesNote = 'dynamic DOM rendered during this hover dwell, serialized before mouse-out unmounts it (picker verdicts do NOT gate this list — a rejected one-line strip can carry the payload); extract from these nodes anything the visible popover did not yield';
     }
     notifyBackgroundDiagnostic('hover_anchor_timing', {
       selector: selectorForLog,

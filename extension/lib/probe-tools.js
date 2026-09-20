@@ -849,6 +849,16 @@
         if (Array.isArray(h.rejectedAddedTexts)) {
           for (const rej of h.rejectedAddedTexts) push(rej, 'hover.rejectedText');
         }
+        // Ninety-first-round user directive: the dynamic-DOM journal — every
+        // node the hover rendered before mouse-out unmounted it, picker
+        // verdicts not gating. A full-absolute date in here IS the tooltip
+        // payload even when the visual picker never blessed the strip.
+        if (Array.isArray(h.addedNodesHtml)) {
+          for (const html of h.addedNodesHtml) {
+            const txt = String(html || '').replace(/<[^>]*>/g, ' ');
+            for (const sub of extractDateSubstringsRef(txt)) push(sub, 'hover.addedDom');
+          }
+        }
         // The captured popover's own text — popover markup is structurally
         // prose ("Shared with Public · Friday, September 11, 2026 at …"), so
         // it NEVER takes the whole-value path: strip markup and extract the
@@ -874,9 +884,22 @@
       const absolute = (candidates.find((c) => !c.relative && !c.partial) ||
                         candidates.find((c) => !c.relative) || null);
       const relative = (candidates.find((c) => c.relative) || null);
+      // Ninety-first-round anchorLog: per-anchor hover reality — what was
+      // hovered, what mounted, what the picker did — so a tooltip that
+      // never yields is diagnosable from the receipt instead of guessed at.
+      const anchorLog = cards.slice(0, 5).map((h, i) => ({
+        anchor: i,
+        desc: String((h && h.anchorText) || (h && h.labelledbyText) || '').slice(0, 40) || null,
+        href: (h && h.anchorHref) ? String(h.anchorHref).slice(0, 80) : null,
+        hovered: !!(h && (h.hovered === true || h.hoverDispatched === true)),
+        captured: !!(h && h.htmlSnippet),
+        reason: (h && h.reason) || null,
+        addedNodes: Array.isArray(h && h.addedNodesHtml) ? h.addedNodesHtml.length : 0
+      }));
       const out = {
         containerSel: containerSel,
         anchorSel: anchorSel,
+        anchorLog: anchorLog,
         // 机械-语义分离（spec 3.B）：heuristicValue 是日历通用正则的
         // 便捷默认（value 为旧名别名，保留一个版本周期）；识别职责归
         // 研究期 LLM —— candidates[]（原文+来源）才是一等公民。

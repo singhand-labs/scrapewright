@@ -175,7 +175,9 @@ describe('RC51: inline fallback parity (drift guard per RC35)', () => {
     // the 2026-09-11 popoverText raw-text channel on the success push sit
     // between the success anchorHref lines and the catch preamble — the
     // window is scoping, not size.
-    const errBranch = body.slice(errIdx - 1300, errIdx);
+    // Ninety-first round: the addedNodesHtml forwarding sits between the
+    // success push and the catch preamble — lookback widened, scoping only.
+    const errBranch = body.slice(errIdx - 2000, errIdx);
     assert.ok(/anchorHref\s*:/.test(errBranch),
       'inline fallback error branch must push anchorHref');
     assert.ok(/anchorText\s*:/.test(errBranch),
