@@ -119,3 +119,28 @@ describe('90th-round F3: Copy JSON button (clean export)', () => {
     assert.match(block, /JSON\.stringify\(finalRes, null, 2\)/, 'pretty pure finalResult only — no UI text');
   });
 });
+
+// Ninety-seventh-round: $openTab(fn) resolved to ~undefined instantly —
+// background wrapped fn.toString() ("async () => {...}" FULL source) inside
+// `(async () => { ${scriptStr} })()`, creating the model's arrow but never
+// invoking it (live: sub-tab "completed" 141ms after a body containing a
+// 4s sleep; snippet got an envelope-shaped stub). Day-one bug.
+describe('97th-round: openTab fn-source wrap invokes the function', () => {
+  const BG = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
+  it('background detects full function sources and CALLS them (bare bodies keep the body-wrap)', () => {
+    assert.match(BG, /isFullFnSource|full function source/, 'detection exists');
+    const i = BG.indexOf('executor.execute(script');
+    assert.ok(i !== -1);
+    const j = BG.indexOf('return await (${fnSource})();');
+    assert.ok(j !== -1, 'full-source form is invoked: return await (${fnSource})();');
+  });
+  it('behavioral: full arrow source returns its body value; bare body still works', () => {
+    const fullSrc = 'async () => { return {ran: true}; }';
+    const isFullFn = /^(async\s+)?(\([^)]*\)\s*=>|function\s*\w*\s*\()/.test(fullSrc.trim());
+    assert.ok(isFullFn, 'arrow source detected as full function');
+    const wrapped = isFullFn
+      ? new Function('__input__', 'return (' + fullSrc + ')();')
+      : new Function('__input__', 'return (async () => { ' + fullSrc + ' })();');
+    return wrapped({}).then((r) => assert.deepEqual(r, { ran: true }));
+  });
+});

@@ -1531,16 +1531,24 @@ async function handleOpenTabExecute(url, scriptStr, parentTabId, reqId) {
   const executor = new OffscreenExecutor(tab.id);
   executor.timeoutMs = 120000; // sixtieth-round: slow-network tolerance for $openTab sub-tab execution (was 60s)
   try {
-    // scriptStr is a function body (may contain function declarations + return statements)
-    // OffscreenExecutor.execute resolves the envelope {result, selectorDiagnostics};
-    // the fn body's return value sits at envelope.result. Seventeenth log: the
-    // envelope was sent as TAB_RESULT.result verbatim (day-one), so $openTab
-    // callers got the wrapper object instead of their data — v4 `recs.slice is
-    // not a function`, v5's [recs] coercion wrapping the wrapper into one
-    // all-empty record. Unwrap before sending; the sub-tab's diagnostics stay
-    // with the envelope (the outer step's own selectorDiagnostics channel is
-    // unaffected).
-    const envelope = await executor.execute(`return await (async () => { ${scriptStr} })();`, {});
+    // scriptStr arrives as fn.toString() — the FULL function source
+    // ("async () => {...}" / "function (...) {...}"), or historically as a
+    // bare body. OffscreenExecutor.execute resolves the envelope
+    // {result, selectorDiagnostics}; the fn body's return value sits at
+    // envelope.result. Seventeenth log: the envelope was sent as
+    // TAB_RESULT.result verbatim (day-one), so $openTab callers got the
+    // wrapper object — unwrapped here. Ninety-seventh log (day-one bug,
+    // live evidence): wrapping a FULL function source inside
+    // `(async () => { ${src} })()` creates the model's arrow but never
+    // INVOKES it — the sub-tab "completed" 141ms after a body containing a
+    // 4s sleep and $openTab resolved to a stub. Detect the shape and invoke
+    // full sources directly.
+    const fnSource = String(scriptStr || '').trim();
+    const isFullFnSource = /^(async\s+)?(\([^)]*\)\s*=>|function\s*\w*\s*\()/.test(fnSource);
+    const script = isFullFnSource
+      ? `return await (${fnSource})();`
+      : `return await (async () => { ${scriptStr} })();`;
+    const envelope = await executor.execute(script, {});
 
     // RC16: capture the sub-tab's HTML BEFORE destroying it, on BOTH success
     // and failure paths. The success-path capture is NEW — previously only
