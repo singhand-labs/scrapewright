@@ -139,8 +139,8 @@ describe('F1: domExtractWithHover wiring (source audit)', () => {
       'maxWallMs forwarded to the helper');
     assert.match(CS_SRC, /partialWallBudget = \{\s*processed: partialEnvelope\.partial\.processed/);
     assert.match(CS_SRC, /_diagnostics\.partialNote = partialEnvelope\.partial\.note/);
-    assert.match(CS_SRC, /return \{ result: partialEnvelope \|\| records, _diagnostics: _diagnostics \};/,
-      'partial runs resolve to the {records, partial} envelope');
+    assert.match(CS_SRC, /return \{ result: records, _diagnostics: _diagnostics \};/,
+      'partial runs resolve to the records array (92nd-round fix: the {partial} stub must never replace it)');
   });
 });
 
@@ -270,5 +270,35 @@ describe('F3: time-budget stop suffix', () => {
       'wallClock stop carries the suffix');
     assert.match(RS_SRC, /recordToolTiming\(turn\.tool, Date\.now\(\) - __t0/,
       'dispatchTool timed');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Ninety-second-round regression (13b89ca follow-through): the wrapper's
+// legacy return `{result: partialEnvelope || records}` let the dual-shape
+// detection's bare `{partial}` stub REPLACE the records array — the DSL-level
+// $extractWithHover on a budget hit resolved to `{"partial":{...}}` with NO
+// records (live evidence: hoverExtract resultPreview `{"recs":{"partial":...`,
+// assemble died as `recs.forEach is not a function`; the 90th session's
+// defensive `res.records → []` silently dropped the partial records instead).
+describe('92nd-round: budget-hit DSL result stays the records array', () => {
+  it('domExtractWithHover returns the RECORDS ARRAY as result — the {partial} stub never replaces it (source audit)', () => {
+    assert.ok(!/result: partialEnvelope \|\| records/.test(CS_SRC),
+      'the stub-substitution return is gone');
+    const i = CS_SRC.indexOf("return { result: records, _diagnostics: _diagnostics };");
+    assert.ok(i !== -1, 'the result is the records array (partial info rides _diagnostics.partialWallBudget/partialNote)');
+  });
+
+  it('behavioral: a budget-hit $extractWithHover result is an ARRAY (forEach works) even through the wrapper logic', async () => {
+    // Simulate the wrapper's post-helper handling: the helper (lib) already
+    // returns the array+annotations; the wrapper must not re-wrap it.
+    const { dom, containers } = feedDom(10);
+    const out = await loadInline(dom).extractWithHoverRecords(
+      containers, FIELD_MAP, HOVER_CONFIG, slowHover(), { maxWallMs: 60 });
+    assert.ok(Array.isArray(out), 'helper keeps the array envelope');
+    assert.equal(typeof out.forEach, 'function', 'forEach callable');
+    // the {partial}-stub shape the live session saw must NOT be producible
+    assert.ok(!out || !(!Array.isArray(out) && out.partial && !Array.isArray(out.records)),
+      'the {partial}-only object shape must not exist');
   });
 });

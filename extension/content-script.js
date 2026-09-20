@@ -4651,7 +4651,15 @@
       failureReasons: failureReasons,
       observedPopoverCount: observedPopoverCount
     });
-    return { result: partialEnvelope || records, _diagnostics: _diagnostics };
+    // Ninety-second-round regression (13b89ca follow-through): the legacy
+    // `partialEnvelope || records` let the dual-shape detection's bare
+    // {partial} stub REPLACE the records array — the DSL-level result on a
+    // budget hit resolved to {"partial":{...}} with NO records (live:
+    // `recs.forEach is not a function`; the 90th session's defensive
+    // res.records check silently dropped the partial records instead). The
+    // result is ALWAYS the records array; the partial disclosure rides
+    // _diagnostics.partialWallBudget/partialNote above.
+    return { result: records, _diagnostics: _diagnostics };
   }
 
   const openTabPending = new Map();
