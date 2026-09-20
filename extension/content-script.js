@@ -1,4 +1,9 @@
 (function() {
+  // Build tag (95th round: three sessions ran stale builds — the tooltip
+  // journal was committed but never loaded, and diagnosis burned a round
+  // inferring the build from field presence). Bump on every hover-chain
+  // change; the tag rides the load log and the SW-console mirror.
+  const SW_BUILD_TAG = '95-journal-addedTexts-c63409e';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -1324,7 +1329,8 @@
     return result;
   }
 
-  sendDebugLog('info', 'content-script', 'Content script loaded', { url: location.href, readyState: document.readyState });
+  sendDebugLog('info', 'content-script', 'Content script loaded', { build: SW_BUILD_TAG, url: location.href, readyState: document.readyState });
+  try { notifyBackgroundDiagnostic('content_script_build', { build: SW_BUILD_TAG }); } catch (_) { /* best-effort */ }
 
   // ===== Sandbox =====
   function ensureSandbox() {

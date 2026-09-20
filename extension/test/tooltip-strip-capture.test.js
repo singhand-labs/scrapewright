@@ -122,3 +122,15 @@ describe('94th-round: anchorLog carries journal text samples', () => {
     assert.match(ts.slice(i, i + 600), /addedTexts/, 'the DSL-side log samples journal texts');
   });
 });
+
+// Ninety-fifth-round: three sessions ran STALE builds (the journal was
+// committed but the extension was never reloaded — 92nd/94th/95th rounds
+// burned diagnosis time inferring the build from field presence). The build
+// tag is logged at content-script load and mirrored to the SW console.
+describe('95th-round: build tag visible in logs', () => {
+  it('content-script declares SW_BUILD_TAG and logs it at load + to the background mirror', () => {
+    assert.match(CS_SRC, /const SW_BUILD_TAG = '/, 'tag constant declared');
+    assert.match(CS_SRC, /Content script loaded', \{ build: SW_BUILD_TAG/, 'rides the load log');
+    assert.match(CS_SRC, /content_script_build/, 'mirrored to the SW console');
+  });
+});
