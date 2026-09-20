@@ -2351,8 +2351,12 @@
   }
   async function domTimestamp(sel, opts) {
     const o = (opts && typeof opts === 'object') ? opts : {};
-    const anchorSel = (typeof o.anchorSel === 'string' && o.anchorSel.trim()) ? o.anchorSel.trim()
-      : 'a:has(span[aria-labelledby]), [aria-labelledby], abbr[aria-label], time';
+    // Ninety-ninth round: custom anchorSel UNIONES with the default time-anchor
+    // union (never replaces) — sessions hovering span-only custom anchors
+    // concluded "no year" while the timestamp <a> was never hovered.
+    const TS_DEFAULT_ANCHORS = 'a:has(span[aria-labelledby]), [aria-labelledby], abbr[aria-label], time';
+    const tsCustom = (typeof o.anchorSel === 'string' && o.anchorSel.trim()) ? o.anchorSel.trim() : '';
+    const anchorSel = tsCustom ? (tsCustom + ', ' + TS_DEFAULT_ANCHORS) : TS_DEFAULT_ANCHORS;
     const timeoutMs = (typeof o.timeoutMs === 'number' && o.timeoutMs > 0) ? o.timeoutMs : 4500;
     // F2 recharge: a changed href means the page navigated (SPA route change
     // included) — restore the full budget and forget prior spend.

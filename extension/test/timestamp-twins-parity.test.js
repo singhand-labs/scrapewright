@@ -42,7 +42,11 @@ describe('#14 twins constants parity', () => {
     const def = 'a:has(span[aria-labelledby]), [aria-labelledby], abbr[aria-label], time';
     const csIdx = CS.indexOf("var TS_MAX_HOVER_ANCHORS");
     assert.ok(CS.slice(csIdx, csIdx + 4000).includes(def), 'domTimestamp default anchor union present');
-    const ptIdx = PT.indexOf("const anchorSel = (typeof a.anchorSel === 'string'");
-    assert.ok(PT.slice(ptIdx, ptIdx + 800).includes(def), 'probe.timestamp default anchor union present');
+    // Ninety-ninth round: both sides now hold the union in a constant and
+    // UNION custom anchorSels with it — assert the constant carries the
+    // identical union on both sides.
+    const ptIdx = PT.indexOf('DEFAULT_TS_ANCHORS =');
+    assert.ok(ptIdx !== -1, 'probe.timestamp default union constant exists');
+    assert.ok(PT.slice(ptIdx, ptIdx + 400).includes(def), 'probe.timestamp default anchor union present');
   });
 });

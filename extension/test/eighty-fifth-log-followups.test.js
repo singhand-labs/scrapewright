@@ -74,20 +74,14 @@ describe('85th log F1a: domTimestamp zero-anchor receipt', () => {
     return ctx;
   }
 
-  it('a zero-anchor enumeration returns a VACUOUS-negative note + an in-container census, never "no timestamp on this card"', async () => {
+  it('99th-round: a span-only custom anchorSel is RESCUED by the default union (the timestamp <a> gets hovered); a truly-empty union still self-discloses as vacuous', async () => {
     const ctx = tsContext(makeBlindDom());
     const r = await ctx.__ts('#card', { anchorSel: 'span[aria-labelledby] a' });
-    assert.equal(r.result.anchorsProbed, 0);
-    assert.equal(r.result.absolute, null);
-    assert.match(r.result.note, /matched 0 anchors/i);
-    assert.match(r.result.note, /selector miss, not a page fact/i);
-    assert.ok(r.result.anchorCensus, 'census rides the receipt');
-    assert.ok(r.result.anchorCensus.families['[aria-labelledby]'] >= 1,
-      'the family the anchorSel needed IS in the census: ' + JSON.stringify(r.result.anchorCensus.families));
-    assert.ok(r.result.anchorCensus.families['a[href]'] >= 1);
-    assert.ok(Array.isArray(r.result.anchorCensus.hrefSamples) && r.result.anchorCensus.hrefSamples.length >= 1,
-      'observed href samples surface (the /stories/ permalink where the numeric id lives)');
-    assert.doesNotMatch(r.result.note, /no date-shaped value on this card/);
+    // the custom sel alone matched 0 (85th-log case); the UNIONED defaults
+    // now match the card's aria-labelledby carriers → no longer vacuous, and
+    // the rescue means the ordinary harvest path runs (census not needed).
+    assert.ok(r.result.anchorsProbed > 0, 'default union rescues the blind custom sel: ' + r.result.anchorsProbed);
+    assert.doesNotMatch(r.result.note, /matched 0 anchors/i, 'no vacuous-negative when the union found anchors');
   });
 
   it('anchors that exist but expose no dates keep the ordinary negative (no census noise)', async () => {

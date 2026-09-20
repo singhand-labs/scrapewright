@@ -134,3 +134,21 @@ describe('95th-round: build tag visible in logs', () => {
     assert.match(CS_SRC, /content_script_build/, 'mirrored to the SW console');
   });
 });
+
+// Ninety-ninth-round (user ground truth: the time tooltip ALWAYS carries the
+// full date): a custom anchorSel is UNIONED with the default time-anchor
+// union, never a replacement — two sessions hovered span-only custom anchors
+// and concluded "no year on these cards" while the timestamp <a> (in the
+// default union) was never hovered.
+describe('99th-round: custom anchorSel unions with the default time anchors', () => {
+  it('probe.timestamp unions the custom anchorSel with the default union', () => {
+    const i = PT_SRC.indexOf('DEFAULT_TS_ANCHORS');
+    assert.ok(i !== -1, 'default union constant exists');
+    assert.match(PT_SRC.slice(i, i + 400), /customAnchorSel \+ ', ' \+ DEFAULT_TS_ANCHORS/, 'custom + defaults, comma-joined');
+  });
+  it('$timestamp (domTimestamp) unions the same way', () => {
+    const ts = CS_SRC.slice(CS_SRC.indexOf('async function domTimestamp('), CS_SRC.indexOf('async function domExists('));
+    assert.match(ts, /TS_DEFAULT_ANCHORS/, 'default union constant exists');
+    assert.match(ts, /tsCustom \+ ', ' \+ TS_DEFAULT_ANCHORS/, 'custom + defaults, comma-joined');
+  });
+});

@@ -795,8 +795,14 @@
         return { error: 'containerSel (required) — the repeating card container whose timestamp you are binding. The probe hovers its time-ish anchors once and returns date-shaped candidates only (absolute preferred).' };
       }
       const index = (typeof a.index === 'number' && a.index >= 0) ? Math.floor(a.index) : 0;
-      const anchorSel = (typeof a.anchorSel === 'string' && a.anchorSel.trim()) ? a.anchorSel.trim()
-        : 'a:has(span[aria-labelledby]), [aria-labelledby], abbr[aria-label], time';
+      // Ninety-ninth round (user ground truth: the time tooltip ALWAYS carries
+      // the full date): a custom anchorSel is UNIONED with the default
+      // time-anchor union, never a replacement — two live sessions hovered
+      // spans-only custom anchors and concluded "no year on these cards"
+      // while the timestamp <a> (in the default union) was never hovered.
+      const DEFAULT_TS_ANCHORS = 'a:has(span[aria-labelledby]), [aria-labelledby], abbr[aria-label], time';
+      const customAnchorSel = (typeof a.anchorSel === 'string' && a.anchorSel.trim()) ? a.anchorSel.trim() : '';
+      const anchorSel = customAnchorSel ? (customAnchorSel + ', ' + DEFAULT_TS_ANCHORS) : DEFAULT_TS_ANCHORS;
       const snippet = 'return $extractWithHover(' + JSON.stringify(containerSel) + ', {' +
         '__t_label: { selector: ' + JSON.stringify(anchorSel) + ', labelledby: true },' +
         '__t_aria: { selector: ' + JSON.stringify(anchorSel) + ', attr: "aria-label" },' +
