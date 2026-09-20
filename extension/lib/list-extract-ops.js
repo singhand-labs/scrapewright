@@ -524,6 +524,11 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
           // text). Carried on FAILED entries too — label text routinely
           // needs no visible popover.
           labelledbyText: (r && typeof r.labelledbyText === 'string' && r.labelledbyText) ? r.labelledbyText : null,
+          // Ninetieth-round F2c: text READ out of became-visible strips the
+          // visual picker rejected (narrow tooltip bars — the timestamp
+          // tooltip's full date lives here when the 50×50 gate turns the
+          // strip away). Bindable via read:'hoverPopover'-style routing.
+          rejectedAddedTexts: (r && Array.isArray(r.rejectedAddedTexts) && r.rejectedAddedTexts.length) ? r.rejectedAddedTexts.slice(0, 3) : undefined,
           labelledbyAttr: (r && typeof r.labelledbyAttr === 'string' && r.labelledbyAttr) ? r.labelledbyAttr : null,
           labelledbyNote: (r && typeof r.labelledbyNote === 'string' && r.labelledbyNote) ? r.labelledbyNote : null,
           // 机械-语义分离（spec 3.B）：剥标签原文，模型免写 DOM 解析。

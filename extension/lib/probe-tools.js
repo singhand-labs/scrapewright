@@ -842,6 +842,13 @@
         if (!h) continue;
         push(h.labelledbyText, 'hover.labelledbyText');
         push(h.anchorText, 'hover.anchorText');
+        // Ninetieth-round F2b: rejectedAddedTexts — text READ out of
+        // became-visible strips the visual picker turned away (narrow
+        // tooltip bars). Reads are not visibility-gated; a full-absolute
+        // date there is the tooltip payload.
+        if (Array.isArray(h.rejectedAddedTexts)) {
+          for (const rej of h.rejectedAddedTexts) push(rej, 'hover.rejectedText');
+        }
         // The captured popover's own text — popover markup is structurally
         // prose ("Shared with Public · Friday, September 11, 2026 at …"), so
         // it NEVER takes the whole-value path: strip markup and extract the

@@ -563,9 +563,26 @@
           }
         }
         if (nonConsumingCall) {
+          // Ninetieth-round F2d: when a captured sample carries a FULL
+          // absolute date, NAME it — the user asserted the timestamp tooltip
+          // always has one, and three sessions shipped month-day labels
+          // while the capture holding the full date sat unconsumed.
+          let dateCallout = '';
+          try {
+            for (const s of samples) {
+              if (typeof s !== 'string' || !s) continue;
+              const subs = (typeof WU.extractDateSubstrings === 'function') ? (WU.extractDateSubstrings(s) || []) : [];
+              const full = subs.find((x) => (typeof WU.hasYearToken === 'function') ? WU.hasYearToken(x) : /(?:19|20)\d{2}/.test(x));
+              if (full) {
+                dateCallout = ' A captured sample carries a FULL ABSOLUTE DATE ("' + String(full).slice(0, 60) +
+                  '") — bind the time field from the popover text NOW via read:\'hoverPopover\' with your own match regex; the page-visible label is the partial one.';
+                break;
+              }
+            }
+          } catch (_) { /* callout is best-effort */ }
           return {
             totalCaptured: total, popoverReadFields: 0, samples: samples,
-            note: 'hover popovers were CAPTURED this run but no fieldMap field consumes them (read:\'hoverPopover\') — bind the field to the popover text of its anchor selector (and filter with your own match regex), instead of discarding the capture'
+            note: 'hover popovers were CAPTURED this run but no fieldMap field consumes them (read:\'hoverPopover\') — bind the field to the popover text of its anchor selector (and filter with your own match regex), instead of discarding the capture' + dateCallout
           };
         }
         if (declaredCall) {

@@ -335,6 +335,7 @@
                 // Forty-second log (inline mirror of lib/list-extract-ops.js):
                 // anchor-label harvest forwarding, failed entries included.
                 labelledbyText: (r && typeof r.labelledbyText === 'string' && r.labelledbyText) ? r.labelledbyText : null,
+                rejectedAddedTexts: (r && Array.isArray(r.rejectedAddedTexts) && r.rejectedAddedTexts.length) ? r.rejectedAddedTexts.slice(0, 3) : undefined,
                 labelledbyAttr: (r && typeof r.labelledbyAttr === 'string' && r.labelledbyAttr) ? r.labelledbyAttr : null,
                 labelledbyNote: (r && typeof r.labelledbyNote === 'string' && r.labelledbyNote) ? r.labelledbyNote : null,
                 // 机械-语义分离（spec 3.B）：剥标签原文，模型免写 DOM 解析。
@@ -2455,6 +2456,24 @@
           candidates.push({ value: sub.slice(0, 120), source: 'popoverText', relative: TS_REL_RE.test(sub), partial: !TS_REL_RE.test(sub) && !TS_hasYear(sub) });
         }
       }
+      // Ninetieth-round F2b: the hover ALSO harvested text out of visual
+      // rejects (rejectedAddedTexts — narrow became-visible strips the
+      // geometry gates turned away, e.g. a one-line timestamp tooltip under
+      // 50px tall carrying "August 23, 2024 at 12:43 PM"). Reads are not
+      // visibility-gated; a full-absolute date there is the tooltip's own
+      // payload — feed it into the candidate pool like popoverText.
+      if (hv && Array.isArray(hv.rejectedAddedTexts)) {
+        for (const rej of hv.rejectedAddedTexts) {
+          const str = String(rej || '').replace(/<[^>]*>/g, ' ');
+          if (!str.trim()) continue;
+          for (const sub of extractDateSubstringsCS(str)) {
+            const k = 'rejectedText|' + sub;
+            if (seen.has(k)) continue;
+            seen.add(k);
+            candidates.push({ value: sub.slice(0, 120), source: 'rejectedText', relative: TS_REL_RE.test(sub), partial: !TS_REL_RE.test(sub) && !TS_hasYear(sub) });
+          }
+        }
+      }
     }
     // Pick order (sixty-ninth log): full absolute (year token present) →
     // partial absolute (year-less month-day) → relative.
@@ -3680,9 +3699,17 @@
     // ADDED candidate so the no-popover result can read its text.
     // candidateSource persists across ticks (F2), so an added node rejected
     // on any tick is still remembered here.
-    function rememberRejectedAdded(node) {
+    function rememberRejectedAdded(node, widen) {
       if (!node || node.nodeType !== 1) return;
-      if (candidateSource.get(node) !== 'added') return;
+      // Ninetieth-round F2a: `widen` collects VISIBLE non-baseline strips
+      // the geometry gates rejected (too_small). An efp-source candidate
+      // absent from the T0 baseline BECAME VISIBLE during the dwell — that
+      // is popover-defining behavior, and a narrow strip is a tooltip
+      // (a timestamp tooltip is a one-line date bar under 50px tall).
+      // Without the widened path the full date the tooltip carries was
+      // collected by NOTHING — rejectedAddedTexts only took
+      // MutationObserver-added nodes.
+      if (!widen && candidateSource.get(node) !== 'added') return;
       if (rejectedAddedNodes.indexOf(node) !== -1) return;
       if (rejectedAddedNodes.length >= 8) return;
       rejectedAddedNodes.push(node);
@@ -3925,7 +3952,7 @@
         }
         var nr = node.getBoundingClientRect();
         if (nr.width < 50 || nr.height < 50) {
-          rememberRejectedAdded(node);
+          rememberRejectedAdded(node, true);
           if (rejectedSummary.length < 5) rejectedSummary.push({
             tag: node.tagName,
             size: Math.round(nr.width) + 'x' + Math.round(nr.height),
