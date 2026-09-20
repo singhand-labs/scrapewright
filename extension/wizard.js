@@ -2627,8 +2627,13 @@ function mirrorClip(text, cap) {
 // verify report bodies, the model's own replies).
 function mirrorLines(label, text, cap) {
   const s = String(text == null ? '' : text);
-  if (s.length <= cap) { console.log(label, s); return; }
+  // Ninetieth-round regression: cap=Infinity made the single-line branch
+  // ALWAYS win — a ~300K verify receipt went out as one console arg and
+  // DevTools silently dropped it (the FULL verify.run mirror line carried
+  // an EMPTY payload in the live log). cap bounds the TOTAL; anything over
+  // one CHUNK is chunked regardless of cap.
   const CHUNK = 1500;
+  if (s.length <= Math.min(cap, CHUNK)) { console.log(label, s); return; }
   const shown = s.slice(0, cap);
   const n = Math.ceil(shown.length / CHUNK);
   for (let i = 0; i < n; i++) {

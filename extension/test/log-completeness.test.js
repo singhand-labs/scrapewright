@@ -60,3 +60,45 @@ describe('87th-round log completeness — source wiring audit', () => {
     }
   });
 });
+
+// Ninetieth-round regression: passing cap=Infinity made `s.length <= cap`
+// ALWAYS true — every mirror went out as ONE console line, and DevTools
+// silently dropped the ~300K-char verify FULL receipt (the live log's
+// "TOOL RESULT FULL verify.run" line carried an EMPTY payload). cap bounds
+// the TOTAL; chunking at CONTENT_CHUNK applies whenever the payload exceeds
+// one chunk, regardless of cap.
+describe('90th-round regression: mirrorLines chunks long payloads even with cap=Infinity', () => {
+  const mirrorLines = eval('(function () { return (' + sliceFnWizard('mirrorLines') + '); })()');
+  function sliceFnWizard(name) {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'wizard.js'), 'utf8');
+    const start = src.indexOf('function ' + name + '(');
+    let i = src.indexOf('{', start), depth = 0;
+    for (; i < src.length; i++) {
+      if (src[i] === '{') depth += 1;
+      else if (src[i] === '}') { depth -= 1; if (depth === 0) return src.slice(start, i + 1); }
+    }
+    throw new Error('unbalanced');
+  }
+  it('a 10K payload logs as 7 chunked lines, never one giant single line', () => {
+    const logs = [];
+    const orig = console.log;
+    console.log = (...a) => logs.push(a);
+    try { mirrorLines('[test] big', 'x'.repeat(10000), Infinity); }
+    finally { console.log = orig; }
+    const chunkLines = logs.filter((a) => /^\[test\] big \(\d+\/\d+\):$/.test(a[0]) || /\(\d+\/\d+\)/.test(String(a[0])));
+    assert.ok(chunkLines.length >= 7, 'chunked lines: ' + chunkLines.length + ' — got first: ' + JSON.stringify(logs[0] && logs[0][0]));
+    assert.equal(logs.filter((a) => String(a[1] || '').length > 1600).length, 0, 'no payload slice exceeds one chunk');
+    assert.ok(!logs.some((a) => /^\[test\] big$/.test(String(a[0])) && String(a[1] || '').length > 1500), 'no giant single-line payload');
+  });
+
+  it('a small payload stays a single unchunked line', () => {
+    const logs = [];
+    const orig = console.log;
+    console.log = (...a) => logs.push(a);
+    try { mirrorLines('[test] small', 'abc', Infinity); }
+    finally { console.log = orig; }
+    assert.equal(logs.length, 1);
+    assert.equal(logs[0][0], '[test] small');
+    assert.equal(logs[0][1], 'abc');
+  });
+});
