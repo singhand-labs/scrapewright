@@ -1655,6 +1655,27 @@ async function presentTestOutcome(out) {
     document.getElementById('testResults').textContent = JSON.stringify(out.raw.testResult, null, 2);
     renderResultSummary(out.raw.testResult);
     renderPagesViewer(out.raw.testResult);
+    // 90th round: clean-JSON copy — hand-selection from the panel dragged
+    // the next UI heading into a live result.json export. The button copies
+    // the pure finalResult JSON to the clipboard; finalResult-missing runs
+    // keep the button hidden (nothing clean to copy).
+    try {
+      const btnCopy = document.getElementById('btnCopyResultJson');
+      const finalRes = out.raw.testResult && out.raw.testResult.finalResult;
+      if (btnCopy && finalRes !== undefined && finalRes !== null) {
+        btnCopy.classList.remove('hidden');
+        btnCopy.onclick = async () => {
+          try {
+            await navigator.clipboard.writeText(JSON.stringify(finalRes, null, 2));
+            showToast('Result JSON copied (clean — no UI text)', 'success', 2000);
+          } catch (e) {
+            showToast('Clipboard copy failed: ' + String((e && e.message) || e), 'error', 3000);
+          }
+        };
+      } else if (btnCopy) {
+        btnCopy.classList.add('hidden');
+      }
+    } catch (e) { /* the copy button is best-effort */ }
     appendLog('All steps completed.', 'success');
     if (out.report.detectors.shapeDistribution) {
       appendLog(out.report.detectors.shapeDistribution, 'warn');

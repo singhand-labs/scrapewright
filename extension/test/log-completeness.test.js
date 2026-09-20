@@ -102,3 +102,20 @@ describe('90th-round regression: mirrorLines chunks long payloads even with cap=
     assert.equal(logs[0][1], 'abc');
   });
 });
+
+// 90th-round F3: clean-JSON copy — hand-selection from the result panel
+// dragged the next UI heading into a live result.json export (trailing
+// "Steps"). A dedicated Copy JSON button writes the PURE finalResult to the
+// clipboard.
+describe('90th-round F3: Copy JSON button (clean export)', () => {
+  it('wizard.html has the button; presentTestOutcome wires clipboard write of the pure finalResult', () => {
+    const html = fs.readFileSync(path.join(__dirname, '..', 'wizard.html'), 'utf8');
+    assert.ok(html.includes('id="btnCopyResultJson"'), 'button exists');
+    const body = fs.readFileSync(path.join(__dirname, '..', 'wizard.js'), 'utf8');
+    const i = body.indexOf('btnCopyResultJson');
+    assert.ok(i !== -1, 'wired in wizard.js');
+    const block = body.slice(i, i + 900);
+    assert.match(block, /navigator\.clipboard\.writeText/, 'clipboard write');
+    assert.match(block, /JSON\.stringify\(finalRes, null, 2\)/, 'pretty pure finalResult only — no UI text');
+  });
+});
