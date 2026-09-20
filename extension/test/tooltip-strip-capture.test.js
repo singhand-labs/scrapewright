@@ -88,3 +88,17 @@ describe('90th-round F2d: unusedCaptures census NAMES a captured full-absolute d
     assert.match(block, /read:'hoverPopover'|read:\\'hoverPopover\\'/, 'the callout names the bind route');
   });
 });
+
+// Ninety-third-round: the model shipped hoverCards:[] while 18 captured
+// author/group cards sat unused — it read the requirement's "exclude
+// recommendation modules" as excluding the captured cards themselves. The
+// census note must name the distinction generically.
+describe('93rd-round: unusedCaptures note distinguishes enrichment cards from feed modules', () => {
+  it('the non-consuming note teaches: captured hovercards ARE the enrichment the contract asks for; the exclusion rule targets non-post modules', () => {
+    const i = VR_SRC.indexOf("hover popovers were CAPTURED this run but no fieldMap field consumes them");
+    assert.ok(i !== -1, 'note found');
+    const note = VR_SRC.slice(i, i + 700);
+    assert.match(note, /enrichment/i, 'the note names the enrichment role of captured cards');
+    assert.match(note, /exclusion|exclude/i, 'the note names the exclusion distinction');
+  });
+});

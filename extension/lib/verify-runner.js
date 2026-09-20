@@ -582,7 +582,7 @@
           } catch (_) { /* callout is best-effort */ }
           return {
             totalCaptured: total, popoverReadFields: 0, samples: samples,
-            note: 'hover popovers were CAPTURED this run but no fieldMap field consumes them (read:\'hoverPopover\') — bind the field to the popover text of its anchor selector (and filter with your own match regex), instead of discarding the capture' + dateCallout
+            note: 'hover popovers were CAPTURED this run but no fieldMap field consumes them (read:\'hoverPopover\') — bind the field to the popover text of its anchor selector (and filter with your own match regex), instead of discarding the capture. Before excluding captured cards as "recommendations": cards popped over a POST card (author/group identity, role metadata) are the ENRICHMENT the contract asks for; an exclusion rule in the requirement targets non-post MODULES inserted in the feed, not the hovercards themselves — they are different things' + dateCallout
           };
         }
         if (declaredCall) {
