@@ -50,7 +50,9 @@ describe('RC45 Task 1: domHover accepts element-or-selector', () => {
     const fnStart = src.indexOf('async function domHover(');
     assert.ok(fnStart > -1, 'domHover function must exist');
     // Slice a reasonable window for the anchor-resolution block.
-    const window = src.slice(fnStart, fnStart + 4000);
+    // [HOVER-DEBUG-TEMP] window widened — the debug flag-cache block at the
+    // function head pushed the branch past 4000 chars (scoping heuristic).
+    const window = src.slice(fnStart, fnStart + 6000);
     // Must detect an element (DOM node) branch via nodeType or typeof object.
     assert.ok(/nodeType|typeof\s+\w+\s*===\s*['"]object['"]/.test(window),
       'domHover must branch on element vs string input (look for nodeType or typeof object check near the anchor-resolution block)');
@@ -62,7 +64,9 @@ describe('RC45 Task 1: domHover accepts element-or-selector', () => {
     // querySelectorDeep calls must still be present.
     const src = readSrc('content-script.js');
     const fnStart = src.indexOf('async function domHover(');
-    const window = src.slice(fnStart, fnStart + 5000);
+    // [HOVER-DEBUG-TEMP] window widened — the debug flag-cache block at the
+    // function head pushed the resolution calls past 5000 chars.
+    const window = src.slice(fnStart, fnStart + 7000);
     assert.ok(/querySelectorAllDeep/.test(window),
       'domHover must still call querySelectorAllDeep for string input with opts.index');
     assert.ok(/querySelectorDeep/.test(window),

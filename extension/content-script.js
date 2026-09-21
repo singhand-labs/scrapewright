@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '95-journal-addedTexts-c63409e';
+  const SW_BUILD_TAG = '101-hoverdebug-on';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -3376,6 +3376,25 @@
     // anchor's activation) with no way to attribute it from the log —
     // scrollIntoView-triggered virtualized reflow and a deep popoverSel
     // query over a huge DOM are indistinguishable without timestamps.
+    // [HOVER-DEBUG-TEMP] debug flag cache — master switch for the temporary
+    // hover-relay inspection pause (chrome.storage.local 'hoverDebugInspect',
+    // default off). Off = one storage read per hover call, zero behavior
+    // change. REMOVE THIS BLOCK + its listeners when the relay problem is
+    // solved (removal checklist in test/hover-debug-temp.test.js).
+    if (!('__hoverDebugInspect' in domHover)) {
+      domHover.__hoverDebugInspect = false;
+      try {
+        chrome.storage.local.get('hoverDebugInspect', function (st) {
+          domHover.__hoverDebugInspect = !!(st && st.hoverDebugInspect);
+        });
+        chrome.storage.onChanged.addListener(function (ch, area) {
+          if (area === 'local' && ch && 'hoverDebugInspect' in ch) {
+            domHover.__hoverDebugInspect = !!ch.hoverDebugInspect.newValue;
+          }
+        });
+      } catch (_) { /* debug instrumentation is best-effort */ }
+    }
+    var hoverDebugInspect = domHover.__hoverDebugInspect === true;
     var hoverT0 = Date.now();
     opts = opts || {};
     var timeoutMs = (typeof opts.timeoutMs === 'number' && opts.timeoutMs > 0) ? opts.timeoutMs : 4500;
@@ -4253,19 +4272,9 @@
     // Forty-fifth log F1: also skip entirely on dispatch failure — the mouse
     // never moved, so there is nothing to dismiss, and the extra activation +
     // CDP roundtrip only burns the caller's budget.
-    if (dismiss && !dispatchFailed) {
-      try {
-        await withTabActivation('hoverDismiss', async function () {
-          await chrome.runtime.sendMessage({ type: 'TRUSTED_HOVER_DISMISS' });
-        }, { need: 'hover' });
-        notifyBackgroundDiagnostic('hover_dismiss', { selector: selectorForLog, ok: true });
-      } catch (e) {
-        notifyBackgroundDiagnostic('hover_dismiss', {
-          selector: selectorForLog, ok: false,
-          reason: 'sendMessage error: ' + (e && e.message || String(e))
-        });
-      }
-    }
+    // [HOVER-DEBUG-TEMP] MOVED below result assembly: the debug pause must
+    // hold the popover OPEN (dismiss not yet sent) while the user inspects
+    // the relay details — the dismiss block originally sat here.
 
     var result = {
       hovered: !!(hoverResp && hoverResp.ok),
@@ -4384,6 +4393,64 @@
       autoDiscovered: autoDiscovered,
       reason: result.reason || null
     });
+    // [HOVER-DEBUG-TEMP] debug inspection pause — popover stays MOUNTED (the
+    // dismiss has not been sent yet); relay the capture details to the user,
+    // wait unlimited for their observation, log it on the wizard console,
+    // then dismiss and return. REMOVE with the checklist in
+    // test/hover-debug-temp.test.js when the relay problem is solved.
+    if (hoverDebugInspect) {
+      try {
+        var __dbgAddedTexts = [];
+        try {
+          __dbgAddedTexts = [...new Set((addedNodesHtml || [])
+            .map(function (h2) { return String(h2 || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100); })
+            .filter(Boolean))].slice(0, 5);
+        } catch (_) {}
+        var __dbgResp = await new Promise(function (resolve) {
+          try {
+            chrome.runtime.sendMessage({
+              type: 'HOVER_DEBUG_INSPECT',
+              payload: {
+                action: 'hover @ ' + selectorForLog + ' (' + x + ',' + y + ')',
+                pageUrl: (typeof location !== 'undefined') ? location.href : '',
+                html: htmlSnippet || null,
+                texts: {
+                  labelledbyText: (anchorLabel && anchorLabel.text) || null,
+                  observedPopover: result.observedPopover || null,
+                  addedTexts: __dbgAddedTexts,
+                  rejectedAddedTexts: rejectedAddedTexts || []
+                },
+                note: 'popover held open — compare what YOU see on screen, then submit your observation'
+              }
+            }, function (resp) { resolve(resp || { observation: null, reason: 'no receiver' }); });
+          } catch (e) { resolve({ observation: null, reason: 'sendMessage error' }); }
+        });
+        result.debugObservation = (__dbgResp && __dbgResp.observation) || null;
+        sendDebugLog('info', 'content-script', '[hover-debug-relay] pause resolved', {
+          action: selectorForLog, observation: result.debugObservation,
+          reason: (__dbgResp && __dbgResp.reason) || null
+        });
+      } catch (_) { /* the debug pause must never break the hover */ }
+    }
+
+    // [HOVER-DEBUG-TEMP] dismiss block MOVED here (was before result assembly)
+    // so the inspection pause above can hold the popover open. RC50/RC20
+    // rationale still applies: the dismiss is the same CDP
+    // Input.dispatchMouseEvent on the same tab — a background tab hangs
+    // (compositor frames only for the active tab), hence withTabActivation.
+    if (dismiss && !dispatchFailed) {
+      try {
+        await withTabActivation('hoverDismiss', async function () {
+          await chrome.runtime.sendMessage({ type: 'TRUSTED_HOVER_DISMISS' });
+        }, { need: 'hover' });
+        notifyBackgroundDiagnostic('hover_dismiss', { selector: selectorForLog, ok: true });
+      } catch (e) {
+        notifyBackgroundDiagnostic('hover_dismiss', {
+          selector: selectorForLog, ok: false,
+          reason: 'sendMessage error: ' + (e && e.message || String(e))
+        });
+      }
+    }
     return result;
   }
 

@@ -474,6 +474,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (message.type === 'EXECUTION_LOG') {
       appendLog(message.message, message.level || 'info');
     }
+    // [HOVER-DEBUG-TEMP] hover-relay inspection panel (debug only — REMOVE
+    // with the checklist in test/hover-debug-temp.test.js)
+    if (message.type === 'HOVER_DEBUG_INSPECT_PANEL') {
+      showHoverDebugPanel(message.reqId, message.payload || {});
+    }
     // RC25 (console.log 2026-08-04): count trusted-wheel skips during the
     // current testScript run. Background broadcasts TRUSTED_WHEEL_SKIPPED
     // whenever a content-script emits a trustedWheel_skipped diagnostic
@@ -1907,6 +1912,74 @@ function findHrefInObject(obj, depth = 0) {
   return null;
 }
 
+
+// [HOVER-DEBUG-TEMP] ——— hover-relay inspection panel (debug only) ———
+// REMOVE this whole block with the checklist in test/hover-debug-temp.test.js
+let hoverDebugReqId = null;
+function showHoverDebugPanel(reqId, payload) {
+  hoverDebugReqId = reqId;
+  try {
+    document.getElementById('hoverDebugAction').textContent = payload.action || '';
+    document.getElementById('hoverDebugPageUrl').textContent = payload.pageUrl || '';
+    document.getElementById('hoverDebugHtml').textContent =
+      payload.html ? String(payload.html).slice(0, 4000) + (payload.html.length > 4000 ? ' …[截断，全文入日志]' : '') : '(no popover captured)';
+    document.getElementById('hoverDebugTexts').textContent = JSON.stringify(payload.texts || {}, null, 1);
+    document.getElementById('hoverDebugObservation').value = '';
+    document.getElementById('hoverDebugPanel').classList.remove('hidden');
+    if (typeof focusWizardTab === 'function') focusWizardTab();
+    (document.getElementById('hoverDebugObservation') || {}).focus && document.getElementById('hoverDebugObservation').focus();
+  } catch (e) { /* debug panel is best-effort */ }
+}
+function hideHoverDebugPanel() {
+  try { document.getElementById('hoverDebugPanel').classList.add('hidden'); } catch (_) {}
+}
+function respondHoverDebug(stopAsking) {
+  if (!hoverDebugReqId) return;
+  const reqId = hoverDebugReqId;
+  hoverDebugReqId = null;
+  const observation = (document.getElementById('hoverDebugObservation') || {}).value || '';
+  const payloadShown = {
+    action: (document.getElementById('hoverDebugAction') || {}).textContent || '',
+    pageUrl: (document.getElementById('hoverDebugPageUrl') || {}).textContent || '',
+    html: (document.getElementById('hoverDebugHtml') || {}).textContent || '',
+    texts: (document.getElementById('hoverDebugTexts') || {}).textContent || ''
+  };
+  try { hideHoverDebugPanel(); } catch (_) {}
+  // full-fidelity console log: observation + the relayed details, chunked
+  try {
+    mirrorLines('[hover-debug-relay] ' + reqId, JSON.stringify({
+      action: payloadShown.action, pageUrl: payloadShown.pageUrl,
+      relayedHtmlHead: payloadShown.html, texts: payloadShown.texts,
+      observation: observation || '(skipped)', stopAsking: !!stopAsking
+    }, null, 1), Infinity);
+  } catch (_) {}
+  try {
+    chrome.runtime.sendMessage({ type: 'HOVER_DEBUG_INSPECT_RESPONSE', reqId, observation, stopAsking: !!stopAsking }, () => { void chrome.runtime.lastError; });
+  } catch (_) {}
+}
+function wireHoverDebugPanel() {
+  const submit = document.getElementById('btnHoverDebugSubmit');
+  const skip = document.getElementById('btnHoverDebugSkip');
+  const stop = document.getElementById('btnHoverDebugStop');
+  const toggle = document.getElementById('btnHoverDebugToggle');
+  if (submit) submit.addEventListener('click', () => respondHoverDebug(false));
+  if (skip) skip.addEventListener('click', () => respondHoverDebug(false));
+  if (stop) stop.addEventListener('click', () => respondHoverDebug(true));
+  if (toggle) {
+    const refresh = (on) => { toggle.textContent = '悬停回传调试：' + (on ? '开' : '关'); };
+    try {
+      chrome.storage.local.get('hoverDebugInspect', (st) => refresh(!!(st && st.hoverDebugInspect)));
+      toggle.addEventListener('click', () => {
+        chrome.storage.local.get('hoverDebugInspect', (st) => {
+          const next = !(st && st.hoverDebugInspect);
+          chrome.storage.local.set({ hoverDebugInspect: next }, () => refresh(next));
+        });
+      });
+    } catch (_) {}
+  }
+}
+wireHoverDebugPanel();
+// ——— [HOVER-DEBUG-TEMP] end ———
 
 async function confirmDeploy() {
   syncStepsFromEditor();

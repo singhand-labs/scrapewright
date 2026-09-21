@@ -89,6 +89,8 @@
       </div>
       <div id="sessionControls" class="step-nav hidden">
         <button id="btnSessionPause">Pause</button>
+        <!-- [HOVER-DEBUG-TEMP] master toggle for the hover-relay debug pause -->
+        <button id="btnHoverDebugToggle" title="[调试] 每次悬停回传时暂停并收集你的观察">悬停回传调试：关</button>
         <button id="btnSessionResume" class="hidden">Resume</button>
         <button id="btnSessionAbort">Abort</button>
         <span id="sessionSpend" class="hint-label"></span>
@@ -141,6 +143,21 @@
       </div>
       <!-- Harness 对标（2026-09-11 用户指示）：研究过程感知不到页面行为时
            随时弹窗问用户观察——用户的眼睛是最好的传感器。 -->
+      <!-- [HOVER-DEBUG-TEMP] temporary hover-relay inspection panel — debug
+           only, REMOVE with the checklist in test/hover-debug-temp.test.js -->
+      <div id="hoverDebugPanel" class="exploration-panel hidden">
+        <h3>悬停回传调试 — 对照屏幕所见填写观察</h3>
+        <p id="hoverDebugAction" class="hint-label"></p>
+        <p id="hoverDebugPageUrl" class="hint-label"></p>
+        <pre id="hoverDebugHtml" style="max-height:180px;overflow:auto;white-space:pre-wrap;font-size:11px;background:#f6f6f6;padding:6px;border-radius:4px;"></pre>
+        <pre id="hoverDebugTexts" style="max-height:120px;overflow:auto;white-space:pre-wrap;font-size:11px;background:#f6f6f6;padding:6px;border-radius:4px;"></pre>
+        <textarea id="hoverDebugObservation" rows="2" placeholder="页面上实际显示了什么？（弹窗内容、时间格式、与回传 HTML 的差异…）"></textarea>
+        <div class="exploration-buttons">
+          <button id="btnHoverDebugSubmit" class="btn-primary">提交观察</button>
+          <button id="btnHoverDebugSkip">跳过</button>
+          <button id="btnHoverDebugStop">提交并本次会话不再中断</button>
+        </div>
+      </div>
       <div id="userObservePanel" class="exploration-panel hidden">
         <h3>The AI asks what you observe</h3>
         <p id="userObserveQuestion"></p>

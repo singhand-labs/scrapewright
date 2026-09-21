@@ -989,6 +989,23 @@ async function logExecution(service, input, output, error, retryCount) {
 }
 
 // Internal message handlers
+// [HOVER-DEBUG-TEMP] pending map for the hover-relay inspection pause
+// (HOVER_DEBUG_INSPECT <-> HOVER_DEBUG_INSPECT_PANEL/RESPONSE). REMOVE with
+// the checklist in test/hover-debug-temp.test.js.
+const hoverDebugPending = new Map();
+(function initHoverDebugCleanup() {
+  if (chrome.tabs && chrome.tabs.onRemoved) {
+    chrome.tabs.onRemoved.addListener((tabId) => {
+      for (const [reqId, p] of hoverDebugPending) {
+        if (p.tabId === tabId) {
+          hoverDebugPending.delete(reqId);
+          try { p.sendResponse({ observation: null, reason: 'tab closed' }); } catch (_) {}
+        }
+      }
+    });
+  }
+})();
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'OFFSCREEN_READY' && message._fromOffscreen) {
     debugLogger.log('info', 'background', 'Offscreen document ready');
@@ -1056,6 +1073,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message.type === 'GET_CURRENT_TAB_ID') {
     sendResponse({ tabId: sender.tab?.id });
+    return false;
+  }
+  // [HOVER-DEBUG-TEMP] relay for the temporary hover-relay inspection pause:
+  // content script asks to pause with the popover held open → broadcast a
+  // panel request to extension pages (the wizard answers) → route the user's
+  // observation back. Unlimited wait; tab close resolves with cancelled.
+  // REMOVE with the checklist in test/hover-debug-temp.test.js.
+  if (message.type === 'HOVER_DEBUG_INSPECT') {
+    const reqId = 'hd-' + Date.now() + '-' + Math.floor(Math.random() * 1e6);
+    hoverDebugPending.set(reqId, { sendResponse, tabId: sender.tab?.id });
+    try {
+      chrome.runtime.sendMessage({ type: 'HOVER_DEBUG_INSPECT_PANEL', reqId, payload: message.payload }, () => {
+        void chrome.runtime.lastError;
+        // No extension page answered (wizard closed) — resolve immediately so
+        // the hover never hangs.
+        const p = hoverDebugPending.get(reqId);
+        if (p) {
+          hoverDebugPending.delete(reqId);
+          p.sendResponse({ observation: null, reason: 'no receiver' });
+        }
+      });
+    } catch (e) {
+      const p = hoverDebugPending.get(reqId);
+      if (p) {
+        hoverDebugPending.delete(reqId);
+        p.sendResponse({ observation: null, reason: 'broadcast error' });
+      }
+    }
+    return true;
+  }
+  if (message.type === 'HOVER_DEBUG_INSPECT_RESPONSE') {
+    const p = hoverDebugPending.get(message.reqId);
+    if (p) {
+      hoverDebugPending.delete(message.reqId);
+      if (message.stopAsking) {
+        try { chrome.storage.local.set({ hoverDebugInspect: false }); } catch (_) {}
+      }
+      p.sendResponse({ observation: message.observation || null });
+    }
     return false;
   }
   if (message.type === 'OPEN_TAB_EXECUTE') {
