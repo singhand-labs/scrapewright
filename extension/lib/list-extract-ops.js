@@ -529,6 +529,11 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
           // tooltip's full date lives here when the 50×50 gate turns the
           // strip away). Bindable via read:'hoverPopover'-style routing.
           rejectedAddedTexts: (r && Array.isArray(r.rejectedAddedTexts) && r.rejectedAddedTexts.length) ? r.rejectedAddedTexts.slice(0, 3) : undefined,
+          // Hundred-third log: the rejected mounts' HTML fragments — the
+          // read:'hoverPopover' source chain searches them when the picked
+          // popover's markup hides the payload (size-gate rejects are the
+          // text-bearing leaves; 2000-char match guard hides deep content).
+          rejectedAddedHtml: (r && Array.isArray(r.rejectedAddedHtml) && r.rejectedAddedHtml.length) ? r.rejectedAddedHtml.slice(0, 3).map((h) => (h.length > 1200 ? h.slice(0, 1200) + '<!--capped-->' : h)) : undefined,
           // Ninety-first-round user directive: the dynamic-DOM journal rides
           // every hovercard — the page unmounts hover-rendered nodes on
           // mouse-out; this window is the only cache of them.
@@ -590,6 +595,21 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
         (typeof snip === 'string' && snip)
           ? ((hspec.read === 'hoverPopoverHtml') ? snip : stripTags(snip))
           : null;
+      // Hundred-third log: source chain per capture — picked popover html
+      // first, then the rejectedAddedHtml fragments. The picker's <50px size
+      // gate rejects exactly the text-bearing leaves (tooltip strips,
+      // category lines), and the 2000-char match guard hides content buried
+      // deep in the picked popover's markup — the small text-dense fragments
+      // are the haystack a match predicate can actually hit.
+      const readFirstHoverText = (hv) => {
+        const srcs = [hv && hv.htmlSnippet].concat(
+          (hv && Array.isArray(hv.rejectedAddedHtml)) ? hv.rejectedAddedHtml : []);
+        for (const s of srcs) {
+          const t = readHoverText(s);
+          if (t) return t;
+        }
+        return null;
+      };
       for (let hh = 0; hh < hcands.length; hh++) {
         let htext = null;
         // (c) reuse: if the anchor loop already hovered THIS element (same
@@ -597,11 +617,11 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
         // of dispatching a second dwell at the same anchor.
         const reuseIdx = anchors.indexOf(hcands[hh]);
         if (reuseIdx >= 0 && hovercards[reuseIdx]) {
-          htext = readHoverText(hovercards[reuseIdx].htmlSnippet);
+          htext = readFirstHoverText(hovercards[reuseIdx]);
         } else {
           try {
             const hr = await hoverFn(hcands[hh], popoverSel, perHoverOpts);
-            htext = readHoverText(hr && hr.htmlSnippet);
+            htext = readFirstHoverText(hr);
           } catch (_) { htext = null; }
         }
         if (htext) hvals.push(htext);
@@ -616,22 +636,30 @@ async function extractWithHoverRecords(containers, fieldMap, hoverConfig, hoverF
       if (hspec.multi === true) {
         records[i][hfieldName] = hvals.map((v) => applyMatch(v, hre)).filter(Boolean);
       } else {
-        records[i][hfieldName] = applyMatch(hvals.length ? hvals[0] : '', hre);
+        let hbound = applyMatch(hvals.length ? hvals[0] : '', hre);
         // (d) scalar fallback: when the field's own candidates yielded
-        // nothing, fall back to the record's own hovercards captures before
-        // settling '' — the anchor loop's popoverText is the same popover
-        // text the field wanted, already tag-stripped.
-        if (!hvals.length) {
-          for (const hce of hovercards) {
-            const t = (hspec.read === 'hoverPopoverHtml')
-              ? hce.htmlSnippet
-              : hce.popoverText;
-            if (typeof t === 'string' && t) {
-              records[i][hfieldName] = applyMatch(t, hre);
-              break;
+        // nothing the match could bind, fall back through the record's
+        // hovercards captures — picked popover first, then the
+        // rejectedAddedHtml fragments, then rejectedAddedTexts (the tooltip
+        // strip the size gate rejected IS the payload; every source gets a
+        // match chance before settling '').
+        if (!hbound) {
+          for (let hci = 0; hci < hovercards.length && !hbound; hci++) {
+            const hce = hovercards[hci];
+            const hsrcs = (hspec.read === 'hoverPopoverHtml')
+              ? [hce.htmlSnippet].concat(hce.rejectedAddedHtml || [])
+              : [hce.popoverText]
+                  .concat((hce.rejectedAddedHtml || []).map(stripTags))
+                  .concat(hce.rejectedAddedTexts || []);
+            for (let hsi = 0; hsi < hsrcs.length; hsi++) {
+              const hs = hsrcs[hsi];
+              if (typeof hs !== 'string' || !hs) continue;
+              const hv2 = applyMatch(hs, hre);
+              if (hv2) { hbound = hv2; break; }
             }
           }
         }
+        records[i][hfieldName] = hbound;
       }
     }
     processedCount = i + 1;

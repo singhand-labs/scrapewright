@@ -110,13 +110,16 @@ describe('twenty-fourth log: domHover wires rejected-added text evidence (source
       'the helper only remembers nodes whose candidate source is "added" (MutationObserver-caught mounts)');
   });
 
-  it('no-popover result carries rejectedAddedTexts + readability note', () => {
+  it('result carries rejectedAddedTexts + readability note (hundred-third log: attach is UNGATED)', () => {
     const body = sliceDomHover();
     assert.ok(/result\.rejectedAddedTexts\s*=/.test(body), 'result gains rejectedAddedTexts');
     assert.ok(/collectRejectedAddedTexts\(rejectedAddedNodes\)/.test(body), 'texts computed from the accumulated node refs');
     assert.ok(/reads are not visibility-gated/.test(body),
       'the note must teach the asymmetry (hidden/zero-height content is READABLE)');
-    assert.ok(/!htmlSnippet/.test(body), 'attached only on the no-popover path');
+    assert.match(body, /if \(rejectedAddedTexts\.length\) \{\s*\n\s*result\.rejectedAddedTexts = rejectedAddedTexts;/,
+      'hundred-third log: the attach no longer requires !htmlSnippet — the picked popover can bury the payload under markup noise while the rejects carry it');
+    assert.ok(/if \(!htmlSnippet && rejectedAddedTexts\.length\) \{[\s\S]*?rejectedAddedNote/.test(body),
+      'the no-popover NOTE keeps its own gate (its teaching is about the no-popover path)');
   });
 
   it('texts are sampled BEFORE the dismiss unmounts the scaffolding', () => {

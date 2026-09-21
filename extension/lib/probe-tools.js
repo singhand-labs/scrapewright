@@ -725,6 +725,13 @@
         out.rejectedAddedTexts = r.rejectedAddedTexts;
         if (typeof r.rejectedAddedNote === 'string' && r.rejectedAddedNote) out.rejectedAddedNote = r.rejectedAddedNote;
       }
+      // Hundred-third log: the rejected mounts' HTML fragments — the
+      // text-bearing leaves the size gate turned away; structure + attributes
+      // a match predicate binds against (the picked popover's markup can bury
+      // the same content past the 2000-char match guard).
+      if (Array.isArray(r.rejectedAddedHtml) && r.rejectedAddedHtml.length) {
+        out.rejectedAddedHtml = r.rejectedAddedHtml.slice(0, 3).map((h) => (h.length > 1200 ? h.slice(0, 1200) + '<!--capped-->' : h));
+      }
       // Forty-second log: the anchor-label harvest taken at dwell time
       // (before the dismiss). Same contract as the fields above — hover-layer
       // evidence must survive the probe layer, or the teaching that names it
@@ -854,6 +861,14 @@
         // date there is the tooltip payload.
         if (Array.isArray(h.rejectedAddedTexts)) {
           for (const rej of h.rejectedAddedTexts) push(rej, 'hover.rejectedText');
+        }
+        // Hundred-third log: the rejected mounts' HTML fragments ride the
+        // hovercards — same date-candidate harvest as the journal above.
+        if (Array.isArray(h.rejectedAddedHtml)) {
+          for (const rhtml of h.rejectedAddedHtml) {
+            const rtxt = String(rhtml || '').replace(/<[^>]*>/g, ' ');
+            for (const rsub of extractDateSubstringsRef(rtxt)) push(rsub, 'hover.rejectedDom');
+          }
         }
         // Ninety-first-round user directive: the dynamic-DOM journal — every
         // node the hover rendered before mouse-out unmounted it, picker

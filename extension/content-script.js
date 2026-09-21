@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '101c-portclose-aware';
+  const SW_BUILD_TAG = '103-rejected-html';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -341,6 +341,7 @@
                 // anchor-label harvest forwarding, failed entries included.
                 labelledbyText: (r && typeof r.labelledbyText === 'string' && r.labelledbyText) ? r.labelledbyText : null,
                 rejectedAddedTexts: (r && Array.isArray(r.rejectedAddedTexts) && r.rejectedAddedTexts.length) ? r.rejectedAddedTexts.slice(0, 3) : undefined,
+                rejectedAddedHtml: (r && Array.isArray(r.rejectedAddedHtml) && r.rejectedAddedHtml.length) ? r.rejectedAddedHtml.slice(0, 3).map((h) => (h.length > 1200 ? h.slice(0, 1200) + '<!--capped-->' : h)) : undefined,
                 addedNodesHtml: (r && Array.isArray(r.addedNodesHtml) && r.addedNodesHtml.length) ? r.addedNodesHtml.slice(0, 3).map((h) => (h.length > 1200 ? h.slice(0, 1200) + '<!--capped-->' : h)) : undefined,
                 labelledbyAttr: (r && typeof r.labelledbyAttr === 'string' && r.labelledbyAttr) ? r.labelledbyAttr : null,
                 labelledbyNote: (r && typeof r.labelledbyNote === 'string' && r.labelledbyNote) ? r.labelledbyNote : null,
@@ -396,15 +397,28 @@
                 ? ((hspec.read === 'hoverPopoverHtml') ? snip : stripTags(snip))
                 : null;
             };
+            // Hundred-third log (inline mirror of lib/list-extract-ops.js):
+            // source chain per capture — picked popover html first, then the
+            // rejectedAddedHtml fragments (size-gate rejects are the
+            // text-bearing leaves; the 2000-char match guard hides deep
+            // content in the picked markup).
+            var readFirstHoverText = function (hv) {
+              var srcs = [hv && hv.htmlSnippet].concat((hv && Array.isArray(hv.rejectedAddedHtml)) ? hv.rejectedAddedHtml : []);
+              for (var si = 0; si < srcs.length; si++) {
+                var st = readHoverText(srcs[si]);
+                if (st) return st;
+              }
+              return null;
+            };
             for (var hh = 0; hh < hcands.length; hh++) {
               var htext = null;
               var reuseIdx = anchors.indexOf(hcands[hh]);
               if (reuseIdx >= 0 && hovercards[reuseIdx]) {
-                htext = readHoverText(hovercards[reuseIdx].htmlSnippet);
+                htext = readFirstHoverText(hovercards[reuseIdx]);
               } else {
                 try {
                   var hr = await hoverFn(hcands[hh], popoverSel, perHoverOpts);
-                  htext = readHoverText(hr && hr.htmlSnippet);
+                  htext = readFirstHoverText(hr);
                 } catch (_) { htext = null; }
               }
               if (htext) hvals.push(htext);
@@ -421,18 +435,27 @@
                 .map(function (v) { return applyMatch(v, hre); })
                 .filter(Boolean);
             } else {
-              records[i][hfieldName] = applyMatch(hvals.length ? hvals[0] : '', hre);
-              if (!hvals.length) {
-                for (var hci = 0; hci < hovercards.length; hci++) {
-                  var hct = (hspec.read === 'hoverPopoverHtml')
-                    ? hovercards[hci].htmlSnippet
-                    : hovercards[hci].popoverText;
-                  if (typeof hct === 'string' && hct) {
-                    records[i][hfieldName] = applyMatch(hct, hre);
-                    break;
+              var hbound = applyMatch(hvals.length ? hvals[0] : '', hre);
+              // (d) scalar fallback (inline mirror): every hovercard source —
+              // picked popover, then rejectedAddedHtml fragments, then
+              // rejectedAddedTexts — gets a match chance before settling ''.
+              if (!hbound) {
+                for (var hci = 0; hci < hovercards.length && !hbound; hci++) {
+                  var hce = hovercards[hci];
+                  var hsrcs = (hspec.read === 'hoverPopoverHtml')
+                    ? [hce.htmlSnippet].concat(hce.rejectedAddedHtml || [])
+                    : [hce.popoverText]
+                        .concat((hce.rejectedAddedHtml || []).map(stripTags))
+                        .concat(hce.rejectedAddedTexts || []);
+                  for (var hsi = 0; hsi < hsrcs.length; hsi++) {
+                    var hs2 = hsrcs[hsi];
+                    if (typeof hs2 !== 'string' || !hs2) continue;
+                    var hv3 = applyMatch(hs2, hre);
+                    if (hv3) { hbound = hv3; break; }
                   }
                 }
               }
+              records[i][hfieldName] = hbound;
             }
           }
           processedCount = i + 1;
@@ -1984,6 +2007,41 @@
       if (!txt || seen.has(txt)) continue;
       seen.add(txt);
       out.push(txt.length > 120 ? txt.slice(0, 120) + '…' : txt);
+    }
+    return out;
+  }
+
+  // Hundred-third log: the rejected mounts' HTML fragments. The 102nd-live
+  // incident (user observation via the hover debug panel, five times): the
+  // popover's text-bearing leaves are exactly the nodes the <50px size gate
+  // rejects — their TEXT rode rejectedAddedTexts, but their HTML (structure +
+  // attributes a match predicate binds against) was discarded, and the picked
+  // popover's own htmlSnippet buries the same content under kilobytes of SVG
+  // noise the 2000-char match guard never sees past. Serializing the rejected
+  // mounts' HTML inside the dwell window (they unmount on mouseout) gives the
+  // read:'hoverPopover' channel small, text-dense haystacks.
+  function collectRejectedAddedHtml(nodes) {
+    const out = [];
+    const texts = [];
+    if (!Array.isArray(nodes)) return out;
+    for (const node of nodes) {
+      if (out.length >= 4) break;
+      if (!node || node.nodeType !== 1) continue;
+      let txt = '';
+      try { txt = String(node.textContent || ''); } catch (err) { txt = ''; }
+      txt = txt.replace(/\s+/g, ' ').trim();
+      if (!txt) continue;
+      // subset skip (lossless): a fragment whose text is contained in an
+      // ALREADY-collected fragment's text adds nothing; supersets are KEPT so
+      // no text is lost regardless of wrapper/leaf collection order.
+      let subset = false;
+      for (const t of texts) { if (t.indexOf(txt) !== -1) { subset = true; break; } }
+      if (subset) continue;
+      let html = '';
+      try { html = String(node.outerHTML || ''); } catch (err) { html = ''; }
+      if (!html) continue;
+      texts.push(txt);
+      out.push(html.length > 2000 ? html.slice(0, 2000) + '<!--REJECTED-FRAGMENT: capped at 2000 of ' + html.length + '-->' : html);
     }
     return out;
   }
@@ -4215,6 +4273,7 @@
     // the dismiss — mouseout can unmount the scaffolding, but the text is
     // the payload the visual picker could not see (zero-height/hidden).
     var rejectedAddedTexts = collectRejectedAddedTexts(rejectedAddedNodes);
+    var rejectedAddedHtml = collectRejectedAddedHtml(rejectedAddedNodes);
 
     // Ninety-first-round user directive (manual page investigation): hover
     // popovers are rendered DYNAMICALLY on mouse-over and REMOVED from the
@@ -4366,8 +4425,19 @@
     // nodes whose text was readable through the visual filter's rejects. A
     // tooltip whose layout never materialized still carries its payload as
     // textContent — hand it to the caller instead of a bare popover_timeout.
-    if (!htmlSnippet && rejectedAddedTexts.length) {
+    // Hundred-third log: the attach is NO LONGER gated on !htmlSnippet — the
+    // 102nd-live incident had the picker capture the big hovercard (htmlSnippet
+    // set) while its text content sat in the too_small-rejected leaves, buried
+    // under SVG noise the 2000-char match guard never sees past; the rejected
+    // evidence was dropped exactly when it was most needed. Texts + fragments
+    // ride EVERY result; only the teaching note stays on the no-popover path.
+    if (rejectedAddedTexts.length) {
       result.rejectedAddedTexts = rejectedAddedTexts;
+    }
+    if (rejectedAddedHtml.length) {
+      result.rejectedAddedHtml = rejectedAddedHtml;
+    }
+    if (!htmlSnippet && rejectedAddedTexts.length) {
       result.rejectedAddedNote = "no visible popover was captured, but the hover mounted node(s) whose text was READ out of the visual filter's rejects (hidden or zero-height mounts). reads are not visibility-gated: if the value you need appears in rejectedAddedTexts, bind the field from it directly instead of waiting for a visible popover.";
     }
     // Ninety-first-round user directive: the dynamic DOM journal rides EVERY
@@ -4418,7 +4488,8 @@
                   labelledbyText: (anchorLabel && anchorLabel.text) || null,
                   observedPopover: result.observedPopover || null,
                   addedTexts: __dbgAddedTexts,
-                  rejectedAddedTexts: rejectedAddedTexts || []
+                  rejectedAddedTexts: rejectedAddedTexts || [],
+                  rejectedAddedHtml: rejectedAddedHtml || []
                 },
                 note: 'popover held open — compare what YOU see on screen, then submit your observation'
               }

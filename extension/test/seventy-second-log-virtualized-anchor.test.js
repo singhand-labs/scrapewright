@@ -94,6 +94,7 @@ function gateHoverContext(dom, anchor) {
       querySelectorAllDeep: () => [anchor],
       isElementVisible: () => true,
       collectRejectedAddedTexts: () => [],
+      collectRejectedAddedHtml: () => [],
       harvestAnchorLabel: () => null,
       popoverIdentityOf: () => ({ tag: 'DIV' })
     },

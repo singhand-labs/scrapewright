@@ -133,6 +133,7 @@ function baseHoverContext(dom, anchor, hoverReply) {
       querySelectorAllDeep: () => [anchor],
       isElementVisible: () => true,
       collectRejectedAddedTexts: () => [],
+      collectRejectedAddedHtml: () => [],
       harvestAnchorLabel: () => null,
       popoverIdentityOf: () => ({ tag: 'DIV' })
     },
