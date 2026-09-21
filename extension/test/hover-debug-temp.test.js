@@ -60,3 +60,20 @@ describe('[HOVER-DEBUG-TEMP] behavior contracts', () => {
     assert.match(BG, /tab closed/, 'background tab-close cleanup');
   });
 });
+
+// 101st-round live bug (user observation: NO per-hover interruption — all
+// cards dismissed, ONE empty panel after the batch): the background's
+// broadcast callback fires when listeners merely RETURN (delivery included),
+// so the unconditional no-receiver resolve made every pause a no-op. The
+// guard must check chrome.runtime.lastError BEFORE resolving.
+describe('[HOVER-DEBUG-TEMP] 101st-round: no-receiver resolve is lastError-gated', () => {
+  it('the broadcast callback resolves the pending ONLY when lastError is actually set', () => {
+    const i = BG.indexOf("chrome.runtime.sendMessage({ type: 'HOVER_DEBUG_INSPECT_PANEL'");
+    assert.ok(i !== -1, 'broadcast call found');
+    const block = BG.slice(i, i + 1200);
+    assert.match(block, /if \(chrome\.runtime && chrome\.runtime\.lastError\)/,
+      'the resolve is gated on lastError — an unconditional resolve makes every pause a no-op');
+    assert.ok(!/void chrome\.runtime\.lastError;\s*\n\s*const p = hoverDebugPending/.test(block),
+      'the old swallow-then-resolve shape is gone');
+  });
+});

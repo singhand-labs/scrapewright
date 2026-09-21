@@ -1085,13 +1085,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     hoverDebugPending.set(reqId, { sendResponse, tabId: sender.tab?.id });
     try {
       chrome.runtime.sendMessage({ type: 'HOVER_DEBUG_INSPECT_PANEL', reqId, payload: message.payload }, () => {
-        void chrome.runtime.lastError;
-        // No extension page answered (wizard closed) — resolve immediately so
-        // the hover never hangs.
-        const p = hoverDebugPending.get(reqId);
-        if (p) {
-          hoverDebugPending.delete(reqId);
-          p.sendResponse({ observation: null, reason: 'no receiver' });
+        // [HOVER-DEBUG-TEMP] 101st-round live bug: this callback fires when
+        // all listeners have RETURNED (synchronously) — delivery alone also
+        // lands here, so resolving unconditionally made EVERY pause a no-op
+        // (cards dismissed per hover; only the overwritten panel survived,
+        // showing the LAST empty payload after the batch — the user's exact
+        // observation). Resolve-as-no-receiver ONLY when lastError is set
+        // (nobody received); otherwise keep the pending alive until the
+        // panel's HOVER_DEBUG_INSPECT_RESPONSE arrives.
+        if (chrome.runtime && chrome.runtime.lastError) {
+          const p = hoverDebugPending.get(reqId);
+          if (p) {
+            hoverDebugPending.delete(reqId);
+            p.sendResponse({ observation: null, reason: 'no receiver' });
+          }
         }
       });
     } catch (e) {
