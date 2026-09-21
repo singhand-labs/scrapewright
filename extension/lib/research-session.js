@@ -900,6 +900,7 @@
           popovers: popovers,
           evictedPopovers: evicted,
           lastVerify: (typeof feeds.lastVerify === 'function') ? feeds.lastVerify() : null,
+          captureRoutes: (typeof feeds.captureRoutes === 'function') ? feeds.captureRoutes() : null,
           artifactVersions: state.artifactVersions.slice(-3),
           stepPlan: Array.isArray(state.stepPlan) ? state.stepPlan : []
         });

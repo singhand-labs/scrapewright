@@ -157,6 +157,25 @@
     let popovers = Array.isArray(a.popovers) ? a.popovers.slice() : [];
     let popoverTrimmed = 0;
 
+    // [CAPTURE ROUTES] (112th log): evidence-route bookkeeping — which
+    // anchor→payload routes are PROVEN this session (with samples) and which
+    // keep failing. The policy line enforces page-op frugality: parsing and
+    // binding problems are solved from captured evidence, not by re-
+    // triggering proven page operations.
+    let routesText = '';
+    if (Array.isArray(a.captureRoutes) && a.captureRoutes.length) {
+      const rl = a.captureRoutes.slice(0, 8).map((e) => {
+        const an = JSON.stringify(String((e && e.anchor) || '?').slice(0, 60));
+        if (e && e.proofs > 0) {
+          return '- anchor ' + an + ': PROVEN ×' + e.proofs +
+            ((e.samples && e.samples.length) ? ' (sample ' + JSON.stringify(String(e.samples[0]).slice(0, 40)) + ')' : '');
+        }
+        return '- anchor ' + an + ': ' + ((e && e.attempts) || 0) + ' attempt(s), NO capture';
+      });
+      routesText = '[CAPTURE ROUTES]\n' + rl.join('\n') +
+        '\npage-op frugality: a PROVEN route\'s payload is already captured (this block / [POPOVER CAPTURES]) — solve parsing/binding problems from the captured evidence or probe.snippet, NOT by re-triggering page hovers; page ops are for not-yet-proven routes and verify. A route with ≥3 attempts and NO capture: ask the user (user.observe / annotate.request) instead of another identical dispatch.';
+    }
+
     // [LAST VERIFY CENSUS] — purpose-built renderer (89th-round plan T2):
     // deterministic rows for the decision-critical detectors. The old raw
     // JSON.stringify head-slice cut mid-JSON behind prose detectors, hiding
@@ -232,6 +251,7 @@
         '- #' + (i + 1) + ' anchor=' + JSON.stringify(p.anchor) + ' text=' + JSON.stringify(p.text)).join('\n');
       parts.push('[POPOVER CAPTURES] (' + popCount + (popoverTrimmed ? ', ' + popoverTrimmed + ' oldest trimmed for budget' : '') + ')\n' +
         (ps || '(none captured yet — hover-bearing probes feed this automatically)'));
+      if (routesText) parts.push(routesText);
       parts.push('[LAST VERIFY CENSUS]\n' + (cens || '(no verify run yet)'));
       parts.push('[ARTIFACT LINEAGE] current: ' + (current ? 'v' + current.version : '(none)') +
         (lineageLines.length ? '\nolder: ' + lineageLines.join(' | ') : '') +

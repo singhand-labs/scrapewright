@@ -744,6 +744,58 @@
     // accumulators the engine's per-turn dossier rebuild reads. Popover
     // captures LRU (≤15, evictions counted for disclosure) + the last raw
     // HTML a probe fetched (capped) for the container skeleton.
+    // Hundred-twelfth log (user behavioral feedback): EVIDENCE-ROUTE ledger.
+    // The step-level plan ([STEP PLAN]) tracks steps, not capture routes —
+    // the observed thrash: some rounds hover author anchors only, some time
+    // anchors only, some prove everything and STILL re-research instead of
+    // assembling. A capture route (anchorSel → popover payload) that is
+    // PROVEN this session needs its page ops re-triggered only after an
+    // artifact/verify change (epoch) — parsing/binding problems are solved
+    // from the captured evidence or probe.snippet; a route attempted
+    // repeatedly with NO capture escalates to the user instead of another
+    // identical dispatch.
+    const captureRoutes = new Map();
+    let captureRouteEpoch = 0;
+    function recordCaptureRoute(name, args, result) {
+      try {
+        if (name !== 'probe.hover' && name !== 'probe.timestamp') return null;
+        const key = String((args && (args.anchorSel || args.containerSel)) || name).replace(/\s+/g, ' ').trim();
+        let e = captureRoutes.get(key);
+        if (!e) { e = { anchor: key, attempts: 0, proofs: 0, samples: [], notedEpoch: -1, askedNote: false }; captureRoutes.set(key, e); }
+        e.attempts += 1;
+        const texts = [];
+        const r = result;
+        if (r && typeof r === 'object' && !r.error) {
+          if (Array.isArray(r.rejectedAddedTexts)) {
+            for (const t of r.rejectedAddedTexts) { if (t) texts.push(String(t)); }
+          }
+          if (typeof r.labelledbyText === 'string' && r.labelledbyText) texts.push(r.labelledbyText);
+          if (typeof r.htmlSnippet === 'string' && r.htmlSnippet) {
+            const t = r.htmlSnippet.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+            if (t) texts.push(t);
+          }
+          if (Array.isArray(r.candidates)) {
+            for (const c of r.candidates) { if (c && c.value) texts.push(String(c.value)); }
+          }
+        }
+        const sample = texts.map((t) => t.trim()).filter(Boolean)[0] || '';
+        let proven = !!sample;
+        if (name === 'probe.timestamp') proven = !!(r && r.absolute);
+        if (proven) {
+          e.proofs += 1;
+          if (sample && e.samples.length < 3 && e.samples.indexOf(sample.slice(0, 60)) === -1) e.samples.push(sample.slice(0, 60));
+        }
+        if (proven && e.proofs > 1 && e.notedEpoch !== captureRouteEpoch) {
+          e.notedEpoch = captureRouteEpoch;
+          return 'capture route already proven this session (×' + e.proofs + ', sample ' + JSON.stringify(e.samples[0] || sample.slice(0, 60)) + '). If the remaining problem is parsing/binding/regex, work from the captured evidence ([CAPTURE ROUTES] / [POPOVER CAPTURES] in the dossier) or probe.snippet — re-triggering page hovers re-proves what is proven. Page ops are for not-yet-proven routes and verify.';
+        }
+        if (!proven && e.proofs === 0 && e.attempts >= 3 && !e.askedNote) {
+          e.askedNote = true;
+          return 'this capture route has been attempted ' + e.attempts + ' times without ANY capture — do NOT repeat the identical dispatch: ask the user (user.observe — what the screen shows on hover; annotate.request — mark the element), or change the anchor shape. Repeating the same page action cannot change the outcome.';
+        }
+        return null;
+      } catch (err) { return null; }
+    }
     const DossierLib = resolveLib('./evidence-dossier', 'EvidenceDossier');
     const popoverCaptureLru = [];
     // Eighty-seventh log: session-scoped tooltip-route evidence for the
@@ -800,6 +852,10 @@
       return async function (args, ctx) {
         probesSinceLastVerify += 1;
         const r = await fn(args, ctx);
+        const routeNote = recordCaptureRoute(name, args, r);
+        if (routeNote && r && typeof r === 'object' && !Array.isArray(r)) {
+          try { r.routeNote = routeNote; } catch (_) { /* best-effort steering */ }
+        }
         harvestDossierFeeds(name, r);
         // 89th-round D5: a page.open invalidates the captured skeleton.
         if (name === 'page.open' && containerHtmlMeta) containerHtmlMeta.staleBy = 'page.open';
@@ -838,6 +894,7 @@
       const out = await d.runVerify({ service: service, input: input, outputSchema: outputSchema, sessionEvidence: sessionEvidence });
       const wallCostMs = Date.now() - __verifyT0;
       lastVerify = { events: out.events || [], report: out.report, raw: out.raw, at: Date.now() };
+      captureRouteEpoch += 1; // route re-proving is legitimate after a verify (page state changed)
       const report = out.report || {};
       // Seventy-first log F1: verify economics on the receipt — this call's
       // measured cost, the remaining wall budget (live via ctx.session
@@ -1065,6 +1122,7 @@
     }
 
     async function serviceUpdate(args, ctx) {
+      captureRouteEpoch += 1; // an artifact change re-legitimizes page re-proving
       const a = args && typeof args === 'object' ? args : {};
       const steps = Array.isArray(a.steps) ? a.steps : [];
       if (!ioContractConfirmed(ctx)) {
@@ -1475,6 +1533,9 @@
         containerHtml: () => lastContainerHtml,
         containerHtmlMeta: () => containerHtmlMeta,
         popovers: () => popoverCaptureLru,
+        captureRoutes: () => Array.from(captureRoutes.values()).map((e) => ({
+          anchor: e.anchor, attempts: e.attempts, proofs: e.proofs, samples: e.samples.slice(0, 2)
+        })),
         // Eighty-ninth-round shape fix (third recurrence of the class): the
         // dossier reads REPORT-shaped keys (ok/error/score/detectors) — pass
         // the report, not the {events, report, raw, at} wrapper
