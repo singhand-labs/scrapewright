@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '103-rejected-html';
+  const SW_BUILD_TAG = '103b-audit-fixes';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -4447,14 +4447,6 @@
       result.addedNodesHtml = addedNodesHtml;
       result.addedNodesNote = 'dynamic DOM rendered during this hover dwell, serialized before mouse-out unmounts it (picker verdicts do NOT gate this list — a rejected one-line strip can carry the payload); extract from these nodes anything the visible popover did not yield';
     }
-    notifyBackgroundDiagnostic('hover_anchor_timing', {
-      selector: selectorForLog,
-      scrollMs: scrollDoneAt - hoverT0,
-      preDispatchMs: preDispatchDoneAt - scrollDoneAt,
-      dispatchMs: dispatchDoneAt - preDispatchDoneAt,
-      dwellMs: dwellDoneAt - dispatchDoneAt,
-      dismissMs: Date.now() - dwellDoneAt
-    });
 
     sendDebugLog('info', 'content-script', 'domHover done', {
       selector: selectorForLog, popoverSelector: popoverSel || null,
@@ -4468,6 +4460,7 @@
     // wait unlimited for their observation, log it on the wizard console,
     // then dismiss and return. REMOVE with the checklist in
     // test/hover-debug-temp.test.js when the relay problem is solved.
+    var postPauseAt = 0;
     if (hoverDebugInspect) {
       try {
         var __dbgAddedTexts = [];
@@ -4507,6 +4500,7 @@
           reason: (__dbgResp && __dbgResp.reason) || null
         });
       } catch (_) { /* the debug pause must never break the hover */ }
+      postPauseAt = Date.now();
     }
 
     // [HOVER-DEBUG-TEMP] dismiss block MOVED here (was before result assembly)
@@ -4527,6 +4521,21 @@
         });
       }
     }
+    // Hundred-third-round audit B: the notify sits AFTER the dismiss — the
+    // 101st-round relocation of the dismiss block (to hold the popover open
+    // during the debug pause) left this notify firing BEFORE it, so dismissMs
+    // logged 0/1 all session and measured nothing. pauseMs separates the
+    // debug-pause duration from the real dismiss duration.
+    var dismissDoneAt = Date.now();
+    notifyBackgroundDiagnostic('hover_anchor_timing', {
+      selector: selectorForLog,
+      scrollMs: scrollDoneAt - hoverT0,
+      preDispatchMs: preDispatchDoneAt - scrollDoneAt,
+      dispatchMs: dispatchDoneAt - preDispatchDoneAt,
+      dwellMs: dwellDoneAt - dispatchDoneAt,
+      pauseMs: postPauseAt ? (postPauseAt - dwellDoneAt) : 0,
+      dismissMs: dismissDoneAt - (postPauseAt || dwellDoneAt)
+    });
     return result;
   }
 

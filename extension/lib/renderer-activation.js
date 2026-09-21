@@ -135,6 +135,22 @@
     });
   }
 
+  // Hundred-third-round audit A: per-tab CDP attach serialization. The three
+  // dispatchers below each run attach→sendCommand→detach; two overlapping
+  // calls on the SAME tab (103rd-log 03:47:31.912: an un-awaited script fired
+  // the next $hover while the previous one's deferred dismiss still held the
+  // debugger) failed the second attach outright ("Another debugger is already
+  // attached") and burned that hover's dispatch. Chains are per TARGET —
+  // cross-tab dispatches stay concurrent.
+  const cdpTabChains = new Map();
+  function serializeCdpTab(tabId, run) {
+    const key = String(tabId);
+    const prev = cdpTabChains.get(key) || Promise.resolve();
+    const next = prev.then(run, run);
+    cdpTabChains.set(key, next.catch(function () { /* the chain never blocks on a failed run */ }));
+    return next;
+  }
+
   // dispatchTrustedWheelScroll(tabId, opts): the RC19 fix for isTrusted-gated
   // lazy-loaders (console.log 2026-07-28).
   //
@@ -171,6 +187,11 @@
   // Returns { ok, dispatched, attached, detached, reason?, wheelX?, wheelY?,
   //   deltaY? } for diagnostic logging. Never throws.
   async function dispatchTrustedWheelScroll(tabId, opts) {
+    // Hundred-third-round audit A: serialized per tab — see serializeCdpTab.
+    return serializeCdpTab(tabId, function () { return dispatchTrustedWheelScrollCdp(tabId, opts); });
+  }
+
+  async function dispatchTrustedWheelScrollCdp(tabId, opts) {
     opts = opts || {};
     var deltaY = (typeof opts.deltaY === 'number') ? opts.deltaY : 800;
     var x = (typeof opts.x === 'number') ? opts.x : 400;
@@ -284,6 +305,11 @@
   // Returns { ok, dispatched, attached, detached, reason?, hoverX?, hoverY? }
   // for diagnostic logging. Never throws.
   async function dispatchTrustedHover(tabId, opts) {
+    // Hundred-third-round audit A: serialized per tab — see serializeCdpTab.
+    return serializeCdpTab(tabId, function () { return dispatchTrustedHoverCdp(tabId, opts); });
+  }
+
+  async function dispatchTrustedHoverCdp(tabId, opts) {
     opts = opts || {};
     var x = (typeof opts.x === 'number') ? opts.x : 400;
     var y = (typeof opts.y === 'number') ? opts.y : 400;
@@ -375,6 +401,11 @@
   // results. DO NOT tighten the dismiss timeouts back below 1500ms — the
   // 500ms override is the documented regression point.
   async function dispatchTrustedHoverDismiss(tabId) {
+    // Hundred-third-round audit A: serialized per tab — see serializeCdpTab.
+    return serializeCdpTab(tabId, function () { return dispatchTrustedHoverDismissCdp(tabId); });
+  }
+
+  async function dispatchTrustedHoverDismissCdp(tabId) {
     if (typeof chrome === 'undefined' || !chrome.debugger ||
         typeof chrome.debugger.attach !== 'function' ||
         typeof chrome.debugger.sendCommand !== 'function' ||

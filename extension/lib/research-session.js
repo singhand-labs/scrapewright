@@ -47,7 +47,13 @@
     // 89th-round T3: verify.run receipts carry the decision-critical
     // detectors/finalResult — a verify costs 65-110s, a 20K receipt is
     // affordable next to a 4K budget that elided exactly those rows.
-    toolResultCaps: { 'verify.run': 20000 },
+    // Hundred-third-round audit C: probe.hover receipts carry the hover
+    // evidence payload (8000-char htmlSnippet head + rejectedAddedHtml
+    // fragments + identity + texts) — compactObjectForLLM divides the budget
+    // EQUALLY across keys, so the 4000 default sliced every one of those to
+    // ~400 chars of noise (the fragment channel would starve one layer after
+    // being fixed in the layer below).
+    toolResultCaps: { 'verify.run': 20000, 'probe.hover': 12000 },
     // tool_result EVENT summaries ride the console mirror (wizard.js slices
     // at 600), so the event budget matches it exactly.
     eventSummaryCapChars: 600,
