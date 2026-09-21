@@ -50,13 +50,19 @@ const MATCH_GUARD_LIMIT = 2000;
 let matchGuardSkips = 0;
 function testMatchValue(v, re) {
   if (typeof v !== 'string') return false;
-  let s = v;
-  if (s.length > MATCH_GUARD_LIMIT) {
-    matchGuardSkips += 1;
-    s = s.slice(0, MATCH_GUARD_LIMIT);
+  if (v.length <= MATCH_GUARD_LIMIT) {
+    re.lastIndex = 0;
+    return re.test(v);
   }
+  // Hundred-third-round C (user-adjudicated): head AND tail of long values —
+  // popover markup puts the payload AFTER the avatar/SVG noise, so a head-
+  // only guard made deep content permanently unmatchable. The middle stays
+  // bounded (catastrophic-backtracking protection) and skips are counted.
+  matchGuardSkips += 1;
   re.lastIndex = 0;
-  return re.test(s);
+  if (re.test(v.slice(0, MATCH_GUARD_LIMIT))) return true;
+  re.lastIndex = 0;
+  return re.test(v.slice(-MATCH_GUARD_LIMIT));
 }
 function getMatchGuardSkips() { return matchGuardSkips; }
 function resetMatchGuardSkips() { matchGuardSkips = 0; }

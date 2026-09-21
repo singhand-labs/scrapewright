@@ -1006,6 +1006,23 @@ const hoverDebugPending = new Map();
   }
 })();
 
+// Hundred-third-round C (user-adjudicated): per-tab DOM_REQUEST
+// serialization at the relay. Concurrent DOM_REQUESTs to the SAME tab
+// (research probe + verify, or an un-awaited script firing the next $hover
+// while the previous one's deferred dismiss was in flight — the 103rd-log
+// debugger race) interleaved content-script operations and made run data
+// unstable. 103b serialized only the CDP attach; this queue serializes the
+// whole relay per tab. Cross-tab queues are independent (an $openTab
+// sub-execution on another tab never blocks its parent).
+const domRelayQueues = new Map();
+function enqueueDomRequestRelay(tabId, run) {
+  const key = String(tabId);
+  const prev = domRelayQueues.get(key) || Promise.resolve();
+  const next = prev.then(run, run);
+  domRelayQueues.set(key, next.then(() => {}, () => { /* the queue never blocks on a failed relay */ }));
+  return next;
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'OFFSCREEN_READY' && message._fromOffscreen) {
     debugLogger.log('info', 'background', 'Offscreen document ready');
@@ -1022,7 +1039,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       tabId: message.tabId,
       _fromOffscreen: true
     };
-    (async () => {
+    enqueueDomRequestRelay(message.tabId, async () => {
       for (let attempt = 0; attempt < 4; attempt++) {
         try {
           await chrome.tabs.sendMessage(message.tabId, relayMsg);

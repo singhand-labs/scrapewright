@@ -272,7 +272,9 @@ describe('P3: hover_anchor_timing phase diagnostics (source audit)', () => {
   // dispatch early-out + cursor/pool/bail declarations pushed past 44000.
   // Ninety-first round: the dynamic-DOM journal block pushed the notify
   // past 56000 — the window is a scoping heuristic, not a size contract.
-  const fnBody = CS_SRC.slice(fnStart, fnStart + 64000);
+  // Hundred-third-round audit B: the notify moved AFTER the relocated
+  // dismiss block (pause included) so dismissMs measures the real dismiss.
+  const fnBody = CS_SRC.slice(fnStart, fnStart + 76000);
 
   it('emits hover_anchor_timing with per-phase durations', () => {
     const i = fnBody.indexOf('hover_anchor_timing');

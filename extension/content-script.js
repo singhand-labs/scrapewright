@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '103b-audit-fixes';
+  const SW_BUILD_TAG = '103c-audit-round2';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -75,13 +75,18 @@
     let matchGuardSkips = 0;
     function testMatchValue(v, re) {
       if (typeof v !== 'string') return false;
-      let s = v;
-      if (s.length > MATCH_GUARD_LIMIT) {
-        matchGuardSkips += 1;
-        s = s.slice(0, MATCH_GUARD_LIMIT);
+      if (v.length <= MATCH_GUARD_LIMIT) {
+        re.lastIndex = 0;
+        return re.test(v);
       }
+      // Hundred-third-round C (inline mirror of lib/list-extract-ops.js):
+      // head AND tail of long values — popover markup puts the payload after
+      // the avatar/SVG noise; the middle stays bounded, skips counted.
+      matchGuardSkips += 1;
       re.lastIndex = 0;
-      return re.test(s);
+      if (re.test(v.slice(0, MATCH_GUARD_LIMIT))) return true;
+      re.lastIndex = 0;
+      return re.test(v.slice(-MATCH_GUARD_LIMIT));
     }
     // F9 (inline mirror): hover-read candidate caps move out of records
     // into this per-call map, lifted into _diagnostics.hoverReadCapped.
@@ -2046,6 +2051,32 @@
     return out;
   }
 
+  // Hundred-third-round C (user-adjudicated): churn-proof structural identity
+  // for the RC43 pre-existing-chrome baseline. The exact-outerHTML check is
+  // blind on obfuscated pages — attributes churn (ids, URLs, mask counters),
+  // so pre-existing chrome NEVER equals its T0 sample and stayed in the
+  // passing pool forever. Identity here = tag + class-prefix + 8px-bucketed
+  // PAGE-coordinate rect (scroll-absorbing). Content is deliberately NOT
+  // part of the key: the caller guards with text-length equality so a
+  // pre-existing wrapper that FILLED with hover content during the dwell
+  // (RC43's own portal incident) is NOT wrongly rejected.
+  function baselineStructKeyOf(el) {
+    try {
+      if (!el || el.nodeType !== 1) return null;
+      var r = el.getBoundingClientRect();
+      var win = el.ownerDocument && el.ownerDocument.defaultView;
+      var sy = (win && win.scrollY) || 0;
+      var sx = (win && win.scrollX) || 0;
+      var clsObj = el.className;
+      var cls = '';
+      if (typeof clsObj === 'string') cls = clsObj;
+      else if (clsObj && typeof clsObj.baseVal === 'string') cls = clsObj.baseVal;
+      return el.tagName + '|' + cls.slice(0, 80) + '|' +
+        Math.round((r.top + sy) / 8) + ',' + Math.round((r.left + sx) / 8) + ',' +
+        Math.round(r.width / 8) + ',' + Math.round(r.height / 8);
+    } catch (e) { return null; }
+  }
+
   // Twenty-fifth log: a list container matching ZERO while its own base
   // selector matches many is the compound-selector trap — a trailing
   // :not()/:has() clause built on an attr-name guess (data-ad-*) removed the
@@ -3677,6 +3708,10 @@
     // text) — the payload of a tooltip whose visual layer never
     // materialized. Sampled before the dismiss unmounts the scaffolding.
     var rejectedAddedNodes = [];
+    // Hundred-third-round C (user-adjudicated): scoring runner-ups — passing
+    // candidates that lost the cascade to bigger chrome still carry their
+    // payload; remember them so the rejected evidence channels can harvest.
+    var runnerUpNodes = [];
     var observer = null;
     try {
       if (typeof MutationObserver !== 'undefined') {
@@ -3729,6 +3764,11 @@
       }
     }
     var baselineEfpSnippets = new Set();
+    // Hundred-third-round C: structKey → trimmed textContent length at T0.
+    // The structural fallback rejects only when the box matches AND the text
+    // length is unchanged — geometry-same + content-grew means the wrapper
+    // FILLED during the dwell (keep it, it may be the popover).
+    var baselineEfpProfiles = new Map();
     if (typeof document.elementsFromPoint === 'function') {
       var baselineOffsets = [[0, 0], [0, -120], [0, 120], [-120, 0], [120, 0]];
       for (var boi = 0; boi < baselineOffsets.length; boi++) {
@@ -3742,6 +3782,12 @@
           try {
             var bhtml = bstack[bti].outerHTML;
             if (bhtml) baselineEfpSnippets.add(bhtml);
+            var bkey = baselineStructKeyOf(bstack[bti]);
+            if (bkey && !baselineEfpProfiles.has(bkey)) {
+              var btxt = '';
+              try { btxt = String(bstack[bti].textContent || '').replace(/\s+/g, ' ').trim(); } catch (e2) { btxt = ''; }
+              baselineEfpProfiles.set(bkey, btxt.length);
+            }
           } catch (e) { /* skip unreadable */ }
         }
       }
@@ -4077,15 +4123,48 @@
           });
           continue;
         }
+        // Hundred-third-round C (user-adjudicated): structural fallback for
+        // the obfuscation reverse hole — exact outerHTML never matches churned
+        // chrome, so it stayed in the passing pool. Reject when the
+        // tag+class+page-rect identity matches a T0 profile AND the trimmed
+        // text length is unchanged; a filled wrapper (content grew) survives.
+        if (nsource !== 'added' && baselineEfpProfiles.size) {
+          var nStructKey = baselineStructKeyOf(node);
+          var nProfile = nStructKey ? baselineEfpProfiles.get(nStructKey) : undefined;
+          if (typeof nProfile === 'number') {
+            var nTextLen = -1;
+            try { nTextLen = String(node.textContent || '').replace(/\s+/g, ' ').trim().length; } catch (e) { nTextLen = -1; }
+            if (nTextLen === nProfile) {
+              if (rejectedSummary.length < 5) rejectedSummary.push({
+                tag: node.tagName,
+                source: nsource,
+                reason: 'pre_existed_unchanged_struct'
+              });
+              continue;
+            }
+          }
+        }
         var nr = node.getBoundingClientRect();
         if (nr.width < 50 || nr.height < 50) {
-          rememberRejectedAdded(node, true);
-          if (rejectedSummary.length < 5) rejectedSummary.push({
-            tag: node.tagName,
-            size: Math.round(nr.width) + 'x' + Math.round(nr.height),
-            reason: 'too_small'
-          });
-          continue;
+          // Hundred-third-round C (user-adjudicated): a TEXT-BEARING added
+          // candidate is never "too small" — one-line tooltip strips ARE the
+          // payload (the 103rd incident: every text leaf of the picked
+          // hovercard died at this gate; the strip can now be picked itself).
+          var exemptTinyText = false;
+          if (nsource === 'added') {
+            try {
+              exemptTinyText = String(node.textContent || '').replace(/\s+/g, ' ').trim().length > 0;
+            } catch (e) { exemptTinyText = false; }
+          }
+          if (!exemptTinyText) {
+            rememberRejectedAdded(node, true);
+            if (rejectedSummary.length < 5) rejectedSummary.push({
+              tag: node.tagName,
+              size: Math.round(nr.width) + 'x' + Math.round(nr.height),
+              reason: 'too_small'
+            });
+            continue;
+          }
         }
         var narea = nr.width * nr.height;
         if (viewportArea > 0 && narea > viewportAreaThreshold) {
@@ -4179,6 +4258,14 @@
         return b.area - a.area;
       });
       var bestCandidate = passingCandidates.length > 0 ? passingCandidates[0] : null;
+      // Hundred-third-round C: remember the top-3 non-winning PASSING
+      // candidates (added-source — efp chrome would pollute the harvest).
+      for (var rui = 1; rui < passingCandidates.length && rui < 4; rui++) {
+        var runnerNode = passingCandidates[rui].node;
+        if (candidateSource.get(runnerNode) === 'added' && runnerUpNodes.indexOf(runnerNode) === -1) {
+          runnerUpNodes.push(runnerNode);
+        }
+      }
       function summarizeCandidate(c) {
         if (!c) return null;
         return {
@@ -4272,6 +4359,13 @@
     // Twenty-fourth log: read the text out of rejected ADDED mounts BEFORE
     // the dismiss — mouseout can unmount the scaffolding, but the text is
     // the payload the visual picker could not see (zero-height/hidden).
+    // Hundred-third-round C: merge the scoring runner-ups first (cap 12 —
+    // 8 filter-rejects + runner-ups; filter-rejects keep sampling priority).
+    for (var rni = 0; rni < runnerUpNodes.length && rejectedAddedNodes.length < 12; rni++) {
+      if (rejectedAddedNodes.indexOf(runnerUpNodes[rni]) === -1) {
+        rejectedAddedNodes.push(runnerUpNodes[rni]);
+      }
+    }
     var rejectedAddedTexts = collectRejectedAddedTexts(rejectedAddedNodes);
     var rejectedAddedHtml = collectRejectedAddedHtml(rejectedAddedNodes);
 

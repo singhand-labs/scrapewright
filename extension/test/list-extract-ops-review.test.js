@@ -57,7 +57,7 @@ dual('#5 compileMatch hardening', ({ make }) => {
     );
     assert.deepEqual(norm(rec[0].t), ['ab1', 'ab2']);
   });
-  it('values > 2000 chars match against the FIRST 2000 chars (early match visible), and the skipped guard is counted (F8)', () => {
+  it('values > 2000 chars: head AND tail windows tested (103c user directive), skipped guard counted (F8)', () => {
     const { dom, doc } = makeDom('<div class="c"><a href="/a">x</a></div>');
     const long = 'a'.repeat(2500) + 'TAIL';
     doc.querySelector('.c a').textContent = long;
@@ -73,8 +73,8 @@ dual('#5 compileMatch hardening', ({ make }) => {
     if (typeof ops.getMatchGuardSkips === 'function') {
       assert.ok(ops.getMatchGuardSkips() >= 1, 'skipped guard disclosed via counter');
     }
-    // a match living PAST the 2000-char prefix is still invisible — the value
-    // is dropped (bounded-prefix guard), but the counter disclosed it.
+    // a match living in the TAIL window (past the SVG/noise head — the 103rd
+    // incident shape) is now VISIBLE: head+tail windows both tested.
     doc.querySelector('.c a').textContent = 'x'.repeat(2500) + 'NEEDLE';
     if (typeof ops.resetMatchGuardSkips === 'function') ops.resetMatchGuardSkips();
     const rec2 = ops.extractListRecords(
@@ -82,7 +82,20 @@ dual('#5 compileMatch hardening', ({ make }) => {
       { t: { selector: 'a', match: 'NEEDLE' } },
       {}
     );
-    assert.equal(rec2[0].t, '');
+    assert.equal(rec2[0].t, 'x'.repeat(2500) + 'NEEDLE', 'tail-window match takes the whole raw value');
+    if (typeof ops.getMatchGuardSkips === 'function') {
+      assert.ok(ops.getMatchGuardSkips() >= 1);
+    }
+    // the MIDDLE stays bounded (catastrophic-backtracking protection, F8):
+    // a needle between the two windows is still invisible, counter disclosed.
+    doc.querySelector('.c a').textContent = 'x'.repeat(2100) + 'MIDDLE-NEEDLE' + 'y'.repeat(2100);
+    if (typeof ops.resetMatchGuardSkips === 'function') ops.resetMatchGuardSkips();
+    const rec3 = ops.extractListRecords(
+      [doc.querySelector('.c')],
+      { t: { selector: 'a', match: 'MIDDLE-NEEDLE' } },
+      {}
+    );
+    assert.equal(rec3[0].t, '');
     if (typeof ops.getMatchGuardSkips === 'function') {
       assert.ok(ops.getMatchGuardSkips() >= 1);
     }
