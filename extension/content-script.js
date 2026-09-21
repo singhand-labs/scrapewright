@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '104-transform-overlay';
+  const SW_BUILD_TAG = '105-aria-strip';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -4150,10 +4150,20 @@
           // candidate is never "too small" — one-line tooltip strips ARE the
           // payload (the 103rd incident: every text leaf of the picked
           // hovercard died at this gate; the strip can now be picked itself).
+          // 105th log: ARIA-BEARING counts too — the time tooltip mounts as a
+          // 218x0 zero-height strip whose date lives in aria-label /
+          // aria-labelledby-referenced spans, NOT textContent, so the
+          // text-only exemption missed it (user-observed popover, passing:0
+          // for the whole dwell).
           var exemptTinyText = false;
           if (nsource === 'added') {
             try {
               exemptTinyText = String(node.textContent || '').replace(/\s+/g, ' ').trim().length > 0;
+              if (!exemptTinyText) {
+                var ariaLbl = node.getAttribute('aria-label');
+                if (typeof ariaLbl === 'string' && ariaLbl.trim()) exemptTinyText = true;
+                else if (node.hasAttribute('aria-labelledby') || node.hasAttribute('aria-describedby')) exemptTinyText = true;
+              }
             } catch (e) { exemptTinyText = false; }
           }
           if (!exemptTinyText) {
@@ -4590,7 +4600,7 @@
                   rejectedAddedTexts: rejectedAddedTexts || [],
                   rejectedAddedHtml: rejectedAddedHtml || []
                 },
-                note: 'popover held open — compare what YOU see on screen, then submit your observation'
+                note: 'popover held open — compare what YOU see on screen, then submit your observation. rejectedAdded*＝过滤拒绝+评分未选中的挂载片段（可能与 picked 同属一个弹窗，是提取的兜底证据，并非丢弃）；picked 才是选中的弹窗主体'
               }
             }, function (resp) { resolve(resp || { observation: null, reason: 'no receiver' }); });
           } catch (e) { resolve({ observation: null, reason: 'sendMessage error' }); }

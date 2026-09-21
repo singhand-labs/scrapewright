@@ -183,3 +183,13 @@ describe('104th log: transform-positioned portals are overlay-positioned (user p
     assert.match(body, /posOverlay: c\.posOverlay/, 'the SW-log candidate summary discloses the overlay flag');
   });
 });
+
+describe('105th log: too_small exemption covers ARIA-bearing zero-height strips', () => {
+  it('an added candidate carrying aria-label/aria-labelledby payload is exempt even with empty textContent', () => {
+    const i = CS.indexOf("nr.width < 50 || nr.height < 50");
+    const block = CS.slice(i, i + 1600);
+    assert.match(block, /exemptTinyText/, 'exemption present');
+    assert.match(block, /aria-label/, 'aria-label counts as payload');
+    assert.match(block, /aria-labelledby|labelledby/, 'aria reference presence counts (the date lives in the referenced hidden spans — 105th incident: the 218x0 tooltip strip carries its date in ARIA, not textContent, so the 103c text-only exemption missed it)');
+  });
+});
