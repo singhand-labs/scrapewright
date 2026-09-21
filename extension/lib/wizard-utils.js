@@ -5587,6 +5587,76 @@ function detectNeverExtractedFields(steps, outputSchema) {
 
 // Forty-sixth log F5: ONE literal bag feeds every resolution surface. In
 // the wizard PAGE the two service.update static lints (detectUnawaitedDollar-
+// Hundred-seventh log (user review-stage feedback): the self-check list
+// rendered raw detector names ("检测器 oversizedFields 有发现 (1 项)") — the
+// user cannot make a deploy decision from that. Every detector gets a plain
+// -language verdict: level 'action' (the user must decide/fix something) or
+// 'advisory' (informational — often by-design, no action needed; the user's
+// rule: do not invent problems, and real ones must come with a readable
+// explanation).
+const DETECTOR_PLAIN = {
+  partialEmptyFields: { level: 'action', title: '部分记录字段为空', explain: (v) => '某些记录的必填字段没有取到值（如 ' + briefEntries(v, (e) => e.path + ' 空 ' + e.emptyCount + '/' + e.totalCount) + '）。请核对空记录样本：字段在页面上确实不存在时，应把它改为可选或从合同移除；存在却没取到则需要修复提取。' },
+  emptyFields: { level: 'action', title: '字段全部为空', explain: (v) => '以下字段在所有记录里都是空的：' + briefEntries(v, (e) => (e && typeof e === 'object') ? (e.path || e.field || '?') : String(e)) + '。若页面本就没有这个数据，改可选或删字段；否则修复绑定。' },
+  zeroMatchFields: { level: 'action', title: '有字段的选择器零命中', explain: () => '某字段的选择器在页面上一个都没匹配到——选择器写错了或页面结构变了，需要修复。' },
+  countShortfall: { level: 'action', title: '条数缺口', explain: (v) => '请求 ' + (v && v.requested) + ' 条，实际提取 ' + (v && v.extracted) + ' 条。常见原因是页面内容不足或滚动提前停止；内容确实不足时可以接受并披露，不足以外的原因需要修复。' },
+  relativeTimestamps: { level: 'action', title: '时间是相对格式', explain: (v) => '时间字段是"3 天前"这类相对时间而非绝对日期（' + briefEntries(v, (e) => (e && typeof e === 'object') ? ((e.path || e.field || '?') + '=' + (e.sampleValue != null ? String(e.sampleValue) : '')) : String(e)) + '）。若需要精确时间，应从悬停提示等渠道取绝对值；接受相对时间则改为披露。' },
+  duplicateIdValues: { level: 'action', title: '身份字段值重复', explain: () => '多条记录的 id 字段是同一个值——通常是把列表级共享值（如版主 id）当成了每条记录的身份。需要改为真正的逐条 id，或把该字段降为可选。' },
+  duplicateFields: { level: 'advisory', title: '字段间重复值', explain: () => '不同字段的值相同（常见于同一数据的多个读法）。不影响正确性；如需精简可去掉冗余字段。' },
+  duplicateEntities: { level: 'action', title: '疑似重复记录', explain: () => '有记录看起来是同一条数据被提取了多次（同内容/同链接）。需要去重或修正容器选择器，避免同一帖子重复出现。' },
+  implausibleTimeFields: { level: 'action', title: '时间字段值不像时间', explain: () => '时间字段的值不含任何日期形态——多半是读错了元素。需要换绑定来源。' },
+  positionLikeIds: { level: 'action', title: 'id 是序号', explain: () => 'id 字段的值是 1、2、3 这类位置序号，不是页面上的真实身份。需要改绑真实 id。' },
+  containerZero: { level: 'action', title: '容器选择器零命中', explain: () => '列表容器一个都没匹配到——选择器错误或页面未加载完成。' },
+  stepNoReturn: { level: 'action', title: '步骤没有返回数据', explain: () => '某步骤执行完没有产出数据。检查脚本是否漏了 return。' },
+  timeSourceUnexercised: { level: 'action', title: '时间来源未启用', explain: () => '合同要求时间来自悬停提示，但本次运行没有实际走到该来源。' },
+  oversizedFields: { level: 'advisory', title: '字段值超长（仅提示）', explain: (v) => '以下字段保存了大体积原始值（如整卡 HTML）：' + briefEntries(v, (e) => e.field + ' 最长 ' + e.maxLen + ' 字符') + '。不影响数据正确性；若下游用不到原始 HTML，可从合同移除该字段以减小输出体积。无需处理也可以直接部署。' },
+  adMarkerSelectors: { level: 'advisory', title: '选择器引用了广告标记属性（请核对用途）', explain: () => '步骤的选择器用了广告/推广标记类属性。请确认用途：若需求要排除广告，选择器应当用排除写法（:not() 等）；若该属性只是页面的结构标记（比如用来识别帖子卡），则无需处理——部署说明里应有模型的分布验证。' },
+  unusedCaptures: { level: 'advisory', title: '悬停弹层已捕获但未被字段消费（仅提示）', explain: () => '悬停捕获到了弹层内容但没有字段绑定它。信息已随记录交付时无需处理；若你想要这些信息成为独立字段，反馈让模型补绑定。' },
+  htmlNoMarkup: { level: 'advisory', title: 'HTML 字段无标签（仅提示）', explain: () => '名为 html 的字段值里没有标记，可能是文本被当 HTML 保存。仅影响该字段用途，不影响其他数据。' },
+  scrollCountFrozen: { level: 'advisory', title: '滚动计数冻结（仅提示）', explain: () => '滚动循环里计数不再增长。若页面确实加载完了这是正常收尾；若内容应更多，反馈让模型检查滚动。' },
+  clickContainersTransient: { level: 'advisory', title: '点击容器瞬时零匹配（仅提示）', explain: () => '点击步骤偶尔匹配不到容器后又在同一次运行里匹配到了——是页面挂载时序波动，非选择器错误。' },
+  siblingCountContrast: { level: 'advisory', title: '计数字段隐藏在属性里（仅提示）', explain: () => '某计数类字段文本读不到但兄弟字段读得到——值可能在 aria 属性里。需要该字段时反馈让模型改用属性读取。' },
+  labelPrefixedCounts: { level: 'advisory', title: '计数字段带控制台标签（仅提示）', explain: () => '计数字段的值形如"赞：37"。需要纯数字时反馈让模型解析。' },
+  junkShapeRecords: { level: 'advisory', title: '疑似填充记录子群（仅提示）', explain: () => '一部分记录像页面插入的非目标内容（超长、无身份字段）。需要排除时反馈让模型收紧容器选择器。' },
+  shapeDistribution: { level: 'advisory', title: '记录形态分布（信息）', explain: () => '各字段的填充形态统计，供参考。' }
+};
+function briefEntries(v, fmt) {
+  if (!Array.isArray(v)) return '';
+  return v.slice(0, 3).map((e) => { try { return fmt(e); } catch (_) { return '?'; } }).join('、');
+}
+// explainDetectorFinding(k, v) → {level,title,detail} | null (unknown detector
+// keys fall back to a generic advisory so nothing renders as a bare key).
+function explainDetectorFinding(k, v) {
+  const spec = DETECTOR_PLAIN[k];
+  if (spec) {
+    let detail = '';
+    try { detail = spec.explain ? String(spec.explain(v)) : spec.title; } catch (_) { detail = spec.title; }
+    return { level: spec.level, title: spec.title, detail: detail };
+  }
+  return { level: 'advisory', title: k, detail: '（未编目的检测器发现——可反馈给开发者补解释）' };
+}
+
+// Hundred-seventh log: sessions ABORTED or reviewed mid-run lose their
+// in-session verify greens — wizardState.lastVerified only synced on the
+// completion path (presentTestOutcome / seedArtifactVersionBookkeeping), so
+// the review banner showed "最后验证通过 v5" while v6-v11 had ALL verified
+// green (only the final v12 update lacked a verify). Pure state transition:
+// returns the fresh lastVerified record when the session's last verify is
+// green AND no artifact version has landed after it, else null.
+function syncLastVerifiedFromVerify(state, lv) {
+  try {
+    const rep = lv && lv.report;
+    if (!rep || rep.ok !== true) return null;
+    const v = rep.executedArtifactVersion;
+    if (typeof v !== 'number') return null;
+    if (typeof state.currentArtifactVersion === 'number' && state.currentArtifactVersion !== v) return null;
+    const vSteps = state.artifactsByVersion && state.artifactsByVersion[v];
+    if (!Array.isArray(vSteps)) return null;
+    return { version: v, steps: vSteps };
+  } catch (e) {
+    return null;
+  }
+}
+
 // Calls, detectNeverExtractedFields) were structurally dead for the whole
 // campaign: session-tools' page-context resolveWU falls back to a literal
 // 3-key bag when window.__wizardUtilsModuleMarker__ is absent — and nothing
@@ -5598,7 +5668,7 @@ function detectNeverExtractedFields(steps, outputSchema) {
 // direct property access keeps working. test/forty-sixth-log-followups.test.js
 // pins marker-bag keys === module.exports keys so a future export cannot
 // land on one surface only (the inline-fallback drift class, RC8/RC35).
-var WU_EXPORT_BAG = { unverifiedArtifactState, parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, hasYearToken, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectJunkShapeRecords, seedLedgerFromSameSite, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+var WU_EXPORT_BAG = { unverifiedArtifactState, syncLastVerifiedFromVerify, explainDetectorFinding, DETECTOR_PLAIN, parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, hasYearToken, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectJunkShapeRecords, seedLedgerFromSameSite, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = WU_EXPORT_BAG;

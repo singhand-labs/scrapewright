@@ -22,11 +22,25 @@ function sliceFn(src, a, b) {
 
 function loadRenderResultReview(report) {
   const dom = new JSDOM('<div><div id="resultReviewList"></div><textarea id="sessionFeedbackText"></textarea></div>', { url: 'https://w.local/' });
+  const WU_SRC = fs.readFileSync(path.join(__dirname, '..', 'lib', 'wizard-utils.js'), 'utf8');
+  const detStart = WU_SRC.indexOf('const DETECTOR_PLAIN = {');
+  const detEnd = WU_SRC.indexOf('function explainDetectorFinding');
+  const detBlock = WU_SRC.slice(detStart, detEnd);
+  let depth = 0, i = WU_SRC.indexOf('function explainDetectorFinding');
+  for (; i < WU_SRC.length; i++) {
+    if (WU_SRC[i] === '{') depth += 1;
+    else if (WU_SRC[i] === '}') { depth -= 1; if (depth === 0) break; }
+  }
+  const exFn = WU_SRC.slice(WU_SRC.indexOf('function explainDetectorFinding'), i + 1);
   const ctx = {
     document: dom.window.document,
-    wizardToolsBag: { getLastVerify: () => ({ report }) }
+    wizardToolsBag: { getLastVerify: () => ({ report }) },
+    explainDetectorFinding: null
   };
   vm.createContext(ctx);
+  vm.runInContext(detBlock + '\n' + exFn + '\nthis.__ex = explainDetectorFinding;', ctx);
+  ctx.explainDetectorFound = ctx.__ex;
+  ctx.explainDetectorFinding = ctx.__ex;
   const fn = sliceFn(WIZARD_SRC, 'function renderResultReview()', '\nasync function sendSessionFeedback');
   vm.runInContext(fn + '\nthis.__fn = renderResultReview;', ctx);
   ctx.__fn();
@@ -48,7 +62,7 @@ describe('renderResultReview behavioral (jsdom)', () => {
     assert.match(text, /posts\.t2=yesterday/);
     assert.ok(!text.includes('[object Object]'), 'no [object Object] leak');
   });
-  it('covered detector keys are skipped; object detectors render a JSON snippet', () => {
+  it('every detector renders through the plain-language map (107th log) — no bare keys, no [object Object]', () => {
     const list = loadRenderResultReview({
       detectors: {
         emptyFields: [{ field: 'x' }],
@@ -57,9 +71,14 @@ describe('renderResultReview behavioral (jsdom)', () => {
       }
     });
     const text = list.textContent;
-    assert.ok(!/检测器 emptyFields/.test(text), 'covered key emptyFields skipped');
-    assert.match(text, /检测器 siblingCountContrast 有发现/);
-    assert.match(text, /populatedSibling/);
+    // 107th contract: emptyFields is an ACTION finding with a readable title
+    // (the old renderer skipped it as "covered" — the user never saw it).
+    assert.match(text, /字段全部为空/);
+    assert.match(text, /x/, 'the empty field name is named');
+    // siblingCountContrast renders its plain advisory title, not a bare key.
+    assert.match(text, /计数字段隐藏在属性里/);
+    assert.ok(!/检测器 \w+ 有发现/.test(text), 'no raw detector-key rendering remains');
+    assert.ok(!text.includes('[object Object]'), 'no [object Object] leak');
   });
 });
 

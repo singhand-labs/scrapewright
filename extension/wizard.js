@@ -594,6 +594,13 @@ function updatePhaseUI(state) {
 
   const nameInput = document.getElementById('serviceNameEdit');
   if (nameInput && document.activeElement !== nameInput) {
+    // Hundred-seventh log (user review feedback "service name 缺失"): the
+    // research-first flow never passes through phase 2, so the suggestion
+    // there never ran and review showed an empty name. Suggest here too.
+    if (!wizardState.serviceName && typeof suggestServiceName === 'function') {
+      const suggested = suggestServiceName(wizardState.targetUrl);
+      if (suggested) wizardState.serviceName = suggested;
+    }
     nameInput.value = wizardState.serviceName || '';
   }
   renderIOSummary();
@@ -2820,6 +2827,16 @@ function handleSessionEvent(ev) {
       case 'tool_result':
         appendLog((ev.ok ? '✓ ' : '✗ ') + ev.summary, ev.ok ? 'info' : 'error');
         if (!sessionPanelOpen()) setSessionBadge('running', 'thinking…');
+        // Hundred-seventh log: keep lastVerified LIVE — an aborted/mid-run
+        // review used to lose every in-session verify green (the banner said
+        // "最后验证通过 v5" while v6-v11 had all verified green; only the final
+        // v12 update lacked a verify).
+        try {
+          const lvNow = (wizardToolsBag && typeof wizardToolsBag.getLastVerify === 'function')
+            ? wizardToolsBag.getLastVerify() : null;
+          const freshV = syncLastVerifiedFromVerify(wizardState, lvNow);
+          if (freshV) wizardState.lastVerified = freshV;
+        } catch (_) { /* bookkeeping is best-effort */ }
         break;
       case 'knowledge_attached':
         appendLog('Knowledge attached: ' + ev.id + ' (trigger: ' + ev.trigger + ').');
@@ -3411,7 +3428,33 @@ function renderResultReview() {
       banner.setAttribute('data-unverified-banner', 'v' + ua.currentV);
       const span = document.createElement('span');
       if (ua.verifiedV > 0 && wizardState.lastVerified && Array.isArray(wizardState.lastVerified.steps)) {
-        span.textContent = '⚠ 部署候选为未验证版本 v' + ua.currentV + '（最后验证通过：v' + ua.verifiedV + '）——建议回滚到最后验证版本';
+        // Hundred-seventh log (user question "为啥不验证呢"): explain WHY the
+        // candidate is unverified (it is a post-green rewrite — the session
+        // ended before another verify could run) and offer BOTH exits:
+        // re-verify the candidate now, or roll back to the verified version.
+        span.textContent = '⚠ 当前部署候选 v' + ua.currentV + ' 还没跑过验证——它是最后一次通过验证（v' + ua.verifiedV + '）之后的新修改，会话在验证它之前就结束了。这不是跳过验证：下面的修改必须先验证才能安全部署。';
+        const rvBtn = document.createElement('button');
+        rvBtn.id = 'btnReverifyCurrent';
+        rvBtn.textContent = '立即验证当前版本 v' + ua.currentV + '（推荐）';
+        rvBtn.addEventListener('click', async () => {
+          try {
+            rvBtn.disabled = true;
+            rvBtn.textContent = '正在验证…';
+            await testScript();
+            // A green manual run of the CURRENT steps blesses the current
+            // version for the banner/deploy gate (same rule as the
+            // presentSessionCompletion fresh-run branch).
+            const fr = wizardState.testResult;
+            if (fr && fr.finalResult != null && wizardState.currentArtifactVersion > 0 && Array.isArray(wizardState.steps)) {
+              wizardState.lastVerified = { version: wizardState.currentArtifactVersion, steps: JSON.parse(JSON.stringify(wizardState.steps)) };
+            }
+            renderResultReview();
+          } catch (e) {
+            showToast('验证运行失败：' + (e && e.message || e), 'error');
+            rvBtn.disabled = false;
+            rvBtn.textContent = '立即验证当前版本 v' + ua.currentV + '（推荐）';
+          }
+        });
         const btn = document.createElement('button');
         btn.id = 'btnRollbackToVerified';
         btn.textContent = '使用 v' + ua.verifiedV + ' 的已验证 steps';
@@ -3425,9 +3468,10 @@ function renderResultReview() {
           renderResultReview();
         });
         banner.appendChild(span);
+        banner.appendChild(rvBtn);
         banner.appendChild(btn);
       } else {
-        span.textContent = '⚠ 部署候选为未验证版本 v' + ua.currentV + '——当前工件从未验证通过，部署前请先验证';
+        span.textContent = '⚠ 当前部署候选 v' + ua.currentV + ' 从未通过任何验证——先点上方“运行测试”验证通过后再部署';
         banner.appendChild(span);
       }
       listEl.appendChild(banner);
@@ -3437,43 +3481,41 @@ function renderResultReview() {
     ? wizardToolsBag.getLastVerify() : null;
   const report = lv && lv.report;
   if (!report) return;
-  const items = [];
+  // Hundred-seventh log (user review feedback): the self-check rendered raw
+  // detector keys ("检测器 oversizedFields 有发现 (1 项)") — undecipherable.
+  // Every finding now carries a plain-language verdict and a level:
+  //   action   — the user should fix / renegotiate / decide something
+  //   advisory — informational, often by-design; explicitly marked 无需处理
+  // per the user's rule: do not invent problems; real ones must read clearly.
+  const findings = [];
   const errMsg = report.error && report.error.message ? String(report.error.message) : '';
-  if (errMsg) items.push('verify 失败: ' + errMsg.slice(0, 300));
+  if (errMsg) findings.push({ level: 'action', text: 'verify 失败: ' + errMsg.slice(0, 300) });
   const det = report.detectors || {};
-  if (Array.isArray(det.partialEmptyFields)) {
-    for (const pe of det.partialEmptyFields) {
-      items.push('字段 ' + pe.path + ' 空 ' + pe.emptyCount + '/' + pe.totalCount + ' 条记录');
-    }
-  }
-  if (Array.isArray(det.relativeTimestamps) && det.relativeTimestamps.length) {
-    // Code-review P2: entries are OBJECTS ({field,path,sampleValue}) — naive
-    // join rendered "[object Object]". Map to path=sample first.
-    const rtLines = det.relativeTimestamps.slice(0, 3).map((e) =>
-      (e && typeof e === 'object')
-        ? (e.path || e.field || '?') + '=' + (e.sampleValue != null ? String(e.sampleValue) : '')
-        : String(e));
-    items.push('相对时间戳（非绝对日期）: ' + rtLines.join(', '));
-  }
-  if (det.countShortfall) {
-    items.push('条数缺口: ' + JSON.stringify(det.countShortfall).slice(0, 200));
-  }
-  if (report.scoreNote) items.push('评分说明（含广告位极性）: ' + String(report.scoreNote).slice(0, 200));
-  const covered = ['partialEmptyFields', 'relativeTimestamps', 'countShortfall', 'emptyFields'];
   for (const k of Object.keys(det)) {
-    if (covered.indexOf(k) !== -1) continue;
     const v = det[k];
     if (!v || (Array.isArray(v) && !v.length)) continue;
-    // Code-review P2: object detectors render a JSON snippet instead of a
-    // bare "has findings" so the user sees WHAT was found.
-    items.push('检测器 ' + k + ' 有发现' +
-      (Array.isArray(v) ? (' (' + v.length + ' 项)') : (': ' + JSON.stringify(v).slice(0, 120))));
+    const ex = (typeof explainDetectorFinding === 'function')
+      ? explainDetectorFinding(k, v) : null;
+    if (ex) {
+      findings.push({ level: ex.level, text: ex.title + '——' + ex.detail });
+    } else if (Array.isArray(v)) {
+      findings.push({ level: 'advisory', text: k + ' (' + v.length + ' 项)' });
+    } else {
+      findings.push({ level: 'advisory', text: k + ': ' + JSON.stringify(v).slice(0, 120) });
+    }
   }
-  if (!items.length) return;
+  if (report.scoreNote) {
+    findings.push({ level: 'advisory', text: '评分说明（含广告位极性核对提示）: ' + String(report.scoreNote).slice(0, 200) });
+  }
+  const items = findings.filter((f) => f.level === 'action').map((f) => f.text);
+  const advisories = findings.filter((f) => f.level !== 'action').map((f) => f.text);
+  if (!items.length && !advisories.length) return;
   const capped = items.slice(0, 8);
   const headEl = document.createElement('p');
   headEl.className = 'hint-label';
-  headEl.textContent = '审查以下可能的问题：点任意条目把它加入反馈继续修复，或直接部署（已知问题将随披露说明交付）。';
+  headEl.textContent = items.length
+    ? '以下发现需要你决策：点条目把它加入反馈继续修复，或直接部署（已知问题将随披露说明交付）。'
+    : '本次运行没有需要处理的问题——以下为仅提示项（通常无需处理）。';
   listEl.appendChild(headEl);
   for (const it of capped) {
     const row = document.createElement('div');
@@ -3491,6 +3533,22 @@ function renderResultReview() {
     });
     row.appendChild(btn);
     listEl.appendChild(row);
+  }
+  // Hundred-seventh log: advisories render collapsed, explicitly marked as
+  // 无需处理 unless the user wants the detail — no fix buttons on them (the
+  // user's rule: do not surface non-problems as problems).
+  if (advisories.length) {
+    const detEl = document.createElement('details');
+    detEl.className = 'result-review-item';
+    const sumEl = document.createElement('summary');
+    sumEl.textContent = '仅提示项 ' + advisories.length + ' 条（默认无需处理，点开看说明）';
+    detEl.appendChild(sumEl);
+    for (const ad of advisories.slice(0, 8)) {
+      const p = document.createElement('div');
+      p.textContent = '· ' + ad;
+      detEl.appendChild(p);
+    }
+    listEl.appendChild(detEl);
   }
 }
 

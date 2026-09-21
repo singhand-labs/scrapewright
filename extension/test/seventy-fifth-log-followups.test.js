@@ -88,8 +88,10 @@ describe('75th log — wizard wiring source audits', () => {
   it('F2: the review panel prepends an unverified-artifact banner with a rollback button wired via addEventListener', () => {
     const fnSrc = sliceBetween(WIZ, 'function renderResultReview() {', 'const lv = (wizardToolsBag && typeof wizardToolsBag.getLastVerify', 'renderResultReview banner');
     assert.match(fnSrc, /unverifiedArtifactState\(wizardState\)/);
-    assert.match(fnSrc, /部署候选为未验证版本/);
-    assert.match(fnSrc, /当前工件从未验证通过/);
+    // 107th log: the banner text was rewritten to EXPLAIN why the candidate
+    // is unverified (post-green rewrite) and offer a re-verify button.
+    assert.match(fnSrc, /还没跑过验证——它是最后一次通过验证/);
+    assert.match(fnSrc, /从未通过任何验证/);
     assert.match(fnSrc, /btnRollbackToVerified/);
     assert.match(fnSrc, /btn\.addEventListener\('click'/);
     assert.match(fnSrc, /wizardState\.steps = JSON\.parse\(JSON\.stringify\(lv\.steps\)\)/);
