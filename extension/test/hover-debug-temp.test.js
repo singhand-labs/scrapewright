@@ -66,13 +66,27 @@ describe('[HOVER-DEBUG-TEMP] behavior contracts', () => {
 // broadcast callback fires when listeners merely RETURN (delivery included),
 // so the unconditional no-receiver resolve made every pause a no-op. The
 // guard must check chrome.runtime.lastError BEFORE resolving.
-describe('[HOVER-DEBUG-TEMP] 101st-round: no-receiver resolve is lastError-gated', () => {
-  it('the broadcast callback resolves the pending ONLY when lastError is actually set', () => {
+//
+// 102nd-round live bug (user observation: STILL no interruption, every pause
+// resolved in ~50ms with reason 'no receiver' on build 101b): lastError is
+// set in TWO distinct cases — (a) "Receiving end does not exist" (nobody
+// received) and (b) "The message port closed before a response was received"
+// (the wizard page RECEIVED the panel, its listener returned undefined, the
+// port closed — EXPECTED, because the user's answer rides a SEPARATE
+// HOVER_DEBUG_INSPECT_RESPONSE message). Gating on "lastError is set" alone
+// (the 101b shape) resolves every delivered panel as no-receiver. The gate
+// must match the nobody-received MESSAGE specifically.
+describe('[HOVER-DEBUG-TEMP] 101st/102nd-round: no-receiver resolve is error-DISCRIMINATED', () => {
+  it('the broadcast callback resolves the pending ONLY on the nobody-received error', () => {
     const i = BG.indexOf("chrome.runtime.sendMessage({ type: 'HOVER_DEBUG_INSPECT_PANEL'");
     assert.ok(i !== -1, 'broadcast call found');
-    const block = BG.slice(i, i + 1200);
-    assert.match(block, /if \(chrome\.runtime && chrome\.runtime\.lastError\)/,
+    const block = BG.slice(i, i + 2600);
+    assert.match(block, /chrome\.runtime && chrome\.runtime\.lastError/,
       'the resolve is gated on lastError — an unconditional resolve makes every pause a no-op');
+    assert.match(block, /Receiving end does not exist/,
+      'the gate matches the nobody-received MESSAGE — port-close ("The message port closed before a response was received") is the DELIVERED case and must NOT resolve');
+    assert.match(block, /panel delivered, port closed/,
+      'the delivered-but-port-closed path is disclosed in the SW log for diagnosis');
     assert.ok(!/void chrome\.runtime\.lastError;\s*\n\s*const p = hoverDebugPending/.test(block),
       'the old swallow-then-resolve shape is gone');
   });

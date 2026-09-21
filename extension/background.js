@@ -1093,12 +1093,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // observation). Resolve-as-no-receiver ONLY when lastError is set
         // (nobody received); otherwise keep the pending alive until the
         // panel's HOVER_DEBUG_INSPECT_RESPONSE arrives.
-        if (chrome.runtime && chrome.runtime.lastError) {
+        // [HOVER-DEBUG-TEMP] 102nd-round live bug: lastError is set in TWO
+        // distinct cases — (a) "Receiving end does not exist" (NOBODY
+        // received) and (b) "The message port closed before a response was
+        // received" (the page RECEIVED the panel, returned undefined, and
+        // the port closed — the user's answer rides a SEPARATE
+        // HOVER_DEBUG_INSPECT_RESPONSE message, so port-close is EXPECTED).
+        // Treating both as no-receiver (the 101b assumption) resolved every
+        // pause in ~50ms — the user's exact observation "script still
+        // executing". Resolve ONLY on the nobody-received error.
+        const dbgErr = (chrome.runtime && chrome.runtime.lastError) ? String(chrome.runtime.lastError.message || '') : '';
+        if (dbgErr && /Receiving end does not exist/i.test(dbgErr)) {
           const p = hoverDebugPending.get(reqId);
           if (p) {
             hoverDebugPending.delete(reqId);
             p.sendResponse({ observation: null, reason: 'no receiver' });
           }
+        } else if (dbgErr) {
+          debugLogger.log('info', 'background', '[hover-debug-relay] panel delivered, port closed (answer rides the separate response)', { reqId, portErr: dbgErr.slice(0, 80) });
         }
       });
     } catch (e) {
