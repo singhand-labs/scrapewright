@@ -57,6 +57,7 @@
       findEmptyExtractionFields: w.findEmptyExtractionFields,
       findUpstreamExtractionStepId: w.findUpstreamExtractionStepId,
       detectDuplicateRecords: w.detectDuplicateRecords,
+      detectDuplicateEntityPairs: w.detectDuplicateEntityPairs,
       detectDuplicateEntities: w.detectDuplicateEntities,
       detectOversizedFields: w.detectOversizedFields,
       detectCountShortfall: w.detectCountShortfall,
@@ -974,6 +975,26 @@
               }
             }
             detectors.duplicateIdValues = dupIds;
+            // Hundred-eleventh log (user hit this class twice, 107 & 111):
+            // the same card extracted under TWO id surfaces (postId
+            // 'fbid=…' vs 'pfbid…') — pairwise entity duplicates escape
+            // BOTH the model's id-keyed dedupe AND the wholesale ratio
+            // detector above. Veto: records matching on every comparable
+            // data field are the same entity shipped twice.
+            const entPairs = (typeof WU.detectDuplicateEntityPairs === 'function')
+              ? WU.detectDuplicateEntityPairs(finalData, outputSchema) : [];
+            if (entPairs.length) {
+              detectors.duplicateEntityPairs = entPairs;
+              if (!error) {
+                const first = entPairs[0];
+                error = new Error(
+                  'DUPLICATE_ENTITY_PAIRS: ' + first.field + ' records #' + first.indexA + ' and #' + first.indexB +
+                  ' match on every data field (' + first.matchedFields.join(', ') + ')' +
+                  (first.idSurface ? ' while their id surfaces differ (' + first.idSurface.field + ' "' + first.idSurface.a + '" vs "' + first.idSurface.b + '")' : '') +
+                  ' — the same entity extracted twice under two identifier surfaces. Dedupe keyed on the id alone cannot catch cross-surface duplicates: dedupe by the entity signature (the matched fields, e.g. content+postTime) in the step script, or collapse to ONE id surface during extraction. If the page legitimately repeats the entity, renegotiate via io.confirm — duplicated records may not ship green.'
+                );
+              }
+            }
           }
         }
         if (RSD && typeof RSD.formatShapeDistributionFromData === 'function') {

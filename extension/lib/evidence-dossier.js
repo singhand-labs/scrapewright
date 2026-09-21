@@ -76,6 +76,13 @@
         out.push('dup-id ' + String(row.path) + ' ' + (row.count || 0) + '/' + (row.totalRecords || '?') +
           ' on records ' + (Array.isArray(row.indices) ? row.indices.join(', ') : '?'));
       }
+      const entp = Array.isArray(d.duplicateEntityPairs) ? d.duplicateEntityPairs : [];
+      for (const row of entp) {
+        if (!row) continue;
+        out.push('dup-entity #' + (row.indexA || '?') + '≡#' + (row.indexB || '?') +
+          ' match ' + (Array.isArray(row.matchedFields) ? row.matchedFields.join('+') : '?') +
+          (row.idSurface ? ' id-surface differs: ' + row.idSurface.field : ''));
+      }
       if (d.countShortfall) out.push('count-shortfall: ' + String(d.countShortfall).slice(0, 120));
       const uc = d.unusedCaptures;
       if (uc && typeof uc === 'object') {

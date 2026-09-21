@@ -5603,6 +5603,7 @@ const DETECTOR_PLAIN = {
   duplicateIdValues: { level: 'action', title: '身份字段值重复', explain: () => '多条记录的 id 字段是同一个值——通常是把列表级共享值（如版主 id）当成了每条记录的身份。需要改为真正的逐条 id，或把该字段降为可选。' },
   duplicateFields: { level: 'advisory', title: '字段间重复值', explain: () => '不同字段的值相同（常见于同一数据的多个读法）。不影响正确性；如需精简可去掉冗余字段。' },
   duplicateEntities: { level: 'action', title: '疑似重复记录', explain: () => '有记录看起来是同一条数据被提取了多次（同内容/同链接）。需要去重或修正容器选择器，避免同一帖子重复出现。' },
+  duplicateEntityPairs: { level: 'action', title: '同一实体被提取两次', explain: (v) => '两条记录的全部数据字段完全一致（如 ' + briefEntries(v, (e) => '#' + e.indexA + '≡#' + e.indexB) + '），仅 id 形态不同——同一张卡片以两种链接形态被提取了两次。需要按实体签名（内容+时间等）去重，而不是仅按 id；或反馈协商从合同移除该字段。' },
   implausibleTimeFields: { level: 'action', title: '时间字段值不像时间', explain: () => '时间字段的值不含任何日期形态——多半是读错了元素。需要换绑定来源。' },
   positionLikeIds: { level: 'action', title: 'id 是序号', explain: () => 'id 字段的值是 1、2、3 这类位置序号，不是页面上的真实身份。需要改绑真实 id。' },
   containerZero: { level: 'action', title: '容器选择器零命中', explain: () => '列表容器一个都没匹配到——选择器错误或页面未加载完成。' },
@@ -5635,6 +5636,71 @@ function explainDetectorFinding(k, v) {
   return { level: 'advisory', title: k, detail: '（未编目的检测器发现——可反馈给开发者补解释）' };
 }
 
+
+
+// Hundred-eleventh log: post1 ≡ post5 AGAIN — the same card extracted under
+// two identifier surfaces (the same post's numeric id vs its opaque token).
+// The model's dedupe
+// keyed on postId cannot catch cross-surface duplicates, and the wholesale
+// duplicate detector (full-record signature including the id, ratio
+// threshold 1.0) structurally cannot either: one differing field breaks the
+// signature and a single pair is 2/N < 1.0. PAIRWISE detection instead:
+// two records matching on EVERY comparable data field (≥3) are the same
+// entity extracted twice — id-ish surfaces (id/url/href/permalink/link/
+// snippet/html) never block the match, they are REPORTED as the differing
+// surface; ordinal fields (index/order/position) are excluded from the
+// comparison entirely.
+function detectDuplicateEntityPairs(data, outputSchema) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return [];
+  if (!outputSchema || typeof outputSchema !== 'object') return [];
+  const props = outputSchema.properties && typeof outputSchema.properties === 'object'
+    ? outputSchema.properties : {};
+  const NON_ENTITY = /id|url|href|permalink|link|snippet|html|sourcepage|index|ordinal|position|order/i;
+  // within non-entity fields, only ID-ish surfaces are worth reporting as
+  // "the differing surface" — ordinals (index 1 vs 3) are positional noise.
+  const IDISH = /id|url|href|permalink|link/i;
+  const normScalar = (v) => {
+    if (typeof v === 'number' || typeof v === 'boolean') return v;
+    if (typeof v === 'string') {
+      const t = v.trim();
+      return t.length ? t : null;
+    }
+    return null;
+  };
+  const out = [];
+  for (const key of Object.keys(props)) {
+    const fieldKeys = schemaArrayItemFieldKeys(props[key]);
+    if (!fieldKeys) continue;
+    const arr = data[key];
+    if (!Array.isArray(arr) || arr.length < 2 || arr.length > 50) continue;
+    for (let i = 0; i < arr.length && out.length < 3; i++) {
+      for (let j = i + 1; j < arr.length && out.length < 3; j++) {
+        const a = arr[i], b = arr[j];
+        if (!a || !b || typeof a !== 'object' || typeof b !== 'object') continue;
+        const matched = [];
+        let idSurface = null;
+        let clean = true;
+        for (const fk of fieldKeys) {
+          const sa = normScalar(a[fk]);
+          const sb = normScalar(b[fk]);
+          if (sa === null || sb === null) continue;
+          if (NON_ENTITY.test(fk)) {
+            if (sa !== sb && !idSurface && IDISH.test(fk)) {
+              idSurface = { field: fk, a: String(sa).slice(0, 60), b: String(sb).slice(0, 60) };
+            }
+            continue;
+          }
+          if (sa !== sb) { clean = false; break; }
+          if (matched.indexOf(fk) === -1) matched.push(fk);
+        }
+        if (clean && matched.length >= 3) {
+          out.push({ field: key, indexA: i + 1, indexB: j + 1, matchedFields: matched.slice(0, 6), idSurface: idSurface });
+        }
+      }
+    }
+  }
+  return out;
+}
 
 // Hundred-tenth log (user: "comments shares are both empty, reported but still not fixed"): a
 // fresh rebuild of a service concluded "the page never renders comments/shares"
@@ -5717,7 +5783,7 @@ function syncLastVerifiedFromVerify(state, lv) {
 // direct property access keeps working. test/forty-sixth-log-followups.test.js
 // pins marker-bag keys === module.exports keys so a future export cannot
 // land on one surface only (the inline-fallback drift class, RC8/RC35).
-var WU_EXPORT_BAG = { unverifiedArtifactState, syncLastVerifiedFromVerify, explainDetectorFinding, DETECTOR_PLAIN, collectFieldSamplesFromOutput, parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, hasYearToken, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectJunkShapeRecords, seedLedgerFromSameSite, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+var WU_EXPORT_BAG = { unverifiedArtifactState, syncLastVerifiedFromVerify, explainDetectorFinding, DETECTOR_PLAIN, collectFieldSamplesFromOutput, detectDuplicateEntityPairs, parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, hasYearToken, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectJunkShapeRecords, seedLedgerFromSameSite, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = WU_EXPORT_BAG;
