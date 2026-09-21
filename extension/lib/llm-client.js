@@ -149,6 +149,10 @@ function anthropicMessagesUrl(base) {
   return /\/v1$/i.test(b) ? b + '/messages' : b + '/v1/messages';
 }
 
+// 116th round: per-base throttle bookkeeping (module-level, per page/worker).
+const lastCallByBase = new Map();
+function normalizeBase(u) { return String(u || '').replace(/\/+$/, ''); }
+
 class LLMClient {
   constructor(config) {
     this.provider = config.provider;
@@ -171,6 +175,9 @@ class LLMClient {
     // budget on non-visible tokens — RC52: output_tokens 4096, text_tokens 0),
     // so it is a Settings-page config knob, not a per-call-site guess. Use
     // site chain: options.maxTokens ?? this.maxOutputTokens ?? 16384.
+    // 116th round: optional per-config request throttle (ms) — see chat().
+    const thr = Number(config.throttleMs);
+    this.throttleMs = Number.isFinite(thr) && thr >= 0 ? thr : 0;
     const maxOut = Number(config.maxOutputTokens);
     this.maxOutputTokens = Number.isFinite(maxOut) && maxOut > 0 ? maxOut : undefined;
   }
@@ -208,6 +215,36 @@ class LLMClient {
   async chat(messages, options = {}) {
     const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
     const backoffMs = options.backoffMs ?? defaultBackoffMs;
+    // 116th round (speed spec track C): per-base-URL minimum interval —
+    // burst requests are the main trigger of provider rate-limit windows
+    // (six 429 retries in the profiled session). Injected via
+    // options.throttleMs / constructor throttleMs; waits surface through
+    // options.onThrottle so the spend line can show WHY the call is slow.
+    const throttleMs = (typeof options.throttleMs === 'number' && options.throttleMs >= 0)
+      ? options.throttleMs
+      : (Number.isFinite(this.throttleMs) && this.throttleMs > 0 ? this.throttleMs : 0);
+    if (throttleMs > 0) {
+      const key = normalizeBase(this.apiBaseUrl);
+      const last = lastCallByBase.get(key) || 0;
+      const now = Date.now();
+      const wait = last + throttleMs - now;
+      if (wait > 0) {
+        if (typeof options.onThrottle === 'function') {
+          try { options.onThrottle({ waitedMs: wait }); } catch (_) {}
+        }
+        await new Promise(r => setTimeout(r, wait));
+      }
+    }
+    try {
+      return await this._chatThrottled(messages, options, maxRetries, backoffMs);
+    } finally {
+      if (throttleMs > 0) {
+        try { lastCallByBase.set(normalizeBase(this.apiBaseUrl), Date.now()); } catch (_) {}
+      }
+    }
+  }
+
+  async _chatThrottled(messages, options, maxRetries, backoffMs) {
 
     let lastError;
     let attempt = 0;

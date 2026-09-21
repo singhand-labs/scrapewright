@@ -12,7 +12,8 @@
     "tabs",
     "windows",
     "offscreen",
-    "debugger"
+    "debugger",
+    "notifications"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -22,8 +23,17 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["lib/iframe-selector.js", "lib/dom-cleaner.js", "lib/selector-generator.js", "lib/list-extract-ops.js", "lib/scroll-ops.js", "content-script.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "lib/iframe-selector.js",
+        "lib/dom-cleaner.js",
+        "lib/selector-generator.js",
+        "lib/list-extract-ops.js",
+        "lib/scroll-ops.js",
+        "content-script.js"
+      ],
       "run_at": "document_idle"
     }
   ],
@@ -41,6 +51,8 @@
     "128": "icons/icon128.png"
   },
   "sandbox": {
-    "pages": ["sandbox.html"]
+    "pages": [
+      "sandbox.html"
+    ]
   }
 }

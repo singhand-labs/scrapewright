@@ -895,7 +895,34 @@
           .map((e) => (e && typeof e.text === 'string') ? e.text : '')
           .filter(Boolean)
       };
+      // 116th round (speed spec track B): OPTIONAL warm preflight — dry-run
+      // the artifact's EXTRACT step on the RESEARCH tab before the cold
+      // end-to-end verify. A doomed-red verify costs 60-90s; the preflight
+      // surfaces its field-level red dots in ~10-20s on the warm DOM.
+      // Default OFF: verify's cold-tab semantics are untouched.
+      let preflight = null;
+      if (a.preflight === true && d.rail && typeof d.rail.executeDsl === 'function') {
+        try {
+          const extractStep = (service.steps || []).find((st) =>
+            st && typeof st.script === 'string' && /\$extract/i.test(st.script));
+          if (extractStep) {
+            const pfOpts = Object.assign({}, input || {});
+            const pfRes = await d.rail.executeDsl(extractStep.script, { input: pfOpts, timeoutMs: 20000, preflight: true });
+            preflight = {
+              executed: true,
+              stepId: extractStep.id || null,
+              ok: !(pfRes && pfRes.error),
+              resultPreview: JSON.stringify(pfRes).slice(0, 1500)
+            };
+          } else {
+            preflight = { executed: false, note: 'no step script uses an $extract primitive — nothing to pre-dry-run' };
+          }
+        } catch (e) {
+          preflight = { executed: false, note: 'preflight error: ' + (e && e.message || String(e)) };
+        }
+      }
       const out = await d.runVerify({ service: service, input: input, outputSchema: outputSchema, sessionEvidence: sessionEvidence });
+      if (preflight) out.report.preflight = preflight;
       const wallCostMs = Date.now() - __verifyT0;
       lastVerify = { events: out.events || [], report: out.report, raw: out.raw, at: Date.now() };
       captureRouteEpoch += 1; // route re-proving is legitimate after a verify (page state changed)

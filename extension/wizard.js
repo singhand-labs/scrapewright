@@ -2151,6 +2151,15 @@ function makeLlmAdapter(client) {
     try {
       const content = await client.chat(messages, {
         maxTokens,
+        // 116th round (speed spec track C): throttle waits show in the spend
+        // line — a silent multi-second stall reads as "stuck" (the 429
+        // backoffs of the profiled session were invisible here).
+        onThrottle: (info) => {
+          try {
+            const el = document.getElementById('sessionSpend');
+            if (el) el.textContent = '⏳ 请求节流等待中（' + ((info && info.waitedMs) || 0) + 'ms）— ' + el.textContent;
+          } catch (_) {}
+        },
         // Nineteenth log (user directive): a rate-limited provider stalls the
         // session for tens of seconds with zero UI feedback — surface every
         // retry in the research log so the user sees attempt N/10 and the
@@ -2585,6 +2594,16 @@ function getSessionMaxTurns() {
 // 23 minutes with zero tab-level visibility), and a single +5min reminder
 // toast fires if the panel is still open.
 let parkReminderTimer = null;
+// 116th round (speed spec track A): desktop notifications for parked asks —
+// the 40-minute io.confirm wait was invisible outside the wizard tab.
+let parkNotifier = null;
+function ensureParkNotifier() {
+  if (parkNotifier) return parkNotifier;
+  try {
+    parkNotifier = createParkNotifier(chrome.notifications, function () { focusWizardTab(); });
+  } catch (e) { parkNotifier = null; }
+  return parkNotifier;
+}
 
 function setSessionBadge(state, text) {
   const badge = document.getElementById('sessionStatusBadge');
@@ -2600,9 +2619,14 @@ function setSessionBadge(state, text) {
   badge.classList.add('is-' + state);
   const label = document.getElementById('sessionStatusText');
   if (label) label.textContent = String(text || '');
+  if (state !== 'waiting' && parkNotifier) { try { parkNotifier.end(); } catch (e0) {} }
   if (state === 'running') document.title = '● researching… — ' + BASE_DOC_TITLE;
   else if (state === 'waiting') {
     document.title = '❓ your answer is needed — ' + BASE_DOC_TITLE;
+    try {
+      const n = ensureParkNotifier();
+      if (n) n.begin(String(text || 'session ask').slice(0, 30), parkQuestionText());
+    } catch (e) { /* notifier is best-effort */ }
     parkReminderTimer = setTimeout(() => {
       parkReminderTimer = null;
       if (sessionPanelOpen()) showToast('The research session is still waiting for your answer (panel open for 5 minutes).', 'warn', 8000);
@@ -2610,6 +2634,20 @@ function setSessionBadge(state, text) {
   }
   else if (state === 'paused') document.title = '‖ paused — ' + BASE_DOC_TITLE;
   else document.title = BASE_DOC_TITLE;
+}
+
+// 116th round: the notification body carries the actual ask when the panel
+// exposes one (io note / annotation purpose / observe question).
+function parkQuestionText() {
+  try {
+    const io = document.getElementById('ioConfirmNote');
+    if (io && io.textContent && io.textContent.trim()) return io.textContent.trim();
+    const ann = document.getElementById('annotationRequestText');
+    if (ann && ann.textContent && ann.textContent.trim()) return ann.textContent.trim();
+    const obs = document.getElementById('userObserveQuestion');
+    if (obs && obs.textContent && obs.textContent.trim()) return obs.textContent.trim();
+  } catch (e) {}
+  return 'research session is waiting for your answer';
 }
 
 function sessionPanelOpen() {
