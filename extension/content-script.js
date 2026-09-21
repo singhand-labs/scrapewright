@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '105-aria-strip';
+  const SW_BUILD_TAG = '108-profile-demotion';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -1202,7 +1202,16 @@
         let mutations = 0;
         let observer = null;
         try {
-          observer = new MutationObserver(function (records) { mutations += records.length; });
+          observer = new MutationObserver(function (records) {
+            // 108th log: count ADDED NODES, not records — a virtualized feed
+            // swaps cards in as few records with several added nodes each;
+            // record-counting under-sensed exactly the churn that proves the
+            // page is dynamic (this session profiled a hydrating search feed
+            // as 'static').
+            for (var ri = 0; ri < records.length; ri++) {
+              mutations += records[ri].addedNodes ? records[ri].addedNodes.length : 1;
+            }
+          });
           observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
         } catch (_) { /* observer is a secondary signal only */ }
         const startHeight = document.documentElement.scrollHeight;
@@ -1222,6 +1231,10 @@
             if (startHeight > 0 && (maxHeight - startHeight) / startHeight > 0.05) profile = 'lazy';
             else if (mutations > 20) profile = 'lazy';
             window.__scrapewrightPageProfile = profile;
+            // 108th log: remember the height the verdict was decided on — a
+            // later scroll that grows the page beyond it CONTRADICTS 'static'
+            // (see demoteStaticProfileIfGrown).
+            try { window.__scrapewrightProfiledMaxHeight = maxHeight; } catch (_) {}
             resolve(profile);
           }, 500);
         }, 500);
@@ -1230,6 +1243,23 @@
   }
 
   let pageProfilePromise = null;
+  // 108th log: the profile is a FIRST-SECOND snapshot cached for the tab's
+  // whole lifetime — a cold page that hydrates later (ads render eagerly,
+  // organic posts arrive via XHR after the probe window) stayed 'static'
+  // forever and every later frame-need op skipped activation ("static page"
+  // receipts ×5 this session), a self-fulfilling starvation. Any scroll that
+  // later grows the page beyond the profiled height CONTRADICTS the static
+  // verdict — demote one-way to 'lazy'.
+  function demoteStaticProfileIfGrown(newHeight) {
+    try {
+      if (window.__scrapewrightPageProfile !== 'static') return false;
+      var base = window.__scrapewrightProfiledMaxHeight;
+      if (!(base > 0) || !(newHeight > base * 1.05)) return false;
+      window.__scrapewrightPageProfile = 'lazy';
+      try { notifyBackgroundDiagnostic('page_profile_demoted', { profiledMaxHeight: base, observedHeight: Math.round(newHeight) }); } catch (_) {}
+      return true;
+    } catch (e) { return false; }
+  }
   async function getPageProfile() {
     try {
       if (window.__scrapewrightPageProfile) return window.__scrapewrightPageProfile;
@@ -3038,6 +3068,9 @@
       const prevY = root.scrollTop || 0;
       const delta = typeof deltaY === 'number' && isFinite(deltaY) ? Math.trunc(deltaY) : 0;
       const finish = async (r) => {
+        // 108th log: growth contradiction — a page that grows past its
+        // profiled height IS dynamic; demote a stale 'static' verdict.
+        try { demoteStaticProfileIfGrown(document.documentElement.scrollHeight); } catch (_) {}
         await attachScrollEvidence(r);
         sendDebugLog('info', 'content-script', 'domScrollBy', {
           selector: sel || '(window)',
@@ -3215,6 +3248,13 @@
     // rate-limit concern. The receiver is the background SW which is awake
     // for the duration of the scrape.
     const onIter = (info) => {
+      // 108th log: growth contradiction — the incremental loop sees the live
+      // scrollHeight on every iteration; growth beyond the profiled height
+      // demotes a stale 'static' verdict so the NEXT op takes the full tier.
+      try {
+        if (info && typeof info.curHeight === 'number') demoteStaticProfileIfGrown(info.curHeight);
+        else demoteStaticProfileIfGrown(document.documentElement.scrollHeight);
+      } catch (_) {}
       notifyBackgroundDiagnostic('scrollToBottom_iter', info);
     };
 

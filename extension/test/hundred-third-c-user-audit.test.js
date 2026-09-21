@@ -193,3 +193,37 @@ describe('105th log: too_small exemption covers ARIA-bearing zero-height strips'
     assert.match(block, /aria-labelledby|labelledby/, 'aria reference presence counts (the date lives in the referenced hidden spans — 105th incident: the 218x0 tooltip strip carries its date in ARIA, not textContent, so the 103c text-only exemption missed it)');
   });
 });
+
+describe('108th log: page-profile probe — virtualization blindness + static lock-in', () => {
+  it('the probe counts ADDED NODES (not mutation records) and records its max height', () => {
+    const i = CS.indexOf('function detectLazyLoadProfile');
+    const block = CS.slice(i, i + 3000);
+    assert.match(block, /addedNodes/, 'count added nodes — a virtualized feed swaps cards in as ADDED nodes; counting records under-senses churn');
+    assert.match(block, /__scrapewrightProfiledMaxHeight/, 'the height the profile was decided on is stored for later contradiction');
+  });
+  it('demoteStaticProfileIfGrown — later growth on a static-profiled tab demotes to lazy (one-way)', () => {
+    const fnSrc = sliceFnFrom(CS, 'demoteStaticProfileIfGrown') + '\nthis.__fn = demoteStaticProfileIfGrown;';
+    const ctx = { window: { __scrapewrightPageProfile: 'static', __scrapewrightProfiledMaxHeight: 5000 }, notifyBackgroundDiagnostic: (n) => { ctx.__diag = n; } };
+    vm.createContext(ctx);
+    vm.runInContext(fnSrc, ctx);
+    const fn = ctx.__fn;
+    assert.equal(fn(5200), false, '4% growth — under the 5% contradiction bar');
+    assert.equal(ctx.window.__scrapewrightPageProfile, 'static');
+    assert.equal(fn(5600), true, '12% growth contradicts the static verdict');
+    assert.equal(ctx.window.__scrapewrightPageProfile, 'lazy', 'one-way demotion — a page that grows IS lazy regardless of the first-second snapshot');
+    assert.equal(ctx.__diag, 'page_profile_demoted');
+    // idempotent + lazy stays lazy + missing baseline never demotes
+    assert.equal(fn(9000), false);
+    const ctx2 = { window: { __scrapewrightPageProfile: 'static' }, notifyBackgroundDiagnostic: () => {} };
+    vm.createContext(ctx2); vm.runInContext(fnSrc, ctx2);
+    assert.equal(ctx2.__fn(99999), false, 'no stored baseline (old tabs) — never demotes');
+  });
+  it('scroll ops consult the demotion hook', () => {
+    const sb = CS.indexOf('async function domScrollBy');
+    const block = CS.slice(sb, CS.indexOf('async function domScrollToBottom', sb));
+    assert.match(block, /demoteStaticProfileIfGrown/, 'domScrollBy checks growth contradiction');
+    const stb = CS.indexOf('async function domScrollToBottom');
+    const block2 = CS.slice(stb, stb + 9000);
+    assert.match(block2, /demoteStaticProfileIfGrown/, 'domScrollToBottom checks growth contradiction');
+  });
+});
