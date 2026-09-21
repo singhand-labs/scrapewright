@@ -907,7 +907,7 @@
         reason: (h && h.reason) || null,
         addedNodes: Array.isArray(h && h.addedNodesHtml) ? h.addedNodesHtml.length : 0,
         addedTexts: Array.isArray(h && h.addedNodesHtml)
-          ? h.addedNodesHtml.slice(0, 2).map((html) => stripTagsLocal(html).slice(0, 100)).filter(Boolean)
+          ? [...new Set(h.addedNodesHtml.map((html) => stripTagsLocal(html).slice(0, 100)).filter(Boolean))].slice(0, 5)
           : []
       }));
       const out = {

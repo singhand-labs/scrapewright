@@ -2510,9 +2510,9 @@
       let __addedTexts = [];
       try {
         if (hv && Array.isArray(hv.addedNodesHtml)) {
-          __addedTexts = hv.addedNodesHtml.slice(0, 2)
+          __addedTexts = [...new Set(hv.addedNodesHtml
             .map((h2) => String(h2 || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100))
-            .filter(Boolean);
+            .filter(Boolean))].slice(0, 5);
         }
       } catch (_) { __addedTexts = []; }
       anchorLog.push({
