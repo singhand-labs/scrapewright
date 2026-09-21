@@ -3227,6 +3227,41 @@ async function startResearchSession(seedOverride) {
       if (svc) {
         seed = { ledger: svc.findingsLedger };
         appendLog('Ledger seeded from service ' + svc.name + ' (same target site) — prior findings carry forward');
+        // Hundred-tenth log (user: "comments shares 都是空，反馈了也没修复"):
+        // a rebuilt service concluded "the page never renders X" from one
+        // cold-tab sweep while the PRIOR same-site service's execution
+        // history had extracted X. Mine the prior service's field samples
+        // and seed them as a ledger entry so an absence claim for a field
+        // this site already yielded reads as the contradiction it is.
+        try {
+          const store = await chrome.storage.local.get('executionLogs');
+          const logs = (store && Array.isArray(store.executionLogs)) ? store.executionLogs : [];
+          const mine = logs.filter((l) => l && l.serviceId === svc.id && l.output && !l.error).slice(-3).reverse();
+          const samples = {};
+          for (const lg of mine) {
+            const smp = (typeof collectFieldSamplesFromOutput === 'function')
+              ? collectFieldSamplesFromOutput(lg.output) : {};
+            for (const k of Object.keys(smp)) {
+              if (!samples[k] && smp[k] && smp[k].length) samples[k] = smp[k].slice(0, 2);
+            }
+          }
+          const ks = Object.keys(samples);
+          if (ks.length) {
+            const led = JSON.parse(JSON.stringify(svc.findingsLedger));
+            if (!Array.isArray(led.entries)) led.entries = [];
+            led.entries.unshift({
+              id: 'prior-service-samples-' + Date.now(),
+              finding: 'SAME-SITE FIELD SAMPLES (from the prior service "' + (svc.name || svc.id) + '" execution history): ' +
+                ks.slice(0, 12).map((k) => k + '=' + JSON.stringify(samples[k])).join(', ') +
+                ' — this site HAS yielded these fields before. A "the page never renders X" conclusion for any of them is a CONTRADICTION to reconcile (population / hydration / binding), not an absence to conclude: re-probe on the long-lived warm tab (a freshly opened tab is cold and ad/machine cards lack engagement rows), or user.observe, before shipping the field empty.',
+              evidence: 'executionLogs (same-site service ' + (svc.id || '') + ')',
+              provenance: 'prior-service',
+              confidence: 'high'
+            });
+            seed = { ledger: led };
+            appendLog('Ledger seeded with prior-service field samples: ' + ks.slice(0, 8).join(', '));
+          }
+        } catch (e) { /* sample mining is best-effort */ }
       }
     } catch (e) { /* cross-session ledger seed is best-effort */ }
   }
@@ -3592,7 +3627,7 @@ async function sendSessionFeedback() {
   // steering input — pin it at submit time (three feedback rounds in the
   // 86th log were unrecoverable before full request logging landed).
   try { mirrorLines('[session] user_feedback', text, Infinity); } catch (e) { /* best-effort */ }
-  st.transcript.push({ kind: 'system', text: 'USER FEEDBACK (fix request): ' + text + ' — continue: the research tab was closed when the session ended, so page.open the target (with a concrete sample input) first, probe the live page to diagnose the reported problem, fix the artifact via service.update, then verify.run again before finishing. Before finishing you must close EACH named problem: state per reported problem whether it is now fixed, quoting field values from the verify output as evidence, and a problem you could not fix must be disclosed in the finish summary naming what was tried. A green verify.run alone does not close user feedback — empty fields, UI-label junk values, and duplicate records can all pass a shape-only verify, so re-read the complaint and check the actual extracted values.' });
+  st.transcript.push({ kind: 'system', text: 'USER FEEDBACK (fix request): ' + text + ' — continue: the research tab was closed when the session ended, so page.open the target (with a concrete sample input) first, probe the live page to diagnose the reported problem, fix the artifact via service.update, then verify.run again before finishing. Before finishing you must close EACH named problem: state per reported problem whether it is now fixed, quoting field values from the verify output as evidence, and a problem you could not fix must be disclosed in the finish summary naming what was tried. A green verify.run alone does not close user feedback — empty fields, UI-label junk values, and duplicate records can all pass a shape-only verify, so re-read the complaint and check the actual extracted values. When the complaint names a FIELD that comes back empty: the reporter can see the page, so an absence conclusion must be EARNED, not assumed — (a) re-probe on the long-lived warm research tab (a freshly page.open-ed tab is cold; engagement/summary rows hydrate late and ad/machine cards lack them entirely), (b) user.observe to ask what the reporter sees and where the value appears, (c) check the findings ledger for SAME-SITE FIELD SAMPLES — a field the site yielded before contradicts never-render claims. One cold-tab aria sweep NEVER closes a named-field complaint.' });
   try {
     await wizardPersistence.save({ session: st, observation: persisted.observation, ledger: persisted.ledger });
     await wizardPersistence.flush();
