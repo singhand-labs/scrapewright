@@ -2709,7 +2709,12 @@ function updateSessionSpendLine(st, parkedMs) {
   const el = document.getElementById('sessionSpend');
   if (!el || !st) return;
   const sp = st.session.spend;
-  el.textContent = 'turns ' + sp.turns + '/' + wizardMaxTurns + ' · tokens ~' + (sp.promptTokens + sp.completionTokens) +
+  // 113th round (user request): split the token counter into INPUT vs
+  // OUTPUT — a single blended number hid that prompt tokens dominate
+  // (dossier/system prompts) while completion tokens are the controllable
+  // spend; both are tracked separately by the engine since day one.
+  el.textContent = 'turns ' + sp.turns + '/' + wizardMaxTurns +
+    ' · 输入 tokens ~' + sp.promptTokens + ' · 输出 tokens ~' + sp.completionTokens +
     (sp.estimated ? ' (est)' : '') + ' · ledger ' + st.ledger.entries.length +
     // Parked time (io.confirm / annotation waits) does not burn the session
     // clock — disclose it so the wall-clock arithmetic adds up for the user.

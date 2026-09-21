@@ -57,26 +57,4 @@ describe('SCRIPT_TIMEOUT error context', () => {
       assert.match(err.message, /extractWithHover|\$hover/);
     });
   });
-
-  describe('ScriptExecutor (legacy $openTab path)', () => {
-    const { ScriptExecutor } = require('../lib/script-executor');
-
-    beforeEach(() => {
-      global.chrome = mockChrome();
-      global.debugLogger = { log() {} };
-    });
-
-    it('rejects with budget ms in the message', async () => {
-      const ex = new ScriptExecutor(3);
-      ex.timeoutMs = 25;
-      const err = await captureRejection(ex.execute('await new Promise(() => {})', {}));
-      assert.match(err.message, /^SCRIPT_TIMEOUT/);
-      assert.match(err.message, /25ms/);
-    });
-  });
-
-  it('restores globals', () => {
-    global.chrome = ORIG_CHROME;
-    global.debugLogger = ORIG_DEBUG_LOGGER;
-  });
 });

@@ -38,7 +38,6 @@ const WIZARD_HTML_SCRIPT_ORDER = [
   'lib/service-registry.js',
   'lib/llm-client.js',
   'lib/offscreen-executor.js',
-  'lib/script-executor.js',
   'lib/list-pattern.js',
   'lib/wizard-utils.js',
   'lib/dom-cleaner.js',

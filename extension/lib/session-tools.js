@@ -789,9 +789,13 @@
           e.notedEpoch = captureRouteEpoch;
           return 'capture route already proven this session (×' + e.proofs + ', sample ' + JSON.stringify(e.samples[0] || sample.slice(0, 60)) + '). If the remaining problem is parsing/binding/regex, work from the captured evidence ([CAPTURE ROUTES] / [POPOVER CAPTURES] in the dossier) or probe.snippet — re-triggering page hovers re-proves what is proven. Page ops are for not-yet-proven routes and verify.';
         }
-        if (!proven && e.proofs === 0 && e.attempts >= 3 && !e.askedNote) {
+        // 113rd round (user directive): TWO failed locates is enough — the
+        // user asked for annotation help at the 2nd failure (not the 3rd);
+        // annotate.request leads (the user picks the element), user.observe
+        // backs it up (what the screen shows).
+        if (!proven && e.proofs === 0 && e.attempts >= 2 && !e.askedNote) {
           e.askedNote = true;
-          return 'this capture route has been attempted ' + e.attempts + ' times without ANY capture — do NOT repeat the identical dispatch: ask the user (user.observe — what the screen shows on hover; annotate.request — mark the element), or change the anchor shape. Repeating the same page action cannot change the outcome.';
+          return 'this capture route has been attempted ' + e.attempts + ' times without ANY capture — do NOT repeat the identical dispatch: annotate.request is the next move (ask the user to MARK the element on the page), with user.observe as the fallback (ask what the screen shows on hover), or change the anchor shape. Repeating the same page action cannot change the outcome.';
         }
         return null;
       } catch (err) { return null; }

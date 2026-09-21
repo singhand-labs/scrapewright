@@ -57,15 +57,14 @@ describe('112th-A: capture-route ledger nudges (session-tools functional)', () =
     assert.ok(r2.routeNote && /already proven/i.test(r2.routeNote), 'second proof in the same epoch nudges toward reuse');
     assert.match(r2.routeNote, /probe\.snippet|captured evidence/i);
   });
-  it('three attempts with NO capture escalate to the ask-user note', async () => {
+  it('repeated empty attempts escalate to the ask-user note (113rd round: two-strike)', async () => {
     const impl = async () => ({ hovered: false, htmlSnippet: null, reason: 'popover_timeout' });
     const tools = makeTools(impl);
     const k = { anchorSel: 'div.x span' };
     const r1 = await tools.tools['probe.hover'](k);
     const r2 = await tools.tools['probe.hover'](k);
-    const r3 = await tools.tools['probe.hover'](k);
-    assert.ok(!r1.routeNote && !r2.routeNote, 'first two attempts stay quiet');
-    assert.ok(r3.routeNote && /user\.observe|annotate\.request/.test(r3.routeNote), 'third empty attempt requires asking the user');
+    assert.ok(!r1.routeNote, 'first attempt stays quiet');
+    assert.ok(r2.routeNote && /user\.observe|annotate\.request/.test(r2.routeNote), 'second empty attempt requires asking the user');
   });
 });
 
@@ -82,7 +81,7 @@ describe('112th-B: dossier [CAPTURE ROUTES] block', () => {
     assert.match(text, /September 21, 2026 at 3:11 AM/);
     assert.match(text, /3 attempt\(s\), NO capture/);
     assert.match(text, /page-op frugality/i);
-    assert.match(text, /user\.observe \/ annotate\.request/);
+    assert.match(text, /annotate\.request — they mark the element/);
   });
 });
 
@@ -104,5 +103,18 @@ describe('112th-C: wiring (source audits)', () => {
     const iR = text.indexOf('[CAPTURE ROUTES]');
     const iC = text.indexOf('[LAST VERIFY CENSUS]');
     assert.ok(iP > -1 && iR > iP && iC > iR, 'ordering: popovers → capture routes → census');
+  });
+});
+
+describe('113rd round (user request): two-strike escalation to annotation', () => {
+  it('the SECOND empty attempt on a route already requires user annotation', async () => {
+    const impl = async () => ({ hovered: false, htmlSnippet: null, reason: 'popover_timeout' });
+    const tools = makeTools(impl);
+    const k = { anchorSel: 'div.y span' };
+    const r1 = await tools.tools['probe.hover'](k);
+    const r2 = await tools.tools['probe.hover'](k);
+    assert.ok(!r1.routeNote, 'first attempt stays quiet (one miss can be a timing flake)');
+    assert.ok(r2.routeNote && /annotate\.request/.test(r2.routeNote), 'second miss requires user annotation — the user picks the element');
+    assert.match(r2.routeNote, /user\.observe/);
   });
 });

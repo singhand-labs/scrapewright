@@ -173,7 +173,7 @@
         return '- anchor ' + an + ': ' + ((e && e.attempts) || 0) + ' attempt(s), NO capture';
       });
       routesText = '[CAPTURE ROUTES]\n' + rl.join('\n') +
-        '\npage-op frugality: a PROVEN route\'s payload is already captured (this block / [POPOVER CAPTURES]) — solve parsing/binding problems from the captured evidence or probe.snippet, NOT by re-triggering page hovers; page ops are for not-yet-proven routes and verify. A route with ≥3 attempts and NO capture: ask the user (user.observe / annotate.request) instead of another identical dispatch.';
+        '\npage-op frugality: a PROVEN route\'s payload is already captured (this block / [POPOVER CAPTURES]) — solve parsing/binding problems from the captured evidence or probe.snippet, NOT by re-triggering page hovers; page ops are for not-yet-proven routes and verify. A route with ≥2 attempts and NO capture: ask the user (annotate.request — they mark the element; user.observe — they describe the screen) instead of another identical dispatch.';
     }
 
     // [LAST VERIFY CENSUS] — purpose-built renderer (89th-round plan T2):
