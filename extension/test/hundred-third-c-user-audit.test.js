@@ -171,3 +171,15 @@ describe('103c-E: scoring runner-ups enter the rejected memory', () => {
     assert.ok(mergeIdx > -1 && textsIdx > mergeIdx, 'merged BEFORE the texts/html collectors sample');
   });
 });
+
+describe('104th log: transform-positioned portals are overlay-positioned (user panel "有弹窗，为何reject？")', () => {
+  it('posOverlay = absolute/fixed OR computed transform placement; the cascade sorts on posOverlay', () => {
+    const domHoverStart = CS.indexOf('async function domHover(');
+    const body = CS.slice(domHoverStart, CS.indexOf('async function domOpenTab(', domHoverStart));
+    assert.match(body, /var posOverlay = posAbsolute \|\|\s*\n?\s*\(nodeStyle\.transform && nodeStyle\.transform !== 'none'\)/,
+      'transform-placed portals (the 104th incident: transform: translate(627px, 762px), position NOT absolute) count as overlay-positioned');
+    assert.match(body, /if \(a\.posOverlay !== b\.posOverlay\) return a\.posOverlay \? -1 : 1;/,
+      'the scoring cascade sorts on posOverlay — the transform-placed hovercard must beat nearer static in-card wrappers');
+    assert.match(body, /posOverlay: c\.posOverlay/, 'the SW-log candidate summary discloses the overlay flag');
+  });
+});

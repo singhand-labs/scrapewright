@@ -1058,7 +1058,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }
         }
       }
-    })();
+    });
     return false;
   }
   if (message.type === 'DOM_RESPONSE' && sender.tab?.id && message._fromOffscreen) {

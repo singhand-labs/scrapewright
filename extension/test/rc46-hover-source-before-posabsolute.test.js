@@ -59,25 +59,27 @@ describe('RC46: domHover scoring cascade checks source BEFORE posAbsolute', () =
   // content, source:"added") — even though source:"added" is the only signal
   // that uniquely identifies a portal-mount event.
 
-  it('source comparison appears in the sort cascade before posAbsolute comparison', () => {
+  it('source comparison appears in the sort cascade before the positioning comparison', () => {
     const body = sliceDomHover(readSrc('content-script.js'));
     const sortBlock = sliceSortBlock(body);
 
     const sourceIdx = sortBlock.indexOf("a.source !== b.source");
-    const posAbsIdx = sortBlock.indexOf('a.posAbsolute !== b.posAbsolute');
+    // 104th log: the positioning comparator is posOverlay (absolute/fixed OR
+    // transform-placed) — a superset of RC46's posAbsolute.
+    const posIdx = sortBlock.indexOf('a.posOverlay !== b.posOverlay');
 
     assert.ok(sourceIdx > -1, 'sort cascade must compare a.source !== b.source');
-    assert.ok(posAbsIdx > -1, 'sort cascade must compare a.posAbsolute !== b.posAbsolute');
-    assert.ok(sourceIdx < posAbsIdx,
-      'source comparison must appear BEFORE posAbsolute comparison in the sort cascade. ' +
-      'RC45 console.log showed posAbsolute-first picking a pre-existing positioned DIV ' +
+    assert.ok(posIdx > -1, 'sort cascade must compare a.posOverlay !== b.posOverlay');
+    assert.ok(sourceIdx < posIdx,
+      'source comparison must appear BEFORE the positioning comparison in the sort cascade. ' +
+      'RC45 console.log showed positioning-first picking a pre-existing positioned DIV ' +
       '(source:"efp") over the actual hovercard (source:"added") because hovercard inner ' +
       'content has posAbsolute:false while page chrome has posAbsolute:true.');
   });
 
-  it('source:"added" wins over source:"efp" regardless of posAbsolute', () => {
-    // Even if the added candidate has posAbsolute:false and the efp candidate
-    // has posAbsolute:true, the added one must sort first. This is the exact
+  it('source:"added" wins over source:"efp" regardless of positioning', () => {
+    // Even if the added candidate has posOverlay:false and the efp candidate
+    // has posOverlay:true, the added one must sort first. This is the exact
     // scenario from the smoking-gun log line.
     const body = sliceDomHover(readSrc('content-script.js'));
     const sortBlock = sliceSortBlock(body);
@@ -86,24 +88,25 @@ describe('RC46: domHover scoring cascade checks source BEFORE posAbsolute', () =
     assert.ok(/a\.source\s*===\s*['"]added['"]\s*\?\s*-1\s*:\s*1/.test(sortBlock),
       'source comparison must favor "added" (return -1 when a.source === "added")');
 
-    // Confirm it appears BEFORE posAbsolute comparison
+    // Confirm it appears BEFORE the positioning comparison
     const sourceIdx = sortBlock.indexOf("a.source !== b.source");
-    const posAbsIdx = sortBlock.indexOf('a.posAbsolute !== b.posAbsolute');
-    assert.ok(sourceIdx < posAbsIdx,
-      'source comparison must be the first (or earlier) check so added beats posAbsolute.');
+    const posIdx = sortBlock.indexOf('a.posOverlay !== b.posOverlay');
+    assert.ok(sourceIdx < posIdx,
+      'source comparison must be the first (or earlier) check so added beats positioning.');
   });
 
-  it('preserves posAbsolute as a tiebreaker between same-source candidates', () => {
+  it('preserves overlay positioning as a tiebreaker between same-source candidates', () => {
     // When both candidates are source:"efp" (pre-existing, no portal mount),
-    // posAbsolute should still break ties — favoring positioned overlays over
-    // static content. This preserves RC39 (pre-allocated portal: both efp).
+    // overlay positioning should still break ties — favoring positioned
+    // overlays over static content. This preserves RC39 (pre-allocated
+    // portal: both efp).
     const body = sliceDomHover(readSrc('content-script.js'));
     const sortBlock = sliceSortBlock(body);
 
-    const posAbsIdx = sortBlock.indexOf('a.posAbsolute !== b.posAbsolute');
+    const posIdx = sortBlock.indexOf('a.posOverlay !== b.posOverlay');
     const zIdx = sortBlock.indexOf('a.z !== b.z');
-    assert.ok(posAbsIdx > -1 && zIdx > -1 && posAbsIdx < zIdx,
-      'posAbsolute must remain in the cascade (as a tiebreaker after source), ' +
+    assert.ok(posIdx > -1 && zIdx > -1 && posIdx < zIdx,
+      'posOverlay must remain in the cascade (as a tiebreaker after source), ' +
       'ahead of z-index, so two same-source candidates still resolve by positioning.');
   });
 

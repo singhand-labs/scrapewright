@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '103c-audit-round2';
+  const SW_BUILD_TAG = '104-transform-overlay';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -4189,6 +4189,14 @@
           continue;
         }
         var posAbsolute = (nodeStyle.position === 'absolute' || nodeStyle.position === 'fixed');
+        // 104th log (user panel observation "有弹窗，为何reject？" ×3): portal
+        // popovers are positioned via CSS TRANSFORM translate, not
+        // position:absolute — posAbsolute:false made them lose the cascade's
+        // positioning stage to nearer in-card wrappers (the visible hovercard
+        // "rejected" while a dist-157 feed wrapper won). A candidate whose own
+        // computed transform carries a placement is overlay-positioned.
+        var posOverlay = posAbsolute ||
+          (nodeStyle.transform && nodeStyle.transform !== 'none');
         var nz = 0;
         var zRaw = nodeStyle.zIndex;
         if (zRaw !== 'auto' && zRaw !== '') {
@@ -4223,7 +4231,7 @@
           continue;
         }
         passingCandidates.push({
-          node: node, posAbsolute: posAbsolute, z: nz, dist: ndist, area: narea,
+          node: node, posAbsolute: posAbsolute, posOverlay: posOverlay, z: nz, dist: ndist, area: narea,
           source: nsource
         });
       }
@@ -4243,16 +4251,19 @@
       // source:"added"). The captured htmlSnippet was page chrome, which
       // downstream classifiers then dropped for lacking hovercard-shaped
       // content — producing empty results despite the portal mount
-      // succeeding. source > posAbsolute > z > dist > area.
+      // succeeding. source > posOverlay > z > dist > area.
       //
       // RC42 had moved source ahead of dist (correct) but kept posAbsolute
-      // ahead of source. RC46 finishes the reorder. posAbsolute remains a
+      // ahead of source. RC46 finishes the reorder. posOverlay remains a
       // tiebreaker BETWEEN same-source candidates: when no portal mount was
       // observed (both source:"efp"), positioned overlays still beat static
       // content — preserving the RC39 pre-allocated-portal scenario.
+      // 104th log: posOverlay (absolute/fixed OR transform-placed) replaces
+      // posAbsolute in the cascade — transform-positioned portals must win
+      // the positioning stage over static in-card wrappers.
       passingCandidates.sort(function (a, b) {
         if (a.source !== b.source) return a.source === 'added' ? -1 : 1;
-        if (a.posAbsolute !== b.posAbsolute) return a.posAbsolute ? -1 : 1;
+        if (a.posOverlay !== b.posOverlay) return a.posOverlay ? -1 : 1;
         if (a.z !== b.z) return b.z - a.z;
         if (a.dist !== b.dist) return a.dist - b.dist;
         return b.area - a.area;
@@ -4271,6 +4282,7 @@
         return {
           tag: c.node.tagName,
           posAbsolute: c.posAbsolute,
+          posOverlay: c.posOverlay,
           z: c.z,
           dist: Math.round(c.dist),
           area: Math.round(c.area),
