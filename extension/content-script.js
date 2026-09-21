@@ -4430,6 +4430,11 @@
           action: selectorForLog, observation: result.debugObservation,
           reason: (__dbgResp && __dbgResp.reason) || null
         });
+        notifyBackgroundDiagnostic('hover_debug_pause_resolved', {
+          selector: selectorForLog,
+          observation: result.debugObservation,
+          reason: (__dbgResp && __dbgResp.reason) || null
+        });
       } catch (_) { /* the debug pause must never break the hover */ }
     }
 
