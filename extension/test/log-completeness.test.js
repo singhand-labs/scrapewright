@@ -45,10 +45,12 @@ describe('87th-round log completeness — source wiring audit', () => {
   });
 
   it('user feedback is logged at submit time', () => {
-    const i = WIZ_SRC.indexOf('USER FEEDBACK (fix request): ');
+    // 123rd round: the first occurrence may be inside the identical-feedback
+    // breaker probe — anchor on the transcript push's contiguous phrase.
+    const i = WIZ_SRC.indexOf("'USER FEEDBACK (fix request): ' + text + '");
     assert.ok(i !== -1);
     // a console mirror of the raw feedback text near the push
-    assert.match(WIZ_SRC.slice(Math.max(0, i - 600), i + 900), /user_feedback/, 'the feedback text is mirrored');
+    assert.match(WIZ_SRC.slice(Math.max(0, i - 1400), i + 900), /user_feedback/, 'the feedback text is mirrored');
   });
 
   it('mirrorLines callers that still pass a finite cap are the compact-detail lane only', () => {

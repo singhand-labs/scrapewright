@@ -299,3 +299,54 @@ describe('120th log: leading bare-token repair (the green session died AT THE FI
     assert.match(SP, /BARE TOKEN|leading bare token/i);
   });
 });
+
+describe('122nd log: feedback convergence (one count-shortfall feedback looped for many rounds while verify was GREEN)', () => {
+  const WJ2 = fs.readFileSync(path.join(__dirname, '..', 'wizard.js'), 'utf8');
+  it('the review fix-this button carries the advisory-closure clause', () => {
+    assert.match(WJ2, /CLOSING it with an honest disclosure in finish/, 'disclosure is named as a valid resolution');
+    assert.match(WJ2, /Do not keep researching for a fix the page cannot provide/, 'endless research is forbidden when the page cannot offer more');
+  });
+  it('a repeated-identical-feedback breaker exists as a defensive backstop', () => {
+    assert.match(WJ2, /IDENTICAL FEEDBACK #/, 'meta directive injected on the 3rd identical send');
+    assert.match(WJ2, /Do NOT re-diagnose from scratch/, 're-diagnosis forbidden');
+  });
+});
+
+describe('123rd round (user design): [FIX PLAN] — per-problem status, fixed ones stay closed', () => {
+  const DossierLib = require('../lib/evidence-dossier');
+  const RS = fs.readFileSync(path.join(__dirname, '..', 'lib', 'research-session.js'), 'utf8');
+  const WJ3 = fs.readFileSync(path.join(__dirname, '..', 'wizard.js'), 'utf8');
+  it('multi-problem feedback splits into a per-problem plan with computed statuses', () => {
+    const text = DossierLib.buildDossier({
+      fixProblems: [
+        { text: 'Please fix: posts.postTime empty in 4/4 records' },
+        { text: 'Please fix: Count shortfall — requested 10, extracted 3' }
+      ],
+      lastVerify: { ok: true, detectors: { countShortfall: { field: 'posts', requested: 10, extracted: 3 } } }
+    });
+    assert.match(text, /\[FIX PLAN\]/);
+    // postTime: green verify + its field absent from every failing row → FIXED
+    const pt = text.split('\n').filter(l => /postTime/.test(l))[0];
+    assert.match(pt, /FIXED/i, 'solved problem marked fixed — ' + pt);
+    // count shortfall: its detector still fires → OPEN
+    const cs = text.split('\n').filter(l => /Count shortfall/.test(l))[0];
+    assert.match(cs, /OPEN|still failing/i, 'unresolved problem stays open — ' + cs);
+    assert.match(text, /work ONLY the OPEN/i, 'teaching forbids re-researching fixed ones');
+  });
+  it('a red verify on ANOTHER field does not reopen a fixed problem; regression reopens it', () => {
+    const t1 = DossierLib.buildDossier({
+      fixProblems: [{ text: 'Please fix: posts.postTime empty' }],
+      lastVerify: { ok: false, error: { message: 'REQUIRED_FIELD_EMPTY: posts.content is empty in 2/4' }, detectors: {} }
+    });
+    assert.match(t1.split('\n').filter(l => /postTime/.test(l))[0], /FIXED/i, 'other-field red does not reopen');
+    const t2 = DossierLib.buildDossier({
+      fixProblems: [{ text: 'Please fix: posts.postTime empty' }],
+      lastVerify: { ok: false, error: { message: 'REQUIRED_FIELD_EMPTY: posts.postTime is empty in 1/4' }, detectors: {} }
+    });
+    assert.match(t2.split('\n').filter(l => /postTime/.test(l))[0], /OPEN|REGRESSED/i, 're-appearing failure reopens');
+  });
+  it('wizard seeds fixProblems from multi-line feedback; engine passes them to the dossier', () => {
+    assert.match(WJ3, /fixProblems/, 'wizard seeds the problem list');
+    assert.match(RS, /fixProblems: \(Array\.isArray\(state\.fixProblems\)/, 'engine wires the feed');
+  });
+});

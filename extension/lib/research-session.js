@@ -247,6 +247,7 @@
       digest: '',
       spend: { turns: 0, llmCalls: 0, promptTokens: 0, completionTokens: 0, estimated: false, parkedMs: 0 },
       attachedUnits: [],
+      fixProblems: [], // 123rd round: per-problem fix plan seeded from multi-problem feedback (see [FIX PLAN])
       artifactVersions: [],
       elapsedMs: 0,
       stopped: null,
@@ -960,6 +961,9 @@
           evictedPopovers: evicted,
           lastVerify: (typeof feeds.lastVerify === 'function') ? feeds.lastVerify() : null,
           captureRoutes: (typeof feeds.captureRoutes === 'function') ? feeds.captureRoutes() : null,
+          fixProblems: (Array.isArray(state.fixProblems) && state.fixProblems.length)
+            ? state.fixProblems.map((fp) => ((fp && typeof fp === 'object') ? fp : { text: String(fp) }))
+            : null,
           artifactVersions: state.artifactVersions.slice(-3),
           stepPlan: Array.isArray(state.stepPlan) ? state.stepPlan : []
         });

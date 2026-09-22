@@ -157,6 +157,57 @@
     let popovers = Array.isArray(a.popovers) ? a.popovers.slice() : [];
     let popoverTrimmed = 0;
 
+    // [FIX PLAN] (123rd round, user design): multi-problem feedback splits
+    // into a per-problem checklist; statuses are COMPUTED at render time
+    // from the CURRENT last-verify report, so a solved problem stays FIXED
+    // in every later turn (the still-binding feedback text alone made the
+    // model re-judge solved problems as open every round). Rule: a problem
+    // is FIXED when the verify is green OR its field/gate tokens appear in
+    // NO failing row; it reopens automatically when its tokens re-appear.
+    let fixPlanText = '';
+    if (Array.isArray(a.fixProblems) && a.fixProblems.length) {
+      const lv = (a.lastVerify && typeof a.lastVerify === 'object') ? a.lastVerify : null;
+      const failJson = JSON.stringify({
+        error: lv && lv.error,
+        detectors: (lv && lv.detectors) ? Object.keys(lv.detectors).filter((k) => {
+          const v = lv.detectors[k];
+          return v && (!Array.isArray(v) || v.length);
+        }) : []
+      }) || '';
+      const lines = a.fixProblems.slice(0, 10).map((fp, idx) => {
+        const raw = String((fp && fp.text) || fp || '').slice(0, 160);
+        const tokens = (raw.match(/[a-z][a-zA-Z]*\.[a-zA-Z][\w.]*|\b[A-Z][A-Z_]{5,}\b/g) || []);
+        let hits = tokens.filter((tk) => failJson.indexOf(tk) !== -1);
+        // detector-phrase match: a failing detector whose camelCase words
+        // ALL appear in the problem text (e.g. "Count shortfall" ↔
+        // countShortfall) names this problem even without a field token.
+        const detKeys = ((lv && lv.detectors) ? Object.keys(lv.detectors) : []);
+        const rawLower = raw.toLowerCase();
+        for (const dk of detKeys) {
+          const words = dk.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+          if (words.length && words.every((w) => rawLower.indexOf(w) !== -1)) {
+            const v = lv.detectors[dk];
+            if (v && (!Array.isArray(v) || v.length)) { hits = hits.concat([dk]); break; }
+          }
+        }
+        const green = !!(lv && lv.ok === true);
+        let status, note;
+        if (hits.length) {
+          status = (fp && fp.wasFixed) ? 'OPEN (REGRESSED — was fixed, failing again)' : 'OPEN';
+          note = 'still failing: ' + hits.slice(0, 2).join(', ');
+        } else if (green) {
+          status = 'FIXED';
+          note = 'verify green';
+        } else {
+          status = 'FIXED (this run)';
+          note = 'not named in the current failures — the red gate is another problem\'s';
+        }
+        return '- problem ' + (idx + 1) + ' [' + status + '] ' + raw + ' — ' + note;
+      });
+      fixPlanText = '[FIX PLAN]\n' + lines.join('\n') +
+        '\nwork ONLY the OPEN problems; FIXED ones are closed (a later verify that re-flags a field reopens it automatically) — do not re-research or re-verify solved problems.';
+    }
+
     // [CAPTURE ROUTES] (112th log): evidence-route bookkeeping — which
     // anchor→payload routes are PROVEN this session (with samples) and which
     // keep failing. The policy line enforces page-op frugality: parsing and
@@ -251,6 +302,7 @@
         '- #' + (i + 1) + ' anchor=' + JSON.stringify(p.anchor) + ' text=' + JSON.stringify(p.text)).join('\n');
       parts.push('[POPOVER CAPTURES] (' + popCount + (popoverTrimmed ? ', ' + popoverTrimmed + ' oldest trimmed for budget' : '') + ')\n' +
         (ps || '(none captured yet — hover-bearing probes feed this automatically)'));
+      if (fixPlanText) parts.push(fixPlanText);
       if (routesText) parts.push(routesText);
       parts.push('[LAST VERIFY CENSUS]\n' + (cens || '(no verify run yet)'));
       parts.push('[ARTIFACT LINEAGE] current: ' + (current ? 'v' + current.version : '(none)') +

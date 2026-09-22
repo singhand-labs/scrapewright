@@ -3608,7 +3608,14 @@ function renderResultReview() {
     btn.addEventListener('click', () => {
       const textEl = document.getElementById('sessionFeedbackText');
       if (!textEl) return;
-      textEl.value = (textEl.value ? textEl.value.replace(/\s+$/, '') + '\n' : '') + 'Please fix: ' + it + '\n';
+      // 122nd round (user: one feedback looped for many rounds): an
+      // advisory-shaped finding (verify may already be GREEN) has a second
+      // legitimate close — a disclosed ship. Say so in the directive so the
+      // model does not research endlessly for a fix the page cannot offer
+      // (requested-10-extracted-3 on a scarce keyword).
+      textEl.value = (textEl.value ? textEl.value.replace(/\s+$/, '') + '\n' : '') +
+        'Please fix: ' + it +
+        '\n(If this is advisory-level and verify already passed, CLOSING it with an honest disclosure in finish — naming what was tried and why the page cannot offer more — is a valid resolution. Do not keep researching for a fix the page cannot provide; if you have already tried the obvious routes, finish with the disclosure.)\n';
       textEl.focus();
     });
     row.appendChild(btn);
@@ -3654,6 +3661,23 @@ async function sendSessionFeedback() {
     return;
   }
   const st = persisted.session;
+  // 122nd round (defensive backstop): an identical feedback sent 3+ times
+  // (whoever re-sends it) gets a confirm + a META directive instead of
+  // another plain repeat — repeated identical directives re-diagnose from
+  // scratch and burn whole budget segments.
+  try {
+    const priorSame = (st.transcript || []).filter((e) =>
+      e && e.kind === 'user' && typeof e.text === 'string' &&
+      e.text.indexOf('USER FEEDBACK' + ' (fix request): ' + text) !== -1).length;
+    if (priorSame >= 2) {
+      const lastGreen = !!(wizardState.lastVerified && wizardState.lastVerified.version);
+      const ok = confirm('This exact feedback has already been sent ' + priorSame + ' times.' +
+        (lastGreen ? ' The last verify came back GREEN with this advisory — it is likely page-honest (e.g. genuine content scarcity for this input).' : '') +
+        '\n\nSend anyway (the session will be told NOT to re-diagnose from scratch), or Cancel and instead: accept & ship with the disclosure, change the test input (e.g. a more common keyword), or renegotiate the contract.');
+      if (!ok) return;
+      st.transcript.push({ kind: 'system', text: 'IDENTICAL FEEDBACK #' + (priorSame + 1) + ' — this directive has been sent ' + priorSame + ' times already and the advisory persists. Do NOT re-diagnose from scratch and do NOT re-run the same probes: summarize in ONE think what has already been tried (it is in the transcript above), then pick an exit — accept-and-disclose in finish, renegotiate the contract via io.confirm, or state precisely what NEW evidence would change the answer and gather only that.' });
+    }
+  } catch (e) { /* the breaker is best-effort */ }
   // Ninth-log M1: the feedback continuation gets a FRESH budget segment — the
   // ninth log resumed a completed session at turn 53/60, fixed both fields,
   // verified ok, and died at the ceiling before it could finish. The
@@ -3672,6 +3696,14 @@ async function sendSessionFeedback() {
   // steering input — pin it at submit time (three feedback rounds in the
   // 86th log were unrecoverable before full request logging landed).
   try { mirrorLines('[session] user_feedback', text, Infinity); } catch (e) { /* best-effort */ }
+  // 123rd round (user design): multi-problem feedback becomes a per-problem
+  // fix plan — [FIX PLAN] in the per-turn dossier tracks each problem's
+  // status from verify evidence, so solved problems stay closed and the
+  // model works only the open ones.
+  try {
+    const problems = text.split('\n').map((l) => l.replace(/^\s*(?:[0-9]+[).]|[-*])\s*/, '').trim()).filter(Boolean).slice(0, 8);
+    st.fixProblems = problems.map((t) => ({ text: t.slice(0, 200) }));
+  } catch (e) { st.fixProblems = []; }
   st.transcript.push({ kind: 'system', text: 'USER FEEDBACK (fix request): ' + text + ' — continue: the research tab was closed when the session ended, so page.open the target (with a concrete sample input) first, probe the live page to diagnose the reported problem, fix the artifact via service.update, then verify.run again before finishing. Before finishing you must close EACH named problem: state per reported problem whether it is now fixed, quoting field values from the verify output as evidence, and a problem you could not fix must be disclosed in the finish summary naming what was tried. A green verify.run alone does not close user feedback — empty fields, UI-label junk values, and duplicate records can all pass a shape-only verify, so re-read the complaint and check the actual extracted values. When the complaint names a FIELD that comes back empty: the reporter can see the page, so an absence conclusion must be EARNED, not assumed — (a) re-probe on the long-lived warm research tab (a freshly page.open-ed tab is cold; engagement/summary rows hydrate late and ad/machine cards lack them entirely), (b) user.observe to ask what the reporter sees and where the value appears, (c) check the findings ledger for SAME-SITE FIELD SAMPLES — a field the site yielded before contradicts never-render claims. One cold-tab aria sweep NEVER closes a named-field complaint.' });
   try {
     await wizardPersistence.save({ session: st, observation: persisted.observation, ledger: persisted.ledger });
