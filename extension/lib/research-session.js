@@ -144,6 +144,44 @@
     }
   ];
 
+  // 117th log: the session died at tokenCap with detail=null and ZERO
+  // warning — the advisory family above keys on TURNS only, so a
+  // prompt-weighted feedback chain (21 pinned entries, ~31K tokens/turn)
+  // crept past 2M tokens at turn ~50 with the turn counter far from 60.
+  // Token-fraction advisories mirror the turn family; the stop itself now
+  // carries an honest breakdown with the three exits.
+  const TOKEN_BUDGET_ADVISORIES = [
+    {
+      key: 'token-half', pct: 0.5,
+      text: (used, max) => 'TOKEN BUDGET ADVISORY (half the token budget spent: ' + used.toLocaleString() + ' of ' + max.toLocaleString() + ' — this session is PROMPT-weighted): prefer the cheapest probe that answers the question, reuse captured evidence over re-probing, and avoid full verify.run rounds where probe.snippet answers the same question.'
+    },
+    {
+      key: 'token-author', pct: 0.75,
+      text: (used, max) => 'TOKEN BUDGET ADVISORY (75% of the token budget spent: ' + used.toLocaleString() + ' of ' + max.toLocaleString() + '): converge — compact the evidence you send (smaller test input, fewer probed pages), finish the current repair, and reserve tokens for the final verify.'
+    },
+    {
+      key: 'token-finalize', pct: 0.9,
+      text: (used, max) => 'TOKEN BUDGET ADVISORY (90% of the token budget spent: ' + used.toLocaleString() + ' of ' + max.toLocaleString() + ' — ~' + Math.max(1, Math.floor((max - used) / 31000)) + ' turns left at the current prompt size): FINALIZE — submit your best-grounded artifact now and run the LAST verify; if that verify is red, finish with the last verified artifact and disclose instead of writing updates you cannot verify.'
+    }
+  ];
+
+  function buildTokenCapDetail(spend, budgets) {
+    try {
+      const sp = spend || {};
+      const p = sp.promptTokens || 0;
+      const c = sp.completionTokens || 0;
+      const calls = sp.llmCalls || 0;
+      const avg = calls > 0 ? Math.round(p / calls) : 0;
+      return 'token budget exhausted: prompt ' + p.toLocaleString() + ' + completion ' + c.toLocaleString() +
+        ' ≥ cap ' + (budgets && budgets.tokenCap || 0).toLocaleString() +
+        (sp.estimated ? ' (estimated)' : '') +
+        '. This session is prompt-dominated (输入占 ' + (p + c > 0 ? Math.round(p * 100 / (p + c)) : 0) + '%; avg ~' + avg.toLocaleString() + ' tokens/call over ' + calls + ' calls)' +
+        '. Exits: (a) send another feedback to resume — compact first (smaller test input, reuse captured evidence, prefer probe.snippet over re-verify); (b) ship the last VERIFIED artifact — the review banner shows the version and one-click rollback; (c) raise budgets.tokenCap in the engine config if this site genuinely needs the runway.';
+    } catch (e) {
+      return 'token budget exhausted (detail unavailable: ' + (e && e.message) + ')';
+    }
+  }
+
   // Window-dedup helper (2026-09-18 user directive): blocks of repeated
   // instruction text (DSL guide, tool catalogs) are replaced by a one-line
   // marker wherever they appear in HISTORY, so only the current system prompt
@@ -777,6 +815,24 @@
           due = adv;
         }
       }
+      // 117th log: token-fraction advisories — a prompt-weighted chain hits
+      // the token cap long before the turn ceiling; the turn-only family
+      // stayed silent through the whole creep.
+      let tokenDue = null;
+      const tokUsed = (state.spend.promptTokens || 0) + (state.spend.completionTokens || 0);
+      if (budgets.tokenCap > 0) {
+        for (const adv of TOKEN_BUDGET_ADVISORIES) {
+          if (tokUsed >= Math.floor(budgets.tokenCap * adv.pct) &&
+              state.budgetAdvisories.indexOf(adv.key) === -1) {
+            tokenDue = adv;
+          }
+        }
+      }
+      if (tokenDue) {
+        state.budgetAdvisories.push(tokenDue.key);
+        state.transcript.push({ kind: 'system', text: tokenDue.text(tokUsed, budgets.tokenCap) });
+        emit('budget_advisory', { key: tokenDue.key, tokens: tokUsed, tokenCap: budgets.tokenCap });
+      }
       if (!due) return;
       for (const adv of BUDGET_ADVISORIES) {
         if (state.spend.turns >= Math.floor(budgets.maxTurns * adv.pct) &&
@@ -1121,7 +1177,7 @@
             report = await stop('wallClock', 'time budget exhausted after ~' + Math.round((state.elapsedMs + netSegmentMs()) / 1000) + 's (parked ' + Math.round(parkedTotal / 1000) + 's excluded) [LLM/provider waits ' + Math.round(llmWaitTotal / 1000) + 's excluded] — raise the budget (wallClockMs) in the resume seed to continue' + verifyStopSuffix() + formatTimeBudgetSuffix());
             break;
           }
-          if (state.spend.promptTokens + state.spend.completionTokens >= budgets.tokenCap) { report = await stop('tokenCap'); break; }
+          if (state.spend.promptTokens + state.spend.completionTokens >= budgets.tokenCap) { report = await stop('tokenCap', buildTokenCapDetail(state.spend, budgets)); break; }
           maybeBudgetAdvisory();
 
           emit('turn_start', { turn: state.spend.turns + 1 });

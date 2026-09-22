@@ -150,3 +150,37 @@ describe('C: throttle + wait visibility', () => {
     assert.match(WJ, /限流等待|rate-limit/i.test('') ? /x/ : /onThrottle/, 'wizard wires onThrottle');
   });
 });
+
+describe('117th log: token-budget visibility (tokenCap stop with null detail + zero token advisories)', () => {
+  const RS = fs.readFileSync(path.join(__dirname, '..', 'lib', 'research-session.js'), 'utf8');
+  it('tokenCap stops carry an honest detail (breakdown + exits), not null', () => {
+    assert.match(RS, /buildTokenCapDetail/, 'detail builder exists');
+    const i = RS.indexOf("stop('tokenCap'");
+    assert.ok(i > -1);
+    assert.match(RS.slice(i - 200, i + 200), /buildTokenCapDetail/, 'the stop call passes the detail');
+  });
+  it('buildTokenCapDetail: prompt/completion split, avg per call, exits teaching', () => {
+    const vm = require('node:vm');
+    const src = RS.slice(RS.indexOf('function buildTokenCapDetail'));
+    let depth = 0, j = 0;
+    for (j = RS.indexOf('function buildTokenCapDetail'); j < RS.length; j++) {
+      if (RS[j] === '{') depth += 1;
+      else if (RS[j] === '}') { depth -= 1; if (depth === 0) break; }
+    }
+    const ctx = {}; vm.createContext(ctx);
+    vm.runInContext(RS.slice(RS.indexOf('function buildTokenCapDetail'), j + 1) + '\nthis.__f = buildTokenCapDetail;', ctx);
+    const d = ctx.__f({ promptTokens: 1800000, completionTokens: 200000, llmCalls: 62 }, { tokenCap: 2000000 });
+    assert.match(d, /1,?800,?000/);
+    assert.match(d, /prompt-dominated|输入占/i);
+    assert.match(d, /compact|缩小|smaller test input|精简/i);
+    assert.match(d, /last verified|最后验证|回滚/i);
+  });
+  it('token-fraction budget advisories exist alongside the turn ones', () => {
+    assert.match(RS, /TOKEN_BUDGET_ADVISORIES/, 'token advisory family');
+    const i = RS.indexOf('TOKEN_BUDGET_ADVISORIES');
+    const block = RS.slice(i, i + 2500);
+    assert.match(block, /0\.5|'half'/);
+    assert.match(block, /0\.9|'finalize'/);
+    assert.match(RS, /budget_advisory.*token|tokenBudget_advisory/, 'emitted event distinguishes token advisories');
+  });
+});
