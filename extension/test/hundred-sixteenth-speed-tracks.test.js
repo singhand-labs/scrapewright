@@ -350,3 +350,38 @@ describe('123rd round (user design): [FIX PLAN] — per-problem status, fixed on
     assert.match(RS, /fixProblems: \(Array\.isArray\(state\.fixProblems\)/, 'engine wires the feed');
   });
 });
+
+describe('125th log: chunked service.update (provider cuts ~4-5K replies; the full steps array can NEVER fit)', () => {
+  const { createSessionTools } = require('../lib/session-tools');
+  function makeTools2(applied) {
+    return createSessionTools({
+      rail: { executeDsl: async () => ({}), pageState: async () => ({}), epoch: 0 },
+      runVerify: async () => ({ events: [], report: { ok: true, detectors: {} }, raw: {} }),
+      probeFactory: () => ({ snippet: async () => ({ result: 'ok' }) }),
+      getDraftService: () => null,
+      applyArtifact: (a) => applied.push(a),
+      getTestInput: () => ({}),
+      getOutputSchema: () => ({ type: 'object', properties: {} }),
+      getSteps: () => [],
+      ioConfirmBridge: { request: async (p) => ({ confirmed: true, inputSchema: p && p.inputSchema, outputSchema: p && p.outputSchema }) }
+    });
+  }
+  it('more:true buffers; the follow-up chunk assembles and applies the FULL steps', async () => {
+    const applied = [];
+    const tools = makeTools2(applied);
+    const c1 = [{ id: 's1', script: 'await $extract("a");', onSuccess: 's2', onFailure: 'TERMINATE' }];
+    const c2 = [{ id: 's2', script: 'return {posts: __lastResult__};', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }];
+    await tools.tools['io.confirm']({ inputSchema: { type: 'object', properties: { k: { type: 'string' } } }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array' } } } });
+    const r1 = await tools.tools['service.update']({ steps: c1, more: true });
+    assert.ok(r1 && r1.buffered === true, 'first chunk buffered — got ' + JSON.stringify(r1).slice(0, 120));
+    assert.equal(applied.length, 0, 'nothing applied yet');
+    const r2 = await tools.tools['service.update']({ steps: c2 });
+    assert.ok(r2 && (r2.updated === true || (r2.version || r1.version)), 'final chunk applies — got ' + JSON.stringify(r2).slice(0, 120));
+    assert.equal(applied.length, 1);
+    assert.deepEqual(applied[0].steps.map((s) => s.id), ['s1', 's2'], 'assembled in order');
+  });
+  it('the cut-off nudge for service.update teaches the split', () => {
+    const RS2 = fs.readFileSync(path.join(__dirname, '..', 'lib', 'research-session.js'), 'utf8');
+    assert.match(RS2, /CHUNKED . service\.update/, 'nudge names the chunked-send escape');
+  });
+});

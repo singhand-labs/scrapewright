@@ -761,6 +761,12 @@
     // 14-update/1-snippet session burned its whole token budget rewriting
     // bindings it never dry-ran.
     let dryRunSinceRedVerify = false;
+    // 125th round: chunked service.update buffer — providers cut long
+    // replies at ~4-5K chars while reporting finish stop, and the full
+    // steps array cannot shrink. {steps:[...], more:true} buffers; the
+    // next steps-carrying update (no more) assembles buffer+steps and
+    // applies. Any schema/testInput ride the FINAL chunk.
+    let pendingUpdateSteps = null;
     let captureRouteEpoch = 0;
     function recordCaptureRoute(name, args, result) {
       try {
@@ -1162,6 +1168,29 @@
 
     async function serviceUpdate(args, ctx) {
       captureRouteEpoch += 1; // an artifact change re-legitimizes page re-proving
+      // 125th round: chunked sends. more:true buffers this chunk and defers
+      // every gate; the final chunk (steps without more) assembles
+      // buffer+steps and runs the FULL pipeline below. abortChunk clears.
+      try {
+        const a0 = args || {};
+        if (a0.abortChunk === true) {
+          pendingUpdateSteps = null;
+          return { aborted: true, note: 'pending update chunks cleared' };
+        }
+        if (a0.more === true && Array.isArray(a0.steps)) {
+          pendingUpdateSteps = (pendingUpdateSteps || []).concat(a0.steps);
+          return {
+            buffered: true,
+            bufferedSteps: pendingUpdateSteps.length,
+            note: 'chunk buffered (' + pendingUpdateSteps.length + ' step(s) so far). Send the NEXT chunk as service.update({steps:[...], more:true}) or the FINAL chunk as service.update({steps:[...]}) — the final call assembles and applies everything. Keep each reply comfortably under ~3000 chars.'
+          };
+        }
+        if (pendingUpdateSteps && Array.isArray(a0.steps) && a0.steps.length) {
+          a0.steps = pendingUpdateSteps.concat(a0.steps);
+          pendingUpdateSteps = null;
+          // fall through: the assembled payload runs the normal pipeline
+        }
+      } catch (e) { pendingUpdateSteps = null; /* chunking must never block the normal path */ }
       // 118th round (package B): RED_VERIFY_SNIPPET_GATE — a steps rewrite
       // after a red verify must be preceded by a dry-run (probe.snippet, or
       // verify.run {preflight:true}); blind rewrites burned whole sessions.
