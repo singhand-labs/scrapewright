@@ -961,6 +961,8 @@
           evictedPopovers: evicted,
           lastVerify: (typeof feeds.lastVerify === 'function') ? feeds.lastVerify() : null,
           captureRoutes: (typeof feeds.captureRoutes === 'function') ? feeds.captureRoutes() : null,
+          goals: (Array.isArray(state.goals) && state.goals.length) ? state.goals : null,
+          hypotheses: (Array.isArray(state.hypotheses) && state.hypotheses.length) ? state.hypotheses : null,
           fixProblems: (Array.isArray(state.fixProblems) && state.fixProblems.length)
             ? state.fixProblems.map((fp) => ((fp && typeof fp === 'object') ? fp : { text: String(fp) }))
             : null,
@@ -1233,6 +1235,24 @@
             // classes keep the original two-strike behavior (the cut-off
             // class additionally keeps its continuation round below).
             const maxRepairRounds = isActionShapeViolation(parsed.violation) ? 2 : 1;
+            // 126th round (user: replies must never be lost to truncation):
+            // the provider gateway cuts completions at ~2K tokens while
+            // reporting finish stop (usage proof: 2007/1937/1456 completion
+            // tokens with max_tokens 32768 requested). We cannot stop the
+            // provider cutting — we make the ESCAPE mechanical: after two
+            // consecutive cut-off replies, generic "resend shorter/continue"
+            // advice has already failed once; the nudge becomes per-step
+            // chunking that can never hit the ceiling.
+            let consecutiveCutOff = 0;
+            try {
+              // session-level streak: every prior cut-off nudge in the
+              // transcript counts (the 125th-run death was reply-cut,
+              // repair-cut, continuation-cut — three separate turns).
+              const priorCuts = state.transcript.filter((e) =>
+                e && e.kind === 'system' && typeof e.text === 'string' &&
+                e.text.indexOf('CUT OFF before the JSON closed') !== -1).length;
+              if (/cut-off/.test(String(parsed.detail || ''))) consecutiveCutOff = priorCuts + 1;
+            } catch (e) { consecutiveCutOff = 0; }
             let repaired = null;
             let repairRound = 0;
             while (repairRound < maxRepairRounds) {
@@ -1250,6 +1270,9 @@
               // replies: the advice is conditional).
               if (/cut-off/.test(String(parsed.detail || ''))) {
                 nudgeText += ' If the cut-off reply was a service.update (the artifact payload cannot shrink): send it CHUNKED — service.update({steps:[first part], more:true}) now, the remaining parts next turn, final part without more.';
+                if (repairRound >= 2 || consecutiveCutOff >= 2) {
+                  nudgeText += ' MECHANICAL ESCAPE (two replies already died at the provider\'s ~2K-token completion ceiling): send service.update({steps:[EXACTLY ONE step], more:true}) — ONE step per reply, repeat until every step is sent, final step without more. Never emit a multi-step reply again this session.';
+                }
               }
               }
               state.transcript.push({ kind: 'system', text: nudgeText });

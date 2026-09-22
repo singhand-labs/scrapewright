@@ -385,3 +385,33 @@ describe('125th log: chunked service.update (provider cuts ~4-5K replies; the fu
     assert.match(RS2, /CHUNKED . service\.update/, 'nudge names the chunked-send escape');
   });
 });
+
+describe('126th round Q1: two-cut ceiling escalation (provider cuts ~2K completions, finish lies stop)', () => {
+  it('after two consecutive cut-off replies the nudge turns mechanical: ONE step per reply', () => {
+    const RS3 = fs.readFileSync(path.join(__dirname, '..', 'lib', 'research-session.js'), 'utf8');
+    assert.match(RS3, /consecutiveCutOff/, 'cut-off streak tracked');
+    assert.match(RS3, /ONE step per reply/, 'mechanical escalation present');
+  });
+});
+describe('126th round Q2: [RESEARCH PLAN] — per-question closure in the self-research phase (user: borrow the fix-plan mechanism)', () => {
+  const DossierLib = require('../lib/evidence-dossier');
+  const RS3 = fs.readFileSync(path.join(__dirname, '..', 'lib', 'research-session.js'), 'utf8');
+  it('renders goals/hypotheses with status + closure teaching', () => {
+    const text = DossierLib.buildDossier({
+      goals: [
+        { id: 'g1', text: 'find the repeating post container', status: 'done' },
+        { id: 'g2', text: 'ground postTime from the tooltip', status: 'open' }
+      ],
+      hypotheses: [{ n: 1, text: 'comments live in aria-labels', verdict: null }]
+    });
+    assert.match(text, /\[RESEARCH PLAN\]/);
+    assert.match(text.split('\n').filter(l => /g2/.test(l))[0], /OPEN/i);
+    assert.match(text.split('\n').filter(l => /g1/.test(l))[0], /DONE|✓/i);
+    assert.match(text, /close .* the MOMENT|the moment/i);
+    assert.match(text, /never re-probe|do not re-probe/i);
+  });
+  it('the engine passes goals/hypotheses into the dossier', () => {
+    assert.match(RS3, /goals: state\.goals|goals: \(Array\.isArray\(state\.goals\)/, 'goals feed');
+    assert.match(RS3, /hypotheses: state\.hypotheses|hypotheses: \(Array/, 'hypotheses feed');
+  });
+});

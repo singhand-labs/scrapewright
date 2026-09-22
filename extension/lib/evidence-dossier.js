@@ -157,6 +157,21 @@
     let popovers = Array.isArray(a.popovers) ? a.popovers.slice() : [];
     let popoverTrimmed = 0;
 
+    // [RESEARCH PLAN] (126th round, user design — the fix-plan mechanism
+    // borrowed for the self-research phase): per-QUESTION closure. Goals and
+    // hypotheses render with status so an ANSWERED question stays visibly
+    // closed — without this the model re-probes answered questions every
+    // few turns (the same blindness [FIX PLAN] cured for feedback repair).
+    let researchPlanText = '';
+    if ((Array.isArray(a.goals) && a.goals.length) || (Array.isArray(a.hypotheses) && a.hypotheses.length)) {
+      const gl = (a.goals || []).slice(0, 12).map((g) =>
+        '- ' + (g && g.status === 'done' ? '[DONE] ' : '[OPEN] ') + String((g && g.id) || '?') + ': ' + String((g && g.text) || '').slice(0, 120));
+      const hl = (a.hypotheses || []).slice(0, 8).map((h) =>
+        '- H' + ((h && h.n) || '?') + ' [' + ((h && h.verdict) ? String(h.verdict) : 'UNDECIDED') + '] ' + String((h && h.text) || '').slice(0, 120));
+      researchPlanText = '[RESEARCH PLAN]\n' + gl.concat(hl).join('\n') +
+        '\nwork ONE open question at a time; close a goal the MOMENT its question is answered (goalUpdates.complete) and record the one-line answer in think — closed questions are never re-probed; give a hypothesis its verdict as soon as evidence decides it.';
+    }
+
     // [FIX PLAN] (123rd round, user design): multi-problem feedback splits
     // into a per-problem checklist; statuses are COMPUTED at render time
     // from the CURRENT last-verify report, so a solved problem stays FIXED
@@ -302,6 +317,7 @@
         '- #' + (i + 1) + ' anchor=' + JSON.stringify(p.anchor) + ' text=' + JSON.stringify(p.text)).join('\n');
       parts.push('[POPOVER CAPTURES] (' + popCount + (popoverTrimmed ? ', ' + popoverTrimmed + ' oldest trimmed for budget' : '') + ')\n' +
         (ps || '(none captured yet — hover-bearing probes feed this automatically)'));
+      if (researchPlanText) parts.push(researchPlanText);
       if (fixPlanText) parts.push(fixPlanText);
       if (routesText) parts.push(routesText);
       parts.push('[LAST VERIFY CENSUS]\n' + (cens || '(no verify run yet)'));
