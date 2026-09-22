@@ -67,9 +67,20 @@
         idx.map(u => '- ' + u.id + ': ' + String(u.title || '')).join('\n'));
     }
     const units = (Array.isArray(c.attachedUnits) ? c.attachedUnits : []).filter(u => u && typeof u === 'object' && u.id);
+    // 118th round (efficiency): long sessions accumulated 12 auto-attached
+    // full bodies (~20K chars) re-sent EVERY turn — the design intent was
+    // index-resident with bodies pulled via knowledge.query. Render at most
+    // the MAX_AUTO_ATTACHED most recently attached in full; the rest stay
+    // one-line pointers.
+    const MAX_AUTO_ATTACHED = 4;
     if (units.length) {
-      parts.push('## Knowledge (auto-attached, applies now)\n' +
-        units.map(u => '### ' + u.id + ' — ' + String(u.title || '') + '\n' + String(u.body || '')).join('\n\n'));
+      const full = units.slice(-MAX_AUTO_ATTACHED);
+      const fullIds = {};
+      for (const u of full) fullIds[u.id] = 1;
+      const lines = units.map(u => fullIds[u.id]
+        ? '### ' + u.id + ' — ' + String(u.title || '') + '\n' + String(u.body || '')
+        : '- ' + u.id + ': ' + String(u.title || '') + ' (body not auto-attached — pull via knowledge.query {"ids":["' + u.id + '"]} when it applies)');
+      parts.push('## Knowledge (auto-attached, applies now)\n' + lines.join('\n\n'));
     }
     return parts.join('\n\n');
   }

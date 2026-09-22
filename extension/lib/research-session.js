@@ -755,7 +755,10 @@
       return n;
     }
 
-    const DIGEST_CAP = 24000;
+    // 118th round (efficiency): the measured session carried a 24K digest —
+    // a quarter of every prompt re-summarizing procedural history. 8K keeps
+    // findings/decisions and drops narrative (head 70% / tail 30% elision).
+    const DIGEST_CAP = 8000;
 
     function maybeCompact() {
       const keepEntries = Math.max(2, compaction.keepTurns * 2);

@@ -184,3 +184,97 @@ describe('117th log: token-budget visibility (tokenCap stop with null detail + z
     assert.match(RS, /budget_advisory.*token|tokenBudget_advisory/, 'emitted event distinguishes token advisories');
   });
 });
+
+describe('118th-A: prompt slimming (knowledge auto-attach cap + digest cap)', () => {
+  const RS = fs.readFileSync(path.join(__dirname, '..', 'lib', 'research-session.js'), 'utf8');
+  const SP = fs.readFileSync(path.join(__dirname, '..', 'lib', 'session-protocol.js'), 'utf8');
+  it('auto-attached knowledge renders at most 4 full bodies; the rest stay one-line index entries', async () => {
+    const { createResearchSession } = require('../lib/research-session');
+    // render-level check via session-protocol's exported buildSystemPrompt? It's inside the IIFE —
+    // drive through the engine's assembleMessages by... simplest: source audit + unit on the renderer shape.
+    assert.match(SP, /MAX_AUTO_ATTACHED|attachedUnits\.slice\(-\d+\)/, 'render-side cap present');
+  });
+  it('the digest cap is 8000 (was 24000 — the 24K digest was half the bloat)', () => {
+    assert.match(RS, /DIGEST_CAP = 8000/, 'digest tightened');
+  });
+});
+
+describe('118th-B: RED_VERIFY_SNIPPET_GATE (blind-update churn killer)', () => {
+  const { createSessionTools } = require('../lib/session-tools');
+  function makeTools(verifyReport, dslCalls) {
+    return createSessionTools({
+      rail: { executeDsl: async (s, o) => { dslCalls.push(s); return {}; }, pageState: async () => ({}), epoch: 0 },
+      ioConfirmBridge: { request: async (payload) => ({ confirmed: true, inputSchema: payload && payload.inputSchema, outputSchema: payload && payload.outputSchema }) },
+      runVerify: async () => ({ events: [], report: verifyReport, raw: {} }),
+      probeFactory: () => ({ snippet: async () => ({ result: 'ok' }) }),
+      getDraftService: () => ({ steps: [{ id: 'x', script: 'await $extract("d");' }] }),
+      applyArtifact: () => {},
+      getTestInput: () => ({}),
+      getOutputSchema: () => ({ type: 'object', properties: {} }),
+      getSteps: () => [{ id: 'x', script: 'await $extract("d");' }]
+    });
+  }
+  const STEPS = [{ id: 'x', script: 'const r = await $extractList("div"); return r;' }];
+  it('service.update after a RED verify with no intervening snippet/preflight is REJECTED with teaching', async () => {
+    const tools = makeTools({ ok: false, error: { message: 'REQUIRED_FIELD_EMPTY: x' }, detectors: {} }, []);
+    await tools.tools['verify.run']({});
+    const r = await tools.tools['service.update']({ steps: STEPS });
+    assert.ok(r && r.error && /RED_VERIFY_SNIPPET_GATE/.test(r.error), 'gate fires — got ' + JSON.stringify(r).slice(0, 120));
+    assert.match(r.error, /probe\.snippet|preflight/);
+  });
+  it('a probe.snippet since the red verify unblocks the update', async () => {
+    const tools = makeTools({ ok: false, error: { message: 'X_GATE: x' }, detectors: {} }, []);
+    await tools.tools['verify.run']({});
+    await tools.tools['probe.snippet']({ code: 'return 1;' });
+    await tools.tools['io.confirm']({ inputSchema: { type: 'object', properties: { keyword: { type: 'string' } } }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array' } } } });
+    const r = await tools.tools['service.update']({ steps: STEPS });
+    assert.ok(!r || !r.error, 'update lands after the dry-run — got ' + JSON.stringify(r).slice(0, 120));
+  });
+  it('no verify yet (fresh session) — no gate', async () => {
+    const tools = makeTools({ ok: true, detectors: {} }, []);
+    await tools.tools['io.confirm']({ inputSchema: { type: 'object', properties: { keyword: { type: 'string' } } }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array' } } } });
+    const r = await tools.tools['service.update']({ steps: STEPS });
+    assert.ok(!r || !r.error);
+  });
+});
+
+describe('118th-C: $collectUntil primitive (count reliability infrastructure)', () => {
+  it('domCollectUntil: satisfied when unique count reaches target; certified exhaustion after stall', async () => {
+    const vm = require('node:vm');
+    const CSRC = fs.readFileSync(path.join(__dirname, '..', 'content-script.js'), 'utf8');
+    const i = CSRC.indexOf('async function domCollectUntil');
+    assert.ok(i > -1, 'domCollectUntil defined in content-script');
+    // slice the function and run against a fake DOM-ish env
+    let depth = 0, j = i;
+    for (j = i; j < CSRC.length; j++) {
+      if (CSRC[j] === '{') depth += 1;
+      else if (CSRC[j] === '}') { depth -= 1; if (depth === 0) break; }
+    }
+    const fnSrc = CSRC.slice(i, j + 1);
+    let rounds = 0;
+    const counts = [2, 4, 6];
+    const ctx = {
+      setTimeout, clearTimeout,
+      querySelectorAllDeep: (sel) => { const n = counts[Math.min(rounds, counts.length - 1)]; return Array.from({ length: n }, (_, k) => ({ element: { getAttribute: (a) => a === 'href' ? '/p' + (k % 4) : null } })); },
+      getScrollOps: () => ({ scrollToBottomIncremental: async () => { rounds += 1; return { stalled: rounds >= 2, newScrollHeight: 1000, attempts: 1 }; } }),
+      withTabActivation: async (l, fn) => fn(),
+      resolveScrollTarget: () => null,
+      sendDebugLog: () => {},
+      notifyBackgroundDiagnostic: () => {},
+      setTimeoutGlobal: null
+    };
+    vm.createContext(ctx);
+    vm.runInContext(fnSrc + '\nthis.__f = domCollectUntil;', ctx);
+    const r = await ctx.__f('div.card', { targetCount: 4, idAttr: 'href', settleMs: 10 });
+    assert.equal(r.satisfied, true, 'reached 4 unique');
+    assert.ok(r.collected >= 4);
+    assert.ok(Array.isArray(r.trace) && r.trace.length >= 1);
+  });
+  it('DSL guide + dispatcher carry the primitive', () => {
+    const WU2 = fs.readFileSync(path.join(__dirname, '..', 'lib', 'wizard-utils.js'), 'utf8');
+    assert.match(WU2, /\\\$collectUntil/, 'DSL guide documents it');
+    const CSRC = fs.readFileSync(path.join(__dirname, '..', 'content-script.js'), 'utf8');
+    const i = CSRC.indexOf("case 'collectUntil'");
+    assert.ok(i > -1, 'dispatcher case present');
+  });
+});

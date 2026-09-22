@@ -71,6 +71,9 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
   // `if (scrollable) { /* empty */ }` code because no scroll API existed.
   window.$scrollBy = (deltaY, selector) => sendDomRequest('scrollBy', selector || null, [deltaY]);
   window.$scrollToBottom = (selector) => sendDomRequest('scrollToBottom', selector || null);
+  // 118th round: count-reliability primitive — scroll→settle→UNIQUE-count
+  // loop with certified exhaustion (see domCollectUntil in content-script).
+  window.$collectUntil = (containerSel, opts) => sendDomRequest('collectUntil', containerSel, [opts || {}]);
   window.$scrollIntoView = (selector) => sendDomRequest('scrollIntoView', selector);
   // $hover: dispatch a trusted mouseMoved at the anchor's bounding-box center
   // via CDP, wait for the popover selector to appear, return its outerHTML as

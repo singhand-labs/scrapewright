@@ -23,7 +23,16 @@ function makeDeps(overrides) {
     getOutputSchema: () => ({ type: 'object' }),
     getSteps: () => (state.draft ? state.draft.steps : []),
     annotationBridge: null,
-    ioConfirmBridge: { request: async () => ({ confirmed: true }) }
+    ioConfirmBridge: { request: async () => ({ confirmed: true }) },
+    // 118th round: RED_VERIFY_SNIPPET_GATE — after a red verify, updates
+    // require a dry-run. Base the default probe set on the REAL factory
+    // (count/scroll/etc must keep working) and only guarantee a snippet.
+    probeFactory: (cfg) => {
+      const ProbeTools = require('../lib/probe-tools');
+      const base = ProbeTools.createProbeTools(cfg);
+      if (!base.snippet) base.snippet = async () => ({ result: 'dry-run ok' });
+      return base;
+    }
   }, overrides || {});
   return { deps: d, state };
 }
@@ -319,6 +328,7 @@ describe('createSessionTools', () => {
     const r = await t.tools['diag.read']({ kind: 'failingStep' });
     assert.ok(typeof r.failingStep === 'string');
     assert.ok(!('selectorDiagnostics' in r), 'kind narrowing');
+    await t.tools['probe.snippet']({ code: 'return 1;' }); // 118th: dry-run gate
     const upd = await t.tools['service.update']({ steps: GOOD_STEPS }, { session: { state: () => ({ session: { artifactVersions: [] } }) } });
     assert.equal(upd.updated, true);
     const r2 = await t.tools['diag.read']({});

@@ -755,6 +755,12 @@
     // repeatedly with NO capture escalates to the user instead of another
     // identical dispatch.
     const captureRoutes = new Map();
+    // 118th round (efficiency, package B): the blind-update churn killer —
+    // a service.update after a RED verify is rejected until a dry-run
+    // (probe.snippet or verify preflight) has run since that verify. The
+    // 14-update/1-snippet session burned its whole token budget rewriting
+    // bindings it never dry-ran.
+    let dryRunSinceRedVerify = false;
     let captureRouteEpoch = 0;
     function recordCaptureRoute(name, args, result) {
       try {
@@ -855,6 +861,7 @@
     function wrapProbe(fn, name) {
       return async function (args, ctx) {
         probesSinceLastVerify += 1;
+        if (name === 'probe.snippet') dryRunSinceRedVerify = true;
         const r = await fn(args, ctx);
         const routeNote = recordCaptureRoute(name, args, r);
         if (routeNote && r && typeof r === 'object' && !Array.isArray(r)) {
@@ -921,6 +928,7 @@
           preflight = { executed: false, note: 'preflight error: ' + (e && e.message || String(e)) };
         }
       }
+      dryRunSinceRedVerify = (a.preflight === true);
       const out = await d.runVerify({ service: service, input: input, outputSchema: outputSchema, sessionEvidence: sessionEvidence });
       if (preflight) out.report.preflight = preflight;
       const wallCostMs = Date.now() - __verifyT0;
@@ -1154,6 +1162,19 @@
 
     async function serviceUpdate(args, ctx) {
       captureRouteEpoch += 1; // an artifact change re-legitimizes page re-proving
+      // 118th round (package B): RED_VERIFY_SNIPPET_GATE — a steps rewrite
+      // after a red verify must be preceded by a dry-run (probe.snippet, or
+      // verify.run {preflight:true}); blind rewrites burned whole sessions.
+      // Steps-LESS updates (testInput adoption, schema attaches) pass.
+      try {
+        if (args && Array.isArray(args.steps) && args.steps.length &&
+            lastVerify && lastVerify.report && lastVerify.report.ok === false &&
+            !dryRunSinceRedVerify) {
+          return {
+            error: 'RED_VERIFY_SNIPPET_GATE: the last verify.run was RED and no dry-run has run since. Dry-run the corrected extraction FIRST — probe.snippet with the fixed fieldMap/assembly on the research tab (or verify.run {preflight:true}) — then resend this service.update. A blind rewrite after a red verify re-burns a 60-90s verify to learn what a 10-20s snippet would have shown; this exact churn killed a session at the token cap.'
+          };
+        }
+      } catch (e) { /* the gate must never block a legitimate update path */ }
       const a = args && typeof args === 'object' ? args : {};
       const steps = Array.isArray(a.steps) ? a.steps : [];
       if (!ioContractConfirmed(ctx)) {

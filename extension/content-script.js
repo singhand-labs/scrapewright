@@ -1673,6 +1673,12 @@
           recordDomActivity('$scrollBy', data.selector, result && result.scrolled ? 1 : 0, Date.now() - __t0);
           break;
         }
+        case 'collectUntil': {
+          const __t0 = Date.now();
+          result = await domCollectUntil(data.selector, (data.args && data.args[0] && typeof data.args[0] === 'object') ? data.args[0] : {});
+          recordDomActivity('$collectUntil', data.selector, result && result.satisfied ? 1 : 0, Date.now() - __t0);
+          break;
+        }
         case 'scrollToBottom': {
           const __t0 = Date.now();
           result = await domScrollToBottom(data.selector);
@@ -3129,6 +3135,113 @@
       }
       return finish({ scrolled: false, prevY, newY });
     });
+  }
+
+
+  // 118th round (count reliability): the count promise kept falling short
+  // (10→4, 5→2 across sessions) because model-authored scroll loops treat a
+  // transient stall as genuine exhaustion. This primitive moves the
+  // scroll→settle→UNIQUE-count loop into infrastructure: dedupe by an
+  // id-ish attribute (or raw containers when no idAttr), one
+  // scrollToBottomIncremental round per iteration (which carries the whole
+  // throttle stack — activation, stall detection, trusted-wheel fallback,
+  // inner-container probing), and a CERTIFIED exhaustion verdict
+  // (scroll stalled + unique count unchanged for two consecutive rounds)
+  // instead of a bare "no more progress".
+  async function domCollectUntil(containerSel, opts) {
+    const o = opts && typeof opts === 'object' ? opts : {};
+    const target = (typeof o.targetCount === 'number' && o.targetCount > 0) ? Math.floor(o.targetCount) : 1;
+    const idAttr = typeof o.idAttr === 'string' && o.idAttr ? o.idAttr : null;
+    const maxRounds = (typeof o.maxRounds === 'number' && o.maxRounds > 0) ? Math.min(Math.floor(o.maxRounds), 20) : 12;
+    const settleMs = (typeof o.settleMs === 'number' && o.settleMs > 0) ? Math.min(o.settleMs, 4000) : 1200;
+    const selectorForLog = String(containerSel || '');
+    const t0 = (typeof Date !== 'undefined') ? Date.now() : 0;
+    const ops = getScrollOps();
+    const hasIncremental = !!(ops && typeof ops.scrollToBottomIncremental === 'function');
+    const root = resolveScrollTarget(null) || (typeof document !== 'undefined' ? (document.scrollingElement || document.documentElement) : null);
+    function snapshot() {
+      let containers = [];
+      try { containers = querySelectorAllDeep(selectorForLog) || []; } catch (e) { containers = []; }
+      const items = containers.map((m) => (m && m.element) ? m.element : m).filter(Boolean);
+      const seen = {};
+      let unique = 0;
+      const ids = [];
+      for (const el of items) {
+        let key = null;
+        if (idAttr) {
+          try { key = el.getAttribute(idAttr); } catch (e) { key = null; }
+        }
+        if (key == null || key === '') key = '@dom' + (el.__scrapewrightCollectKey || (el.__scrapewrightCollectKey = 'k' + Math.random().toString(36).slice(2, 10)));
+        if (!seen[key]) { seen[key] = 1; unique += 1; ids.push(String(key).slice(0, 40)); }
+      }
+      return { total: items.length, unique: unique, sampleIds: ids.slice(0, 3) };
+    }
+    const trace = [];
+    let prevUnique = -1;
+    let stallRounds = 0;
+    let rounds = 0;
+    let snap = snapshot();
+    trace.push({ round: 0, total: snap.total, unique: snap.unique });
+    let satisfied = snap.unique >= target;
+    let certifiedExhaustion = false;
+    while (!satisfied && rounds < maxRounds) {
+      rounds += 1;
+      let scrollRes = null;
+      if (hasIncremental) {
+        scrollRes = await ops.scrollToBottomIncremental(root, { scrollRootLabel: 'collectUntil' });
+      } else {
+        try { root && root.scrollBy && root.scrollBy(0, 900); } catch (e) { /* legacy path */ }
+      }
+      await new Promise(function (res) { setTimeout(res, settleMs); });
+      snap = snapshot();
+      trace.push({
+        round: rounds,
+        total: snap.total,
+        unique: snap.unique,
+        scrollStalled: !!(scrollRes && scrollRes.stalled)
+      });
+      if (snap.unique >= target) { satisfied = true; break; }
+      if (snap.unique === prevUnique) {
+        stallRounds += 1;
+        // CERTIFIED exhaustion: the scroll machinery itself reports a stall
+        // (trusted wheel already attempted inside the incremental op) AND
+        // the unique population did not move for two consecutive rounds.
+        if (stallRounds >= 2 && (!scrollRes || scrollRes.stalled || !hasIncremental)) {
+          certifiedExhaustion = true;
+          break;
+        }
+      } else {
+        stallRounds = 0;
+      }
+      prevUnique = snap.unique;
+    }
+    const out = {
+      satisfied: satisfied,
+      collected: snap.unique,
+      totalContainers: snap.total,
+      targetCount: target,
+      rounds: rounds,
+      trace: trace,
+      sampleIds: snap.sampleIds
+    };
+    if (certifiedExhaustion) {
+      out.exhaustion = {
+        certified: true,
+        evidence: 'scroll stalled (trusted-wheel fallback already attempted by the incremental op) and the unique population was unchanged for 2 consecutive rounds (' + snap.unique + ' unique of ' + target + ' wanted)'
+      };
+    }
+    try {
+      notifyBackgroundDiagnostic('collectUntil_done', {
+        selector: selectorForLog,
+        satisfied: satisfied,
+        collected: snap.unique,
+        target: target,
+        rounds: rounds,
+        certifiedExhaustion: certifiedExhaustion,
+        elapsedMs: ((typeof Date !== 'undefined' ? Date.now() : 0) - t0)
+      });
+    } catch (e) { /* diagnostic only */ }
+    return out;
   }
 
   async function domScrollToBottom(sel) {
