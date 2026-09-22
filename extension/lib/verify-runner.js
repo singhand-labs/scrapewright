@@ -879,6 +879,34 @@
           // Report-only: forcing retries toward an unreachable count is the
           // ZERO-TRAP deadlock; surface it and let the human/LLM judge.
           detectors.countShortfall = WU.detectCountShortfall(finalData, input, outputSchema) || null;
+          // 121st round (user: scrolling satisfied N but extraction came up
+          // short — selector? filter?): name WHERE the count was lost. The
+          // extraction diagnostics carry the run's own container-match
+          // census; comparing it with the final record count separates
+          // selector/population loss (containers < requested) from
+          // ASSEMBLY loss (containers >= requested but posts short — a
+          // dedupe on a weak/positional key collapsing distinct records).
+          if (detectors.countShortfall) {
+            try {
+              let maxContainers = 0;
+              for (const ev of events) {
+                const diags = (ev && Array.isArray(ev.selectorDiagnostics)) ? ev.selectorDiagnostics : [];
+                for (const dg of diags) {
+                  const n = (dg && typeof dg.containerMatches === 'number') ? dg.containerMatches : 0;
+                  if (n > maxContainers) maxContainers = n;
+                }
+              }
+              const got = detectors.countShortfall.extracted;
+              const req = detectors.countShortfall.requested;
+              if (maxContainers > 0 && typeof got === 'number' && typeof req === 'number') {
+                if (maxContainers >= req && got < req) {
+                  detectors.countShortfall.note = 'containers matched ' + maxContainers + ' (≥ requested ' + req + ') but only ' + got + ' record(s) survived — the loss is in the ASSEMBLY, not the selector: a dedupe keyed on a weak/positional/shared value is collapsing distinct records. Merge by a strong per-record key (the permalink/token id), never by a fallback that repeats.';
+                } else if (maxContainers < req) {
+                  detectors.countShortfall.note = 'only ' + maxContainers + ' container(s) matched on this (fresh) verify tab vs ' + req + ' requested — population divergence or genuine scarcity, not an assembly bug: prefer $collectUntil (certified exhaustion) and settle before counting; if certified-exhausted, ship the shortfall disclosed.';
+                }
+              }
+            } catch (e) { /* provenance is best-effort */ }
+          }
         }
         if (typeof WU.detectRelativeTimestamps === 'function') {
           // Forty-sixth log: report-only. A time-like field whose values are
