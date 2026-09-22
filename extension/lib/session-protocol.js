@@ -242,7 +242,23 @@
     let parseErr = null;
     try { obj = JSON.parse(candidate); } catch (e) {
       parseErr = e && e.message ? String(e.message) : 'unparseable';
-      obj = lenientParse(candidate);
+      // 120th log: the model wrote a LEADING BARE TOKEN —
+      // {"finish","tool":"finish",…} — the tool name once without a colon,
+      // then the proper object. A green-verified session died at the very
+      // finish line to this typo (three identical replies, protocol rounds
+      // exhausted). Deterministic repair: strip the bare token and re-parse;
+      // any tool name, disclosed via the repair note.
+      const m = candidate.match(/^\{\s*"([\w.$-]+)"\s*,(?=\s*")/);
+      if (m) {
+        const stripped = '{' + candidate.slice(m[0].length);
+        try {
+          obj = JSON.parse(stripped);
+          parseErr = null;
+          try { console.warn('[session-protocol] repaired leading bare token "' + m[1] + '" in assistant reply'); } catch (e0) {}
+        } catch (e2) { obj = lenientParse(candidate); }
+      } else {
+        obj = lenientParse(candidate);
+      }
     }
     if (obj == null || typeof obj !== 'object' || Array.isArray(obj)) {
       // The tail rides along because console previews cut at 300 chars —
@@ -268,6 +284,12 @@
       let src = null;
       if (obj.args && typeof obj.args === 'object' && !Array.isArray(obj.args)) {
         src = obj.args;
+        // 120th log: {"tool":"finish","args":{},"summary":"…"} — args is an
+        // EMPTY object while the summary rides at top level; harvest it so
+        // the coerced finish keeps the ship summary.
+        if (!(typeof src.summary === 'string' && src.summary) && typeof obj.summary === 'string' && obj.summary) {
+          src = { summary: obj.summary };
+        }
       } else {
         const s = (typeof obj.args === 'string' && obj.args) ? obj.args
           : (typeof obj.summary === 'string' ? obj.summary : '');

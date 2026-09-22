@@ -278,3 +278,24 @@ describe('118th-C: $collectUntil primitive (count reliability infrastructure)', 
     assert.ok(i > -1, 'dispatcher case present');
   });
 });
+
+describe('120th log: leading bare-token repair (the green session died AT THE FINISH LINE)', () => {
+  const SP = fs.readFileSync(path.join(__dirname, '..', 'lib', 'session-protocol.js'), 'utf8');
+  const { parseAssistantTurn } = require('../lib/session-protocol');
+  it('the exact incident reply {"finish","tool":"finish",...} parses as a finish action', () => {
+    const r = parseAssistantTurn('{"finish","tool":"finish","args":{},"summary":"Facebook search posts scraper verified green (ok=true). Inputs keyword/count; outputs posts with absolute postTime from tooltips; the only post-shaped content this search page offers for the test keyword."}');
+    assert.ok(r.ok, 'recovered — got ' + JSON.stringify(r).slice(0, 160));
+    const t = r.turn || r;
+    assert.equal((t.tool || (t.finish && 'finish')), 'finish');
+    assert.match(String((t.args && t.args.summary) || (t.finish && t.finish.summary) || ''), /verified green/);
+  });
+  it('the repair is general (any tool name) and leaves valid JSON untouched', () => {
+    const r2 = parseAssistantTurn('{"ledger.add","tool":"ledger.add","args":{"finding":"x"}}');
+    assert.ok(r2.ok, 'any leading bare token is dropped');
+    const r3 = parseAssistantTurn('{"tool":"probe.count","args":{"sel":"div"}}');
+    assert.ok(r3.ok && r3.turn && r3.turn.tool === 'probe.count', 'valid replies unchanged');
+  });
+  it('source audit: the bare-token strip lives in the parse path with a disclosed repair note', () => {
+    assert.match(SP, /BARE TOKEN|leading bare token/i);
+  });
+});
