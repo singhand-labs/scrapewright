@@ -186,7 +186,7 @@ describe('result review panel (source audit)', () => {
     assert.match(WIZARD_JS, /function renderResultReview\(\)/);
     assert.match(WIZARD_JS, /getLastVerify\(\)/);
     assert.match(WIZARD_JS, /result-review-item/);
-    assert.match(WIZARD_JS, /请修复：/);
+    assert.match(WIZARD_JS, /Please fix:/);
     assert.match(WIZARD_JS, /sessionFeedbackText/);
     assert.match(WIZARD_JS, /addEventListener\('click'/);
   });

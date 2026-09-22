@@ -1929,7 +1929,7 @@ function showHoverDebugPanel(reqId, payload) {
     document.getElementById('hoverDebugAction').textContent = payload.action || '';
     document.getElementById('hoverDebugPageUrl').textContent = payload.pageUrl || '';
     document.getElementById('hoverDebugHtml').textContent =
-      payload.html ? String(payload.html).slice(0, 4000) + (payload.html.length > 4000 ? ' …[截断，全文入日志]' : '') : '(no popover captured)';
+      payload.html ? String(payload.html).slice(0, 4000) + (payload.html.length > 4000 ? ' …[truncated — full text is in the console log]' : '') : '(no popover captured)';
     document.getElementById('hoverDebugTexts').textContent = JSON.stringify(payload.texts || {}, null, 1);
     document.getElementById('hoverDebugObservation').value = '';
     document.getElementById('hoverDebugPanel').classList.remove('hidden');
@@ -1973,7 +1973,7 @@ function wireHoverDebugPanel() {
   if (skip) skip.addEventListener('click', () => respondHoverDebug(false));
   if (stop) stop.addEventListener('click', () => respondHoverDebug(true));
   if (toggle) {
-    const refresh = (on) => { toggle.textContent = '悬停回传调试：' + (on ? '开' : '关'); };
+    const refresh = (on) => { toggle.textContent = 'Hover relay debug: ' + (on ? 'on' : 'off'); };
     try {
       chrome.storage.local.get('hoverDebugInspect', (st) => refresh(!!(st && st.hoverDebugInspect)));
       toggle.addEventListener('click', () => {
@@ -2010,7 +2010,7 @@ async function confirmDeploy() {
   try {
     const ua = (typeof unverifiedArtifactState === 'function') ? unverifiedArtifactState(wizardState) : null;
     if (ua && ua.unverified) {
-      deployReasons.push('即将部署的工件 v' + ua.currentV + ' 从未验证（最后验证通过 ' + (ua.verifiedV > 0 ? 'v' + ua.verifiedV : '无') + '）');
+      deployReasons.push('artifact v' + ua.currentV + ' about to deploy was never verified (last verified: ' + (ua.verifiedV > 0 ? 'v' + ua.verifiedV : 'none') + ')');
     }
   } catch (e) { /* gate text is best-effort; the banner carries the primary signal */ }
   // Ninety-eighth round: syntax-broken artifacts are undeployable, full stop —
@@ -2020,7 +2020,7 @@ async function confirmDeploy() {
   try {
     const gate = validateForExecution(wizardState.steps || []);
     if (gate && gate.valid === false && /parseable|SYNTAX|Update/i.test(String(gate.error))) {
-      alert('无法部署：工件步骤脚本不是可解析的 JavaScript（更新时语法门拒绝）——请先修复或回滚到最后验证版本。\n' + String(gate.error).slice(0, 300));
+      alert('Cannot deploy: the artifact step scripts are not parseable JavaScript (rejected by the update-time syntax gate) — fix them or roll back to the last verified version.\n' + String(gate.error).slice(0, 300));
       return;
     }
   } catch (e) { /* the hard gate is best-effort; the update-time gate is the primary defense */ }
@@ -2157,7 +2157,7 @@ function makeLlmAdapter(client) {
         onThrottle: (info) => {
           try {
             const el = document.getElementById('sessionSpend');
-            if (el) el.textContent = '⏳ 请求节流等待中（' + ((info && info.waitedMs) || 0) + 'ms）— ' + el.textContent;
+            if (el) el.textContent = '⏳ request throttling (' + ((info && info.waitedMs) || 0) + 'ms) — ' + el.textContent;
           } catch (_) {}
         },
         // Nineteenth log (user directive): a rate-limited provider stalls the
@@ -2170,7 +2170,9 @@ function makeLlmAdapter(client) {
           } catch (_) { /* logging must never break the call */ }
         }
       });
-      return { content: String(content || ''), finish_reason: '', usage: null };
+      // 119th round: real usage from the client (prompt/completion split).
+      const lu = client.lastUsage || null;
+      return { content: String(content || ''), finish_reason: (lu && lu.finish_reason) || '', usage: lu ? { prompt_tokens: lu.prompt_tokens, completion_tokens: lu.completion_tokens } : null };
     } catch (e) {
       if (e && e.retryable === false && /finish_reason[=:]length/.test(String(e.message || ''))) {
         return { content: '', finish_reason: 'length', usage: null };
@@ -2423,7 +2425,7 @@ function createWizardIoBridge() {
           const substituteWizardTI = !rtHasValues && !provided && !!(wt && Object.keys(wt).length > 0);
           const ti = rtHasValues ? rt : (substituteWizardTI ? wt : (rt || {}));
           if (substituteWizardTI && noteEl) {
-            noteEl.textContent = (noteEl.textContent ? noteEl.textContent + '\n' : '') + '测试参数预填自上次确认值（模型未随本提案提交 testInput）';
+            noteEl.textContent = (noteEl.textContent ? noteEl.textContent + '\n' : '') + 'Test input prefilled from the last confirmed values (the model did not send testInput with this proposal)';
           }
           const hasValues = Object.keys(ti).length > 0;
           if (Object.keys(inProps).length > 0 || hasValues) {
@@ -2752,7 +2754,7 @@ function updateSessionSpendLine(st, parkedMs) {
   // (dossier/system prompts) while completion tokens are the controllable
   // spend; both are tracked separately by the engine since day one.
   el.textContent = 'turns ' + sp.turns + '/' + wizardMaxTurns +
-    ' · 输入 tokens ~' + sp.promptTokens + ' · 输出 tokens ~' + sp.completionTokens +
+    ' · input ~' + sp.promptTokens + ' tok · output ~' + sp.completionTokens + ' tok' +
     (sp.estimated ? ' (est)' : '') + ' · ledger ' + st.ledger.entries.length +
     // Parked time (io.confirm / annotation waits) does not burn the session
     // clock — disclose it so the wall-clock arithmetic adds up for the user.
@@ -3510,14 +3512,14 @@ function renderResultReview() {
         // candidate is unverified (it is a post-green rewrite — the session
         // ended before another verify could run) and offer BOTH exits:
         // re-verify the candidate now, or roll back to the verified version.
-        span.textContent = '⚠ 当前部署候选 v' + ua.currentV + ' 还没跑过验证——它是最后一次通过验证（v' + ua.verifiedV + '）之后的新修改，会话在验证它之前就结束了。这不是跳过验证：下面的修改必须先验证才能安全部署。';
+        span.textContent = '⚠ Deploy candidate v' + ua.currentV + ' has NOT been verified — it is a change made after the last verified version (v' + ua.verifiedV + '), and the session ended before it could be verified. This is not a skipped check: the change below must pass verification before it is safe to deploy.';
         const rvBtn = document.createElement('button');
         rvBtn.id = 'btnReverifyCurrent';
-        rvBtn.textContent = '立即验证当前版本 v' + ua.currentV + '（推荐）';
+        rvBtn.textContent = 'Verify current version v' + ua.currentV + ' now (recommended)';
         rvBtn.addEventListener('click', async () => {
           try {
             rvBtn.disabled = true;
-            rvBtn.textContent = '正在验证…';
+            rvBtn.textContent = 'Verifying…';
             await testScript();
             // A green manual run of the CURRENT steps blesses the current
             // version for the banner/deploy gate (same rule as the
@@ -3528,28 +3530,28 @@ function renderResultReview() {
             }
             renderResultReview();
           } catch (e) {
-            showToast('验证运行失败：' + (e && e.message || e), 'error');
+            showToast('Verify run failed: ' + (e && e.message || e), 'error');
             rvBtn.disabled = false;
-            rvBtn.textContent = '立即验证当前版本 v' + ua.currentV + '（推荐）';
+            rvBtn.textContent = 'Verify current version v' + ua.currentV + ' now (recommended)';
           }
         });
         const btn = document.createElement('button');
         btn.id = 'btnRollbackToVerified';
-        btn.textContent = '使用 v' + ua.verifiedV + ' 的已验证 steps';
+        btn.textContent = 'Use the verified steps from v' + ua.verifiedV;
         btn.addEventListener('click', () => {
           const lv = wizardState.lastVerified;
           if (!lv || !Array.isArray(lv.steps)) return;
           wizardState.steps = JSON.parse(JSON.stringify(lv.steps));
           wizardState.currentArtifactVersion = lv.version;
           renderStepList();
-          showToast('已回滚到最后验证版本 v' + lv.version + ' 的 steps', 'success');
+          showToast('Rolled back to the last verified version v' + lv.version + ' steps', 'success');
           renderResultReview();
         });
         banner.appendChild(span);
         banner.appendChild(rvBtn);
         banner.appendChild(btn);
       } else {
-        span.textContent = '⚠ 当前部署候选 v' + ua.currentV + ' 从未通过任何验证——先点上方“运行测试”验证通过后再部署';
+        span.textContent = '⚠ Deploy candidate v' + ua.currentV + ' has never passed any verification — run the test above first and deploy only after it goes green';
         banner.appendChild(span);
       }
       listEl.appendChild(banner);
@@ -3567,7 +3569,7 @@ function renderResultReview() {
   // per the user's rule: do not invent problems; real ones must read clearly.
   const findings = [];
   const errMsg = report.error && report.error.message ? String(report.error.message) : '';
-  if (errMsg) findings.push({ level: 'action', text: 'verify 失败: ' + errMsg.slice(0, 300) });
+  if (errMsg) findings.push({ level: 'action', text: 'verify failed: ' + errMsg.slice(0, 300) });
   const det = report.detectors || {};
   for (const k of Object.keys(det)) {
     const v = det[k];
@@ -3577,13 +3579,13 @@ function renderResultReview() {
     if (ex) {
       findings.push({ level: ex.level, text: ex.title + '——' + ex.detail });
     } else if (Array.isArray(v)) {
-      findings.push({ level: 'advisory', text: k + ' (' + v.length + ' 项)' });
+      findings.push({ level: 'advisory', text: k + ' (' + v.length + ' finding(s))' });
     } else {
       findings.push({ level: 'advisory', text: k + ': ' + JSON.stringify(v).slice(0, 120) });
     }
   }
   if (report.scoreNote) {
-    findings.push({ level: 'advisory', text: '评分说明（含广告位极性核对提示）: ' + String(report.scoreNote).slice(0, 200) });
+    findings.push({ level: 'advisory', text: 'Score note (incl. ad-slot polarity check hint): ' + String(report.scoreNote).slice(0, 200) });
   }
   const items = findings.filter((f) => f.level === 'action').map((f) => f.text);
   const advisories = findings.filter((f) => f.level !== 'action').map((f) => f.text);
@@ -3592,8 +3594,8 @@ function renderResultReview() {
   const headEl = document.createElement('p');
   headEl.className = 'hint-label';
   headEl.textContent = items.length
-    ? '以下发现需要你决策：点条目把它加入反馈继续修复，或直接部署（已知问题将随披露说明交付）。'
-    : '本次运行没有需要处理的问题——以下为仅提示项（通常无需处理）。';
+    ? 'Findings that need your decision: click an item to append it to the feedback box and keep fixing, or deploy directly (known issues ship with a disclosure).'
+    : 'No action-required findings in this run — the items below are advisory only.';
   listEl.appendChild(headEl);
   for (const it of capped) {
     const row = document.createElement('div');
@@ -3602,11 +3604,11 @@ function renderResultReview() {
     span.textContent = it;
     row.appendChild(span);
     const btn = document.createElement('button');
-    btn.textContent = '反馈修复此项';
+    btn.textContent = 'Send feedback to fix this';
     btn.addEventListener('click', () => {
       const textEl = document.getElementById('sessionFeedbackText');
       if (!textEl) return;
-      textEl.value = (textEl.value ? textEl.value.replace(/\s+$/, '') + '\n' : '') + '请修复：' + it + '\n';
+      textEl.value = (textEl.value ? textEl.value.replace(/\s+$/, '') + '\n' : '') + 'Please fix: ' + it + '\n';
       textEl.focus();
     });
     row.appendChild(btn);
@@ -3619,7 +3621,7 @@ function renderResultReview() {
     const detEl = document.createElement('details');
     detEl.className = 'result-review-item';
     const sumEl = document.createElement('summary');
-    sumEl.textContent = '仅提示项 ' + advisories.length + ' 条（默认无需处理，点开看说明）';
+    sumEl.textContent = advisories.length + ' advisory note(s) — no action needed by default (expand for details)';
     detEl.appendChild(sumEl);
     for (const ad of advisories.slice(0, 8)) {
       const p = document.createElement('div');

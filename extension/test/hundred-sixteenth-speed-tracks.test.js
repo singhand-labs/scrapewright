@@ -47,7 +47,7 @@ describe('A: parked-user desktop notifications', () => {
     n.begin('io.confirm', '确认输入/输出合同');
     await new Promise(r => setTimeout(r, 80));
     assert.ok(made.length >= 2 && made.length <= 3, 'initial + up to 2 re-issues — got ' + made.length);
-    assert.match(made[0].title, /需要你的操作|action required/i);
+    assert.match(made[0].title, /action is needed|required/i);
     n.end();
     const countAtEnd = made.length;
     await new Promise(r => setTimeout(r, 60));

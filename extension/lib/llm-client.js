@@ -437,6 +437,14 @@ class LLMClient {
         `If this recurs, raise the Settings maxOutputTokens above ${effectiveMaxTokens} for this provider.`
       );
     }
+    // 119th round (user: token counter showed input only): persist the
+    // call's usage on the instance — the return value is a bare string, so
+    // the wizard adapter reads client.lastUsage to feed the engine's
+    // prompt/completion accounting (previously usage was logged and lost,
+    // and the estimator booked EVERYTHING as prompt tokens).
+    try {
+      this.lastUsage = Object.assign({}, (usage || {}), { finish_reason: finishReason });
+    } catch (e) { this.lastUsage = null; }
     return content;
   }
 

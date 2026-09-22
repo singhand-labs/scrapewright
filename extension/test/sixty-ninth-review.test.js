@@ -186,7 +186,7 @@ describe('F7: io.confirm prefill', () => {
   it('source audit: wizard substitutes only when the proposal omitted testInput, and annotates', () => {
     const wz = SRC('wizard.js');
     assert.match(wz, /testInputProvided/, 'bridge carries the provided flag');
-    assert.match(wz, /预填自上次确认值/, 'substitution annotated in the panel');
+    assert.match(wz, /prefilled from the last confirmed values/, 'substitution annotated in the panel');
   });
 });
 

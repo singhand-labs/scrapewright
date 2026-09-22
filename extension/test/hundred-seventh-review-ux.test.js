@@ -71,18 +71,18 @@ describe('107th-B: explainDetectorFinding (plain-language detector verdicts)', (
     const r = fn('oversizedFields', [{ field: 'posts.htmlSnippet', count: 4, total: 4, maxLen: 50062, avgLen: 50061 }]);
     assert.equal(r.level, 'advisory');
     assert.match(r.detail, /htmlSnippet/);
-    assert.match(r.detail, /无需处理|移除/);
+    assert.match(r.detail, /No action needed|remove/i);
   });
   it('adMarkerSelectors explains BOTH polarities so the user can decide', () => {
     const fn = load();
     const r = fn('adMarkerSelectors', [{ stepId: 'collect', markers: ['data-ad-comet-preview'] }]);
-    assert.match(r.detail, /排除|结构标记/);
+    assert.match(r.detail, /exclusion form|structural marker/i);
   });
   it('partialEmptyFields is actionable with per-field counts', () => {
     const fn = load();
     const r = fn('partialEmptyFields', [{ field: 'location', path: 'posts.location', emptyCount: 4, totalCount: 4 }]);
     assert.equal(r.level, 'action');
-    assert.match(r.detail, /posts\.location 空 4\/4/);
+    assert.match(r.detail, /posts\.location empty 4\/4/);
   });
   it('unknown detector keys fall back to a labeled advisory, never a bare key', () => {
     const fn = load();
@@ -99,13 +99,13 @@ describe('107th-C: wizard review wiring (source audit)', () => {
     assert.match(block, /syncLastVerifiedFromVerify/, 'live sync on every tool_result event');
   });
   it('the unverified banner explains WHY and offers a re-verify button', () => {
-    assert.match(WJ, /还没跑过验证——它是最后一次通过验证/, 'banner explains the post-green-rewrite cause');
+    assert.match(WJ, /has NOT been verified — it is a change made after the last verified version/, 'banner explains the post-green-rewrite cause');
     assert.match(WJ, /btnReverifyCurrent/, 're-verify button present');
-    assert.match(WJ, /立即验证当前版本/, 'button label is a clear action');
+    assert.match(WJ, /Verify current version/, 'button label is a clear action');
   });
   it('advisories render collapsed and marked as needing no action', () => {
-    assert.match(WJ, /仅提示项 /, 'collapsed advisory group');
-    assert.match(WJ, /默认无需处理/, 'explicit no-action label');
+    assert.match(WJ, /advisory note\(s\)/, 'collapsed advisory group');
+    assert.match(WJ, /no action needed by default/, 'explicit no-action label');
   });
   it('review-stage name render suggests a name when the state has none', () => {
     const i = WJ.indexOf('document.activeElement !== nameInput');

@@ -5597,30 +5597,30 @@ function detectNeverExtractedFields(steps, outputSchema) {
 // rule: do not invent problems, and real ones must come with a readable
 // explanation).
 const DETECTOR_PLAIN = {
-  partialEmptyFields: { level: 'action', title: '部分记录字段为空', explain: (v) => '某些记录的必填字段没有取到值（如 ' + briefEntries(v, (e) => e.path + ' 空 ' + e.emptyCount + '/' + e.totalCount) + '）。请核对空记录样本：字段在页面上确实不存在时，应把它改为可选或从合同移除；存在却没取到则需要修复提取。' },
-  emptyFields: { level: 'action', title: '字段全部为空', explain: (v) => '以下字段在所有记录里都是空的：' + briefEntries(v, (e) => (e && typeof e === 'object') ? (e.path || e.field || '?') : String(e)) + '。若页面本就没有这个数据，改可选或删字段；否则修复绑定。' },
-  zeroMatchFields: { level: 'action', title: '有字段的选择器零命中', explain: () => '某字段的选择器在页面上一个都没匹配到——选择器写错了或页面结构变了，需要修复。' },
-  countShortfall: { level: 'action', title: '条数缺口', explain: (v) => '请求 ' + (v && v.requested) + ' 条，实际提取 ' + (v && v.extracted) + ' 条。常见原因是页面内容不足或滚动提前停止；内容确实不足时可以接受并披露，不足以外的原因需要修复。' },
-  relativeTimestamps: { level: 'action', title: '时间是相对格式', explain: (v) => '时间字段是"3 天前"这类相对时间而非绝对日期（' + briefEntries(v, (e) => (e && typeof e === 'object') ? ((e.path || e.field || '?') + '=' + (e.sampleValue != null ? String(e.sampleValue) : '')) : String(e)) + '）。若需要精确时间，应从悬停提示等渠道取绝对值；接受相对时间则改为披露。' },
-  duplicateIdValues: { level: 'action', title: '身份字段值重复', explain: () => '多条记录的 id 字段是同一个值——通常是把列表级共享值（如版主 id）当成了每条记录的身份。需要改为真正的逐条 id，或把该字段降为可选。' },
-  duplicateFields: { level: 'advisory', title: '字段间重复值', explain: () => '不同字段的值相同（常见于同一数据的多个读法）。不影响正确性；如需精简可去掉冗余字段。' },
-  duplicateEntities: { level: 'action', title: '疑似重复记录', explain: () => '有记录看起来是同一条数据被提取了多次（同内容/同链接）。需要去重或修正容器选择器，避免同一帖子重复出现。' },
-  duplicateEntityPairs: { level: 'action', title: '同一实体被提取两次', explain: (v) => '两条记录的全部数据字段完全一致（如 ' + briefEntries(v, (e) => '#' + e.indexA + '≡#' + e.indexB) + '），仅 id 形态不同——同一张卡片以两种链接形态被提取了两次。需要按实体签名（内容+时间等）去重，而不是仅按 id；或反馈协商从合同移除该字段。' },
-  implausibleTimeFields: { level: 'action', title: '时间字段值不像时间', explain: () => '时间字段的值不含任何日期形态——多半是读错了元素。需要换绑定来源。' },
-  positionLikeIds: { level: 'action', title: 'id 是序号', explain: () => 'id 字段的值是 1、2、3 这类位置序号，不是页面上的真实身份。需要改绑真实 id。' },
-  containerZero: { level: 'action', title: '容器选择器零命中', explain: () => '列表容器一个都没匹配到——选择器错误或页面未加载完成。' },
-  stepNoReturn: { level: 'action', title: '步骤没有返回数据', explain: () => '某步骤执行完没有产出数据。检查脚本是否漏了 return。' },
-  timeSourceUnexercised: { level: 'action', title: '时间来源未启用', explain: () => '合同要求时间来自悬停提示，但本次运行没有实际走到该来源。' },
-  oversizedFields: { level: 'advisory', title: '字段值超长（仅提示）', explain: (v) => '以下字段保存了大体积原始值（如整卡 HTML）：' + briefEntries(v, (e) => e.field + ' 最长 ' + e.maxLen + ' 字符') + '。不影响数据正确性；若下游用不到原始 HTML，可从合同移除该字段以减小输出体积。无需处理也可以直接部署。' },
-  adMarkerSelectors: { level: 'advisory', title: '选择器引用了广告标记属性（请核对用途）', explain: () => '步骤的选择器用了广告/推广标记类属性。请确认用途：若需求要排除广告，选择器应当用排除写法（:not() 等）；若该属性只是页面的结构标记（比如用来识别帖子卡），则无需处理——部署说明里应有模型的分布验证。' },
-  unusedCaptures: { level: 'advisory', title: '悬停弹层已捕获但未被字段消费（仅提示）', explain: () => '悬停捕获到了弹层内容但没有字段绑定它。信息已随记录交付时无需处理；若你想要这些信息成为独立字段，反馈让模型补绑定。' },
-  htmlNoMarkup: { level: 'advisory', title: 'HTML 字段无标签（仅提示）', explain: () => '名为 html 的字段值里没有标记，可能是文本被当 HTML 保存。仅影响该字段用途，不影响其他数据。' },
-  scrollCountFrozen: { level: 'advisory', title: '滚动计数冻结（仅提示）', explain: () => '滚动循环里计数不再增长。若页面确实加载完了这是正常收尾；若内容应更多，反馈让模型检查滚动。' },
-  clickContainersTransient: { level: 'advisory', title: '点击容器瞬时零匹配（仅提示）', explain: () => '点击步骤偶尔匹配不到容器后又在同一次运行里匹配到了——是页面挂载时序波动，非选择器错误。' },
-  siblingCountContrast: { level: 'advisory', title: '计数字段隐藏在属性里（仅提示）', explain: () => '某计数类字段文本读不到但兄弟字段读得到——值可能在 aria 属性里。需要该字段时反馈让模型改用属性读取。' },
-  labelPrefixedCounts: { level: 'advisory', title: '计数字段带控制台标签（仅提示）', explain: () => '计数字段的值形如"赞：37"。需要纯数字时反馈让模型解析。' },
-  junkShapeRecords: { level: 'advisory', title: '疑似填充记录子群（仅提示）', explain: () => '一部分记录像页面插入的非目标内容（超长、无身份字段）。需要排除时反馈让模型收紧容器选择器。' },
-  shapeDistribution: { level: 'advisory', title: '记录形态分布（信息）', explain: () => '各字段的填充形态统计，供参考。' }
+  partialEmptyFields: { level: 'action', title: 'Some records have empty fields', explain: (v) => 'Required fields came back empty in some records (e.g. ' + briefEntries(v, (e) => e.path + ' empty ' + e.emptyCount + '/' + e.totalCount) + '). Check the empty-record samples: if the page genuinely lacks the field, make it optional or drop it from the contract; if it exists but was not extracted, fix the binding.' },
+  emptyFields: { level: 'action', title: 'Fields empty in every record', explain: (v) => 'These fields are empty across all records: ' + briefEntries(v, (e) => (e && typeof e === 'object') ? (e.path || e.field || '?') : String(e)) + '. If the page never renders this data, make it optional or remove it; otherwise fix the binding.' },
+  zeroMatchFields: { level: 'action', title: 'A field selector matched nothing', explain: () => 'A field selector matched zero elements on the page — the selector is wrong or the page structure changed; fix it.' },
+  countShortfall: { level: 'action', title: 'Count shortfall', explain: (v) => 'Requested ' + (v && v.requested) + ' items, extracted ' + (v && v.extracted) + '. Usually thin page content or scrolling that stopped early; if content is genuinely exhausted, accept and disclose — otherwise fix the collection loop (prefer $collectUntil).' },
+  relativeTimestamps: { level: 'action', title: 'Times are relative', explain: (v) => 'Time fields hold relative ages ("3 days ago") instead of absolute dates (' + briefEntries(v, (e) => (e && typeof e === 'object') ? ((e.path || e.field || '?') + '=' + (e.sampleValue != null ? String(e.sampleValue) : '')) : String(e)) + '). If precise times matter, take absolutes from the hover tooltip; if relative is acceptable, disclose it instead.' },
+  duplicateIdValues: { level: 'action', title: 'Identity field repeats', explain: () => 'The id field carries the same value across records — usually a list-level shared value (e.g. the owner id) mistaken for a per-record identity. Bind the real per-record id, or demote the field to optional.' },
+  duplicateFields: { level: 'advisory', title: 'Duplicate values between fields', explain: () => 'Different fields hold identical values (often several reads of the same data). Harmless; remove the redundant field if you want a leaner output.' },
+  duplicateEntities: { level: 'action', title: 'Possible duplicate records', explain: () => 'Some records look like the same entity extracted more than once (same content/link). Deduplicate or tighten the container selector so the same item does not appear twice.' },
+  duplicateEntityPairs: { level: 'action', title: 'Same entity extracted twice', explain: (v) => 'Two records match on every data field (e.g. ' + briefEntries(v, (e) => '#' + e.indexA + '≡#' + e.indexB) + ') and differ only in id surface — the same card was extracted under two link forms. Deduplicate by entity signature (content+time), not id alone; or renegotiate the field away.' },
+  implausibleTimeFields: { level: 'action', title: 'Time field does not look like a time', explain: () => 'The time field carries no date shape at all — most likely the wrong element is read. Rebind the source.' },
+  positionLikeIds: { level: 'action', title: 'id is a position index', explain: () => 'The id field holds positional ordinals (1, 2, 3), not real identities. Rebind to the real id source.' },
+  containerZero: { level: 'action', title: 'Container selector matched nothing', explain: () => 'The list container matched zero elements — wrong selector or the page had not finished loading.' },
+  stepNoReturn: { level: 'action', title: 'A step returned no data', explain: () => 'A step produced no output. Check whether its script is missing a return.' },
+  timeSourceUnexercised: { level: 'action', title: 'Time source not exercised', explain: () => 'The contract requires the time to come from the hover tooltip, but this run never actually exercised that route.' },
+  oversizedFields: { level: 'advisory', title: 'Oversized field values (informational)', explain: (v) => 'These fields hold very large raw values (e.g. whole-card HTML): ' + briefEntries(v, (e) => e.field + ' max ' + e.maxLen + ' chars') + '. Data correctness is unaffected; if downstream does not need the raw HTML, drop the field to slim the output. No action needed to deploy.' },
+  adMarkerSelectors: { level: 'advisory', title: 'Selector references an ad-marker attribute (check intent)', explain: () => 'A step selector uses an ad/promotion-marker attribute. Confirm the intent: if the requirement excludes ads, the selector should use the exclusion form (:not()); if the attribute is only a structural marker (e.g. it identifies post cards), no action is needed — the ship note should carry the model\'s distribution check.' },
+  unusedCaptures: { level: 'advisory', title: 'Hover popovers captured but unconsumed (informational)', explain: () => 'Hovers captured popover content but no field binds it. If the info already ships with the records, nothing to do; to promote it to dedicated fields, send feedback asking the model to bind them.' },
+  htmlNoMarkup: { level: 'advisory', title: 'HTML field has no markup (informational)', explain: () => 'A field named html carries no tags — plain text may have been saved as HTML. Only that field\'s usefulness is affected.' },
+  scrollCountFrozen: { level: 'advisory', title: 'Scroll count frozen (informational)', explain: () => 'The counter stopped growing during the scroll loop. If the page truly ran out of content this is a normal finish; if more was expected, send feedback to check the scroll (or switch to $collectUntil).' },
+  clickContainersTransient: { level: 'advisory', title: 'Transient zero-match on click containers (informational)', explain: () => 'A click step briefly matched zero containers then matched again within the same run — mount-timing jitter, not a selector error.' },
+  siblingCountContrast: { level: 'advisory', title: 'Count hidden in an attribute (informational)', explain: () => 'A count field reads empty while a sibling count extracts fine — the value likely lives in an aria attribute. Send feedback to switch that field to an attribute read if you need it.' },
+  labelPrefixedCounts: { level: 'advisory', title: 'Count carries a control label (informational)', explain: () => 'A count field holds values like "Like: 37". Send feedback to parse pure numbers if needed.' },
+  junkShapeRecords: { level: 'advisory', title: 'Junk-shaped record subpopulation (informational)', explain: () => 'Some records look like non-target content the page injects (overlong, no identity fields). Send feedback to tighten the container selector if you want them excluded.' },
+  shapeDistribution: { level: 'advisory', title: 'Record shape distribution (informational)', explain: () => 'Per-field population stats, for reference.' }
 };
 function briefEntries(v, fmt) {
   if (!Array.isArray(v)) return '';
@@ -5660,7 +5660,7 @@ function createParkNotifier(notificationsApi, focusFn, opts) {
       notificationsApi.create('scrapewright-park-' + (++seq), {
         type: 'basic',
         iconUrl: iconUrl,
-        title: '需要你的操作 — Scrapewright',
+        title: 'Your action is needed — Scrapewright',
         message: '[' + kind + '] ' + String(question || '').slice(0, 120)
       }, function () { /* created; click routing via onClicked */ });
     } catch (e) { /* notification is best-effort */ }

@@ -4753,7 +4753,7 @@
                   rejectedAddedTexts: rejectedAddedTexts || [],
                   rejectedAddedHtml: rejectedAddedHtml || []
                 },
-                note: 'popover held open — compare what YOU see on screen, then submit your observation. rejectedAdded*＝过滤拒绝+评分未选中的挂载片段（可能与 picked 同属一个弹窗，是提取的兜底证据，并非丢弃）；picked 才是选中的弹窗主体'
+                note: 'popover held open — compare what YOU see on screen, then submit your observation. rejectedAdded* = filter-rejected + scoring-runner-up mounted fragments (possibly parts of the SAME popover as the picked one — kept as fallback extraction evidence, not discarded); picked is the popover body the scorer selected'
               }
             }, function (resp) { resolve(resp || { observation: null, reason: 'no receiver' }); });
           } catch (e) { resolve({ observation: null, reason: 'sendMessage error' }); }

@@ -73,10 +73,10 @@ describe('renderResultReview behavioral (jsdom)', () => {
     const text = list.textContent;
     // 107th contract: emptyFields is an ACTION finding with a readable title
     // (the old renderer skipped it as "covered" — the user never saw it).
-    assert.match(text, /字段全部为空/);
+    assert.match(text, /Fields empty in every record/);
     assert.match(text, /x/, 'the empty field name is named');
     // siblingCountContrast renders its plain advisory title, not a bare key.
-    assert.match(text, /计数字段隐藏在属性里/);
+    assert.match(text, /Count hidden in an attribute/);
     assert.ok(!/检测器 \w+ 有发现/.test(text), 'no raw detector-key rendering remains');
     assert.ok(!text.includes('[object Object]'), 'no [object Object] leak');
   });
