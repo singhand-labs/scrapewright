@@ -415,3 +415,45 @@ describe('126th round Q2: [RESEARCH PLAN] — per-question closure in the self-r
     assert.match(RS3, /hypotheses: state\.hypotheses|hypotheses: \(Array/, 'hypotheses feed');
   });
 });
+
+describe('127th round: green-verify quality gates (decoy html + junk-required + missing seed)', () => {
+  const VR2 = fs.readFileSync(path.join(__dirname, '..', 'lib', 'verify-runner.js'), 'utf8');
+  const WU4 = fs.readFileSync(path.join(__dirname, '..', 'lib', 'wizard-utils.js'), 'utf8');
+  const WJ4 = fs.readFileSync(path.join(__dirname, '..', 'wizard.js'), 'utf8');
+  it('JUNK_VALUES on a REQUIRED field vetoes the run (the "Leave a comment" ship)', () => {
+    const i = VR2.indexOf('JUNK_VALUES_REQUIRED');
+    assert.ok(i > -1, 'promotion exists');
+    assert.match(VR2.slice(i - 300, i + 500), /required/i, 'keys off schemaItemRequiredForPath');
+  });
+  it('detectIdenticalFieldValues flags an all-records-identical field (the decoy htmlSnippet)', () => {
+    const vm = require('node:vm');
+    const start = WU4.indexOf('function detectIdenticalFieldValues');
+    assert.ok(start > -1, 'detector defined');
+    let depth = 0, j = start;
+    for (j = WU4.indexOf('function detectIdenticalFieldValues'); j < WU4.length; j++) {
+      if (WU4[j] === '{') depth += 1;
+      else if (WU4[j] === '}') { depth -= 1; if (depth === 0) break; }
+    }
+    const helper = WU4.slice(WU4.indexOf('function schemaArrayItemFieldKeys'), WU4.indexOf('function detectIdenticalFieldValues'));
+    const ctx = {}; vm.createContext(ctx);
+    vm.runInContext(helper + WU4.slice(start, j + 1) + '\nthis.__f = detectIdenticalFieldValues;', ctx);
+    const r = ctx.__f(
+      { posts: [
+        { id: '1', htmlSnippet: '<blockquote>Facebook</blockquote>' },
+        { id: '2', htmlSnippet: '<blockquote>Facebook</blockquote>' },
+        { id: '3', htmlSnippet: '<blockquote>Facebook</blockquote>' }
+      ] },
+      { type: 'object', properties: { posts: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, htmlSnippet: { type: 'string' } } } } } }
+    );
+    assert.ok(r && r.length === 1 && r[0].path === 'posts.htmlSnippet', JSON.stringify(r));
+    assert.match(r[0].note, /identical|decoy|container/i);
+    // distinct values stay silent
+    const r2 = ctx.__f({ posts: [{ id: '1', htmlSnippet: 'a' }, { id: '2', htmlSnippet: 'b' }] },
+      { type: 'object', properties: { posts: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, htmlSnippet: { type: 'string' } } } } } });
+    assert.ok(!r2 || r2.length === 0);
+  });
+  it('the same-site seed also mines the persisted research session verify (postTime 5/5 lived there, not in executionLogs)', () => {
+    assert.match(WJ4, /wizardResearchSession|persisted\.session/, 'research-session persistence reachable');
+    assert.match(WJ4, /SAME-SITE FIELD SAMPLES[\s\S]{0,4000}research|research[\s\S]{0,400}SAME-SITE FIELD SAMPLES|verify finalResult/i, 'seed sources extended');
+  });
+});

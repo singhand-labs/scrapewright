@@ -58,6 +58,7 @@
       findUpstreamExtractionStepId: w.findUpstreamExtractionStepId,
       detectDuplicateRecords: w.detectDuplicateRecords,
       detectDuplicateEntityPairs: w.detectDuplicateEntityPairs,
+      detectIdenticalFieldValues: w.detectIdenticalFieldValues,
       detectDuplicateEntities: w.detectDuplicateEntities,
       detectOversizedFields: w.detectOversizedFields,
       detectCountShortfall: w.detectCountShortfall,
@@ -1036,6 +1037,44 @@
           // Report-only (tenth-log N2): the human may have confirmed a
           // contract that wants these values — surface, teach, never block.
           detectors.junkValues = detectJunkValues(finalData, outputSchema);
+          // 127th round (the "Leave a comment" green ship): junk in a
+          // REQUIRED field is a broken binding, not an advisory — promote
+          // to veto exactly like DUPLICATE_ID_REQUIRED did for ids.
+          if (Array.isArray(detectors.junkValues) && detectors.junkValues.length && !error) {
+            for (const jk of detectors.junkValues) {
+              const reqF = (typeof WU.schemaItemRequiredForPath === 'function')
+                ? WU.schemaItemRequiredForPath(outputSchema, jk.path || (jk.field ? (jk.topArray ? jk.topArray + '.' + jk.field : jk.field) : '')) : null;
+              const isReq = Array.isArray(reqF) && reqF.indexOf(jk.field) !== -1;
+              if (isReq) {
+                error = new Error(
+                  'JUNK_VALUES_REQUIRED: ' + (jk.path || jk.field) + ' carries junk value(s) in records ' + (jk.indices ? jk.indices.slice(0, 5).join(', ') : '(see census)') +
+                  ' ("' + String(jk.sample || jk.value || '').slice(0, 40) + '") but the contract lists it as REQUIRED — a control label / query fragment / shared token is not data. Re-bind the field to the element that carries the value, or renegotiate it out of required via io.confirm.'
+                );
+                break;
+              }
+            }
+          }
+        }
+        // 127th round: all-records-identical field (the decoy htmlSnippet
+        // ship — identical anti-scrape markup in 6/6 through a green verify).
+        if (typeof WU.detectIdenticalFieldValues === 'function') {
+          const idents = WU.detectIdenticalFieldValues(finalData, outputSchema) || [];
+          if (idents.length) {
+            detectors.identicalFieldValues = idents;
+            for (const iv of idents) {
+              if (error) break;
+              const reqF = (typeof WU.schemaItemRequiredForPath === 'function')
+                ? WU.schemaItemRequiredForPath(outputSchema, iv.path) : null;
+              const base = iv.field;
+              const isReq = Array.isArray(reqF) && reqF.indexOf(base) !== -1;
+              if (isReq) {
+                error = new Error(
+                  'IDENTICAL_FIELD_REQUIRED: ' + iv.path + ' carries the IDENTICAL value in ' + iv.totalRecords + '/' + iv.totalRecords +
+                  ' records ("' + iv.sample + '") but the contract lists it as REQUIRED — a per-record field with one shared value is a decoy/container-level read, not record content. Re-bind to a per-record element, or renegotiate via io.confirm.'
+                );
+              }
+            }
+          }
         }
         if (typeof WU.detectHtmlFieldsWithoutTags === 'function') {
           // Report-only (forty-seventh log): posts.htmlSnippet shipped

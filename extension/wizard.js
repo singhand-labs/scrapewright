@@ -3290,6 +3290,29 @@ async function startResearchSession(seedOverride) {
               if (!samples[k] && smp[k] && smp[k].length) samples[k] = smp[k].slice(0, 2);
             }
           }
+          // 127th round: research-session verifies are the OTHER place
+          // same-site extraction history lives — the postTime 5/5 evidence
+          // never reached the seed because executionLogs only records
+          // background service runs. Mine the persisted research session's
+          // last verified finalResult too.
+          try {
+            const rsStore = await chrome.storage.local.get('wizardResearchSession');
+            const rs = rsStore && rsStore.wizardResearchSession;
+            const rsSession = rs && rs.session;
+            if (rsSession && Array.isArray(rsSession.artifactVersions) && rsSession.artifactVersions.length) {
+              const lv = wizardState.lastVerified ||
+                (rsSession.lastVerifyOk === true && rsSession.lastVerifyArtifactVersion
+                  ? { version: rsSession.lastVerifyArtifactVersion } : null);
+              const fr = wizardState.testResult && wizardState.testResult.finalResult;
+              if (fr) {
+                const smp = (typeof collectFieldSamplesFromOutput === 'function')
+                  ? collectFieldSamplesFromOutput(fr) : {};
+                for (const k of Object.keys(smp)) {
+                  if (!samples[k] && smp[k] && smp[k].length) samples[k] = smp[k].slice(0, 2);
+                }
+              }
+            }
+          } catch (e2) { /* research-session mining is best-effort */ }
           const ks = Object.keys(samples);
           if (ks.length) {
             const led = JSON.parse(JSON.stringify(svc.findingsLedger));
