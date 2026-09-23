@@ -1212,8 +1212,46 @@
     // (assembledFromChunks) so a stale-buffer prepend can never land
     // silently. The gated body is the former serviceUpdate verbatim.
     async function serviceUpdate(args, ctx) {
+      // 131st log: patch:true — merge-by-id into the CURRENT artifact. The
+      // endgame re-authored ONE step of a 2-step artifact as two chunked
+      // turns (REPLACES has no single-step form), five cycles in a row.
+      // The merged array runs the SAME gated pipeline (grounding, syntax,
+      // ghost, chain, schema attach), so a patch can never bypass a gate.
+      let patchReceipt = null;
+      const aPre = args || {};
+      if (aPre.patch === true) {
+        if (aPre.more === true || aPre.abortChunk === true) {
+          return { error: 'patch and chunked sends are mutually exclusive — patch:true carries complete step objects merged by id into the current artifact (no more:/abortChunk:)' };
+        }
+        if (pendingUpdateSteps && pendingUpdateSteps.length) {
+          return { error: 'update chunks are pending — send the final chunk to assemble first, or service.update({abortChunk:true}) to clear, then patch' };
+        }
+        if (!Array.isArray(aPre.steps) || !aPre.steps.length) {
+          return { error: 'patch:true requires steps (the step objects to merge by id)' };
+        }
+        const cur = d.getDraftService();
+        const curSteps = (cur && Array.isArray(cur.steps)) ? cur.steps : [];
+        if (!curSteps.length) {
+          return { error: 'patch:true has no current artifact to merge into — send the COMPLETE steps array (the default REPLACES form) for the first author' };
+        }
+        const merged = curSteps.slice();
+        for (const s of aPre.steps) {
+          const i = merged.findIndex((m) => m && m.id === s.id);
+          if (i !== -1) merged[i] = s; else merged.push(s);
+        }
+        // in place: the engine lineage records this same array
+        aPre.steps.length = 0;
+        for (const st of merged) aPre.steps.push(st);
+        patchReceipt = { patched: true, stepsNow: merged.map((s) => String((s && s.id) || '(no id)')) };
+      }
       const bufferedBefore = pendingUpdateSteps;
       const n = Array.isArray(bufferedBefore) ? bufferedBefore.length : 0;
+      // 131st log: snapshot the CURRENT artifact's step ids — a final chunk
+      // landing on an empty buffer REPLACES whatever stood there, and the
+      // incident session silently applied suffix-only artifacts (v5 = just
+      // s2, v6 = just s1) with zero disclosure.
+      const prevSvc = d.getDraftService();
+      const prevIds = (prevSvc && Array.isArray(prevSvc.steps)) ? prevSvc.steps.map((s) => String((s && s.id) || '(no id)')) : [];
       const out = await serviceUpdateGated(args, ctx);
       if (n > 0 && out && typeof out === 'object') {
         const isErr = typeof out.error === 'string';
@@ -1232,6 +1270,21 @@
           out.assembledFromChunks = n;
         }
       }
+      if (out && typeof out === 'object' && typeof out.error !== 'string' && !patchReceipt) {
+        const appliedIds = (Array.isArray(args && args.steps) ? args.steps : []).map((s) => String((s && s.id) || '(no id)'));
+        if (prevIds.length && appliedIds.length &&
+            (prevIds.join(',') !== appliedIds.join(','))) {
+          out.replacedStepIds = { from: prevIds, to: appliedIds };
+          const subset = appliedIds.every((id2) => prevIds.indexOf(id2) !== -1) && appliedIds.length < prevIds.length;
+          if (subset) {
+            out.replacementNote = 'this REPLACED a ' + prevIds.length + '-step artifact with ' + appliedIds.length +
+              ' step(s) [' + appliedIds.join(', ') + '] — REPLACES semantics, NOT a merge. If you meant chunk assembly, the buffer was EMPTY: resend chunk 1 with more:true, then the final chunk. To re-author ONE step of the standing artifact use patch:true.';
+          }
+        }
+      }
+      if (patchReceipt && out && typeof out === 'object' && typeof out.error !== 'string') {
+        Object.assign(out, patchReceipt);
+      }
       return out;
     }
 
@@ -1243,6 +1296,19 @@
         const a0 = args || {};
         if (a0.abortChunk === true) {
           pendingUpdateSteps = null;
+          // 131st log: the model's natural "abort + start over with these
+          // steps" shape silently discarded the steps — the receipt said
+          // "cleared" and the next turn had to resend chunk 1 from scratch.
+          // Treat steps sent WITH the abort as the new chunk 1.
+          if (Array.isArray(a0.steps) && a0.steps.length) {
+            pendingUpdateSteps = a0.steps.slice();
+            return {
+              aborted: true,
+              bufferedSteps: pendingUpdateSteps.length,
+              note: 'pending update chunks cleared; the ' + a0.steps.length +
+                ' step(s) sent with this call were buffered as the NEW chunk 1 — send the remaining steps as the final chunk (service.update({steps:[...]}) assembles).'
+            };
+          }
           return { aborted: true, note: 'pending update chunks cleared' };
         }
         if (a0.more === true && Array.isArray(a0.steps)) {
@@ -1254,7 +1320,13 @@
           };
         }
         if (pendingUpdateSteps && Array.isArray(a0.steps) && a0.steps.length) {
-          a0.steps = pendingUpdateSteps.concat(a0.steps);
+          // 131st log: splice the assembly INTO the sent array in place —
+          // the engine wrapper holds this same array reference and records
+          // it as the version lineage; a fresh concat array left the
+          // lineage carrying only the raw final chunk.
+          const assembledSteps = pendingUpdateSteps.concat(a0.steps);
+          a0.steps.length = 0;
+          for (const st of assembledSteps) a0.steps.push(st);
           pendingUpdateSteps = null;
           // fall through: the assembled payload runs the normal pipeline
         }

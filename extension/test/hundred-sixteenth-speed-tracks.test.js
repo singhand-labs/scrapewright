@@ -606,7 +606,8 @@ describe('129th-round review fix: same-site seed mines the PERSISTED research se
   it('the service.update spec no longer contradicts itself over chunked sends; buffered/aborted returns are declared', () => {
     assert.match(RS_SRC, /chunked sends assemble to the same effect/, 'REPLACES clause acknowledges chunked assembly');
     assert.doesNotMatch(RS_SRC, /REPLACES the whole artifact \(send the complete steps array every time\)/, 'the contradictory legacy clause is gone');
-    assert.match(RS_SRC, /\{buffered:true,\.\.\.\} \| \{aborted:true\}/, 'chunking return shapes declared');
+    // 131st round: the returns clause grew patched/replacedStepIds shapes
+    assert.match(RS_SRC, /\{buffered:true,\.\.\.\} \| \{aborted:true,\.\.\.\}/, 'chunking return shapes declared');
   });
   it('the verify.run spec names the preflight arg', () => {
     const ST3 = fs.readFileSync(path.join(__dirname, '..', 'lib', 'session-tools.js'), 'utf8');
