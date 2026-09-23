@@ -1707,6 +1707,66 @@ async function seedLedgerFromSameSite(registry, targetUrl) {
   return null;
 }
 
+// 129th-round review fix (chunk buffer vs session restart): the chunked
+// service.update buffer lives in the createSessionTools closure — a
+// stop/suspend/resume cycle rebuilds the tools bag with an EMPTY buffer
+// while the restored transcript still shows "chunk buffered (N steps)"
+// receipts, so the model resumes mid-sequence, sends the final chunk, and a
+// suffix-only artifact applies silently (resume is exactly the interruption
+// class the 125th-round chunking exists to survive). Pure transcript scan,
+// wired on the wizard resume path: walk from the END backwards to the LAST
+// buffered-chunk receipt; if no later service.update consumed it (a
+// successful apply or an explicit abortChunk), push a system note telling
+// the model the chunks were NOT retained. An intervening ERROR receipt does
+// NOT count as consumed — the rejection path restores the buffer, but the
+// restart drops the restored buffer just the same.
+function injectResumeChunkWarning(transcript) {
+  if (!Array.isArray(transcript)) return transcript;
+  let lastBufferedIdx = -1;
+  for (let i = transcript.length - 1; i >= 0; i--) {
+    const e = transcript[i];
+    if (!e || typeof e !== 'object' || e.kind !== 'tool' || e.name !== 'service.update') continue;
+    if (e.result && typeof e.result === 'object' && e.result.buffered === true) { lastBufferedIdx = i; break; }
+  }
+  if (lastBufferedIdx === -1) return transcript;
+  for (let i = lastBufferedIdx + 1; i < transcript.length; i++) {
+    const e = transcript[i];
+    if (!e || typeof e !== 'object' || e.kind !== 'tool' || e.name !== 'service.update') continue;
+    const r = (e.result && typeof e.result === 'object') ? e.result : null;
+    if (r && (r.updated === true || r.aborted === true)) return transcript;
+  }
+  transcript.push({
+    kind: 'system',
+    text: 'PENDING UPDATE CHUNKS WERE NOT RETAINED ACROSS THE RESTART — the artifact was NOT updated by them. Resend the complete artifact (chunked from the first step).'
+  });
+  return transcript;
+}
+
+// 129th-round review fix (finding #4 — the same-site seed mined the wrong
+// object): the 127th-round block gated on the PERSISTED research session
+// but read wizardState.testResult.finalResult — in-memory page state that
+// is null on any fresh wizard page (exactly the cross-restart scenario the
+// block was built for), while the computed last-verified pointer sat dead.
+// Pure merge helper for the wizard's seed block: the persisted session's
+// last GREEN verify finalResult (state.lastVerifyFinalResult, set by the
+// engine where a green verify report is processed) is the PRIMARY source;
+// the in-memory wizardState copy is a fallback only. Mutates and returns
+// `samples` (first value wins, ≤2 samples per field — same contract as the
+// executionLogs mining above it).
+function mineResearchSessionSamples(rsSession, wizardStateFr, samples) {
+  const out = (samples && typeof samples === 'object' && !Array.isArray(samples)) ? samples : {};
+  if (!rsSession || typeof rsSession !== 'object') return out;
+  if (!(Array.isArray(rsSession.artifactVersions) && rsSession.artifactVersions.length)) return out;
+  const fr = ((rsSession.lastVerifyOk === true && rsSession.lastVerifyFinalResult) || wizardStateFr) || null;
+  if (!fr) return out;
+  const smp = (typeof collectFieldSamplesFromOutput === 'function')
+    ? collectFieldSamplesFromOutput(fr) : {};
+  for (const k of Object.keys(smp)) {
+    if (!out[k] && smp[k] && smp[k].length) out[k] = smp[k].slice(0, 2);
+  }
+  return out;
+}
+
 // Fifty-ninth log: the model's CONTRACT RENEGOTIATION carried
 // "postId": {"type": "type", "description": "placeholder"} — a literal
 // unfilled stub — and io.confirm's validation admitted it, surfacing the
@@ -5707,10 +5767,18 @@ function detectStepGraphGhostRefs(steps) {
   const out = [];
   for (const st of steps) {
     if (!st || typeof st.script !== 'string') continue;
-    const refs = st.script.match(/__stepResults__(?:\.([A-Za-z0-9_$-]+)|\[["']([A-Za-z0-9_$-]+)["']\])/g) || [];
+    // 129th-round review fix: match on a comment-stripped projection of the
+    // script — a COMMENT naming a removed step id ('// was
+    // __stepResults__.extract, now inline') executed nowhere yet hard-rejected
+    // the whole update. Computed/aliased access (__stepResults__[var],
+    // const R = __stepResults__) stays out of scope: unanalyzable textually,
+    // a lint-lane limit, not a promise. Optional chaining (__stepResults__?.x)
+    // IS matched since the LLM writes it naturally.
+    const src = (typeof stripJSComments === 'function') ? stripJSComments(st.script) : st.script;
+    const refs = src.match(/__stepResults__(?:\??\.([A-Za-z0-9_$-]+)|\??\[["']([A-Za-z0-9_$-]+)["']\])/g) || [];
     const seen = new Set();
     for (const r of refs) {
-      const m = r.match(/__stepResults__\.([A-Za-z0-9_$-]+)|\[["']([A-Za-z0-9_$-]+)["']\]/);
+      const m = r.match(/__stepResults__\??\.([A-Za-z0-9_$-]+)|\??\[["']([A-Za-z0-9_$-]+)["']\]/);
       const id = m && (m[1] || m[2]);
       if (!id || seen.has(id)) continue;
       seen.add(id);
@@ -5911,7 +5979,7 @@ function syncLastVerifiedFromVerify(state, lv) {
 // direct property access keeps working. test/forty-sixth-log-followups.test.js
 // pins marker-bag keys === module.exports keys so a future export cannot
 // land on one surface only (the inline-fallback drift class, RC8/RC35).
-var WU_EXPORT_BAG = { unverifiedArtifactState, syncLastVerifiedFromVerify, explainDetectorFinding, DETECTOR_PLAIN, collectFieldSamplesFromOutput, detectDuplicateEntityPairs, detectIdenticalFieldValues, detectStepGraphGhostRefs, createParkNotifier, parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, hasYearToken, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectJunkShapeRecords, seedLedgerFromSameSite, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+var WU_EXPORT_BAG = { unverifiedArtifactState, syncLastVerifiedFromVerify, explainDetectorFinding, DETECTOR_PLAIN, collectFieldSamplesFromOutput, detectDuplicateEntityPairs, detectIdenticalFieldValues, detectStepGraphGhostRefs, injectResumeChunkWarning, mineResearchSessionSamples, createParkNotifier, parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, hasYearToken, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectJunkShapeRecords, seedLedgerFromSameSite, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = WU_EXPORT_BAG;

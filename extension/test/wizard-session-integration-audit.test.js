@@ -355,7 +355,9 @@ describe('audit plan1: wizard lifecycle state machine (A1/A2/A3/A5/A6/A17/A18 + 
   });
 
   it('A17: startResearchSession hides the stale feedback panel', () => {
-    const m = SRC.match(/async function startResearchSession\(seedOverride\) \{[\s\S]{0,5000}?goToPhase\(4\);/);
+    // Window widened (129th-round review): the resume block gained the
+    // chunk-buffer restart note, pushing goToPhase(4) past 5000 chars.
+    const m = SRC.match(/async function startResearchSession\(seedOverride\) \{[\s\S]{0,7000}?goToPhase\(4\);/);
     assert.ok(m);
     assert.match(m[0], /sessionFeedbackPanel[\s\S]{0,60}add\('hidden'\)/);
   });

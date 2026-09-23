@@ -53,7 +53,12 @@
     return {
       validateChain: w.validateChain,
       summarizeAllStepDiagnostics: w.summarizeAllStepDiagnostics,
-      summarizeExecutionDiagnostics: w.summarizeExecutionDiagnostics
+      summarizeExecutionDiagnostics: w.summarizeExecutionDiagnostics,
+      // 129th-round review fix (#10a): the ghost-ref gate needs this in the
+      // fallback shape too — in an MV3 service worker the wizard-utils
+      // exports land on `self`, so the old global/window-only chain inside
+      // serviceUpdate left the gate a silent no-op there.
+      detectStepGraphGhostRefs: w.detectStepGraphGhostRefs
     };
   }
 
@@ -1166,8 +1171,42 @@
         JSON.stringify(a.testInput) + ', note: "why the test values change"}) — the SAME schemas, the NEW testInput — then resend this update.';
     }
 
+    // 129th-round review fix (chunk buffer vs rejected final chunk): the
+    // buffer used to be destroyed by ANY gate rejection — assembly ran
+    // BEFORE every gate, so a final chunk tripping GHOST_STEP_REF / the
+    // snippet gate / schema gates / chain validation silently discarded the
+    // buffered prefix, and the model's natural "resend the fixed final
+    // chunk" then applied a suffix-only artifact that validateChain happily
+    // accepted. The wrapper below snapshots the pre-call buffer and RESTORES
+    // it on every error return whose call actually assembled (naming what
+    // was restored), and discloses assembly on the success receipt
+    // (assembledFromChunks) so a stale-buffer prepend can never land
+    // silently. The gated body is the former serviceUpdate verbatim.
     async function serviceUpdate(args, ctx) {
-      captureRouteEpoch += 1; // an artifact change re-legitimizes page re-proving
+      const bufferedBefore = pendingUpdateSteps;
+      const n = Array.isArray(bufferedBefore) ? bufferedBefore.length : 0;
+      const out = await serviceUpdateGated(args, ctx);
+      if (n > 0 && out && typeof out === 'object') {
+        const isErr = typeof out.error === 'string';
+        // Assembly happened iff the call carried steps and was not a
+        // buffering (more:true) or abort call — a0 IS args, so the mutated
+        // array is visible through the same reference here.
+        const assembled = !(args && (args.more === true || args.abortChunk === true)) &&
+          !!(args && Array.isArray(args.steps) && args.steps.length);
+        if (isErr && assembled) {
+          pendingUpdateSteps = bufferedBefore;
+          const ids = [];
+          for (const s of bufferedBefore) ids.push(String((s && s.id) || '(no id)'));
+          out.error = String(out.error) +
+            ' NOTE: ' + n + ' buffered chunk step(s) [' + ids.join(', ') + '] were RESTORED to the pending buffer — fix and resend the FINAL chunk only.';
+        } else if (!isErr && assembled) {
+          out.assembledFromChunks = n;
+        }
+      }
+      return out;
+    }
+
+    async function serviceUpdateGated(args, ctx) {
       // 125th round: chunked sends. more:true buffers this chunk and defers
       // every gate; the final chunk (steps without more) assembles
       // buffer+steps and runs the FULL pipeline below. abortChunk clears.
@@ -1182,7 +1221,7 @@
           return {
             buffered: true,
             bufferedSteps: pendingUpdateSteps.length,
-            note: 'chunk buffered (' + pendingUpdateSteps.length + ' step(s) so far). Send the NEXT chunk as service.update({steps:[...], more:true}) or the FINAL chunk as service.update({steps:[...]}) — the final call assembles and applies everything. Keep each reply comfortably under ~3000 chars.'
+            note: 'chunk buffered (' + pendingUpdateSteps.length + ' step(s) so far). Send the NEXT chunk as service.update({steps:[...], more:true}) or the FINAL chunk as service.update({steps:[...]}) — the final call assembles and applies everything. Keep each reply comfortably under ~3000 chars. Chunks are held in memory; if the session restarts before the final chunk, resend from chunk 1.'
           };
         }
         if (pendingUpdateSteps && Array.isArray(a0.steps) && a0.steps.length) {
@@ -1191,6 +1230,10 @@
           // fall through: the assembled payload runs the normal pipeline
         }
       } catch (e) { pendingUpdateSteps = null; /* chunking must never block the normal path */ }
+      captureRouteEpoch += 1; // an artifact change re-legitimizes page re-proving
+      // (129th-round review fix: the bump moved BELOW the buffering/abort
+      // early returns — a more:true chunk is not an artifact change, so it
+      // must not advance the epoch.)
       // 118th round (package B): RED_VERIFY_SNIPPET_GATE — a steps rewrite
       // after a red verify must be preceded by a dry-run (probe.snippet, or
       // verify.run {preflight:true}); blind rewrites burned whole sessions.
@@ -1210,11 +1253,12 @@
       // from the graph; every fresh run extracts nothing forever. This is
       // deterministic at update time, exactly like the syntax gate.
       try {
-        const WUx = resolveWU();
-        const ghostFn = (WUx && typeof WUx.detectStepGraphGhostRefs === 'function')
-          ? WUx.detectStepGraphGhostRefs
-          : ((typeof global !== 'undefined' && global.detectStepGraphGhostRefs) ||
-             (typeof window !== 'undefined' && window.detectStepGraphGhostRefs) || null);
+        // 129th-round review fix (#10a): one resolveWU() const with a typeof
+        // guard — the old bespoke global/window chain duplicated the
+        // fallback resolution resolveWU already owns (and missed `self`).
+        const WUg = resolveWU();
+        const ghostFn = (WUg && typeof WUg.detectStepGraphGhostRefs === 'function')
+          ? WUg.detectStepGraphGhostRefs : null;
         if (ghostFn && args && Array.isArray(args.steps) && args.steps.length) {
           const ghosts = ghostFn(args.steps);
           if (ghosts && ghosts.length) {
@@ -1612,7 +1656,7 @@
       { name: 'probe.loginState', args: '{}', returns: '{loggedIn, loginWall, evidence{passwordFields,loginLinks,logoutMarkers}, note} — the generic login/logout marker census. BEFORE concluding "requires login" or "unauthenticated" in any finding or finish, call this and quote the numbers — page shape alone (recommendation cards, empty feeds) is NOT login-state evidence' },
       { name: 'probe.timestamp', args: '{containerSel, anchorSel?, index?}', returns: '{heuristicValue, value(alias), absolute, absoluteSource, relative, candidates[{value,source,relative}], note?} — heuristicValue 是日历通用正则的便捷默认，优先自行判断 candidates 原文（机械-语义分离）；ONE call does the whole timestamp dance on one card: hovers its time-ish anchors, harvests labelledby/aria-label/text (hover-mounted included), and returns date-shaped candidates ONLY, preferring an ABSOLUTE value over a relative age. THE first move whenever postTime comes back relative or junk: try it on one card before rewriting fieldMaps' },
       { name: 'diag.read', args: '{stepId?, kind?}', returns: '{selectorDiagnostics, failingStep?, popover, counters, lastError?} — kind:"contract" (no verify needed) reports whether the I/O contract is confirmed and whether the artifact carries the schemas, so you can see schema-blindness BEFORE verify.run; kind:"unusedCaptures" 返回 verify 报告的未消费弹层捕获普查（原文样本）' },
-      { name: 'verify.run', args: '{input?} — optional object overriding the test input for THIS run (the mechanism for alternate-value re-tests when INPUT_VALUE_SUSPECT says the site may have no content for the current value)', returns: '{ok,score,scoreNote?,error,detectors,steps,resultDebug?,finalResult,schemaOk} — detectors.partialEmptyFields lists confirmed fields that came back empty with their emptyRatio (empty/total records): ratio 1 means fix the binding or renegotiate the contract, not ship it. Each entry also carries emptyRecordSamples — WHICH records are empty (1-based ordinal + a content hint from that record; nested paths use parentIndex.subIndex) — so "postId 2/4" becomes "empty: #2 (photo post), #4 (text-only note)": match the named records against steps[].resultPreview, then probe THOSE record shapes on the research tab instead of blind-rewriting the selector. detectors.emptyFieldDiagnostics (beside it) carries per-field falsification crumbs lifted from the owning step\'s LAST iteration diagnostics — an aria reference that resolves to nothing (missingIds), a sub-selector matching 0 containers, an absent attribute — read it BEFORE re-probing: it names WHERE and WHY the empty field died. resultDebug surfaces your step result\'s SMALL non-record keys (debug payloads you attached to the return) ahead of the sampled records, so you can read your own instrumentation. A field you SAW populated on the research tab but empty in verify means the mechanism depends on page state the research tab ACCUMULATED (earlier hovers mounting hidden spans, long dwell hydrating extras) — a fresh load does not reproduce it: re-derive the read on a freshly opened page, do not iterate the same binding blind' },
+      { name: 'verify.run', args: '{input?, preflight?} — optional input object overriding the test input for THIS run (the mechanism for alternate-value re-tests when INPUT_VALUE_SUSPECT says the site may have no content for the current value); preflight:true dry-runs the extract step on the warm research tab before the cold verify (default off)', returns: '{ok,score,scoreNote?,error,detectors,steps,resultDebug?,finalResult,schemaOk} — detectors.partialEmptyFields lists confirmed fields that came back empty with their emptyRatio (empty/total records): ratio 1 means fix the binding or renegotiate the contract, not ship it. Each entry also carries emptyRecordSamples — WHICH records are empty (1-based ordinal + a content hint from that record; nested paths use parentIndex.subIndex) — so "postId 2/4" becomes "empty: #2 (photo post), #4 (text-only note)": match the named records against steps[].resultPreview, then probe THOSE record shapes on the research tab instead of blind-rewriting the selector. detectors.emptyFieldDiagnostics (beside it) carries per-field falsification crumbs lifted from the owning step\'s LAST iteration diagnostics — an aria reference that resolves to nothing (missingIds), a sub-selector matching 0 containers, an absent attribute — read it BEFORE re-probing: it names WHERE and WHY the empty field died. resultDebug surfaces your step result\'s SMALL non-record keys (debug payloads you attached to the return) ahead of the sampled records, so you can read your own instrumentation. A field you SAW populated on the research tab but empty in verify means the mechanism depends on page state the research tab ACCUMULATED (earlier hovers mounting hidden spans, long dwell hydrating extras) — a fresh load does not reproduce it: re-derive the read on a freshly opened page, do not iterate the same binding blind' },
       { name: 'annotate.request', args: '{why, fields?, containerSel?}', returns: '{annotations[{selector,purpose,outputField}]} | {cancelled} — REQUIRES a confirmed I/O contract (io.confirm first)' },
       { name: 'user.observe', args: '{question, hint?}', returns: '{answer} | {cancelled} — ASK THE USER what they observe on the page when the harness cannot perceive it (popovers that never visibly mount, login/geo variance, count variance between runs). Their eyes are the best sensor available; quote the answer as evidence (it lands in the ledger). AVOID GUESSING page behavior: if two probes disagree or a receipt is blind to what matters, one user.observe beats rounds of blind re-probing. The wait does not consume the session clock.' },
       { name: 'probe.snippet', args: '{code, timeoutMs?}', returns: '{result, truncated?} — run an ARBITRARY $-DSL snippet (async function body, top-level await + return) on the research tab and get the RAW result (JSON, capped). Test-before-artifact: verify extraction/assembly logic here BEFORE writing it into service.update — a broken fieldMap or regex shows its actual output in one call instead of a red verify round. timeoutMs (default 30000, max 90000) sizes the budget to the work: each hovered anchor burns ~5-10s, so a 30-container hover batch needs maxContainers narrowing or a larger timeoutMs — resending the identical oversized snippet cannot change the outcome. HTML-bearing result fields (html/outerHTML/htmlSnippet/h) return as NUMBERED SKELETONS by default; pass raw:true to keep original HTML.' },

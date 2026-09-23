@@ -1040,15 +1040,31 @@
           // 127th round (the "Leave a comment" green ship): junk in a
           // REQUIRED field is a broken binding, not an advisory — promote
           // to veto exactly like DUPLICATE_ID_REQUIRED did for ids.
-          if (Array.isArray(detectors.junkValues) && detectors.junkValues.length && !error) {
-            for (const jk of detectors.junkValues) {
+          // 129th-round review fix (P0 dead code): the original gate tested
+          // Array.isArray(detectors.junkValues), but detectJunkValues
+          // returns {fields, note}, never an array — the veto could never
+          // fire, and its only test grepped the source so it stayed green.
+          // Entries carry the DOTTED path in .field ('posts.postId'), so
+          // required resolution goes through schemaItemRequiredForPath
+          // (same pattern as DUPLICATE_ID_REQUIRED above) and membership
+          // tests the LAST path segment against the bare required names.
+          // kind==='controlLabel' stays with the JUNK_DOMINATED_FIELD gate
+          // below — its pinned message owns that lane.
+          if (!error && detectors.junkValues && Array.isArray(detectors.junkValues.fields)) {
+            for (const jk of detectors.junkValues.fields) {
+              if (!jk || typeof jk !== 'object' || !jk.field) continue;
+              if (jk.kind === 'controlLabel') continue;
+              const dotted = String(jk.field);
               const reqF = (typeof WU.schemaItemRequiredForPath === 'function')
-                ? WU.schemaItemRequiredForPath(outputSchema, jk.path || (jk.field ? (jk.topArray ? jk.topArray + '.' + jk.field : jk.field) : '')) : null;
-              const isReq = Array.isArray(reqF) && reqF.indexOf(jk.field) !== -1;
+                ? WU.schemaItemRequiredForPath(outputSchema, dotted) : null;
+              const base = dotted.split('.').pop();
+              const isReq = Array.isArray(reqF) && reqF.indexOf(base) !== -1;
               if (isReq) {
+                const n = (typeof jk.count === 'number') ? jk.count
+                  : ((typeof jk.junkCount === 'number') ? jk.junkCount : 0);
                 error = new Error(
-                  'JUNK_VALUES_REQUIRED: ' + (jk.path || jk.field) + ' carries junk value(s) in records ' + (jk.indices ? jk.indices.slice(0, 5).join(', ') : '(see census)') +
-                  ' ("' + String(jk.sample || jk.value || '').slice(0, 40) + '") but the contract lists it as REQUIRED — a control label / query fragment / shared token is not data. Re-bind the field to the element that carries the value, or renegotiate it out of required via io.confirm.'
+                  'JUNK_VALUES_REQUIRED: ' + dotted + ' carries junk value(s) (' + (jk.kind || 'junk') + ') in ' + n + ' record(s) ' +
+                  '("' + String(jk.sample || '').slice(0, 40) + '") but the contract lists it as REQUIRED — a control label / query fragment / shared token is not data. Re-bind the field to the element that carries the value, or renegotiate it out of required via io.confirm.'
                 );
                 break;
               }

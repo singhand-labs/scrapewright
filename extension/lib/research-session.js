@@ -36,7 +36,7 @@
   const INTERNAL_TOOL_SPECS = [
     { name: 'ledger.add', args: '{finding, evidence?, confidence?, selectors?}', returns: '{added:true, id}' },
     { name: 'knowledge.query', args: '{ids:["unitId"]}', returns: '{units:[{id,title,body}]}' },
-    { name: 'service.update', args: '{steps, more?, abortChunk?, inputSchema?, outputSchema?, testInput?, name?, overrides?} — CHUNKED SENDS: when the full steps payload is long (providers cut replies at ~4-5K chars mid-JSON), send it in parts: service.update({steps:[first part], more:true}) buffers; repeat for middle parts; the FINAL chunk (steps without more) assembles and applies everything — keep every reply comfortably under ~3000 chars — REPLACES the whole artifact (send the complete steps array every time); overrides waives grounding receipts (an array of selector strings, or {"selectors":[...]}) and never carries steps — a waiver stays in force for the rest of the session, you do NOT need to resend it with later updates; testInput (sample input values) is REQUIRED when the target URL has {{param}} placeholders, or verify.run fails with MISSING_URL_PARAM; testInput values are user-confirmed alongside the contract (io.confirm carries them in the same panel) — sending values that DIFFER from the confirmed ones is rejected with TEST_INPUT_UNCONFIRMED: re-confirm via io.confirm (same schemas, new testInput) first; inputSchema/outputSchema, when sent, MUST be JSON Schema objects like {"type":"object","required":["posts"],"properties":{"posts":{"type":"array","items":{"type":"object"}}}} — natural-language maps ({"posts":"array of post objects"}) are rejected: verify scoring reads "required"/"properties" and cannot see through descriptions; once the user has confirmed the contract you may OMIT the schemas — the confirmed contract attaches to the artifact automatically — and sending schemas that MATERIALLY differ from the confirmed ones is rejected (renegotiate via io.confirm first)', returns: '{version} | {updated, waiverRecorded} | {updated, testInputAdopted} | {updated, schemasAttached} | {grounding:"rejected", rejections}' }
+    { name: 'service.update', args: '{steps, more?, abortChunk?, inputSchema?, outputSchema?, testInput?, name?, overrides?} — CHUNKED SENDS: when the full steps payload is long (providers cut replies at ~4-5K chars mid-JSON), send it in parts: service.update({steps:[first part], more:true}) buffers; repeat for middle parts; the FINAL chunk (steps without more) assembles and applies everything — keep every reply comfortably under ~3000 chars — REPLACES the whole artifact (a single send carries the complete steps array; chunked sends assemble to the same effect); overrides waives grounding receipts (an array of selector strings, or {"selectors":[...]}) and never carries steps — a waiver stays in force for the rest of the session, you do NOT need to resend it with later updates; testInput (sample input values) is REQUIRED when the target URL has {{param}} placeholders, or verify.run fails with MISSING_URL_PARAM; testInput values are user-confirmed alongside the contract (io.confirm carries them in the same panel) — sending values that DIFFER from the confirmed ones is rejected with TEST_INPUT_UNCONFIRMED: re-confirm via io.confirm (same schemas, new testInput) first; inputSchema/outputSchema, when sent, MUST be JSON Schema objects like {"type":"object","required":["posts"],"properties":{"posts":{"type":"array","items":{"type":"object"}}}} — natural-language maps ({"posts":"array of post objects"}) are rejected: verify scoring reads "required"/"properties" and cannot see through descriptions; once the user has confirmed the contract you may OMIT the schemas — the confirmed contract attaches to the artifact automatically — and sending schemas that MATERIALLY differ from the confirmed ones is rejected (renegotiate via io.confirm first)', returns: '{version} | {updated, waiverRecorded} | {updated, testInputAdopted} | {updated, schemasAttached} | {grounding:"rejected", rejections} | {buffered:true,...} | {aborted:true}' }
   ];
 
   const DEFAULTS = {
@@ -248,13 +248,20 @@
       spend: { turns: 0, llmCalls: 0, promptTokens: 0, completionTokens: 0, estimated: false, parkedMs: 0 },
       attachedUnits: [],
       fixProblems: [], // 123rd round: per-problem fix plan seeded from multi-problem feedback (see [FIX PLAN])
+      cutOffNudgeCount: 0, // 129th-round review fix: persisted cut-off streak — the old transcript scan died to compaction (see the streak check in the turn loop)
       artifactVersions: [],
       elapsedMs: 0,
       stopped: null,
       budgetAdvisories: [],
       waivedSelectors: [],
       stepPlan: [],
-      priorVerifyReport: null
+      priorVerifyReport: null,
+      // 129th-round review fix (same-site seed mining): the last GREEN
+      // verify's finalResult, persisted so a fresh same-site wizard session
+      // can mine research evidence executionLogs never sees (those only
+      // record background service runs). priorVerifyReport rides every
+      // verify including reds; this snapshot is green-only.
+      lastVerifyFinalResult: null
     };
     if (cfg.seed && cfg.seed.session) {
       state = JSON.parse(JSON.stringify(cfg.seed.session));
@@ -1245,13 +1252,18 @@
             // chunking that can never hit the ceiling.
             let consecutiveCutOff = 0;
             try {
-              // session-level streak: every prior cut-off nudge in the
-              // transcript counts (the 125th-run death was reply-cut,
-              // repair-cut, continuation-cut — three separate turns).
-              const priorCuts = state.transcript.filter((e) =>
-                e && e.kind === 'system' && typeof e.text === 'string' &&
-                e.text.indexOf('CUT OFF before the JSON closed') !== -1).length;
-              if (/cut-off/.test(String(parsed.detail || ''))) consecutiveCutOff = priorCuts + 1;
+              // 129th-round review fix: the streak now reads a PERSISTED
+              // counter (state.cutOffNudgeCount, incremented at the nudge
+              // push below) instead of scanning the transcript — maybeCompact
+              // folds every old system nudge to '- [protocol nudge]' and
+              // DELETES the marker text, so the scan undercounted exactly in
+              // the long sessions this escape targets. +1 for THIS cut-off;
+              // still session-cumulative, not strictly turn-consecutive (the
+              // 125th-run death was reply-cut, repair-cut, continuation-cut —
+              // three separate turns across a resume).
+              if (/cut-off/.test(String(parsed.detail || ''))) {
+                consecutiveCutOff = (state.cutOffNudgeCount || 0) + 1;
+              }
             } catch (e) { consecutiveCutOff = 0; }
             let repaired = null;
             let repairRound = 0;
@@ -1264,14 +1276,23 @@
               let nudgeText = nudgeFor(parsed, repairRound);
               if (parsed.detail && /cut-off|Unterminated string|Unexpected end/i.test(parsed.detail)) {
                 nudgeText += ' Your previous reply was CUT OFF before the JSON closed. Resend the SAME turn much SHORTER: a one-sentence think, then tool/args, then the closing braces — long replies are the ones that get truncated.';
+                // 129th-round review fix: increment the PERSISTED counter at the
+                // push site — the old streak counted these transcript entries,
+                // which compaction later eats (marker text destroyed).
+                state.cutOffNudgeCount = (state.cutOffNudgeCount || 0) + 1;
               // 125th round: a cut-off service.update/io.confirm payload CANNOT
               // be shortened (the artifact is the required content) — teach the
               // chunked-send escape on every cut-off (harmless for probe-sized
               // replies: the advice is conditional).
               if (/cut-off/.test(String(parsed.detail || ''))) {
                 nudgeText += ' If the cut-off reply was a service.update (the artifact payload cannot shrink): send it CHUNKED — service.update({steps:[first part], more:true}) now, the remaining parts next turn, final part without more.';
-                if (repairRound >= 2 || consecutiveCutOff >= 2) {
-                  nudgeText += ' MECHANICAL ESCAPE (two replies already died at the provider\'s ~2K-token completion ceiling): send service.update({steps:[EXACTLY ONE step], more:true}) — ONE step per reply, repeat until every step is sent, final step without more. Never emit a multi-step reply again this session.';
+                if (consecutiveCutOff >= 2) {
+                  // 129th-round review fix: count-accurate and non-permanent —
+                  // the old text claimed exactly "two replies" (wrong for any
+                  // other count) and forbade multi-step replies for the REST of
+                  // the session. The unreachable repairRound>=2 arm is gone
+                  // (maxRepairRounds is 1 for the cut-off/JSON class).
+                  nudgeText += ' MECHANICAL ESCAPE (this session has now seen ' + consecutiveCutOff + ' truncated replies (provider ~2K-token completion ceiling)): send service.update({steps:[EXACTLY ONE step], more:true}) — ONE step per reply, repeat until every step is sent, final step without more. Use one-step-per-reply chunks for the remainder of this session.';
                 }
               }
               }
@@ -1457,6 +1478,14 @@
               state.priorVerifyReport = result;
             }
             state.lastVerifyOk = !!(result && typeof result === 'object' && result.ok === true);
+            // 129th-round review fix: green-only finalResult snapshot for
+            // the same-site seed (see the state defaults). The report's
+            // finalResult is the context-diet-sampled copy (3 records,
+            // capped strings) — enough for the ≤2-samples-per-field seed
+            // and bounded for persistence.
+            if (state.lastVerifyOk && result && typeof result.finalResult !== 'undefined') {
+              state.lastVerifyFinalResult = result.finalResult || null;
+            }
             state.lastVerifyArtifactVersion = state.artifactVersions.length;
             const pe = (result && result.detectors && Array.isArray(result.detectors.partialEmptyFields))
               ? result.detectors.partialEmptyFields

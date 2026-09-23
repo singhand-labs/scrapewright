@@ -797,6 +797,66 @@ describe('verify-runner junk-dominated field gate (fortieth log: "Leave a commen
   });
 });
 
+// 129th-round review fix (P0 dead code): the 127th-round JUNK_VALUES_REQUIRED
+// veto gated on Array.isArray(detectors.junkValues) — detectJunkValues
+// returns {fields, note}, so the veto could NEVER fire and its only test
+// grepped the source. These cases drive the real runner end-to-end: junk in
+// a REQUIRED field flips the run red; the same junk in a non-required field
+// stays advisory; controlLabel junk keeps routing to the older, more
+// specific JUNK_DOMINATED_FIELD gate (precedence pinned).
+describe('verify-runner JUNK_VALUES_REQUIRED veto (129th-round review: the dead gate wired to the real detector shape)', () => {
+  const REQ_SCHEMA = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object', required: ['postId', 'permalink'], properties: {
+    postId: { type: 'string' }, permalink: { type: 'string' }, content: { type: 'string' }, comments: { type: 'string' }
+  } } } } };
+
+  it('query-blob junk in a REQUIRED field vetoes the run (dotted path resolved, last segment tested)', async () => {
+    const posts = [
+      { postId: '1', permalink: '?__cft__[0]=AZge7token&a', content: 'hello one' },
+      { postId: '2', permalink: '?__cft__[0]=ZZZother&b', content: 'hello two' }
+    ];
+    const orch = async () => ({ finalResult: { posts }, steps: [{ stepId: 's1', stepName: 'extract', result: { done: true } }], pages: [] });
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: REQ_SCHEMA });
+    assert.equal(out.report.ok, false, 'junk in a required field is a broken binding, not an advisory');
+    assert.match(out.report.error.message, /JUNK_VALUES_REQUIRED: posts\.permalink/);
+    assert.match(out.report.error.message, /queryBlob/, 'names the junk kind');
+    assert.match(out.report.error.message, /io\.confirm/, 'names the renegotiation exit');
+    assert.ok(out.report.detectors.junkValues, 'underlying census still present under the veto');
+  });
+
+  it('the SAME junk in a NON-required field stays green with the advisory census', async () => {
+    const posts = [
+      { postId: '1', permalink: 'https://example.com/p/1', content: 'hello one', ref: '?__cft__[0]=AZge7token&a' },
+      { postId: '2', permalink: 'https://example.com/p/2', content: 'hello two', ref: '?__cft__[0]=ZZZother&b' }
+    ];
+    const lenient = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object', required: ['postId', 'permalink'], properties: {
+      postId: { type: 'string' }, permalink: { type: 'string' }, content: { type: 'string' }, ref: { type: 'string' }
+    } } } } };
+    const orch = async () => ({ finalResult: { posts }, steps: [{ stepId: 's1', stepName: 'extract', result: { done: true } }], pages: [] });
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: lenient });
+    assert.equal(out.report.ok, true, 'non-required junk is surfaced, never blocking');
+    const jv = out.report.detectors.junkValues;
+    assert.ok(jv && jv.fields.some((f) => f.field === 'posts.ref' && f.kind === 'queryBlob'), 'advisory census entry present');
+  });
+
+  it('controlLabel junk in a required field still routes to JUNK_DOMINATED_FIELD (the two gates coexist)', async () => {
+    const posts = [
+      { postId: '1', permalink: 'https://example.com/p/1', content: 'one', comments: 'Leave a comment' },
+      { postId: '2', permalink: 'https://example.com/p/2', content: 'two', comments: 'Leave a comment' }
+    ];
+    const withComments = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object', required: ['postId', 'permalink', 'comments'], properties: {
+      postId: { type: 'string' }, permalink: { type: 'string' }, content: { type: 'string' }, comments: { type: 'string' }
+    } } } } };
+    const orch = async () => ({ finalResult: { posts }, steps: [{ stepId: 's1', stepName: 'extract', result: { done: true } }], pages: [] });
+    const { runner } = makeRunner(orch);
+    const out = await runner({ service: SERVICE, input: {}, outputSchema: withComments });
+    assert.equal(out.report.ok, false);
+    assert.match(out.report.error.message, /JUNK_DOMINATED_FIELD: posts\.comments/, 'the 40th-log gate keeps the controlLabel lane');
+    assert.doesNotMatch(out.report.error.message, /JUNK_VALUES_REQUIRED/, 'the new veto does not steal the controlLabel case');
+  });
+});
+
 // Fortieth log: the container selector matched the same card at two DOM
 // nesting levels (a :has() selector matches EVERY qualifying ancestor), so
 // 4 records shipped for 2 posts — identical data fields, differing wrapper

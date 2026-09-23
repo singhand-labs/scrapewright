@@ -928,6 +928,48 @@ describe('protocol violations', () => {
     assert.ok(nudges[1].text.includes('div.card'), 'nudge quotes the cut tail verbatim');
   });
 
+  // 129th-round review fix: the streak reads a PERSISTED counter
+  // (state.cutOffNudgeCount) instead of scanning the transcript — compaction
+  // folds old system nudges to '- [protocol nudge]' and destroyed the marker
+  // text the scan counted, so the mechanical escape silently vanished in
+  // exactly the long sessions it targets. A seeded counter models the
+  // stop→resume cycle (the 125th-run death was three cuts across turns).
+  it('a seeded prior cut-off + this turn cut reply escalates mechanically, count-accurate, via the persisted counter', async () => {
+    const cut = '{"think":"write artifact","tool":"service.update","args":{"steps":[{"id":"s1","script":"return await $count(\'div.card\')"';
+    const seedSession = {
+      transcript: [], goals: [], hypotheses: [], digest: '', attachedUnits: [], budgetAdvisories: [],
+      waivedSelectors: [], spend: { turns: 0, llmCalls: 0, promptTokens: 0, completionTokens: 0 },
+      artifactVersions: [], cutOffNudgeCount: 1
+    };
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([reply(cut), reply(cut), reply('not json at all')], []),
+      tools: {},
+      seed: { session: seedSession }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'protocol', 'both replies cut, continuation unparseable');
+    const nudges = session.state().session.transcript.filter(e => e.kind === 'system');
+    assert.ok(/CUT OFF/i.test(nudges[0].text), 'cut-off nudge present');
+    assert.ok(/MECHANICAL ESCAPE/.test(nudges[0].text), 'escalation fired from the persisted counter');
+    assert.ok(nudges[0].text.includes('has now seen 2 truncated replies'), 'count-accurate (seeded 1 + this turn)');
+    assert.ok(/ONE step per reply/.test(nudges[0].text), 'per-step chunking escape present');
+    assert.ok(!/Never emit a multi-step reply again/.test(nudges[0].text), 'the permanent directive is gone');
+    assert.equal(session.state().session.cutOffNudgeCount, 2, 'counter persisted through the nudges');
+    // Control: a FRESH session (no seeded counter) does NOT escalate on its
+    // first cut — the escape needs two.
+    const fresh = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([reply(cut), reply(cut), reply('not json at all')], []),
+      tools: {}
+    });
+    await fresh.run();
+    const freshNudges = fresh.state().session.transcript.filter(e => e.kind === 'system');
+    assert.ok(/CUT OFF/i.test(freshNudges[0].text));
+    assert.ok(!/MECHANICAL ESCAPE/.test(freshNudges[0].text), 'single cut does not escalate');
+    assert.equal(fresh.state().session.cutOffNudgeCount, 1, 'first cut counted');
+  });
+
   it('a continuation that reopens the whole object parses standalone', async () => {
     const cutA = '{"think":"final artifact","tool":"service.update","args":{"steps":[{"id":"s1","script":"return 1"';
     const cutB = '{"think":"retry","tool":"service.update","args":{"steps":[{"id":"s1","script":"return 1"}';

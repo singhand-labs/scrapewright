@@ -386,11 +386,115 @@ describe('125th log: chunked service.update (provider cuts ~4-5K replies; the fu
   });
 });
 
+describe('129th-round review fix: chunked-update failure modes (buffer restore, assembly disclosure, resume warning)', () => {
+  const { createSessionTools } = require('../lib/session-tools');
+  const WU = require('../lib/wizard-utils');
+  function makeTools3(applied) {
+    return createSessionTools({
+      rail: { executeDsl: async () => ({}), pageState: async () => ({}), epoch: 0 },
+      runVerify: async () => ({ events: [], report: { ok: true, detectors: {} }, raw: {} }),
+      probeFactory: () => ({ snippet: async () => ({ result: 'ok' }) }),
+      getDraftService: () => null,
+      applyArtifact: (a) => applied.push(a),
+      getTestInput: () => ({}),
+      getOutputSchema: () => ({ type: 'object', properties: {} }),
+      getSteps: () => [],
+      ioConfirmBridge: { request: async (p) => ({ confirmed: true, inputSchema: p && p.inputSchema, outputSchema: p && p.outputSchema }) }
+    });
+  }
+  it('a final chunk rejected by the ghost gate RESTORES the buffer — resending only the fixed final chunk applies the FULL graph', async () => {
+    const applied = [];
+    const tools = makeTools3(applied);
+    await tools.tools['io.confirm']({ inputSchema: { type: 'object', properties: { k: { type: 'string' } } }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array' } } } });
+    const c1 = [{ id: 's1', script: 'await $extract("a");', onSuccess: 's2', onFailure: 'TERMINATE' }];
+    const bad = [{ id: 's2', script: 'return {posts: (__stepResults__.extract||{}).posts||[]};', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }];
+    const r1 = await tools.tools['service.update']({ steps: c1, more: true });
+    assert.ok(r1 && r1.buffered === true, 'chunk buffered');
+    assert.match(r1.note, /if the session restarts before the final chunk, resend from chunk 1/, 'buffering receipt discloses the restart caveat');
+    const rBad = await tools.tools['service.update']({ steps: bad });
+    assert.ok(rBad && typeof rBad.error === 'string', 'ghost ref rejected');
+    assert.match(rBad.error, /GHOST_STEP_REF.*extract/, 'names the missing step');
+    assert.match(rBad.error, /1 buffered chunk step\(s\) \[s1\] were RESTORED to the pending buffer/, 'discloses the restore and what to resend');
+    assert.equal(applied.length, 0, 'nothing applied on rejection');
+    const fixed = [{ id: 's2', script: 'return {posts: __lastResult__};', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }];
+    const r2 = await tools.tools['service.update']({ steps: fixed });
+    assert.ok(r2 && r2.updated === true, 'fixed FINAL chunk alone now applies — got ' + JSON.stringify(r2).slice(0, 160));
+    assert.equal(r2.assembledFromChunks, 1, 'success receipt discloses assembly');
+    assert.equal(applied.length, 1);
+    assert.deepEqual(applied[0].steps.map((s) => s.id), ['s1', 's2'], 'restore preserved the buffered prefix — no suffix-only artifact');
+  });
+  it('an abandoned buffer is disclosed: a later COMPLETE update carries assembledFromChunks (never a silent prepend)', async () => {
+    const applied = [];
+    const tools = makeTools3(applied);
+    await tools.tools['io.confirm']({ inputSchema: { type: 'object', properties: { k: { type: 'string' } } }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array' } } } });
+    const stale = [{ id: 's1', script: 'await $extract("a");', onSuccess: 'f1', onFailure: 'TERMINATE' }];
+    const r1 = await tools.tools['service.update']({ steps: stale, more: true });
+    assert.ok(r1 && r1.buffered === true, 'chunk buffered then abandoned (no final chunk)');
+    // A fresh complete replacement written as [f1 -> f2], self-chained from
+    // the buffered step so validateChain's reachability rule holds.
+    const fresh = [
+      { id: 'f1', script: 'await $extractList("d", {});', onSuccess: 'f2', onFailure: 'TERMINATE' },
+      { id: 'f2', script: 'return {posts: __lastResult__};', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }
+    ];
+    const r2 = await tools.tools['service.update']({ steps: fresh });
+    assert.ok(r2 && r2.updated === true, 'fresh update applies');
+    assert.equal(r2.assembledFromChunks, 1, 'receipt names the stale-buffer prepend');
+    assert.deepEqual(applied[0].steps.map((s) => s.id), ['s1', 'f1', 'f2'], 'assembly is disclosed, not silent');
+  });
+  it('injectResumeChunkWarning: trailing buffered receipt with no later update pushes the restart note', () => {
+    const t = [
+      { kind: 'assistant', text: 'sending chunk 1' },
+      { kind: 'tool', name: 'service.update', ok: true, result: { buffered: true, bufferedSteps: 2 } },
+      { kind: 'system', text: 'session stopped (wallClock)' }
+    ];
+    const out = WU.injectResumeChunkWarning(t);
+    assert.equal(out.length, 4, 'note pushed');
+    const note = out[out.length - 1];
+    assert.equal(note.kind, 'system');
+    assert.match(note.text, /PENDING UPDATE CHUNKS WERE NOT RETAINED ACROSS THE RESTART/);
+    assert.match(note.text, /resend the complete artifact/i);
+  });
+  it('injectResumeChunkWarning: a buffered receipt CONSUMED by a later successful update pushes nothing', () => {
+    const t = [
+      { kind: 'tool', name: 'service.update', ok: true, result: { buffered: true, bufferedSteps: 1 } },
+      { kind: 'tool', name: 'service.update', ok: true, result: { updated: true, version: 3, assembledFromChunks: 1 } }
+    ];
+    const out = WU.injectResumeChunkWarning(t);
+    assert.equal(out.length, 2, 'no note — the buffer landed');
+    // abortChunk also consumes (explicit clear)
+    const t2 = [
+      { kind: 'tool', name: 'service.update', ok: true, result: { buffered: true, bufferedSteps: 1 } },
+      { kind: 'tool', name: 'service.update', ok: true, result: { aborted: true } }
+    ];
+    assert.equal(WU.injectResumeChunkWarning(t2).length, 2, 'no note after abortChunk');
+  });
+  it('injectResumeChunkWarning: no buffered receipts anywhere → untouched; error-only consumption still warns', () => {
+    const clean = [
+      { kind: 'tool', name: 'page.open', ok: true, result: { url: 'https://example.com' } },
+      { kind: 'tool', name: 'service.update', ok: true, result: { updated: true, version: 1 } }
+    ];
+    assert.equal(WU.injectResumeChunkWarning(clean).length, 2, 'no note with no buffered receipts');
+    const errored = [
+      { kind: 'tool', name: 'service.update', ok: true, result: { buffered: true, bufferedSteps: 1 } },
+      { kind: 'tool', name: 'service.update', ok: false, result: { error: 'GHOST_STEP_REF: ...' } }
+    ];
+    assert.equal(WU.injectResumeChunkWarning(errored).length, 3, 'an error receipt does not consume — the restart dropped the restored buffer too');
+  });
+});
+
 describe('126th round Q1: two-cut ceiling escalation (provider cuts ~2K completions, finish lies stop)', () => {
   it('after two consecutive cut-off replies the nudge turns mechanical: ONE step per reply', () => {
     const RS3 = fs.readFileSync(path.join(__dirname, '..', 'lib', 'research-session.js'), 'utf8');
     assert.match(RS3, /consecutiveCutOff/, 'cut-off streak tracked');
     assert.match(RS3, /ONE step per reply/, 'mechanical escalation present');
+    // 129th-round review fix: the streak is a PERSISTED counter now — the old
+    // transcript scan counted entries compaction later folds to
+    // '- [protocol nudge]'. Behavioral coverage lives in research-session.test.js.
+    assert.match(RS3, /cutOffNudgeCount: 0/, 'counter initialized in the state defaults');
+    assert.match(RS3, /state\.cutOffNudgeCount = \(state\.cutOffNudgeCount \|\| 0\) \+ 1/, 'counter incremented at the nudge push');
+    assert.ok(RS3.indexOf('const priorCuts') === -1, 'transcript-scan streak is gone');
+    assert.doesNotMatch(RS3, /Never emit a multi-step reply again/, 'the permanent directive is reworded away');
+    assert.match(RS3, /Use one-step-per-reply chunks for the remainder of this session/, 'non-permanent wording');
   });
 });
 describe('126th round Q2: [RESEARCH PLAN] — per-question closure in the self-research phase (user: borrow the fix-plan mechanism)', () => {
@@ -420,10 +524,14 @@ describe('127th round: green-verify quality gates (decoy html + junk-required + 
   const VR2 = fs.readFileSync(path.join(__dirname, '..', 'lib', 'verify-runner.js'), 'utf8');
   const WU4 = fs.readFileSync(path.join(__dirname, '..', 'lib', 'wizard-utils.js'), 'utf8');
   const WJ4 = fs.readFileSync(path.join(__dirname, '..', 'wizard.js'), 'utf8');
-  it('JUNK_VALUES on a REQUIRED field vetoes the run (the "Leave a comment" ship)', () => {
+  it('JUNK_VALUES on a REQUIRED field vetoes the run (behavioral cases live in verify-runner.test.js; this pins the envelope)', () => {
+    // 129th-round review fix: the original veto tested Array.isArray(detectors.junkValues)
+    // — detectJunkValues returns {fields,note}, so the gate was dead and this
+    // grep passed anyway. Pin that the gate iterates the REAL shape.
     const i = VR2.indexOf('JUNK_VALUES_REQUIRED');
     assert.ok(i > -1, 'promotion exists');
-    assert.match(VR2.slice(i - 300, i + 500), /required/i, 'keys off schemaItemRequiredForPath');
+    assert.match(VR2.slice(i - 900, i + 300), /junkValues\.fields/, 'iterates the {fields:[...]} envelope detectJunkValues returns');
+    assert.match(VR2.slice(i - 900, i + 300), /schemaItemRequiredForPath/, 'keys off schemaItemRequiredForPath');
   });
   it('detectIdenticalFieldValues flags an all-records-identical field (the decoy htmlSnippet)', () => {
     const vm = require('node:vm');
@@ -453,35 +561,96 @@ describe('127th round: green-verify quality gates (decoy html + junk-required + 
     assert.ok(!r2 || r2.length === 0);
   });
   it('the same-site seed also mines the persisted research session verify (postTime 5/5 lived there, not in executionLogs)', () => {
+    // 129th-round review fix: the block used to gate on the persisted
+    // session but mine the IN-MEMORY wizardState.testResult — strengthen
+    // the pins so a decorative gate cannot pass again.
     assert.match(WJ4, /wizardResearchSession|persisted\.session/, 'research-session persistence reachable');
+    assert.match(WJ4, /mineResearchSessionSamples\(rsSession/, 'the persisted session is MINED, not just gated on');
+    const RS4 = fs.readFileSync(path.join(__dirname, '..', 'lib', 'research-session.js'), 'utf8');
+    assert.match(RS4, /state\.lastVerifyFinalResult = result\.finalResult/, 'engine persists the green verify finalResult into state');
     assert.match(WJ4, /SAME-SITE FIELD SAMPLES[\s\S]{0,4000}research|research[\s\S]{0,400}SAME-SITE FIELD SAMPLES|verify finalResult/i, 'seed sources extended');
   });
 });
 
+describe('129th-round review fix: same-site seed mines the PERSISTED research session (not in-memory wizardState)', () => {
+  const WU = require('../lib/wizard-utils');
+  const RS_SRC = fs.readFileSync(path.join(__dirname, '..', 'lib', 'research-session.js'), 'utf8');
+  it('a green persisted session with a fresh wizardState yields the verify samples (the cross-restart case)', () => {
+    const rsSession = {
+      lastVerifyOk: true,
+      lastVerifyFinalResult: { posts: [
+        { postId: 'p1', postTime: '2026-08-01T10:00' },
+        { postId: 'p2', postTime: '2026-08-02T11:00' }
+      ] },
+      artifactVersions: [{ steps: [] }]
+    };
+    const samples = WU.mineResearchSessionSamples(rsSession, null, {});
+    assert.ok(samples.postTime && samples.postTime.length === 2, 'postTime samples mined from the persisted session — got ' + JSON.stringify(samples));
+    assert.ok(samples.postId && samples.postId.length === 2, 'sibling fields ride along');
+  });
+  it('a non-green persisted session falls back to the in-memory testResult only', () => {
+    const rsSession = { lastVerifyOk: false, lastVerifyFinalResult: null, artifactVersions: [{ steps: [] }] };
+    const samples = WU.mineResearchSessionSamples(rsSession, { posts: [{ author: 'Ada' }, { author: 'Grace' }] }, {});
+    assert.ok(samples.author && samples.author.length === 2, 'fallback source used when the persisted verify was red');
+  });
+  it('no artifact versions / null session leaves the existing samples untouched (first value wins)', () => {
+    const existing = { title: ['kept'] };
+    assert.deepEqual(WU.mineResearchSessionSamples(null, null, existing), { title: ['kept'] }, 'null session is a no-op');
+    const thin = { lastVerifyOk: true, lastVerifyFinalResult: { posts: [{ a: 'x' }, { a: 'y' }] }, artifactVersions: [] };
+    assert.deepEqual(WU.mineResearchSessionSamples(thin, null, existing), { title: ['kept'] }, 'no persisted artifacts → no mining');
+    const green = { lastVerifyOk: true, lastVerifyFinalResult: { posts: [{ title: 'new', a: 'x' }, { title: 'new2', a: 'y' }] }, artifactVersions: [{ steps: [] }] };
+    const merged = WU.mineResearchSessionSamples(green, null, existing);
+    assert.deepEqual(merged.title, ['kept'], 'existing samples are never overwritten');
+    assert.ok(merged.a, 'new fields still merge in');
+  });
+  it('the service.update spec no longer contradicts itself over chunked sends; buffered/aborted returns are declared', () => {
+    assert.match(RS_SRC, /chunked sends assemble to the same effect/, 'REPLACES clause acknowledges chunked assembly');
+    assert.doesNotMatch(RS_SRC, /REPLACES the whole artifact \(send the complete steps array every time\)/, 'the contradictory legacy clause is gone');
+    assert.match(RS_SRC, /\{buffered:true,\.\.\.\} \| \{aborted:true\}/, 'chunking return shapes declared');
+  });
+  it('the verify.run spec names the preflight arg', () => {
+    const ST3 = fs.readFileSync(path.join(__dirname, '..', 'lib', 'session-tools.js'), 'utf8');
+    const m = ST3.match(/\{ name: 'verify\.run', args: '[^']*'/);
+    assert.ok(m, 'verify.run spec found');
+    assert.match(m[0], /\{input\?, preflight\?\}/, 'args declare preflight');
+    assert.match(m[0], /preflight:true dry-runs the extract step/, 'one-line preflight clause present');
+  });
+});
+
 describe('128th round: ghost-step reference gate (v16 = single scroll step returning a removed step results)', () => {
-  const WU5 = fs.readFileSync(path.join(__dirname, '..', 'lib', 'wizard-utils.js'), 'utf8');
+  // 129th-round review fix: direct require instead of vm source-slicing —
+  // the detector now calls stripJSComments (same module), which a sliced
+  // vm context cannot see; the brittle brace-walk re-implemented require().
+  const WU6 = require('../lib/wizard-utils');
   it('detectStepGraphGhostRefs names __stepResults__/<id> refs to steps absent from the graph', () => {
-    const vm = require('node:vm');
-    const start = WU5.indexOf('function detectStepGraphGhostRefs');
-    assert.ok(start > -1, 'function exists');
-    let depth = 0, j = start;
-    for (j = WU5.indexOf('function detectStepGraphGhostRefs'); j < WU5.length; j++) {
-      if (WU5[j] === '{') depth += 1;
-      else if (WU5[j] === '}') { depth -= 1; if (depth === 0) break; }
-    }
-    const ctx = {}; vm.createContext(ctx);
-    vm.runInContext(WU5.slice(start, j + 1) + '\nthis.__f = detectStepGraphGhostRefs;', ctx);
-    const f = ctx.__f;
-    const ghosts = f([{ id: 'scroll', script: "return {done:true, posts: (__stepResults__.extract||{}).posts||[]};" }]);
+    const ghosts = WU6.detectStepGraphGhostRefs([{ id: 'scroll', script: "return {done:true, posts: (__stepResults__.extract||{}).posts||[]};" }]);
     assert.ok(ghosts && ghosts.length === 1 && ghosts[0].fromStep === 'scroll' && ghosts[0].refStep === 'extract', JSON.stringify(ghosts));
-    const clean = f([
+    const clean = WU6.detectStepGraphGhostRefs([
       { id: 'extract', script: 'const r = await $extractList("d", {}); return r;' },
       { id: 'assemble', script: 'return {posts: __stepResults__.extract.posts};' }
     ]);
     assert.ok(!clean || clean.length === 0, 'valid cross-step refs pass');
   });
-  it('service.update rejects ghost refs (the syntax-gate lane)', () => {
+  it('129th-round review fix: a comment-only mention of a removed step id no longer vetoes (comments stripped first)', () => {
+    const out = WU6.detectStepGraphGhostRefs([
+      { id: 'scroll', script: '// was __stepResults__.extract, now inline\nreturn {done:true, posts: __lastResult__.posts};' }
+    ]);
+    assert.ok(!out || out.length === 0, 'provenance comments are not executable references — got ' + JSON.stringify(out));
+  });
+  it('129th-round review fix: optional-chained ghost refs (__stepResults__?.id) are flagged too', () => {
+    const out = WU6.detectStepGraphGhostRefs([
+      { id: 'scroll', script: 'return {posts: (__stepResults__?.extract||{}).posts};' }
+    ]);
+    assert.ok(out && out.length === 1 && out[0].refStep === 'extract', 'optional chaining is a real access — got ' + JSON.stringify(out));
+  });
+  it('service.update rejects ghost refs (the syntax-gate lane); the fallback resolver carries the detector', () => {
     const ST2 = fs.readFileSync(path.join(__dirname, '..', 'lib', 'session-tools.js'), 'utf8');
     assert.match(ST2, /GHOST_STEP_REF|detectStepGraphGhostRefs/, 'wired into service.update');
+    // 129th-round review fix (#10a): resolveWU's fallback object must expose
+    // the detector — the old global/window-only chain left the gate a no-op
+    // in an MV3 service worker (exports land on `self` there).
+    assert.match(ST2, /detectStepGraphGhostRefs: w\.detectStepGraphGhostRefs/, 'fallback resolver carries the ghost detector');
+    // Behavioral wiring coverage: the ghost rejection + buffer restore ride
+    // the 129th-round describe above through the real createSessionTools bag.
   });
 });

@@ -3186,6 +3186,17 @@ async function startResearchSession(seedOverride) {
         }
       }
     }
+    // 129th-round review fix: the chunked-update buffer is tool-closure
+    // state and does NOT survive the restart — if the restored transcript
+    // still shows buffered chunks no later service.update consumed, tell
+    // the model BEFORE it resumes mid-sequence (the final chunk alone would
+    // assemble against an empty buffer and apply a suffix-only artifact
+    // silently). Pure scan in wizard-utils; best-effort like the seeds.
+    try {
+      if (typeof injectResumeChunkWarning === 'function' && Array.isArray(st.transcript)) {
+        injectResumeChunkWarning(st.transcript);
+      }
+    } catch (e) { /* resume note is best-effort */ }
     wizardState.requirements = { inputParams: inputParams, pageOps: pageOps, outputStruct: outputStruct };
     wizardState.description = String(st.requirement || '') || buildRequirementsBlock(wizardState.requirements, wizardState.targetUrl);
     resumeNote = 'Resuming the parked research session' + (st.stopped && st.stopped.reason ? ' (interrupted: ' + st.stopped.reason + ')' : '') + '.';
@@ -3294,23 +3305,20 @@ async function startResearchSession(seedOverride) {
           // same-site extraction history lives — the postTime 5/5 evidence
           // never reached the seed because executionLogs only records
           // background service runs. Mine the persisted research session's
-          // last verified finalResult too.
+          // last GREEN verify finalResult too.
+          // 129th-round review fix: this block used to read the IN-MEMORY
+          // wizardState.testResult.finalResult — null on any fresh wizard
+          // page (exactly the cross-restart case it exists for), leaving
+          // the persisted session as a decorative gate. The persisted
+          // session's own lastVerifyFinalResult (set by the engine at green
+          // verify time) is now the primary source, the in-memory copy only
+          // a fallback; the dead `lv` pointer is gone.
           try {
             const rsStore = await chrome.storage.local.get('wizardResearchSession');
             const rs = rsStore && rsStore.wizardResearchSession;
             const rsSession = rs && rs.session;
-            if (rsSession && Array.isArray(rsSession.artifactVersions) && rsSession.artifactVersions.length) {
-              const lv = wizardState.lastVerified ||
-                (rsSession.lastVerifyOk === true && rsSession.lastVerifyArtifactVersion
-                  ? { version: rsSession.lastVerifyArtifactVersion } : null);
-              const fr = wizardState.testResult && wizardState.testResult.finalResult;
-              if (fr) {
-                const smp = (typeof collectFieldSamplesFromOutput === 'function')
-                  ? collectFieldSamplesFromOutput(fr) : {};
-                for (const k of Object.keys(smp)) {
-                  if (!samples[k] && smp[k] && smp[k].length) samples[k] = smp[k].slice(0, 2);
-                }
-              }
+            if (typeof mineResearchSessionSamples === 'function') {
+              mineResearchSessionSamples(rsSession, wizardState.testResult && wizardState.testResult.finalResult, samples);
             }
           } catch (e2) { /* research-session mining is best-effort */ }
           const ks = Object.keys(samples);
