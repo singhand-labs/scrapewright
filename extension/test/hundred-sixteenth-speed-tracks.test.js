@@ -457,3 +457,31 @@ describe('127th round: green-verify quality gates (decoy html + junk-required + 
     assert.match(WJ4, /SAME-SITE FIELD SAMPLES[\s\S]{0,4000}research|research[\s\S]{0,400}SAME-SITE FIELD SAMPLES|verify finalResult/i, 'seed sources extended');
   });
 });
+
+describe('128th round: ghost-step reference gate (v16 = single scroll step returning a removed step results)', () => {
+  const WU5 = fs.readFileSync(path.join(__dirname, '..', 'lib', 'wizard-utils.js'), 'utf8');
+  it('detectStepGraphGhostRefs names __stepResults__/<id> refs to steps absent from the graph', () => {
+    const vm = require('node:vm');
+    const start = WU5.indexOf('function detectStepGraphGhostRefs');
+    assert.ok(start > -1, 'function exists');
+    let depth = 0, j = start;
+    for (j = WU5.indexOf('function detectStepGraphGhostRefs'); j < WU5.length; j++) {
+      if (WU5[j] === '{') depth += 1;
+      else if (WU5[j] === '}') { depth -= 1; if (depth === 0) break; }
+    }
+    const ctx = {}; vm.createContext(ctx);
+    vm.runInContext(WU5.slice(start, j + 1) + '\nthis.__f = detectStepGraphGhostRefs;', ctx);
+    const f = ctx.__f;
+    const ghosts = f([{ id: 'scroll', script: "return {done:true, posts: (__stepResults__.extract||{}).posts||[]};" }]);
+    assert.ok(ghosts && ghosts.length === 1 && ghosts[0].fromStep === 'scroll' && ghosts[0].refStep === 'extract', JSON.stringify(ghosts));
+    const clean = f([
+      { id: 'extract', script: 'const r = await $extractList("d", {}); return r;' },
+      { id: 'assemble', script: 'return {posts: __stepResults__.extract.posts};' }
+    ]);
+    assert.ok(!clean || clean.length === 0, 'valid cross-step refs pass');
+  });
+  it('service.update rejects ghost refs (the syntax-gate lane)', () => {
+    const ST2 = fs.readFileSync(path.join(__dirname, '..', 'lib', 'session-tools.js'), 'utf8');
+    assert.match(ST2, /GHOST_STEP_REF|detectStepGraphGhostRefs/, 'wired into service.update');
+  });
+});

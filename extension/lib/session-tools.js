@@ -1204,6 +1204,27 @@
           };
         }
       } catch (e) { /* the gate must never block a legitimate update path */ }
+      // 128th round: ghost-step reference gate — the final artifact of the
+      // incident session was a SINGLE scroll step returning
+      // (__stepResults__.extract||{}).posts, a reference to a step removed
+      // from the graph; every fresh run extracts nothing forever. This is
+      // deterministic at update time, exactly like the syntax gate.
+      try {
+        const WUx = resolveWU();
+        const ghostFn = (WUx && typeof WUx.detectStepGraphGhostRefs === 'function')
+          ? WUx.detectStepGraphGhostRefs
+          : ((typeof global !== 'undefined' && global.detectStepGraphGhostRefs) ||
+             (typeof window !== 'undefined' && window.detectStepGraphGhostRefs) || null);
+        if (ghostFn && args && Array.isArray(args.steps) && args.steps.length) {
+          const ghosts = ghostFn(args.steps);
+          if (ghosts && ghosts.length) {
+            return {
+              error: 'GHOST_STEP_REF: ' + ghosts.map((g) => 'step "' + g.fromStep + '" references __stepResults__.' + g.refStep + ' but no step with id "' + g.refStep + '" exists in this graph').join('; ') +
+                '. On every fresh run the referenced value is empty (this exact defect shipped an artifact whose verify reported count 10 -> 0). Fix the reference to an existing step id, or re-add the missing step, then resend.'
+            };
+          }
+        }
+      } catch (e) { /* the ghost gate must never block a legitimate update path */ }
       const a = args && typeof args === 'object' ? args : {};
       const steps = Array.isArray(a.steps) ? a.steps : [];
       if (!ioContractConfirmed(ctx)) {
