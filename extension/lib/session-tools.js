@@ -829,9 +829,10 @@
     let containerHtmlMeta = null;
     function harvestDossierFeeds(name, result) {
       try {
-        if (typeof probes.getLastSelectorDiagnostics === 'function') {
-          const diags = probes.getLastSelectorDiagnostics();
-          for (const dg of (Array.isArray(diags) ? diags : [])) {
+        const diags = (typeof probes.getLastSelectorDiagnostics === 'function')
+          ? (probes.getLastSelectorDiagnostics() || []) : [];
+        if (diags.length) {
+          for (const dg of diags) {
             const cp = dg && dg.capturedPopovers;
             if (cp && Array.isArray(cp.samples)) {
               for (const s of cp.samples) {
@@ -849,6 +850,34 @@
             anchor: (result && result.popoverSelector) || 'probe.hover',
             text: result.htmlSnippet
           });
+        }
+        // 130th log: hover-mounted nodes the visual filter REJECTED are
+        // captures too — the 130th session paid for hovers whose absolute
+        // timestamps rode rejectedAddedTexts, then shipped postTime empty
+        // claiming the values were "unreachable from the DSL" while
+        // read:'hoverPopover' searches exactly these fragments. Harvesting
+        // them keeps [POPOVER CAPTURES] and the session-evidence TIME lanes
+        // able to see values the page-ops already produced.
+        const rejectedAnchor = (base) => String(base || name) + ' (rejected mount)';
+        const pushRejected = (base, texts, htmls) => {
+          for (const t of (Array.isArray(texts) ? texts : [])) {
+            if (typeof t === 'string' && t) {
+              if (DossierLib) DossierLib.pushPopoverCapture(popoverCaptureLru, { anchor: rejectedAnchor(base), text: t });
+            }
+          }
+          for (const h of (Array.isArray(htmls) ? htmls : [])) {
+            if (typeof h === 'string' && h) {
+              if (DossierLib) DossierLib.pushPopoverCapture(popoverCaptureLru, { anchor: rejectedAnchor(base), text: h });
+            }
+          }
+        };
+        if (result && typeof result === 'object' && !Array.isArray(result)) {
+          pushRejected((result && result.popoverSelector) || name, result.rejectedAddedTexts, result.rejectedAddedHtml);
+        }
+        for (const dg2 of diags) {
+          if (!dg2) continue;
+          pushRejected(dg2.containerSelector || dg2.anchorSelector || dg2.selector || name,
+            dg2.rejectedAddedTexts, dg2.rejectedAddedHtml);
         }
         if (typeof probes.getLastFetchedHtml === 'function') {
           const h = probes.getLastFetchedHtml();

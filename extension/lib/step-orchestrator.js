@@ -304,7 +304,15 @@ class StepOrchestrator {
             maxIterations: maxIter,
             domActivity,
             resultPreview,
-            selectorDiagnostics
+            selectorDiagnostics,
+            // 130th log: poll-exhaustion pacing is computable from dispatch
+            // times, but only the TERMINATE path threw POLL_EXHAUSTED with the
+            // note — a poll exhausting into its onFailure edge lost the
+            // settle-vs-exhaustion discriminator entirely (25 scrollBy
+            // iterations in ~2s froze at 2 and read as genuine exhaustion).
+            // The stamp lets verify-side censuses compute pacing for every
+            // path, fallthrough included.
+            at: Date.now()
           });
         } catch (error) {
           debugLogger.log('error', 'step-orchestrator', 'Script execution failed', { stepId: step.id, error: error.message, stack: error.stack, hasSubTabSnapshot: !!error.subTabSnapshot });

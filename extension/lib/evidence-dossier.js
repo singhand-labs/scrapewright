@@ -84,6 +84,25 @@
           (row.idSurface ? ' id-surface differs: ' + row.idSurface.field : ''));
       }
       if (d.countShortfall) out.push('count-shortfall: ' + String(d.countShortfall).slice(0, 120));
+      // 130th log: the frozen-scroll evidence (with its pacing discriminator)
+      // never rendered here — the rebuilt dossier dropped it, so the next
+      // session could not see the previous run's settle-vs-exhaustion call.
+      const fsc = Array.isArray(d.scrollCountFrozen) ? d.scrollCountFrozen : [];
+      for (const row of fsc) {
+        if (!row) continue;
+        let line = 'scroll-frozen ' + String(row.stepId) + '.' + String(row.field) + '=' + (row.frozenCount || 0) +
+          ' streak ' + (row.streak || 0) + '/' + (row.iterations || 0) +
+          (row.grewFrom != null ? ' grew from ' + row.grewFrom : '');
+        if (row.pacing) line += ' paced ' + row.pacing;
+        if (row.noSettle) line += ' — NO settle between attempts (not exhaustion evidence; settle the not-ready branch and re-run)';
+        out.push(line);
+      }
+      const tau = Array.isArray(d.timeAbsoluteCapturedUnbound) ? d.timeAbsoluteCapturedUnbound : [];
+      for (const row of tau) {
+        if (!row) continue;
+        out.push('time-absolute-captured-unbound ' + String(row.path || row.field) +
+          ' (session captures carry a full absolute; ' + String(row.note || '').slice(0, 100) + ')');
+      }
       const uc = d.unusedCaptures;
       if (uc && typeof uc === 'object') {
         out.push('unused-captures: ' + (uc.totalCaptured || 0) + ' popovers captured, ' +

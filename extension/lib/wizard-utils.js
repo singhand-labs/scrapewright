@@ -1143,10 +1143,17 @@ function parsePositiveCounterValues(resultPreview) {
 
 const FROZEN_NONZERO_STREAK_THRESHOLD = 4;
 
+// 130th log: avg dispatch interval below this (ms) marks a poll that never
+// let lazy-load fire — scrollBy resolves in tens of ms while mounting needs
+// ~1s, so a frozen count at this pacing is NOT exhaustion evidence. Mirrors
+// the orchestrator's POLL_EXHAUSTED pacing threshold.
+const NO_SETTLE_AVG_MS = 300;
+
 function detectFrozenScrollCount(events) {
   if (!Array.isArray(events)) return [];
   let anyScrollApi = false;
   const perField = new Map();
+  const stepTimes = new Map();
   for (const evt of events) {
     if (!evt || evt.type !== 'STEP_ITERATION') continue;
     const diags = Array.isArray(evt.selectorDiagnostics) ? evt.selectorDiagnostics : [];
@@ -1154,6 +1161,11 @@ function detectFrozenScrollCount(events) {
       if (d && d.api && /scroll/i.test(String(d.api))) anyScrollApi = true;
     }
     if (evt.stepId == null) continue;
+    if (typeof evt.at === 'number') {
+      const tk = String(evt.stepId);
+      if (!stepTimes.has(tk)) stepTimes.set(tk, []);
+      stepTimes.get(tk).push(evt.at);
+    }
     const s = String(evt.resultPreview || '');
     const pairs = parsePositiveCounterValues(s);
     if (!pairs.length) continue;
@@ -1192,13 +1204,31 @@ function detectFrozenScrollCount(events) {
     if (streak < FROZEN_NONZERO_STREAK_THRESHOLD) continue;
     const prevIdx = vals.length - streak - 1;
     const grewFrom = (prevIdx >= 0 && vals[prevIdx] !== last) ? vals[prevIdx] : null;
+    // 130th log: attach iteration pacing from the events' `at` stamps so the
+    // fallthrough path (poll exhausts into onFailure — the orchestrator only
+    // builds this note for the POLL_EXHAUSTED/TERMINATE throw) still carries
+    // the settle-vs-exhaustion discriminator. frameSample cannot make this
+    // call: an active tab, normal frames, stable count reads as genuine
+    // exhaustion when the loop actually spun back-to-back.
+    const times = stepTimes.get(String(agg.stepId)) || [];
+    let pacing = null;
+    let noSettle = false;
+    if (times.length >= 3) {
+      const elapsedMs = times[times.length - 1] - times[0];
+      const avgMs = elapsedMs / (times.length - 1);
+      pacing = times.length + ' attempt(s) over ' + Math.round(elapsedMs) +
+        'ms (avg ' + Math.round(avgMs) + 'ms/attempt)';
+      noSettle = avgMs < NO_SETTLE_AVG_MS;
+    }
     out.push({
       stepId: agg.stepId,
       field: agg.field,
       frozenCount: last,
       streak: streak,
       iterations: vals.length,
-      grewFrom: grewFrom
+      grewFrom: grewFrom,
+      pacing: pacing,
+      noSettle: noSettle
     });
   }
   return out;

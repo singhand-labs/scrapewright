@@ -1247,7 +1247,20 @@
       // UNEXERCISED source, not a page fact. Red only for required fields;
       // optional time fields keep the advisory path. Full absolutes pass
       // untouched (detectRelativeTimestamps never lists them).
-      if (Array.isArray(detectors.relativeTimestamps) && detectors.relativeTimestamps.length) {
+      // 130th log: an EMPTY required time field never entered this block —
+      // the gate is driven by relativeTimestamps rows, which only exist for
+      // date-shaped VALUES, so a session shipping postTime empty got zero
+      // time-route teaching while its own rejected-mount captures held the
+      // absolute. The block now also opens for empty time-named required
+      // fields (the advisory below covers them; the red gate itself still
+      // only fires on relative/partial rows).
+      const TIME_NAME_RE_130 = /time|date|时间|日期|发布|created|updated|published/i;
+      const emptyTimeRequired130 = (Array.isArray(detectors.partialEmptyFields) ? detectors.partialEmptyFields : [])
+        .filter((pe) => pe && TIME_NAME_RE_130.test(String(pe.field || '')) &&
+          ((typeof WU.schemaItemRequiredForPath === 'function')
+            ? (WU.schemaItemRequiredForPath(outputSchema, String(pe.path || '')) || []).indexOf(String(pe.field)) !== -1
+            : true));
+      if ((Array.isArray(detectors.relativeTimestamps) && detectors.relativeTimestamps.length) || emptyTimeRequired130.length) {
         // Eighty-seventh log: the census was structurally blind — it scanned
         // only THIS run's events, so research-tab probe.timestamp receipts
         // were invisible (the model could never unlock the documented
@@ -1316,7 +1329,8 @@
         const probedNoAbsolute = (probeTimestampCalls > 0 || previewProbeTimestamp) && !fullAbsoluteSeen;
         const capturedNoDate = !probedNoAbsolute && !sampleAnyDateShape &&
           (inRunCaptured > 0 || previewHoverCapture || sessionSamples.length > 0);
-        if (!fullAbsoluteSeen && !probedNoAbsolute && !sampleAnyDateShape) {
+        if (!fullAbsoluteSeen && !probedNoAbsolute && !sampleAnyDateShape &&
+            Array.isArray(detectors.relativeTimestamps) && detectors.relativeTimestamps.length) {
           for (const rt of detectors.relativeTimestamps) {
             if (!rt) continue;
             let itemRequired = null;
@@ -1347,6 +1361,36 @@
         // exercised and its best receipt is partial/relative — the disclosed
         // ship is legal. No tag, no veto; RELATIVE_TIMESTAMP (report-only)
         // already teaches the three exits.
+
+        // 130th log: the complementary case — the session's own captures DO
+        // contain a full absolute while a required time field ships empty or
+        // relative. The disclosed ship stays legal; this REPORT-ONLY advisory
+        // kills the false "the value is unreachable from the DSL" conclusion
+        // (the 130th finish shipped exactly that claim while
+        // read:'hoverPopover' searches the captured rejected mounts by
+        // design) by naming the route that reads those very fragments.
+        if (fullAbsoluteSeen) {
+          const absRows = [];
+          const absSeen = new Set();
+          const pushAbsRow = (field, p, sampleValue) => {
+            const key = String(p || field);
+            if (absSeen.has(key)) return;
+            absSeen.add(key);
+            absRows.push({
+              field: String(field), path: key, sampleValue: sampleValue || null,
+              note: "the session's hover captures (rejected mounts included) already contain a full absolute date — bind the field via read:'hoverPopover' (fieldMap spec {read:'hoverPopover', match:<your regex>} in $extractWithHover): the channel searches the picked popover, rejectedAddedHtml and rejectedAddedTexts automatically, so a captured absolute is never DSL-unreachable"
+            });
+          };
+          for (const rt of (Array.isArray(detectors.relativeTimestamps) ? detectors.relativeTimestamps : [])) {
+            if (!rt) continue;
+            const req = (typeof WU.schemaItemRequiredForPath === 'function')
+              ? WU.schemaItemRequiredForPath(outputSchema, String(rt.path || '')) : null;
+            if (!req || req.indexOf(String(rt.field)) === -1) continue;
+            pushAbsRow(rt.field, rt.path, rt.sampleValue);
+          }
+          for (const pe of emptyTimeRequired130) pushAbsRow(pe.field, pe.path, null);
+          if (absRows.length) detectors.timeAbsoluteCapturedUnbound = absRows;
+        }
       }
 
       const oc = (result ? WU.validateOutputAgainstSchema(finalData, outputSchema) : { ok: true, missing: [] }) || { ok: true, missing: [] };
