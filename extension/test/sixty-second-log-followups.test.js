@@ -258,7 +258,7 @@ function makeVerifyDeps(peSequences, extras) {
       i += 1;
       return {
         report: {
-          ok: true, error: null, aborted: false,
+          ok: false, error: null, aborted: false, // 134th log: the stagnation census is RED-only — a green verify's stable disclosures are the accepted ship
           score: { score: 143, isData: true, breakdown: {} },
           schemaOk: false, schemaMissing: ['posts.postTime'],
           detectors: {

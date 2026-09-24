@@ -1057,6 +1057,14 @@
       // intersect to nothing).
       try {
         const det = report.detectors || {};
+        // 134th log: the census had no verdict gating — it fired ON a GREEN
+        // verify whose stable disclosures are the ACCEPTED ship (v11 green →
+        // "re-verifying cannot fix them" → the model rewrote a passing
+        // artifact → v12 regressed red and shipped). A green verify ENDS the
+        // loop: reset the history, never teach the exits on a passing run.
+        if (report.ok === true) {
+          verifySignatureHistory.length = 0;
+        } else {
         const pe = Array.isArray(det.partialEmptyFields) ? det.partialEmptyFields
           .map((f) => String(f.path || f.field) + ':' + (f.emptyCount != null ? f.emptyCount : '?') + '/' + (f.totalCount != null ? f.totalCount : '?')) : [];
         const jf = det.junkValues && Array.isArray(det.junkValues.fields) ? det.junkValues.fields.map((f) => String(f.field)) : [];
@@ -1079,6 +1087,7 @@
               (probesSinceLastVerify === 0 ? ' Note: you have not run a single research-tab probe between these verifies.' : '');
             report.events = Array.isArray(report.events) ? report.events.concat(['STAGNANT_DISCLOSURES']) : ['STAGNANT_DISCLOSURES'];
           }
+        }
         }
       } catch (_) { /* the stagnation census must never break the verify result */ }
       probesSinceLastVerify = 0;

@@ -250,7 +250,7 @@ describe('F2: stagnation advisory in session verify (fifty-second log)', () => {
       calls.verifies += 1;
       return {
         report: {
-          ok: true, error: null, aborted: false,
+          ok: false, error: null, aborted: false, // 134th log: the stagnation census is RED-only — a green verify's stable disclosures are the accepted ship
           score: { score: 154, isData: true, breakdown: {} },
           schemaOk: true, schemaMissing: [],
           detectors: { emptyFields: [], duplicateFields: [], countShortfall: null,
@@ -288,7 +288,7 @@ describe('F2: stagnation advisory in session verify (fifty-second log)', () => {
     await t.tools['verify.run']({});
     // third verify comes back with a DIFFERENT partial-empty set
     deps.runVerify = async () => ({
-      report: { ok: true, error: null, aborted: false, score: { score: 160, isData: true, breakdown: {} }, schemaOk: true, schemaMissing: [],
+      report: { ok: false, error: null, aborted: false, score: { score: 160, isData: true, breakdown: {} }, schemaOk: true, schemaMissing: [], // 134th log: the stagnation census is RED-only — a green verify's stable disclosures are the accepted ship
         detectors: { emptyFields: [], duplicateFields: [], countShortfall: null,
           partialEmptyFields: [{ field: 'location', path: 'posts.location', emptyCount: 2, totalCount: 5, emptyRatio: 0.4, sampleNonEmpty: 'x', emptyRecordSamples: [] }] },
         steps: [], finalResult: { posts: [{ postId: '1' }] }, pages: '1', eventCount: 1, events: [] },

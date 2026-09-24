@@ -406,7 +406,10 @@
         const ef = state.lastVerifyEmptyFields
           ? '; confirmed field(s) empty in every record: ' + state.lastVerifyEmptyFields.join(', ')
           : '';
-        ladder = ' [LAST VERIFY FAILED — the budget ran out before the failing run could be fixed' + ef + '; Resume to continue]';
+        const greenRestoreB = (state.greenArtifactVersion && state.artifactVersions.length > state.greenArtifactVersion)
+          ? ' [LAST GREEN = v' + state.greenArtifactVersion + ' — service.update({restoreVersion:' + state.greenArtifactVersion + '}) restores the verified artifact in ONE turn]'
+          : '';
+        ladder = ' [LAST VERIFY FAILED — the budget ran out before the failing run could be fixed' + ef + '; Resume to continue]' + greenRestoreB;
       } else if (state.lastVerifySchemaBlind) {
         ladder = ' [VERIFY SCHEMA-BLIND — outputSchema declares no fields, so the last green is unverifiable. Renegotiate the contract with io.confirm (fielded properties + required), service.update the artifact to match, and re-verify]';
       } else if (state.lastVerifyEmptyFields) {
@@ -705,6 +708,24 @@
         if (typeof abortHandler !== 'function') return { error: 'no service.update handler wired' };
         return await abortHandler(a, { observationLog: observationLog, ledger: ledger, session: publicApi });
       }
+      // 134th log: one-turn restore of a PRIOR artifact version. The
+      // incident session shipped a red v12 while green v11 sat one version
+      // away — the model's original steps were compacted out of the
+      // transcript, so restoring meant re-authoring from memory. The engine
+      // owns every prior version; {restoreVersion:N} splices its steps in
+      // and runs the normal gates (grounding receipts persist per session).
+      if (a.restoreVersion != null) {
+        const rv = Number(a.restoreVersion);
+        const entry = state.artifactVersions.find((v) => v && v.version === rv);
+        if (!entry || !Array.isArray(entry.steps) || !entry.steps.length) {
+          return { error: 'restoreVersion: ' + a.restoreVersion + ' names no stored version (versions 1..' +
+            state.artifactVersions.length + ' exist) — pick the LAST GREEN one (see the finish coercion) or resend steps' };
+        }
+        a.steps = entry.steps.map((s) => Object.assign({}, s));
+        a.restoredFrom = rv;
+        steps.length = 0;
+        for (const st of a.steps) steps.push(st);
+      }
       if (!steps.length && !stepsLessAmendment) return { error: 'steps (non-empty array) required' };
       // Sticky waivers (twentieth log): a waiver recorded once applies to
       // every later grounding check for the rest of the session. The model
@@ -743,6 +764,9 @@
       const handler = tools['service.update'];
       if (typeof handler !== 'function') return { error: 'no service.update handler wired' };
       const out = await handler(a, { observationLog: observationLog, ledger: ledger, session: publicApi });
+      if (a.restoredFrom != null && out && typeof out === 'object' && typeof out.error !== 'string') {
+        try { out.restoredFrom = a.restoredFrom; } catch (_) { /* receipt stamp is best-effort */ }
+      }
       // The handler is the authority on whether an artifact was actually
       // created (chain/schema validation, apply). A handler error means NO
       // version exists — announcing one anyway (fourth-log turn 19) sent the
@@ -1387,8 +1411,14 @@
                 ? '; confirmed field(s) empty in every record: ' + state.lastVerifyEmptyFields.join(', ') +
                   ' — renegotiate the contract (io.confirm) or bind a source for each before shipping'
                 : '';
+              // 134th log: a green predecessor + the one-turn restore — the
+              // incident session shipped red v12 while green v11 sat one
+              // version away and its steps were compacted away.
+              const greenRestore = (state.greenArtifactVersion && state.artifactVersions.length > state.greenArtifactVersion)
+                ? ' [LAST GREEN = v' + state.greenArtifactVersion + ' — service.update({restoreVersion:' + state.greenArtifactVersion + '}) restores the verified artifact in ONE turn; ship that, or renegotiate]'
+                : '';
               detail = (detail ? detail + ' ' : '') +
-                '[LAST VERIFY FAILED — shipped best-effort; the review panel shows the failing run' + ef + ']';
+                '[LAST VERIFY FAILED — shipped best-effort; the review panel shows the failing run' + ef + ']' + greenRestore;
             } else if (state.lastVerifySchemaBlind) {
               // Seventeenth log: a fieldless outputSchema made every
               // schema-reading check blind — the last verify came back GREEN
@@ -1497,6 +1527,11 @@
             // and bounded for persistence.
             if (state.lastVerifyOk && result && typeof result.finalResult !== 'undefined') {
               state.lastVerifyFinalResult = result.finalResult || null;
+              // 134th log: remember WHICH version the last green verified —
+              // the finish/budget coercions name it (with the one-turn
+              // restoreVersion op) whenever a later rewrite turns red.
+              state.greenArtifactVersion = (typeof result.executedArtifactVersion === 'number')
+                ? result.executedArtifactVersion : state.lastVerifyArtifactVersion;
             }
             state.lastVerifyArtifactVersion = state.artifactVersions.length;
             const pe = (result && result.detectors && Array.isArray(result.detectors.partialEmptyFields))

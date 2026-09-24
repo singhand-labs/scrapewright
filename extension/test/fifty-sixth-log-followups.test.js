@@ -224,11 +224,15 @@ describe('F3: STAGNANT_DISCLOSURES empty-signature guard (fifty-sixth log)', () 
     assert.ok(!(r3.events || []).includes('STAGNANT_DISCLOSURES'));
   });
 
-  it('a NON-EMPTY identical signature across three verifies still fires (regression, fifty-second log)', async () => {
+  it('a NON-EMPTY identical signature across three RED verifies still fires (regression, fifty-second log)', async () => {
     const deps = makeSessionDeps();
     const t = createSessionTools(deps);
+    // 134th log: the census is RED-only now — a green verify's stable
+    // disclosures are the accepted ship, not a stuck loop (the incident
+    // session's green v11 got the stuck-loop teaching, the model rewrote a
+    // passing artifact, and v12 regressed red and shipped).
     const withEmpties = () => ({
-      report: { ok: true, error: null, aborted: false, score: { score: 100, isData: true, breakdown: {} }, schemaOk: true, schemaMissing: [],
+      report: { ok: false, error: null, aborted: false, score: { score: 100, isData: true, breakdown: {} }, schemaOk: true, schemaMissing: [],
         detectors: { emptyFields: [], duplicateFields: [], countShortfall: null,
           partialEmptyFields: [{ field: 'location', path: 'posts.location', emptyCount: 5, totalCount: 5 }] },
         steps: [], finalResult: { posts: [{}] }, pages: '1', eventCount: 1, events: [] },
@@ -238,6 +242,6 @@ describe('F3: STAGNANT_DISCLOSURES empty-signature guard (fifty-sixth log)', () 
     await t.tools['verify.run']({});
     await t.tools['verify.run']({});
     const r3 = await t.tools['verify.run']({});
-    assert.ok(r3.stagnationNote, 'identical real disclosures still stagnate');
+    assert.ok(r3.stagnationNote, 'identical real disclosures still stagnate on red verifies');
   });
 });
