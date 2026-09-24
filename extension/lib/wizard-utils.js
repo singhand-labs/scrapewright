@@ -1239,6 +1239,48 @@ function detectFrozenScrollCount(events) {
 // an extractor that fell back to a value every record shares instead of a
 // per-record identifier. Report-only: names the duplicated value and the
 // record ordinals so the failing records can be re-probed directly.
+// 139th log: identity normalization for id-like values. URL-shaped ids carry
+// per-render tracking tokens in the query (__cft__ etc.) — two extractions of
+// the SAME permalink differ as raw strings, so exact-match grouping missed the
+// duplicate in one verify and caught it in the next. Identity for URLs is
+// origin+path; everything else compares as-is.
+function normalizeIdValueForIdentity(v) {
+  const s = String(v);
+  if (/^https?:\/\//i.test(s)) {
+    const cut = s.split(/[?#]/)[0];
+    return cut || s;
+  }
+  return s;
+}
+
+// 139th log: content-signature fingerprint for records whose id field is
+// empty. The incident's duplicate pairs had one side postId:"" (the model's
+// `if (pid && done.some(...))` dedupe lets every empty-id record through), so
+// id-keyed detection could never group them. Signature = normalized first 60
+// chars of the content-ish text + the first count-like field's value — the
+// repeated-post pairs share both (same feed post rendered expanded + collapsed).
+const CONTENT_FIELD_RE = /content|text|body|title|message|summary|caption|正文|内容|标题/i;
+function recordContentSignature(record, fields) {
+  const contentField = fields.contentField;
+  let text = '';
+  if (contentField && typeof record[contentField] === 'string') text = record[contentField];
+  else {
+    let best = 0;
+    for (const f of fields.stringFields) {
+      const v = record[f];
+      if (typeof v === 'string' && v.length > best) { best = v.length; text = v; }
+    }
+  }
+  // head-40: expanded/collapsed render states of one post share the opening;
+  // the truncation marker typically lands within ~40-60 chars — a longer head
+  // lets the pair diverge and the duplicate escape (139th log: the 43-char
+  // opening of the incident's shortest pair).
+  const head = String(text || '').replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 40);
+  const countVal = fields.countField && typeof record[fields.countField] === 'string'
+    ? record[fields.countField].trim() : '';
+  return head ? (head + '|' + countVal) : null;
+}
+
 function detectDuplicateIdValues(data, schema) {
   const out = [];
   if (!data || typeof data !== 'object') return out;
@@ -1249,31 +1291,106 @@ function detectDuplicateIdValues(data, schema) {
     const records = data[arrField];
     if (!Array.isArray(records) || records.length < 2) continue;
     const itemProps = (prop.items && prop.items.properties) || {};
-    for (const field of Object.keys(itemProps)) {
-      if (!/id$/i.test(field)) continue; // identity-semantic names only
+    const idFields = Object.keys(itemProps).filter((f) => /id$/i.test(f));
+    for (const field of idFields) {
       const seen = new Map();
       for (let i = 0; i < records.length; i++) {
         const v = records[i] ? records[i][field] : null;
         if (typeof v !== 'string' || !v) continue; // empties belong to the empty-ratio census
-        if (!seen.has(v)) seen.set(v, []);
-        seen.get(v).push(i + 1);
+        const key = normalizeIdValueForIdentity(v);
+        if (!seen.has(key)) seen.set(key, { indices: [], sample: v });
+        seen.get(key).indices.push(i + 1);
       }
-      for (const value of seen.keys()) {
-        const indices = seen.get(value);
-        if (indices.length < 2) continue;
+      for (const key of seen.keys()) {
+        const group = seen.get(key);
+        if (group.indices.length < 2) continue;
+        const value = group.sample;
         out.push({
           path: arrField + '.' + field,
           field: field,
           value: value.length > 80 ? value.slice(0, 80) + '…' : value,
+          count: group.indices.length,
+          totalRecords: records.length,
+          indices: group.indices.slice(0, 6),
+          note: 'an id-like value shared by ' + group.indices.length + ' of ' + records.length + ' records usually means the same underlying item was extracted more than once (URL ids are compared WITHOUT their query tokens — per-render tracking parameters do not make two identical permalinks different items). Deduplicate the assembly by this field, and when the count requirement is still unmet keep collecting UNIQUE items instead of shipping repeats; per-record ids live on per-record elements (links/attrs inside each card), not on the shared container'
+        });
+      }
+      // 139th log content-signature lane: pairs the id lane cannot see (one
+      // or both sides carry an EMPTY id).
+      const sigFields = {
+        contentField: Object.keys(itemProps).find((f) => CONTENT_FIELD_RE.test(f)) || null,
+        stringFields: Object.keys(itemProps).filter((f) => {
+          const t = itemProps[f] && itemProps[f].type;
+          return t === 'string' || t == null;
+        }),
+        countField: Object.keys(itemProps).find((f) => isCountLikeFieldName(f)) || null
+      };
+      const sigSeen = new Map();
+      for (let i = 0; i < records.length; i++) {
+        const sig = recordContentSignature(records[i] || {}, sigFields);
+        if (!sig) continue;
+        if (!sigSeen.has(sig)) sigSeen.set(sig, []);
+        sigSeen.get(sig).push(i + 1);
+      }
+      for (const sig of sigSeen.keys()) {
+        const indices = sigSeen.get(sig);
+        if (indices.length < 2) continue;
+        out.push({
+          path: arrField + '.' + field,
+          field: field,
+          kind: 'contentSignature',
+          sampleSignature: sig.length > 50 ? sig.slice(0, 50) + '…' : sig,
           count: indices.length,
           totalRecords: records.length,
           indices: indices.slice(0, 6),
-          note: 'an id-like value shared by ' + indices.length + ' of ' + records.length + ' records usually means the extractor fell back to a container-level shared value (e.g. the list owner id) instead of a per-record identifier — re-probe the listed records; per-record ids live on per-record elements (links/attrs inside each card), not on the shared container'
+          note: indices.length + ' of ' + records.length + ' records share the same content signature (content head + count value' +
+            ', e.g. ' + JSON.stringify(sig.slice(0, 50)) + ') — the same item extracted in different render states (expanded vs collapsed, hydrated vs not), with the id field empty on at least one side so id-keyed dedupe passed it through. Deduplicate by the content signature when the id is missing, and keep collecting unique items toward the count requirement instead of shipping repeats.'
         });
       }
     }
   }
   return out;
+}
+
+// 139th log: unique-record count for count-bounded requirements. Identity is
+// the TRANSITIVE CLOSURE of two equalities — same normalized id, same content
+// signature — because the incident's duplicate pairs split across surfaces:
+// {id,id} pairs differ only in query tokens, {empty-id,id} pairs share the
+// content head. Keying each record by EITHER one alone leaves a pair unmerged
+// (id-present records never fall through to the signature). Union-find over
+// both edge sets; components = unique items. Exported for tests.
+function countUniqueRecords(records, itemProps) {
+  const recs = (records || []).filter(Boolean);
+  if (!recs.length) return 0;
+  const ip = itemProps || {};
+  const idField = Object.keys(ip).find((f) => /id$/i.test(f)) || null;
+  const sigFields = {
+    contentField: Object.keys(ip).find((f) => CONTENT_FIELD_RE.test(f)) || null,
+    stringFields: Object.keys(ip).filter((f) => {
+      const t = ip[f] && ip[f].type;
+      return t === 'string' || t == null;
+    }),
+    countField: Object.keys(ip).find((f) => isCountLikeFieldName(f)) || null
+  };
+  const parent = recs.map((_, i) => i);
+  const find = (i) => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+  const union = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; };
+  const byId = new Map();
+  const bySig = new Map();
+  for (let i = 0; i < recs.length; i++) {
+    const r = recs[i];
+    if (idField && typeof r[idField] === 'string' && r[idField]) {
+      const k = 'id:' + normalizeIdValueForIdentity(r[idField]);
+      if (byId.has(k)) union(i, byId.get(k)); else byId.set(k, i);
+    }
+    const sig = recordContentSignature(r, sigFields);
+    if (sig) {
+      if (bySig.has(sig)) union(i, bySig.get(sig)); else bySig.set(sig, i);
+    }
+  }
+  const roots = new Set();
+  for (let i = 0; i < recs.length; i++) roots.add(find(i));
+  return roots.size;
 }
 // Fiftieth log: likes read empty on every record while shares extracted real
 // values from the SAME action-bar family — the family demonstrably renders
@@ -3585,13 +3702,109 @@ function detectCountShortfall(data, inputValues, outputSchema, options) {
       worst = { field: key, requested: requested, extracted: extracted };
     }
   }
-  if (!worst) return null;
-  worst.ratio = requested > 0 ? (worst.extracted / requested) : 0;
-  // Inclusive boundary: delivering at most half the requested count is severe
-  // (5/10 must not slip under a strict <).
-  worst.severe = worst.ratio <= severeRatio;
-  return worst;
+  if (worst) {
+    worst.ratio = requested > 0 ? (worst.extracted / requested) : 0;
+    // Inclusive boundary: delivering at most half the requested count is severe
+    // (5/10 must not slip under a strict <).
+    worst.severe = worst.ratio <= severeRatio;
+    return worst;
+  }
+  // 139th log: the record count met the ask — but a count-bounded requirement
+  // counts UNIQUE items. The incident: 7 records delivered for count=7 while
+  // the feed served the same 4 posts in repeated render states (expanded +
+  // collapsed), and an id-keyed dedupe that skips empty ids passed every
+  // repeat through. Identity = the id field (URL-normalized) when present,
+  // else the content signature; a shortfall below the ask by UNIQUE count is
+  // disclosed with the same machinery (never silently green-inflated).
+  for (const key of Object.keys(props)) {
+    const prop = props[key];
+    if (!prop || prop.type !== 'array' || !Array.isArray(data[key])) continue;
+    const records = data[key];
+    if (records.length < requested) continue; // record-count branch owns that case
+    if (!prop.items || prop.items.type !== 'object') continue;
+    const unique = countUniqueRecords(records, (prop.items && prop.items.properties) || {});
+    if (unique >= requested) continue;
+    const ratio = requested > 0 ? (unique / requested) : 0;
+    return {
+      field: key,
+      requested: requested,
+      extracted: records.length,
+      uniqueExtracted: unique,
+      ratio: ratio,
+      severe: ratio <= severeRatio,
+      note: records.length + ' record(s) delivered for ' + requestedKey + '=' + requested +
+        ' but only ' + unique + ' UNIQUE item(s) among them (duplicates by id-when-present, else content signature — repeated feed posts in different render states) — a count-bounded requirement counts UNIQUE items: deduplicate in the assembly (content signature when the id is empty) and KEEP COLLECTING unique items toward the ask; if the unique supply is exhausted, ship the shortfall disclosed as unique count, never the inflated record count.'
+    };
+  }
+  return null;
 }
+
+// 139th log: media-array hygiene census. The incident's posts[].mediaUrls
+// carried the same UI sprite SIX times inside one record (an emoji asset
+// repeated per inline occurrence) and sprite URLs that recurred across most
+// records — page chrome, not per-record content. Both are structural signals
+// (repetition within a record; repetition across records), no URL-substring
+// knowledge. Report-only: surface + teach, never block.
+const MEDIA_ARRAY_FIELD_RE = /media|image|img|photo|video|thumbnail|avatar|icon|url|link|uri|图|片|视频/i;
+function detectMediaArrayHygiene(data, schema) {
+  const dupInRecord = [];
+  const sharedAssets = [];
+  if (!data || typeof data !== 'object') return null;
+  const props = (schema && schema.properties) || {};
+  for (const arrField of Object.keys(props)) {
+    const prop = props[arrField];
+    if (!prop || prop.type !== 'array' || !prop.items || prop.items.type !== 'object') continue;
+    const records = data[arrField];
+    if (!Array.isArray(records) || records.length < 1) continue;
+    const itemProps = (prop.items && prop.items.properties) || {};
+    for (const mf of Object.keys(itemProps)) {
+      const mp = itemProps[mf];
+      if (!mp || mp.type !== 'array' || !MEDIA_ARRAY_FIELD_RE.test(mf)) continue;
+      // within-record duplicates + cross-record recurrence
+      const across = new Map();
+      for (let i = 0; i < records.length; i++) {
+        const arr = records[i] ? records[i][mf] : null;
+        if (!Array.isArray(arr) || arr.length < 1) continue;
+        const seen = new Set();
+        const dupUrls = [];
+        for (const u of arr) {
+          const s = String(u == null ? '' : u);
+          if (!s) continue;
+          if (seen.has(s)) {
+            if (dupUrls.indexOf(s) === -1) dupUrls.push(s);
+          } else seen.add(s);
+          if (!across.has(s)) across.set(s, []);
+          if (across.get(s).indexOf(i + 1) === -1) across.get(s).push(i + 1);
+        }
+        if (dupUrls.length) {
+          dupInRecord.push({
+            path: arrField + '[].' + mf,
+            record: i + 1,
+            urls: dupUrls.slice(0, 3).map((u) => (u.length > 70 ? u.slice(0, 70) + '…' : u)),
+            note: 'the same URL appears multiple times in this record\'s ' + mf + ' array — deduplicate in the assembly (a Set before pushing; per-inline-occurrence assets repeat one entry per occurrence).'
+          });
+        }
+      }
+      const shareThreshold = Math.max(2, Math.ceil(records.length * 0.6));
+      for (const u of across.keys()) {
+        const recs = across.get(u);
+        if (recs.length >= shareThreshold) {
+          sharedAssets.push({
+            path: arrField + '[].' + mf,
+            url: u.length > 70 ? u.slice(0, 70) + '…' : u,
+            records: recs.length,
+            totalRecords: records.length,
+            note: 'this URL appears in ' + recs.length + '/' + records.length + ' records\' ' + mf +
+              ' arrays — an asset shared by most records is PAGE CHROME (a UI sprite/emoji/decoration mounted in every card), not per-record media: filter shared assets out of the per-record arrays in the step assembly.'
+          });
+        }
+      }
+    }
+  }
+  if (!dupInRecord.length && !sharedAssets.length) return null;
+  return { duplicateInRecord: dupInRecord.slice(0, 4), sharedAssets: sharedAssets.slice(0, 4) };
+}
+
 
 // detectRelativeTimestamps(data, outputSchema) → [] | [{field, path, sampleValue, relativeCount, totalRecords}]
 //
@@ -6053,7 +6266,7 @@ function syncLastVerifiedFromVerify(state, lv) {
 // direct property access keeps working. test/forty-sixth-log-followups.test.js
 // pins marker-bag keys === module.exports keys so a future export cannot
 // land on one surface only (the inline-fallback drift class, RC8/RC35).
-var WU_EXPORT_BAG = { unverifiedArtifactState, syncLastVerifiedFromVerify, explainDetectorFinding, DETECTOR_PLAIN, collectFieldSamplesFromOutput, detectDuplicateEntityPairs, detectIdenticalFieldValues, detectStepGraphGhostRefs, injectResumeChunkWarning, mineResearchSessionSamples, createParkNotifier, parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, hasYearToken, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectJunkShapeRecords, seedLedgerFromSameSite, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS, isCspConstructError, __testConstructStepScript: null };
+var WU_EXPORT_BAG = { normalizeIdValueForIdentity, recordContentSignature, countUniqueRecords, detectMediaArrayHygiene, unverifiedArtifactState, syncLastVerifiedFromVerify, explainDetectorFinding, DETECTOR_PLAIN, collectFieldSamplesFromOutput, detectDuplicateEntityPairs, detectIdenticalFieldValues, detectStepGraphGhostRefs, injectResumeChunkWarning, mineResearchSessionSamples, createParkNotifier, parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, hasYearToken, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectJunkShapeRecords, seedLedgerFromSameSite, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS, isCspConstructError, __testConstructStepScript: null };
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = WU_EXPORT_BAG;

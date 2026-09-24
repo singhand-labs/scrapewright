@@ -434,12 +434,16 @@ describe('F2+F4: verify-runner wiring', () => {
 
 describe('F4: detectDuplicateIdValues unit', () => {
   it('fingerprints the shared value with 1-based record ordinals', () => {
+    // 139th log: the detector grew a content-signature lane beside the id
+    // lane (this fixture's records have no content field, so the fallback
+    // signature keys on the longest string — postId — and fires too). The
+    // ID-lane fingerprint assertion is unchanged.
     const out = WU.detectDuplicateIdValues({ posts: [
       { postId: 'x1', kind: 'photo' },
       { postId: 'shared', kind: 'photo' },
       { postId: 'shared', kind: 'photo' },
       { postId: 'shared', kind: 'photo' }
-    ] }, SCHEMA);
+    ] }, SCHEMA).filter((d) => !d.kind);
     assert.equal(out.length, 1);
     assert.equal(out[0].field, 'postId');
     assert.equal(out[0].value, 'shared');

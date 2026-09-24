@@ -435,7 +435,16 @@
       const plNote = state.lastVerifyPositionLikeIds
         ? ' [VERIFY POSITION-LIKE-IDS — id field(s) holding position/index values, not identities: ' + state.lastVerifyPositionLikeIds.join('; ') + ']'
         : '';
-      return ladder + csNote + rtNote + tiNote + jkNote + plNote + unverifiedArtifactSuffix('current');
+      // 139th log: the green-ship censuses the incident's finish omitted —
+      // label-prefixed counts and duplicate ids shipped behind ok=true with
+      // no disclosure reaching the completion summary.
+      const lpNote = state.lastVerifyLabelPrefixedCounts
+        ? ' [VERIFY LABEL-PREFIXED-COUNTS — count field(s) shipping the control label plus the count (parsed numbers are in the verify report): ' + state.lastVerifyLabelPrefixedCounts.join('; ') + ']'
+        : '';
+      const dupNote = state.lastVerifyDuplicateIds
+        ? ' [VERIFY DUPLICATE-ITEMS — repeated items among the delivered records (unique count below the record count): ' + state.lastVerifyDuplicateIds.join('; ') + ']'
+        : '';
+      return ladder + csNote + rtNote + tiNote + jkNote + plNote + lpNote + dupNote + unverifiedArtifactSuffix('current');
     }
 
     function stateForPersist() {
@@ -1461,6 +1470,16 @@
               detail = (detail ? detail + ' ' : '') +
                 '[VERIFY POSITION-LIKE-IDS — id field(s) holding position/index values, not identities: ' + state.lastVerifyPositionLikeIds.join('; ') + '; re-bind to the record permalink/href or drop the field]';
             }
+            // 139th log: the incident's green finish omitted these — they
+            // must reach the shipped disclosure, not just the verify report.
+            if (state.lastVerifyLabelPrefixedCounts) {
+              detail = (detail ? detail + ' ' : '') +
+                '[VERIFY LABEL-PREFIXED-COUNTS — count field(s) shipping the control label plus the count: ' + state.lastVerifyLabelPrefixedCounts.join('; ') + '; parse the number (the verify report carries the parsed sample) or re-bind]';
+            }
+            if (state.lastVerifyDuplicateIds) {
+              detail = (detail ? detail + ' ' : '') +
+                '[VERIFY DUPLICATE-ITEMS — repeated items among the delivered records: ' + state.lastVerifyDuplicateIds.join('; ') + '; the delivered UNIQUE count is what a count-bounded requirement measures — deduplicate and keep collecting, or ship the unique count disclosed]';
+            }
             // Twenty-seventh log: the shipped artifact had no verify at all
             // while the ladder named only the OLDER artifact's failure —
             // both disclose. Shared helper with the budget stops
@@ -1579,6 +1598,22 @@
             // finish disclosure — dedupe, keep first-seen order.
             state.lastVerifyJunkFields = jfList.length
               ? Array.from(new Set(jfList.slice(0, 8).map((f) => String(f.field || f.path)).filter(Boolean))).slice(0, 6)
+              : null;
+            // 139th log: label-prefixed counts + duplicate ids must ride the
+            // same disclosure ladder — the incident's green finish named the
+            // partial-empties but not the label strings or the 7-records-
+            // 4-unique inflation.
+            const lpList = (result && result.detectors && Array.isArray(result.detectors.labelPrefixedCounts))
+              ? result.detectors.labelPrefixedCounts : [];
+            state.lastVerifyLabelPrefixedCounts = lpList.length
+              ? lpList.slice(0, 4).map((f) => String(f.path || f.field) + ' ' + (f.count || 0) + ' record(s) e.g. ' + JSON.stringify(String(f.sample || '').slice(0, 30)))
+              : null;
+            const dupList = (result && result.detectors && Array.isArray(result.detectors.duplicateIdValues))
+              ? result.detectors.duplicateIdValues : [];
+            state.lastVerifyDuplicateIds = dupList.length
+              ? dupList.slice(0, 4).map((d) => (d.kind === 'contentSignature'
+                  ? 'content signature ' + JSON.stringify(String(d.sampleSignature || '').slice(0, 30)) + ' on records ' + (d.indices || []).join(',')
+                  : String(d.field) + ' repeated on records ' + (d.indices || []).join(',')))
               : null;
             const pliList = (result && result.detectors && Array.isArray(result.detectors.positionLikeIds))
               ? result.detectors.positionLikeIds

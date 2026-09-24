@@ -49,6 +49,7 @@
       detectImplausibleTimeFields: w.detectImplausibleTimeFields,
       detectPositionLikeIds: w.detectPositionLikeIds,
       detectLabelPrefixedCounts: w.detectLabelPrefixedCounts,
+      detectMediaArrayHygiene: w.detectMediaArrayHygiene,
       detectJunkShapeRecords: w.detectJunkShapeRecords,
       detectDuplicateIdValues: w.detectDuplicateIdValues,
       detectFieldMatchZero: w.detectFieldMatchZero,
@@ -505,7 +506,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, siblingCountContrast: null, implausibleTimeFields: null, positionLikeIds: null, labelPrefixedCounts: null, junkShapeRecords: null, unusedCaptures: null, timeSourceUnexercised: null };
+      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, siblingCountContrast: null, implausibleTimeFields: null, positionLikeIds: null, labelPrefixedCounts: null, mediaHygiene: null, junkShapeRecords: null, unusedCaptures: null, timeSourceUnexercised: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -899,6 +900,15 @@
               }
               const got = detectors.countShortfall.extracted;
               const req = detectors.countShortfall.requested;
+              // 139th log: the unique-shortfall note (records met the ask but
+              // UNIQUE items did not) must survive the provenance branches
+              // below — they compare RECORD counts and would overwrite it
+              // with the exhaustion caveat alone. Keep it, append theirs.
+              const uniqueShortfallNote = (
+                typeof detectors.countShortfall.uniqueExtracted === 'number' &&
+                detectors.countShortfall.uniqueExtracted < req &&
+                detectors.countShortfall.note
+              ) ? detectors.countShortfall.note : null;
               // 135th log: distinguish a CERTIFIED exhaustion receipt from a
               // hand-rolled "exhausted" flag. The incident session's scroll
               // step returned {done:true, exhausted:true} after ONE settled
@@ -927,6 +937,10 @@
                 }
               } else if (typeof got === 'number' && typeof req === 'number') {
                 detectors.countShortfall.note = certNote.replace(/^\s/, '');
+              }
+              if (uniqueShortfallNote) {
+                detectors.countShortfall.note = uniqueShortfallNote +
+                  (detectors.countShortfall.note ? ' ' + detectors.countShortfall.note : '');
               }
             } catch (e) { /* provenance is best-effort */ }
           }
@@ -975,7 +989,41 @@
           // data — the census carries the parsed sample and teaches the
           // one-line parse instead of just disclosing the junk.
           const lpc = WU.detectLabelPrefixedCounts(finalData, outputSchema) || [];
-          if (lpc.length) detectors.labelPrefixedCounts = lpc;
+          if (lpc.length) {
+            detectors.labelPrefixedCounts = lpc;
+            // 139th log promotion: a REQUIRED count field shipping the label
+            // prefix ("Like: 129 people" in a required likes) is a broken
+            // binding, not an advisory — same promotion class as the 127th
+            // junk-required gate. The parsed number is in the
+            // census; the model parses it or renegotiates, it does not ship
+            // the label behind a green verify. Optional fields keep the
+            // report-only lane (plus the finish disclosure).
+            if (!error) {
+              for (const lp of lpc) {
+                const reqF = (typeof WU.schemaItemRequiredForPath === 'function')
+                  ? WU.schemaItemRequiredForPath(outputSchema, lp.path) : null;
+                const isReq = Array.isArray(reqF) && reqF.indexOf(lp.field) !== -1;
+                if (isReq) {
+                  error = new Error(
+                    'LABEL_PREFIXED_COUNT_REQUIRED: ' + lp.path + ' ships a control label plus the count (e.g. ' +
+                    JSON.stringify(String(lp.sample || '').slice(0, 40)) + ') on ' + lp.count +
+                    ' record(s) but the contract lists it as REQUIRED — a labeled control string is not the count. Parse it in the assembly (value.match(/(\\d[\\d.,]*\\s*[KkMm]?)/)[1], parsed sample: ' +
+                    JSON.stringify(lp.parsedSample) + ') or bind the field to the count-carrying element/attribute, then re-verify.'
+                  );
+                  break;
+                }
+              }
+            }
+          }
+        }
+        if (typeof WU.detectMediaArrayHygiene === 'function') {
+          // 139th log: report-only. Media arrays carrying the same URL
+          // multiple times within one record (per-occurrence assets) and
+          // URLs shared across most records (page chrome: UI sprites/emoji)
+          // are structural repetition signals — surface + teach the Set
+          // dedupe and the shared-asset filter, never block.
+          const mh = WU.detectMediaArrayHygiene(finalData, outputSchema);
+          if (mh) detectors.mediaHygiene = mh;
         }
         if (typeof WU.detectJunkShapeRecords === 'function') {
           // Seventy-fourth log: report-only. A subpopulation of records
@@ -1511,6 +1559,7 @@
         if (detectors.implausibleTimeFields) add('TIME_FIELD_IMPLAUSIBLE');
         if (detectors.positionLikeIds) add('POSITION_LIKE_ID');
         if (detectors.labelPrefixedCounts) add('LABEL_PREFIXED_COUNT');
+        if (detectors.mediaHygiene) add('MEDIA_ARRAY_HYGIENE');
         if (detectors.junkShapeRecords) add('JUNK_SHAPE_RECORDS');
         if (detectors.duplicateIdValues) add('DUPLICATE_ID_VALUES');
         if (detectors.shapeDistribution) add('CARD_POLICY');
