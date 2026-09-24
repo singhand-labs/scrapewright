@@ -29,7 +29,9 @@
   function sendDomRequest(action, selector, args) {
     return new Promise((resolve, reject) => {
       const id = ++domRequestId;
-      pendingDomRequests.set(id, { resolve, reject });
+      // 140th log: capture the deadline AT SEND TIME so a deadline-loss
+      // sweep can reject this execution's stale in-flight requests by value.
+      pendingDomRequests.set(id, { resolve, reject, capturedDeadlineAt: execDeadlineAt });
       sendDebugLog('info', 'sandbox', 'Sending DOM_REQUEST', { id, action, selector });
       parent.postMessage({
         type: 'DOM_REQUEST',
@@ -118,7 +120,7 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
     } else if (e.data.type === 'EXECUTE') {
       sendDebugLog('info', 'sandbox', 'EXECUTE received', { scriptPreview: e.data.script?.slice(0, 2000), scriptLength: e.data.script?.length });
       execDeadlineAt = (typeof e.data.deadlineAt === 'number' && Number.isFinite(e.data.deadlineAt)) ? e.data.deadlineAt : null;
-      executeInSandbox(e.data.script, e.data.input, e.data.execId);
+      executeInSandbox(e.data.script, e.data.input, e.data.execId, e.data.deadlineAt);
     } else if (e.data.type === 'SYNTAX_CHECK') {
       try {
         // Mirror the wrapping used by executeInSandbox so we catch the same
@@ -232,7 +234,28 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
       " — the parser choked at the marked (>>><<<) position; check the quotes, braces, and brackets right there (a stray quote before a colon, e.g. selector':, or an unbalanced bracket, is the usual cause).";
   }
 
-  async function executeInSandbox(scriptCode, input, execId) {
+  // 140th log: race the script against its OWN deadline. The executor's
+  // wall timeout only rejects the caller's promise — the script kept running
+  // in this iframe as a zombie (the incident's preflight timed out at 20s and
+  // kept dispatching hovers for another 67 seconds, because the module-level
+  // execDeadlineAt had been OVERWRITTEN by the next execution's EXECUTE, so
+  // the zombie's DOM_REQUESTs rode the NEW deadline and passed the relay's
+  // expiry pre-check). Racing here kills the zombie at its own deadline:
+  // the script's promise rejects, the catch below posts the (discarded)
+  // result, and stale in-flight requests whose captured deadline is <= this
+  // execution's deadline are rejected so the unwinding is fast.
+  function rejectStalePendingRequests(deadlineAt) {
+    if (typeof deadlineAt !== 'number' || !Number.isFinite(deadlineAt)) return;
+    for (const [id, entry] of Array.from(pendingDomRequests.entries())) {
+      const cap = entry && entry.capturedDeadlineAt;
+      if (typeof cap === 'number' && Number.isFinite(cap) && cap <= deadlineAt) {
+        pendingDomRequests.delete(id);
+        try { entry.reject(new Error('OUTER_DEADLINE_EXCEEDED: the owning script\'s execution budget ended (sandbox deadline race) — this in-flight request was abandoned.')); } catch (e) { /* already settled */ }
+      }
+    }
+  }
+
+  async function executeInSandbox(scriptCode, input, execId, deadlineAt) {
     // Reset before each execution — covers residue from prior failed runs
     // (the catch path does not reset, so without this a later successful
     // run would snapshot the previous run's diagnostics along with its own).
@@ -263,7 +286,20 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
         parent.postMessage({ type: 'EXECUTE_RESULT', execId: execId, error: msg }, '*');
         return;
       }
-      const result = await fn(input, input._stepResults || {}, input._lastResult || null);
+      let deadlineTimer = null;
+      const deadlineRace = (typeof deadlineAt === 'number' && Number.isFinite(deadlineAt) && deadlineAt > Date.now())
+        ? new Promise((_, rej) => {
+            deadlineTimer = setTimeout(() => rej(new Error('SANDBOX_DEADLINE: the script exceeded its own execution budget and was abandoned in the sandbox (the caller already timed out) — in-flight $ calls were rejected.')), Math.max(0, deadlineAt - Date.now()));
+          })
+        : null;
+      let result;
+      try {
+        result = deadlineRace
+          ? await Promise.race([fn(input, input._stepResults || {}, input._lastResult || null), deadlineRace])
+          : await fn(input, input._stepResults || {}, input._lastResult || null);
+      } finally {
+        if (deadlineTimer !== null) clearTimeout(deadlineTimer);
+      }
       // Snapshot + reset the per-execution diagnostics accumulator. Diagnostics
       // only ride on the success path — error responses stay unchanged.
       const selectorDiagnostics = __selectorDiagnostics__;
@@ -271,6 +307,10 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
       sendDebugLog('info', 'sandbox', 'Script completed', { resultType: typeof result, resultPreview: JSON.stringify(result)?.slice(0, 500), selectorDiagnosticCount: selectorDiagnostics.length });
       parent.postMessage({ type: 'EXECUTE_RESULT', execId: execId, result, selectorDiagnostics }, '*');
     } catch (error) {
+      // 140th log: a deadline-race loss (or any script error) unwinds this
+      // execution — its stale in-flight $ calls must not linger resolving
+      // into dead promise chains.
+      try { rejectStalePendingRequests(deadlineAt); } catch (_) { /* sweep is best-effort */ }
       sendDebugLog('error', 'sandbox', 'Script execution error', { error: error.message, stack: error.stack, scriptPreview: scriptCode?.slice(0, 2000), hasSubTabSnapshot: !!error.subTabSnapshot });
       // B2: diagnostics ride the error path too — the failing call's own
       // diagnostics (attached to the Error) plus any accumulated before it.

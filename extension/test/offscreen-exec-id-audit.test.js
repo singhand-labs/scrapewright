@@ -10,11 +10,13 @@ const SANDBOX_SRC = fs.readFileSync(path.join(__dirname, '..', 'sandbox.js'), 'u
 
 // The EXECUTE_RESULT handler region only (a fallback pop() may legitimately
 // exist there for legacy sandbox versions — the pin is that the execId path
-// takes precedence via map lookup + lastIndexOf splice).
+// takes precedence via map lookup + lastIndexOf splice). 140th log: the
+// handler grew a middle branch (purged-execId discard), so the region spans
+// to the NEXT TOP-LEVEL handler, not the first `} else if`.
 function handlerRegion(src, marker) {
   const start = src.indexOf(marker);
   assert.ok(start !== -1, 'marker found: ' + marker);
-  const end = src.indexOf('} else if', start);
+  const end = src.indexOf("if (message.type === 'EXECUTE_SCRIPT_TIMEOUT'", start);
   return src.slice(start, end === -1 ? undefined : end);
 }
 
@@ -54,7 +56,8 @@ describe('B5: offscreen/sandbox execId routing (source audit)', () => {
   });
 
   it('sandbox EXECUTE_RESULT echoes the execId it received', () => {
-    assert.match(SANDBOX_SRC, /executeInSandbox\(e\.data\.script,\s*e\.data\.input,\s*e\.data\.execId\)/);
+    // 140th log: the executor now also threads the deadline (4th arg).
+    assert.match(SANDBOX_SRC, /executeInSandbox\(e\.data\.script,\s*e\.data\.input,\s*e\.data\.execId,\s*e\.data\.deadlineAt\)/);
     const n = (SANDBOX_SRC.match(/type: 'EXECUTE_RESULT'/g) || []).length;
     const e = (SANDBOX_SRC.match(/execId: execId/g) || []).length;
     assert.equal(n, e, 'every EXECUTE_RESULT post carries execId (' + n + ' sites)');

@@ -128,12 +128,24 @@
     } else if (e.data.type === 'EXECUTE_RESULT') {
       // B5: resolve the completing execution's tabId by identity instead of
       // blindly popping — interleaved executions no longer cross-wire.
+      // 140th log: three-way branch. The old else conflated "legacy sandbox
+      // without execId" with "execId present but PURGED by the timeout
+      // handler" — a timed-out execution's late result (the zombie finishes
+      // minutes after its deadline) fell into the blind pop and STOLE a live
+      // execution's routing slot: the next verify's first-step DOM_REQUEST
+      // found the stack without its tab and the whole run died
+      // RELAY_FAILED. A purged execId means this execution was already given
+      // up — discard the result, never touch the stack.
       let tabId = null;
       if (e.data.execId !== undefined && execTabMap.has(e.data.execId)) {
         tabId = execTabMap.get(e.data.execId);
         execTabMap.delete(e.data.execId);
         const idx = tabIdStack.lastIndexOf(tabId);
         if (idx !== -1) tabIdStack.splice(idx, 1);
+      } else if (e.data.execId !== undefined) {
+        // Purged (timed-out) execution finishing late: its own slot was
+        // already removed by the EXECUTE_SCRIPT_TIMEOUT handler. Discard.
+        sendDebugLog('warn', 'offscreen', 'Discarding late result of a timed-out execution (stack untouched)', { execId: e.data.execId, stackDepth: tabIdStack.length });
       } else {
         // Fallback for legacy sandbox versions that don't echo execId.
         tabId = tabIdStack.pop() || null;
