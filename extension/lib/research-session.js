@@ -1479,8 +1479,14 @@
             // input) and postTime as relative ages ("a day ago") with every
             // branch silent. Disclose alongside, not instead.
             if (state.lastVerifyCountShortfall) {
+              // 144th round: the trailer contradicted the body when the
+              // shortfall was UNIQUE-count-shaped (records met the ask,
+              // unique items did not) — branch the closing line on it.
+              const csTrailer = /UNIQUE item/.test(state.lastVerifyCountShortfall)
+                ? 'the delivered UNIQUE count is below the ask — deduplicate and keep collecting, or ship the unique count disclosed'
+                : 'the user requested a count the run did not deliver — ship consciously or renegotiate';
               detail = (detail ? detail + ' ' : '') +
-                '[VERIFY COUNT-SHORTFALL — ' + state.lastVerifyCountShortfall + '; the user requested a count the run did not deliver — ship consciously or renegotiate]';
+                '[VERIFY COUNT-SHORTFALL — ' + state.lastVerifyCountShortfall + '; ' + csTrailer + ']';
             }
             if (state.lastVerifyRelativeTimestamps) {
               detail = (detail ? detail + ' ' : '') +
@@ -1599,7 +1605,15 @@
                 // exhausted" off a one-iteration flag on the cold tab).
                 (cs.exhaustionCertified === false
                   ? ' — exhaustion NOT certified (no $collectUntil receipt; certify or ship with this caveat)'
-                  : (cs.exhaustionCertified === true ? ' — exhaustion CERTIFIED ($collectUntil receipt in the run)' : ''))
+                  : (cs.exhaustionCertified === true ? ' — exhaustion CERTIFIED ($collectUntil receipt in the run)' : '')) +
+                // 144th round: the 143rd finish read "extracted 7 ... the
+                // user requested a count the run did not deliver" — the
+                // 139th unique-shortfall fired (7 records / 6 unique) but
+                // the wording was record-count-shaped. Name the unique
+                // count whenever it is the binding number.
+                (typeof cs.uniqueExtracted === 'number' && cs.uniqueExtracted < cs.requested
+                  ? ' — only ' + cs.uniqueExtracted + ' UNIQUE item(s) among them: a count-bounded requirement counts UNIQUE items; deduplicate in the assembly and keep collecting'
+                  : '')
               : null;
             const rtList = (result && result.detectors && Array.isArray(result.detectors.relativeTimestamps))
               ? result.detectors.relativeTimestamps
