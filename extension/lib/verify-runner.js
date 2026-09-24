@@ -899,12 +899,34 @@
               }
               const got = detectors.countShortfall.extracted;
               const req = detectors.countShortfall.requested;
+              // 135th log: distinguish a CERTIFIED exhaustion receipt from a
+              // hand-rolled "exhausted" flag. The incident session's scroll
+              // step returned {done:true, exhausted:true} after ONE settled
+              // round on the cold verify tab and the finish shipped 4/6 as
+              // a "supply limit" — one round without growth proves nothing
+              // on a cold tab; certification requires the $collectUntil
+              // marker (scroll-machinery stall + 2 unchanged rounds), which
+              // is mechanically visible in the run's own step previews.
+              let exhaustionCertified = false;
+              const CERT_RE = /exhaustion"?\s*:\s*\{?\s*"certified"\s*:\s*true|certifiedExhaustion"?\s*:\s*true/;
+              for (const ev of events) {
+                const pv = String((ev && ev.resultPreview) || '');
+                if (CERT_RE.test(pv)) { exhaustionCertified = true; break; }
+              }
+              detectors.countShortfall.exhaustionCertified = exhaustionCertified;
+              const certNote = exhaustionCertified
+                ? ' this run carries a CERTIFIED exhaustion receipt ($collectUntil exhaustion.certified) — the shortfall is the page\'s honest supply; ship it disclosed.'
+                : ' the run\'s exhaustion verdict is NOT certified (no $collectUntil exhaustion.certified marker in any step preview — a hand-rolled exhausted flag after one settled round without growth proves nothing on a cold tab where lazy-load mounts in bursts): certify with $collectUntil(containerSel, {targetCount, idAttr}) before calling the shortfall a supply limit, or ship it with THAT caveat, not as a page fact.';
               if (maxContainers > 0 && typeof got === 'number' && typeof req === 'number') {
                 if (maxContainers >= req && got < req) {
                   detectors.countShortfall.note = 'containers matched ' + maxContainers + ' (≥ requested ' + req + ') but only ' + got + ' record(s) survived — the loss is in the ASSEMBLY, not the selector: a dedupe keyed on a weak/positional/shared value is collapsing distinct records. Merge by a strong per-record key (the permalink/token id), never by a fallback that repeats.';
                 } else if (maxContainers < req) {
-                  detectors.countShortfall.note = 'only ' + maxContainers + ' container(s) matched on this (fresh) verify tab vs ' + req + ' requested — population divergence or genuine scarcity, not an assembly bug: prefer $collectUntil (certified exhaustion) and settle before counting; if certified-exhausted, ship the shortfall disclosed.';
+                  detectors.countShortfall.note = 'only ' + maxContainers + ' container(s) matched on this (fresh) verify tab vs ' + req + ' requested — population divergence or genuine scarcity, not an assembly bug: prefer $collectUntil (certified exhaustion) and settle before counting; if certified-exhausted, ship the shortfall disclosed.' + certNote;
+                } else {
+                  detectors.countShortfall.note = certNote.replace(/^\s/, '');
                 }
+              } else if (typeof got === 'number' && typeof req === 'number') {
+                detectors.countShortfall.note = certNote.replace(/^\s/, '');
               }
             } catch (e) { /* provenance is best-effort */ }
           }

@@ -1542,7 +1542,15 @@
               : null;
             const cs = (result && result.detectors && result.detectors.countShortfall) ? result.detectors.countShortfall : null;
             state.lastVerifyCountShortfall = cs
-              ? 'requested ' + cs.requested + ' via the test input, extracted ' + cs.extracted + ' into ' + JSON.stringify(cs.field) + (cs.severe ? ' (severe)' : '')
+              ? 'requested ' + cs.requested + ' via the test input, extracted ' + cs.extracted + ' into ' + JSON.stringify(cs.field) + (cs.severe ? ' (severe)' : '') +
+                // 135th log: a hand-rolled "exhausted" flag is not a supply
+                // fact — the suffix names the certification state so the
+                // ship disclosure cannot pass an unproven claim as a page
+                // limit (the incident session shipped 4/6 as "feed
+                // exhausted" off a one-iteration flag on the cold tab).
+                (cs.exhaustionCertified === false
+                  ? ' — exhaustion NOT certified (no $collectUntil receipt; certify or ship with this caveat)'
+                  : (cs.exhaustionCertified === true ? ' — exhaustion CERTIFIED ($collectUntil receipt in the run)' : ''))
               : null;
             const rtList = (result && result.detectors && Array.isArray(result.detectors.relativeTimestamps))
               ? result.detectors.relativeTimestamps
