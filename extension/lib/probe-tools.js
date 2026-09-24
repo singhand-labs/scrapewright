@@ -112,7 +112,7 @@
         ? ' (' + Math.round(queuedMs) + 'ms of that spent waiting behind the previous probe on the serialized rail)'
         : '';
       return {
-        error: 'snippet exceeded ' + ms + 'ms' + queuedNote + ' — size the batch (each hovered anchor burns ~5-10s; narrow with maxContainers) or pass a larger timeoutMs (≤' + SNIPPET_MAX_TIMEOUT_MS + ')'
+        error: 'snippet exceeded ' + ms + 'ms' + queuedNote + ' — size the batch (each hovered anchor burns ~5-10s; narrow with maxContainers, and narrow the anchorSel union to the ONE anchor the hover-derived fields need — every extra union member costs a full hover cycle per card) or pass a larger timeoutMs (≤' + SNIPPET_MAX_TIMEOUT_MS + ')'
       };
     }
 

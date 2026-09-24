@@ -175,13 +175,13 @@
       '- $labelledby(sel, attr?, timeoutMs?) → {text, attr, refCount, missingIds?, note?, viaDescendant?} — resolves the ARIA reference attr (default aria-labelledby; pass "aria-describedby") on the first match; when the match carries NEITHER reference attribute, resolution DESCENDS to its first descendant that carries one (disclosed as viaDescendant + note — own attributes always win); .text carries the CONCATENATED text of the referenced element(s) (id list looked up by id) — postTime = (await $labelledby(sel)).text. probe.labelledby returns this SAME object shape. Tooltip/timestamp full values usually live there — the referenced span is often hidden but readable, so use this instead of re-hovering when the popover never visibly renders. When a time field needs the full candidate→hover→filter dance, probe.timestamp does it in ONE call and returns date-shaped candidates only (absolute preferred). Environmental claims need evidence too: before concluding "requires login"/"unauthenticated", call probe.loginState and quote its marker census — page shape alone is not login-state evidence',
       '- $extractList(containerSel, fieldMap, opts?) — one record per container; fieldMap {field:{selector,attr?,labelledby?,multi?}}; a spec with multi:true (e.g. {selector:"a[href]",attr:"href",multi:true}) collects ALL matches of that field per container as an ARRAY (document order, [] when none) — the exact envelope probe.extract returns with multi:true, so a multi-probed fieldMap pastes into the step as-is (a NON-multi field is a scalar string; for-of over a string iterates characters and matches nothing); labelledby:true (or the attr name, e.g. aria-describedby) resolves the ARIA reference on the match and returns the referenced elements\' concatenated text — the read for anti-scrambled textContent (the visible text is decoy junk; the clean value lives in the hidden elements the reference points at; same resolution as $labelledby, INCLUDING the descendant fallback: when the matched element carries no reference attribute, resolution descends to the first descendant that carries one — so the fieldMap selector may point at the ANCHOR while a child span holds the aria-labelledby); opts.allowEmpty keeps empty-string fields (return every record, never filter to []); attr:"outerHTML"/"innerHTML" values are capped at 50000 chars with a TRUNCATED disclosure suffix — anchor htmlSnippet-style fields to the SEMANTIC sub-element, not the whole card (whole-card DOM is class/style/SVG noise; verify flags such fields OUTPUT_FIELD_SIZE)',
       '- $extractListMulti(containerSel, fieldMap, opts?) — array-valued fields (labelledby fields resolve every match); equivalent to every fieldMap spec carrying multi:true — use it for whole-call multi, or the per-field multi:true flag when only SOME fields need all matches (e.g. every anchor href per card beside scalar reads)',
-      '- $extractWithHover(containerSel, fieldMap, {hover:{anchorSel, popoverSel?}}) — hover-enriched extraction; the SAME fieldMap shape as $extractList, per-field multi:true included (all matches per container as an array — the envelope a multi probe.extract returns, e.g. every anchor href per card to regex the post id out of); anchorSel is evaluated INSIDE each container and may be a comma-UNION to hover several anchors per card (e.g. the author link AND the timestamp element — each lands as its own entry). Each record carries its hover results in `hovercards[]`, ONE ENTRY PER matched anchor: {hovered, htmlSnippet, popoverSelector, reason, observedPopover, anchorIndex, anchorHref, anchorText, labelledbyText, labelledbyAttr} — probe.hover shows this same envelope for a single anchor. Build the output hover-card fields from r.hovercards (htmlSnippet is the captured popover DOM; anchorHref/anchorText tell you WHICH anchor produced it — anchorHref resolves the nearest ENCLOSING a[href] when the anchor itself is not the link, so pointing anchorSel at an inner span still classifies by the link it sits in). labelledbyText is the anchor\'s ACCESSIBLE LABEL, harvested in the same operation at dwell time: the full text its aria-labelledby/aria-describedby references carry (hidden-but-readable tooltip spans — timestamps hold their FULL value there) — and when the anchor itself carries no reference attribute, the harvest descends to the anchor\'s first descendant that carries one (so pointing anchorSel at the whole time link still harvests the inner span\'s label) — present on FAILED entries too (a label needs no visible popover), so a label-anchor entry (timestamp, icon, compact field) is exactly where to take a field\'s value from, NOT something to filter out of the assembly; there is no popoverHtml or __popover field',
+      '- $extractWithHover(containerSel, fieldMap, {hover:{anchorSel, popoverSel?}}) — hover-enriched extraction; the SAME fieldMap shape as $extractList, per-field multi:true included (all matches per container as an array — the envelope a multi probe.extract returns, e.g. every anchor href per card to regex the post id out of); anchorSel is evaluated INSIDE each container and may be a comma-UNION to hover several anchors per card (e.g. the author link AND the timestamp element — each lands as its own entry). Each record carries its hover results in `hovercards[]`, ONE ENTRY PER matched anchor: {hovered, htmlSnippet, popoverSelector, reason, observedPopover, anchorIndex, anchorHref, anchorText, labelledbyText, labelledbyAttr} — probe.hover shows this same envelope for a single anchor. Build the output hover-card fields from r.hovercards (htmlSnippet is the captured popover DOM; anchorHref/anchorText tell you WHICH anchor produced it — anchorHref resolves the nearest ENCLOSING a[href] when the anchor itself is not the link, so pointing anchorSel at an inner span still classifies by the link it sits in). labelledbyText is the anchor\'s ACCESSIBLE LABEL, harvested in the same operation at dwell time: the full text its aria-labelledby/aria-describedby references carry (hidden-but-readable tooltip spans — timestamps hold their FULL value there) — and when the anchor itself carries no reference attribute, the harvest descends to the anchor\'s first descendant that carries one (so pointing anchorSel at the whole time link still harvests the inner span\'s label) — present on FAILED entries too (a label needs no visible popover), so a label-anchor entry (timestamp, icon, compact field) is exactly where to take a field\'s value from, NOT something to filter out of the assembly; there is no popoverHtml or __popover field. COST: every anchorSel union member costs a FULL hover cycle (~5-10s) per card — narrow the anchorSel union to the ONE anchor the hover-derived fields need (one anchor per card is usually enough); for a tooltip-valued field point anchorSel at THAT element and bind the value via read:\'hoverPopover\' with your own match regex (the channel searches the picked popover plus rejectedAddedHtml/rejectedAddedTexts, so a full absolute the visual filter rejected is still reachable)',
       '- $hover(anchorSel, popoverSel?, opts?) — one-off trusted hover (opts.index picks the Nth anchor); for hover-enriched record extraction prefer $extractWithHover',
       '- $waitForStable(sel, opts?) — resolves true once the element\'s sampled content stops changing (streaming content); prefer over setTimeout guessing; a false resolve\'s diagnostics carry pageState — hidden/unfocus means the tab was throttled (content may simply never have arrived), not that the text kept changing',
       '- $click(sel), $type(sel, text), $check(sel, prop)',
       '- $wait(sel, ms?) — waits for a selector (30s cap) then sleeps ms; THROWS ELEMENT_NOT_FOUND if the selector never appears, so never $wait on a selector whose absence is your poll condition (content still loading) — $count it and return { done: false } so maxIterations drives the wait',
       '- $clickInList(containerSel, subSel) — click inside every matched container',
-      '- $scrollBy(px), $scrollToBottom(), $scrollIntoView(sel) — for a count-bounded feed (the requirement asks for N items) write a poll step (maxIterations>1): $scrollBy one viewport per iteration, $count the population, return {done:false} while count < N and {done:true} with the data once it reaches N; reserve $scrollToBottom for genuinely collect-everything requirements. All scroll ops auto-activate the tab AND re-focus its window (infrastructure — the user may switch away mid-run; every call switches back). A no-progress $scrollBy result carries pageState (real visibilityState/hasFocus) and, when gated, frameSample (rAF ticks over ~300ms): ~0 ticks = the renderer stopped producing frames for this tab (lazy-load cannot fire — activation is automatic; `scrapewright throttle on` covers occluded windows); normal ticks with a stable count = the feed is genuinely exhausted',
+      '- $scrollBy(px), $scrollToBottom(), $scrollIntoView(sel) — for a count-bounded feed (the requirement asks for N items) $collectUntil(containerSel, {targetCount: N, idAttr}) is the DEFAULT: it settles between rounds, counts UNIQUE items (virtualization remounts do not double-count), probes the inner scroll root, and returns a CERTIFIED exhaustion verdict — hand-roll the poll step only when $collectUntil cannot express the loop (then: maxIterations>1, $scrollBy one viewport per iteration, an AWAITED SETTLE in the not-ready branch, $count the population, return {done:false} while count < N and {done:true} with the data once it reaches N); reserve $scrollToBottom for genuinely collect-everything requirements. All scroll ops auto-activate the tab AND re-focus its window (infrastructure — the user may switch away mid-run; every call switches back). A no-progress $scrollBy result carries pageState (real visibilityState/hasFocus) and, when gated, frameSample (rAF ticks over ~300ms): ~0 ticks = the renderer stopped producing frames for this tab (lazy-load cannot fire — activation is automatic; `scrapewright throttle on` covers occluded windows); normal ticks with a stable count = the feed is genuinely exhausted',
       '- $openTab(url, fn) — open a sub-tab, run fn in it, return its result',
       'Every $ call resolves to plain serializable JSON (or a primitive) — a step return value must be fully awaited plain JSON: live DOM nodes and un-awaited Promises cannot cross the sandbox boundary.',
       'The $ list above is exhaustive — there is no $json, $log, $fetch, or any other $ global; use the plain JS builtins (JSON.stringify, Math, Array methods) for anything else.',
@@ -634,6 +634,26 @@
       const sess = (ctx && ctx.session) || null;
       let res;
       if (sess && typeof sess.parkBegin === 'function') sess.parkBegin('io.confirm', typeof a.note === 'string' ? a.note.slice(0, 200) : 'contract confirmation');
+      // 132nd log: the count shortfall of the incident session was resolved
+      // by renegotiating the test input from count=5 to count=3 — the panel
+      // showed a normal contract, the green passed, and the retreat was
+      // invisible until the user read the result. A numeric DOWNGRADE against
+      // the previously confirmed testInput is disclosed at the panel, in the
+      // receipt, and in the ledger.
+      const testInputDowngrades = [];
+      try {
+        const priorTI = priorTestInput || {};
+        const propTI = proposedTestInput || {};
+        for (const k of Object.keys(propTI)) {
+          const pv = propTI[k], qv = priorTI[k];
+          if (typeof pv === 'number' && typeof qv === 'number' && pv < qv) {
+            testInputDowngrades.push(k + ': ' + qv + ' → ' + pv);
+          }
+        }
+      } catch (e) { /* disclosure is best-effort */ }
+      const downgradeNote = testInputDowngrades.length
+        ? ' LOWERING ' + testInputDowngrades.join(', ') + ' against the previously confirmed values — the run will be verified against the smaller ask; prefer fixing the extraction to deliver the original count.'
+        : '';
       try {
         // Thirty-first log: a renegotiation must show the user WHAT changes
         // against the confirmed contract (a field leaving items.required is
@@ -642,6 +662,7 @@
         const diffLines = (priorSchemas && priorSchemas.outputSchema)
           ? contractDiffLines(priorSchemas.outputSchema, a.outputSchema)
           : [];
+        if (testInputDowngrades.length) diffLines.push('TEST INPUT DOWNGRADE — ' + testInputDowngrades.join(', ') + ' (was confirmed higher; the service will be tested against the smaller ask)');
         res = await bridge.request({
           inputSchema: a.inputSchema,
           outputSchema: a.outputSchema,
@@ -650,11 +671,18 @@
           // the wizard-side second-layer prefill substitutes its stored
           // values ONLY when this is false.
           testInputProvided: modelTI != null,
-          note: typeof a.note === 'string' ? a.note : '',
+          note: (typeof a.note === 'string' ? a.note : '') + downgradeNote,
+          testInputDowngrades: testInputDowngrades,
           diffLines: diffLines
         });
       } finally {
         if (sess && typeof sess.parkEnd === 'function') sess.parkEnd();
+      }
+      if (testInputDowngrades.length && res && typeof res === 'object') {
+        try {
+          res.testInputDowngrades = testInputDowngrades;
+          res.note = String(res.note || '') + '; testInput downgraded — ' + testInputDowngrades.join(', ');
+        } catch (e) { /* receipt annotation is best-effort */ }
       }
       if (res && res.confirmed) {
         ioConfirmed = true;

@@ -1329,7 +1329,16 @@
         const probedNoAbsolute = (probeTimestampCalls > 0 || previewProbeTimestamp) && !fullAbsoluteSeen;
         const capturedNoDate = !probedNoAbsolute && !sampleAnyDateShape &&
           (inRunCaptured > 0 || previewHoverCapture || sessionSamples.length > 0);
-        if (!fullAbsoluteSeen && !probedNoAbsolute && !sampleAnyDateShape &&
+        // 132nd log: the MIDDLE tier used to silently skip the gate whenever
+        // ANY captured text carried a date shape — one incidental hovercard
+        // labelled "20 hours ago" unlocked shipping page-visible relative
+        // values with probe.timestamp never called and no absolute ever
+        // captured. A relative age is exactly what the page-visible label
+        // produces; it cannot establish the tooltip route. Only a DELIBERATE
+        // time-route exercise (a probe.timestamp call, or a captured full
+        // absolute) legalizes the disclosed relative ship.
+        const capturedRelativeOnly = !probedNoAbsolute && !fullAbsoluteSeen && sampleAnyDateShape;
+        if (!fullAbsoluteSeen && !probedNoAbsolute &&
             Array.isArray(detectors.relativeTimestamps) && detectors.relativeTimestamps.length) {
           for (const rt of detectors.relativeTimestamps) {
             if (!rt) continue;
@@ -1341,6 +1350,9 @@
             const gateMsg = capturedNoDate
               ? 'TIME_SOURCE_UNEXERCISED: ' + rt.path + ' carries page-visible labels (relative/partial; sample "' +
                 String(rt.sampleValue || '').slice(0, 40) + '") and popovers WERE captured this run/session — but none of the captured samples carries ANY date shape (they are author/group cards: the TIME anchor\'s tooltip specifically was never hovered). Call probe.timestamp({containerSel}) once (it hovers the time anchors and returns popover-text candidates) or hover the timestamp element itself — only after that receipt is partial/relative an honest disclosed ship; binding the page-visible label without exercising the time anchor is an unexercised source, not a page fact.'
+              : capturedRelativeOnly
+              ? 'TIME_SOURCE_UNEXERCISED: ' + rt.path + ' carries page-visible labels (relative/partial; sample "' +
+                String(rt.sampleValue || '').slice(0, 40) + '") and the session\'s captures do contain date-shaped strings — but every one of them is RELATIVE/PARTIAL (no year-carrying absolute), and probe.timestamp was never called: a relative age is exactly what the page-visible label produces, so an incidental capture does not establish the tooltip route. Call probe.timestamp({containerSel}) once — it hovers the TIME anchors and reads popover + rejected-mount candidates — or bind the field via read:\'hoverPopover\' with your own match regex (the channel searches rejectedAddedHtml and rejectedAddedTexts automatically). Only a receipt from that deliberate route legalizes the disclosed relative ship.'
               : 'TIME_SOURCE_UNEXERCISED: ' + rt.path + ' carries page-visible labels (relative/partial; sample "' +
                 String(rt.sampleValue || '').slice(0, 40) + '") but the contract source is the hover tooltip, ' +
                 'and no tooltip evidence exists in this run or the session record: call probe.timestamp({containerSel}) once ' +
@@ -1348,7 +1360,7 @@
                 'read:\'hoverPopover\' with your own match — only after that receipt is partial/relative an ' +
                 'honest disclosed ship; without it, this is an unexercised source, not a page fact.';
             detectors.timeSourceUnexercised = detectors.timeSourceUnexercised || [];
-            detectors.timeSourceUnexercised.push({ field: rt.field, path: rt.path, sampleValue: rt.sampleValue, relativeCount: rt.relativeCount, partialAbsoluteCount: rt.partialAbsoluteCount, tier: capturedNoDate ? 'captured-no-date' : 'unexercised' });
+            detectors.timeSourceUnexercised.push({ field: rt.field, path: rt.path, sampleValue: rt.sampleValue, relativeCount: rt.relativeCount, partialAbsoluteCount: rt.partialAbsoluteCount, tier: capturedNoDate ? 'captured-no-date' : (capturedRelativeOnly ? 'captured-relative-only' : 'unexercised') });
             if (!error) {
               error = new Error(gateMsg);
             } else if (!/TIME_SOURCE_UNEXERCISED/.test(String(error.message))) {

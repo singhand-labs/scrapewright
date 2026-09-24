@@ -603,7 +603,13 @@ describe('forty-sixth log F4 — relative timestamps in time-like fields', () =>
         { postTime: '2 hrs ago', title: 'y' }
       ] }, steps: [{ stepId: 's1', stepName: 'one', result: { done: true }, snapshot: null }], pages: [], pagesTruncated: false };
     });
-    const out = await runner({ service: SERVICE, input: {}, outputSchema: TIME_SCHEMA });
+    const out = await runner({
+      service: SERVICE, input: {}, outputSchema: TIME_SCHEMA,
+      // 132nd log: the middle tier tightened — a relative-only capture no
+      // longer establishes the route; the deliberate probe.timestamp call
+      // is the receipt that keeps this disclosed ship green (87th contract).
+      sessionEvidence: { probeTimestampCalls: 1, lastFullAbsolute: false, popoverSamples: [] }
+    });
     assert.equal(out.report.ok, true, 'disclosure, not a gate');
     assert.ok(out.report.detectors.relativeTimestamps);
     assert.equal(out.report.detectors.relativeTimestamps[0].relativeCount, 2);
