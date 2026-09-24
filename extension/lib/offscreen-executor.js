@@ -38,6 +38,14 @@ class OffscreenExecutor {
     await this.ensureOffscreenDocument();
 
     const execId = 'exec-' + Date.now() + '-' + (++EXEC_SEQ);
+    // 138th log: the execution's wall deadline travels WITH the script so
+    // every hop (offscreen → sandbox → DOM_REQUEST → content script) can
+    // self-abandon. The timeout below only fires locally — the content-side
+    // batch (hover loops over many anchors) kept running for minutes after
+    // it rejected, stealing tab activation and window focus for a script
+    // the engine had already given up on (zombie hovers observed 5+ minutes
+    // AFTER session stop).
+    const deadlineAt = Date.now() + this.timeoutMs;
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         chrome.runtime.onMessage.removeListener(listener);
@@ -83,6 +91,7 @@ class OffscreenExecutor {
         script: this.wrapScript(scriptCode),
         input,
         tabId: this.tabId,
+        deadlineAt,
         _toOffscreen: true
       });
     });

@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '136-sustained-cert';
+  const SW_BUILD_TAG = '138-deadline-guard';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -1337,6 +1337,23 @@
     return st;
   }
 
+  // 138th log: outer-deadline guard for long-running DOM ops. The owning
+  // script's wall deadline rides every DOM_REQUEST (stamped by the sandbox
+  // from the EXECUTE message; the background relay also answers expired
+  // requests without relaying them). This in-page check is the last line of
+  // defense for work already INSIDE the handler: a hover batch whose 50ms
+  // settle sleeps were stretched to minutes by occluded-window timer
+  // throttling kept dispatching CDP hovers and re-stealing window focus for
+  // a script the engine had already timed out (observed 5+ minutes AFTER
+  // the session stopped). Returns null while the budget lives, or a
+  // diagnostic error string once it has passed.
+  function outerDeadlineExceeded(deadlineAt, phaseLabel) {
+    if (typeof deadlineAt !== 'number' || !Number.isFinite(deadlineAt)) return null;
+    if (Date.now() <= deadlineAt) return null;
+    return 'OUTER_DEADLINE_EXCEEDED: the owning script\'s execution budget ended before this ' +
+      String(phaseLabel || 'DOM op') + ' could run — the engine already timed the script out, so this op was abandoned instead of continuing (and re-activating the tab) for a dead execution. Narrow the batch (containerRange/maxContainers), slice across maxIterations>1 + {done:false} iterations, or raise the step budget.';
+  }
+
   // rAF ticks over a short window: an active visible tab fires ~60/s; a
   // throttled/frozen renderer fires ~0. This distinguishes "genuinely
   // exhausted feed" (frames flowing, count stable) from "renderer gated"
@@ -1659,7 +1676,7 @@
         }
         case 'extractWithHover': {
           const __t0 = Date.now();
-          const __r = await domExtractWithHover(data.selector, data.args && data.args[0], data.args && data.args[1]);
+          const __r = await domExtractWithHover(data.selector, data.args && data.args[0], data.args && data.args[1], data.deadlineAt);
           result = __r.result;
           _diagnostics = __r._diagnostics;
           recordDomActivity('$extractWithHover', data.selector, Array.isArray(result) ? result.length : 0, Date.now() - __t0);
@@ -1675,7 +1692,7 @@
         }
         case 'collectUntil': {
           const __t0 = Date.now();
-          result = await domCollectUntil(data.selector, (data.args && data.args[0] && typeof data.args[0] === 'object') ? data.args[0] : {});
+          result = await domCollectUntil(data.selector, (data.args && data.args[0] && typeof data.args[0] === 'object') ? data.args[0] : {}, data.deadlineAt);
           recordDomActivity('$collectUntil', data.selector, result && result.satisfied ? 1 : 0, Date.now() - __t0);
           break;
         }
@@ -1695,7 +1712,7 @@
         }
         case 'hover': {
           const __t0 = Date.now();
-          result = await domHover(data.selector, data.args && data.args[0], data.args && data.args[1]);
+          result = await domHover(data.selector, data.args && data.args[0], data.args && data.args[1], data.deadlineAt);
           recordDomActivity('$hover', data.selector, result && result.hovered ? 1 : 0, Date.now() - __t0);
           break;
         }
@@ -3148,7 +3165,7 @@
   // inner-container probing), and a CERTIFIED exhaustion verdict
   // (scroll stalled + unique count unchanged for two consecutive rounds)
   // instead of a bare "no more progress".
-  async function domCollectUntil(containerSel, opts) {
+  async function domCollectUntil(containerSel, opts, deadlineAt) {
     const o = opts && typeof opts === 'object' ? opts : {};
     const target = (typeof o.targetCount === 'number' && o.targetCount > 0) ? Math.floor(o.targetCount) : 1;
     const idAttr = typeof o.idAttr === 'string' && o.idAttr ? o.idAttr : null;
@@ -3191,7 +3208,17 @@
     // different shape). The incident receipts read
     // {collected:0, certifiedExhaustion:true} (one after 110948ms).
     let everPositive = snap.unique > 0;
+    let out_deadline = null;
     while (!satisfied && rounds < maxRounds) {
+      // 138th log: abandon the loop when the owning script's budget is gone
+      // (the settle sleep below is exactly the timer a throttled renderer
+      // stretches to minutes — the loop would otherwise spin for a dead
+      // execution). The receipt discloses the abandonment.
+      const __dlErr = outerDeadlineExceeded(deadlineAt, 'collectUntil round');
+      if (__dlErr) {
+        out_deadline = __dlErr;
+        break;
+      }
       rounds += 1;
       let scrollRes = null;
       if (hasIncremental) {
@@ -3236,6 +3263,7 @@
       trace: trace,
       sampleIds: snap.sampleIds
     };
+    if (out_deadline) out.outerDeadline = out_deadline;
     if (certifiedExhaustion) {
       out.exhaustion = {
         certified: true,
@@ -3636,8 +3664,25 @@
     return { text: '', attr: firstWithAttr, note: fallback.note || null };
   }
 
-  async function domHover(selOrEl, popoverSel, opts) {
+  async function domHover(selOrEl, popoverSel, opts, deadlineAt) {
     if (!selOrEl) throw new Error('$hover requires an anchor selector or element');
+    // 138th log: abandon BEFORE any work (including activation) when the
+    // owning script's budget is already gone — a zombie hover's activation
+    // is what re-stole window focus after the session had stopped.
+    var __dlErr = outerDeadlineExceeded(deadlineAt, 'hover');
+    if (__dlErr) {
+      return {
+        hovered: false,
+        htmlSnippet: null,
+        popoverSelector: null,
+        autoDiscovered: false,
+        hoverDispatched: false,
+        hoverReason: 'outer_deadline_exceeded',
+        reason: 'outer_deadline_exceeded',
+        reasonDetail: __dlErr,
+        budgetNote: 'the owning script\'s execution budget ended — this hover was abandoned without dispatching. The batch should stop calling hovers; narrow the batch or raise the step budget.'
+      };
+    }
     // Sixth-log followup: per-anchor phase timings. Run 1 of the 2026-09-01
     // log burned ~7s/anchor BETWEEN logged events (dismiss-ok → next
     // anchor's activation) with no way to attribute it from the log —
@@ -3738,6 +3783,68 @@
       await new Promise(function (r) { setTimeout(r, 50); });
     }
     var scrollDoneAt = Date.now();
+    // 138th log: pre-dispatch starvation cap. The segment above (anchor
+    // resolution + scrollIntoView + a 50ms settle + up to one 250ms remount
+    // retry) is healthy at 50-1500ms. In an occluded/unfocused window
+    // Chrome's renderer timer throttling stretches those sleeps to MINUTES
+    // (the incident series: scrollMs 24439 → 82695 → 176434 → 590451 — one
+    // 50ms sleep alone crossed 3 minutes between activation thaw bursts),
+    // and maxWallMs budgets checked BETWEEN anchors could never fire inside
+    // one. A pre-dispatch segment this long means the dispatch and dwell
+    // would run against a throttled renderer anyway — fail fast with the
+    // page-state evidence instead of hanging the batch.
+    if (scrollDoneAt - hoverT0 > 15000) {
+      notifyBackgroundDiagnostic('hover_request', {
+        selector: selectorForLog,
+        popoverSelector: popoverSel || null,
+        hoverX: null, hoverY: null,
+        dispatched: false, ok: false,
+        reason: 'pre_dispatch_starved',
+        reasonDetail: 'pre-dispatch segment took ' + (scrollDoneAt - hoverT0) + 'ms (resolution+scroll+settle; healthy is <1500ms)',
+        pageState: readPageFrameState(),
+        popoverBaselineSampled: false,
+        baselineEfpCount: 0
+      });
+      var starvedLabel = null;
+      try { starvedLabel = harvestAnchorLabel(anchor); } catch (eS) { starvedLabel = null; }
+      var starved = {
+        hovered: false,
+        htmlSnippet: null,
+        popoverSelector: null,
+        autoDiscovered: false,
+        hoverDispatched: false,
+        hoverReason: 'pre_dispatch_starved',
+        reason: 'pre_dispatch_starved',
+        reasonDetail: 'pre-dispatch segment took ' + (scrollDoneAt - hoverT0) + 'ms',
+        starvedMs: scrollDoneAt - hoverT0,
+        pageState: readPageFrameState(),
+        budgetNote: 'the tab\'s renderer timers were throttled (occluded/unfocused window — the settle sleeps stretched from milliseconds to minutes). The hover was abandoned BEFORE dispatch: `scrapewright throttle on` covers occlusion, and the op re-runs cleanly once the tab can produce frames. Do not read this as a popover-negative.'
+      };
+      if (starvedLabel) {
+        if (starvedLabel.text) {
+          starved.labelledbyText = starvedLabel.text;
+          starved.labelledbyAttr = starvedLabel.attr;
+        } else if (starvedLabel.note) {
+          starved.labelledbyAttr = starvedLabel.attr;
+          starved.labelledbyNote = starvedLabel.note;
+        }
+      }
+      return starved;
+    }
+    __dlErr = outerDeadlineExceeded(deadlineAt, 'hover pre-dispatch');
+    if (__dlErr) {
+      return {
+        hovered: false,
+        htmlSnippet: null,
+        popoverSelector: null,
+        autoDiscovered: false,
+        hoverDispatched: false,
+        hoverReason: 'outer_deadline_exceeded',
+        reason: 'outer_deadline_exceeded',
+        reasonDetail: __dlErr,
+        budgetNote: 'the owning script\'s execution budget ended — this hover was abandoned without dispatching.'
+      };
+    }
 
     var rect = anchor.getBoundingClientRect();
     // Sixty-third log: a degenerate rect (display:none / zero-size — e.g. a
@@ -4842,9 +4949,26 @@
   // injected as hoverFn. The pure helper in lib/list-extract-ops.js handles
   // the per-container anchor iteration; this wrapper handles the
   // chrome.*-dependent concerns (container resolution, diagnostics wiring).
-  async function domExtractWithHover(containerSel, fieldMap, opts) {
+  async function domExtractWithHover(containerSel, fieldMap, opts, deadlineAt) {
     if (!containerSel || typeof containerSel !== 'string') {
       throw new Error('$extractWithHover containerSel must be a non-empty string');
+    }
+    // 138th log: entry guard — a batch arriving after the owning script's
+    // budget ended does zero page work (no container resolution, no
+    // activation) and fails with the diagnostic.
+    var __ewhDl = outerDeadlineExceeded(deadlineAt, 'extractWithHover batch');
+    if (__ewhDl) {
+      var __ewhErr = new Error(__ewhDl);
+      __ewhErr._diagnostics = {
+        api: 'extractWithHover',
+        containerSelector: containerSel,
+        containerMatches: 0,
+        processedContainers: 0,
+        perField: [],
+        hoverSummary: { anchorsFound: 0, hovercardsCaptured: 0, hoverFailures: 0 },
+        outerDeadlineExceeded: true
+      };
+      throw __ewhErr;
     }
     opts = opts || {};
     var hoverConfig = opts.hover;
@@ -4958,12 +5082,43 @@
     // to the { records, partial } envelope (the Array.isArray consumer path is
     // unchanged for all-fit runs). The census lanes read the flag via
     // _diagnostics.partialWallBudget.
+    // 138th log: the wall budget is CLAMPED to the owning script's remaining
+    // deadline, and the injected hover fn bails per-anchor once the deadline
+    // passes — the batch's own maxWallMs is checked BETWEEN anchors, so a
+    // single starved anchor (settle sleeps stretched by occluded-window
+    // timer throttling) burned 10 minutes inside one call while the outer
+    // execution had long since timed out.
+    var hoverFnForBatch = domHover;
+    if (typeof deadlineAt === 'number' && Number.isFinite(deadlineAt)) {
+      hoverFnForBatch = function (anchorEl, popoverSelArg, hopts) {
+        var derr = outerDeadlineExceeded(deadlineAt, 'anchor hover');
+        if (derr) {
+          return Promise.resolve({
+            hovered: false,
+            htmlSnippet: null,
+            popoverSelector: null,
+            autoDiscovered: false,
+            hoverDispatched: false,
+            hoverReason: 'outer_deadline_exceeded',
+            reason: 'outer_deadline_exceeded',
+            reasonDetail: derr,
+            budgetNote: 'the owning script\'s execution budget ended — this anchor hover was abandoned without dispatching.'
+          });
+        }
+        return domHover(anchorEl, popoverSelArg, hopts, deadlineAt);
+      };
+    }
+    var batchWallMs = opts.maxWallMs;
+    if (typeof deadlineAt === 'number' && Number.isFinite(deadlineAt)) {
+      var remaining = deadlineAt - Date.now();
+      batchWallMs = Math.min((typeof batchWallMs === 'number' && batchWallMs > 0) ? batchWallMs : 25000, Math.max(0, remaining));
+    }
     var ret = await ops.extractWithHoverRecords(
       processed,
       fieldMap,
       hoverConfig,
-      domHover,
-      { allowEmpty: true, maxWallMs: opts.maxWallMs }
+      hoverFnForBatch,
+      { allowEmpty: true, maxWallMs: batchWallMs }
     );
     var partialEnvelope = null;
     var records = ret;

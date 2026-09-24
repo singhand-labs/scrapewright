@@ -122,7 +122,9 @@ describe('103c-B: background per-tab DOM_REQUEST queue', () => {
   });
   it('the DOM_REQUEST relay routes through the queue', () => {
     const i = BG.indexOf("message.type === 'DOM_REQUEST' && message._fromOffscreen");
-    const block = BG.slice(i, i + 1600);
+    // 138th log: the deadline pre-check sits between the marker and the
+    // enqueue call now — the window just needs to span both.
+    const block = BG.slice(i, i + 3200);
     assert.match(block, /enqueueDomRequestRelay\(/, 'relay wrapped by the per-tab queue');
   });
 });

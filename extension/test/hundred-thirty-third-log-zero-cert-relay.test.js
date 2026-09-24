@@ -53,6 +53,9 @@ describe('133rd log — $collectUntil refuses to certify exhaustion at never-pos
       resolveScrollTarget: () => null,
       sendDebugLog: () => {},
       notifyBackgroundDiagnostic: () => {},
+      // 138th log: domCollectUntil consults the outer-deadline guard
+      // (no deadline in these tests -> always null).
+      outerDeadlineExceeded: () => null,
       setTimeoutGlobal: null
     };
     vm.createContext(ctx);

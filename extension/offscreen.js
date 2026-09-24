@@ -122,8 +122,8 @@
       clearSandboxReadyTimer();
       sendDebugLog('info', 'offscreen', 'Sandbox ready, processing pending executes', { count: pendingExecutes.length });
       while (pendingExecutes.length) {
-        const { script, input, execId } = pendingExecutes.shift();
-        forwardExecute(script, input, execId);
+        const { script, input, execId, deadlineAt } = pendingExecutes.shift();
+        forwardExecute(script, input, execId, deadlineAt);
       }
     } else if (e.data.type === 'EXECUTE_RESULT') {
       // B5: resolve the completing execution's tabId by identity instead of
@@ -167,19 +167,21 @@
         action: e.data.action,
         selector: e.data.selector,
         args: e.data.args,
+        deadlineAt: e.data.deadlineAt,
         tabId,
         _fromOffscreen: true
       });
     }
   });
 
-  function forwardExecute(script, input, execId) {
+  function forwardExecute(script, input, execId, deadlineAt) {
     if (sandboxIframe?.contentWindow) {
       sandboxIframe.contentWindow.postMessage({
         type: 'EXECUTE',
         script,
         input,
-        execId
+        execId,
+        deadlineAt
       }, '*');
     }
   }
@@ -207,10 +209,10 @@
       if (message.execId !== undefined) execTabMap.set(message.execId, message.tabId);
       sendDebugLog('info', 'offscreen', 'EXECUTE_SCRIPT_OFFSCREEN received', { tabId: message.tabId, scriptPreview: message.script?.slice(0, 2000), scriptLength: message.script?.length });
       if (sandboxReady) {
-        forwardExecute(message.script, message.input, message.execId);
+        forwardExecute(message.script, message.input, message.execId, message.deadlineAt);
       } else {
         sendDebugLog('info', 'offscreen', 'Sandbox not ready yet, queuing execute');
-        pendingExecutes.push({ script: message.script, input: message.input, execId: message.execId });
+        pendingExecutes.push({ script: message.script, input: message.input, execId: message.execId, deadlineAt: message.deadlineAt });
       }
       return false;
     }

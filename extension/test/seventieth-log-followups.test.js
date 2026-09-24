@@ -135,7 +135,10 @@ for (const [label, getOps] of opsFactories()) {
 
 describe('F1: domExtractWithHover wiring (source audit)', () => {
   it('forwards opts.maxWallMs and unwraps the partial envelope into diagnostics', () => {
-    assert.match(CS_SRC, /\{ allowEmpty: true, maxWallMs: opts\.maxWallMs \}/,
+    // 138th log: the forwarded budget is batchWallMs (opts.maxWallMs clamped
+    // to the owning script's remaining deadline; equals opts.maxWallMs when
+    // no deadline rides the request).
+    assert.match(CS_SRC, /\{ allowEmpty: true, maxWallMs: batchWallMs \}/,
       'maxWallMs forwarded to the helper');
     assert.match(CS_SRC, /partialWallBudget = \{\s*processed: partialEnvelope\.partial\.processed/);
     assert.match(CS_SRC, /_diagnostics\.partialNote = partialEnvelope\.partial\.note/);

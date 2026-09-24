@@ -75,7 +75,11 @@ function sliceFn(source, startMarker, endMarker) {
 const HARVEST_DEPS_SRC =
   sliceFnSource('function resolveLabelledbyText(', '\n  async function domLabelledby') +
   '\n' +
-  sliceFnSource('function harvestAnchorLabel(', '\n  async function domHover(');
+  sliceFnSource('function harvestAnchorLabel(', '\n  async function domHover(')
+  // 138th log: domHover consults the outer-deadline guard and the page-state
+  // reader (starve branch). These tests pass no deadline and never starve, so
+  // inert stubs preserve the pre-138 behavior they pin.
+  + '\nfunction outerDeadlineExceeded(){return null}\nfunction readPageFrameState(){return {visibilityState:"visible",hasFocus:true}}';
 
 function sliceFnSource(startMarker, endMarker) {
   return sliceFn(readSrc('content-script.js'), startMarker, endMarker);

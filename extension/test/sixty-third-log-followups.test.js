@@ -135,7 +135,11 @@ describe('sixty-third log F2: position-guided inner-quote repair', () => {
 const HARVEST_DEPS_SRC =
   sliceFn(readSrc('content-script.js'), 'function resolveLabelledbyText(', '\n  async function domLabelledby') +
   '\n' +
-  sliceFn(readSrc('content-script.js'), 'function harvestAnchorLabel(', '\n  async function domHover(');
+  sliceFn(readSrc('content-script.js'), 'function harvestAnchorLabel(', '\n  async function domHover(')
+  // 138th log: domHover consults the outer-deadline guard and the page-state
+  // reader (starve branch). These tests pass no deadline and never starve, so
+  // inert stubs preserve the pre-138 behavior they pin.
+  + '\nfunction outerDeadlineExceeded(){return null}\nfunction readPageFrameState(){return {visibilityState:"visible",hasFocus:true}}';
 
 function sliceDomHover(src) {
   return sliceFn(src, 'async function domHover(', 'async function domExtractWithHover(');

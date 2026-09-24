@@ -1050,9 +1050,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       action: message.action,
       selector: message.selector,
       args: message.args,
+      deadlineAt: message.deadlineAt,
       tabId: message.tabId,
       _fromOffscreen: true
     };
+    // 138th log: a request whose owning script's wall deadline already
+    // passed is answered HERE, never relayed. The incident: hover batches
+    // queued behind a starved tab kept executing for minutes after the
+    // outer SCRIPT_TIMEOUT rejected — each zombie hover re-activated the
+    // tab (and, on dispatch-failure escalation, re-stole window focus)
+    // long after the session itself had stopped. Answering at the relay
+    // skips tabs.sendMessage entirely, so no activation side effects fire.
+    if (typeof message.deadlineAt === 'number' && Number.isFinite(message.deadlineAt) && Date.now() > message.deadlineAt) {
+      chrome.runtime.sendMessage({
+        type: 'DOM_RESPONSE',
+        id: message.id,
+        error: 'OUTER_DEADLINE_EXCEEDED: the owning script\'s execution budget ended before this DOM request could be relayed — the engine already timed the script out. Narrow the batch (containerRange/maxContainers), slice across maxIterations>1 iterations, or raise the step budget.',
+        _fromOffscreen: true
+      }).catch(() => {});
+      return false;
+    }
     enqueueDomRequestRelay(message.tabId, async () => {
       for (let attempt = 0; attempt < 4; attempt++) {
         try {

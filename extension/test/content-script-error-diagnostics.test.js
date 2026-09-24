@@ -58,7 +58,9 @@ describe('B2: error diagnostics survive handleDomRequest', () => {
     const diffFactory = eval('(function (querySelectorAllDeep, stripTrailingFilterClause) { return (' + sliceFn('computeSelectorDifferential') + '); })');
     const fmtFactory = eval('(function () { return (' + sliceFn('formatSelectorDifferentialNote') + '); })');
     const computeSelectorDifferential = diffFactory(() => [], () => null);
-    const factory = eval('(function (querySelectorAllDeep, sendDebugLog, notifyBackgroundDiagnostic, getListExtractOps, domHover, computeSelectorDifferential, formatSelectorDifferentialNote) { return (async ' + sliceFn('domExtractWithHover') + '); })');
+    // 138th log: domExtractWithHover consults the outer-deadline guard at entry
+    // (no deadline in these tests -> null -> unchanged behavior).
+    const factory = eval('(function (querySelectorAllDeep, sendDebugLog, notifyBackgroundDiagnostic, getListExtractOps, domHover, computeSelectorDifferential, formatSelectorDifferentialNote, outerDeadlineExceeded) { return (async ' + sliceFn('domExtractWithHover') + '); })');
     const fn = factory(
       () => [], // zero containers matched
       () => {},
@@ -66,7 +68,8 @@ describe('B2: error diagnostics survive handleDomRequest', () => {
       undefined,
       undefined,
       computeSelectorDifferential,
-      fmtFactory()
+      fmtFactory(),
+      () => null
     );
     await assert.rejects(
       fn('.no-such-container', { title: 'x' }, { hover: { anchorSel: '.a' } }),

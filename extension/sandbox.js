@@ -7,6 +7,13 @@
   let domRequestId = 0;
   const pendingDomRequests = new Map();
 
+  // 138th log: the current execution's wall deadline (set from each EXECUTE
+  // message; null for legacy senders). Stamped onto every DOM_REQUEST so the
+  // content script can abandon work whose owning script already timed out —
+  // without it, hover batches kept running (and stealing tab activation and
+  // window focus) for minutes after the engine had given up on the script.
+  let execDeadlineAt = null;
+
   // Module-scope accumulator for per-call selector diagnostics stripped from
   // DOM_RESPONSEs. Reset to [] after each execution so diagnostics don't leak
   // between calls (selector diagnostics — spec 2026-07-24 Task 3).
@@ -29,7 +36,8 @@
         id,
         action,
         selector,
-        args: args || []
+        args: args || [],
+        deadlineAt: execDeadlineAt
       }, '*');
     });
   }
@@ -109,6 +117,7 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
       }
     } else if (e.data.type === 'EXECUTE') {
       sendDebugLog('info', 'sandbox', 'EXECUTE received', { scriptPreview: e.data.script?.slice(0, 2000), scriptLength: e.data.script?.length });
+      execDeadlineAt = (typeof e.data.deadlineAt === 'number' && Number.isFinite(e.data.deadlineAt)) ? e.data.deadlineAt : null;
       executeInSandbox(e.data.script, e.data.input, e.data.execId);
     } else if (e.data.type === 'SYNTAX_CHECK') {
       try {

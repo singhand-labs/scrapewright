@@ -29,8 +29,10 @@ describe('B5: offscreen/sandbox execId routing (source audit)', () => {
   });
 
   it('offscreen forwards execId to the sandbox and carries it on pending queues', () => {
-    assert.match(OFFSCREEN_SRC, /forwardExecute\(message\.script,\s*message\.input,\s*message\.execId\)/);
-    assert.match(OFFSCREEN_SRC, /pendingExecutes\.push\(\{\s*script:\s*message\.script,\s*input:\s*message\.input,\s*execId:\s*message\.execId\s*\}\)/);
+    // 138th log: deadlineAt rides the same paths (4th arg on forwardExecute,
+    // extra key on the pending queue entry).
+    assert.match(OFFSCREEN_SRC, /forwardExecute\(message\.script,\s*message\.input,\s*message\.execId,\s*message\.deadlineAt\)/);
+    assert.match(OFFSCREEN_SRC, /pendingExecutes\.push\(\{\s*script:\s*message\.script,\s*input:\s*message\.input,\s*execId:\s*message\.execId,\s*deadlineAt:\s*message\.deadlineAt\s*\}\)/);
   });
 
   it('timeout purge targets only the timed-out execId (legacy branch for execId-less messages)', () => {

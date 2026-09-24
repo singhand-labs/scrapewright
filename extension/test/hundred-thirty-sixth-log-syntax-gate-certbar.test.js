@@ -145,6 +145,10 @@ describe('136th log — collectUntil certification needs sustained evidence', ()
       resolveScrollTarget: () => null,
       sendDebugLog: () => {},
       notifyBackgroundDiagnostic: () => {},
+      // 138th log: domCollectUntil now consults the outer-deadline guard
+      // (no deadline passed in these tests → always null → no behavior
+      // change for them).
+      outerDeadlineExceeded: () => null,
       setTimeoutGlobal: null
     };
     vm.createContext(ctx);

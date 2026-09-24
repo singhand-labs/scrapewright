@@ -4822,11 +4822,31 @@ function validateChain(steps) {
 
   const ids = new Set(steps.map(s => s && s.id).filter(Boolean));
 
+  // 138th log: duplicate-id rejection. The pointer and reachability checks
+  // below are both ID-keyed (a Set collapses duplicates; steps.find resolves
+  // the first occurrence), so a graph carrying the same id twice — the
+  // incident: chunk assembly concatenated a full buffer and a full final
+  // chunk, landing 8 steps with 4 duplicate ids — passed validation and
+  // shipped as v8/v9 while the shadow copies confused every id-addressed
+  // consumer (STEP PLAN, ghost-ref gate, patch merge-by-id).
+  const seenIds = new Map();
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
     if (!step || !step.id) {
       return { valid: false, error: `Step ${i + 1} must have an id` };
     }
+    const idStr = String(step.id);
+    if (seenIds.has(idStr)) {
+      return {
+        valid: false,
+        error: `Duplicate step id "${idStr}" — defined at positions ${seenIds.get(idStr)} and ${i + 1}. The graph routes by id, so one copy shadows the other. Resend the steps with each id exactly once.`
+      };
+    }
+    seenIds.set(idStr, i + 1);
+  }
+
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
     const checkPointer = (field) => {
       const target = step[field];
       if (!target || target === 'TERMINATE') return null;
