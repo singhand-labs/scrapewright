@@ -1681,23 +1681,6 @@
           staticLint.push('step "' + String(h.stepId) + '": non-standard pseudo-class ' + h.pseudo + ' in a selector — browsers reject it at query time. STANDARD CSS ONLY: express text-matching with attribute selectors ([aria-label*=…], [href*=…]) or structural pseudos (:has/:not/:nth-of-type). Playwright-only pseudo-classes (near: ' + h.near + ') do not exist in querySelectorAll.');
         }
       }
-      // 139th log: a synthetic bookkeeping field (index/serialNumber) in an
-      // array's REQUIRED list — the incident's confirmed contract shipped
-      // items.required=[index,content,html]. Advisory-only here (the
-      // io.confirm panel already warned at confirmation time).
-      try {
-        const BOOKKEEPING_RE = /^(index|idx|serialnumber|serial_no|rownumber|rownum|seq|sequence|序号|行号)$/i;
-        const lintSchemaBK = (a.outputSchema != null) ? a.outputSchema : lintSchema;
-        const bkProps = (lintSchemaBK && lintSchemaBK.properties) || {};
-        for (const k of Object.keys(bkProps)) {
-          const itemsBK = bkProps[k] && bkProps[k].items;
-          if (!itemsBK || !Array.isArray(itemsBK.required)) continue;
-          const hitsBK = itemsBK.required.filter((f) => BOOKKEEPING_RE.test(String(f)));
-          if (hitsBK.length) {
-            staticLint.push('schema field "' + k + '" carries REQUIRED bookkeeping field(s) [' + hitsBK.join(', ') + '] — an index/serial is loop-generated, not page data; it masks empty-data signals (a record whose only filled field is index reads as non-empty). Drop it from the output, or make it optional if the user explicitly wants it.');
-          }
-        }
-      } catch (e) { /* advisory lint must never block */ }
       // Thirty-first log: comments/shares shipped as `comments: "", shares:
       // ""` hardcoded literals — schema record fields no step ever extracts.
       // Verify stayed green (a literal satisfies shape checks) and only the
@@ -1722,6 +1705,28 @@
           staticLint.push('schema field "' + f.path + '" appears ONLY as hardcoded string literal(s) in the step scripts — no step extracts it (no fieldMap entry, no assignment). A literal verifies green while carrying no data: bind the field in a fieldMap or compute it, or renegotiate the contract with io.confirm if the page genuinely lacks it.');
         }
       }
+      // 139th log: a synthetic bookkeeping field (index/serialNumber) in an
+      // array's REQUIRED list — the incident's confirmed contract shipped
+      // items.required=[index,content,html]. Advisory-only here (the
+      // io.confirm panel already warned at confirmation time).
+      // 144th round: this block originally sat ABOVE the `const lintSchema`
+      // declaration — the TDZ ReferenceError was swallowed by the catch and
+      // the gate was a silent no-op for two production sessions (the class
+      // the 129th-round review caught in the 127th's junk veto). It now
+      // reads the DECLARED lintSchema below it.
+      try {
+        const BOOKKEEPING_RE = /^(index|idx|serialnumber|serial_no|rownumber|rownum|seq|sequence|序号|行号)$/i;
+        const lintSchemaBK = (a.outputSchema != null) ? a.outputSchema : lintSchema;
+        const bkProps = (lintSchemaBK && lintSchemaBK.properties) || {};
+        for (const k of Object.keys(bkProps)) {
+          const itemsBK = bkProps[k] && bkProps[k].items;
+          if (!itemsBK || !Array.isArray(itemsBK.required)) continue;
+          const hitsBK = itemsBK.required.filter((f) => BOOKKEEPING_RE.test(String(f)));
+          if (hitsBK.length) {
+            staticLint.push('schema field "' + k + '" carries REQUIRED bookkeeping field(s) [' + hitsBK.join(', ') + '] — an index/serial is loop-generated, not page data; it masks empty-data signals (a record whose only filled field is index reads as non-empty). Drop it from the output, or make it optional if the user explicitly wants it.');
+          }
+        }
+      } catch (e) { /* advisory lint must never block */ }
       // Fortieth log: two sessions in a row hand-wrote
       // `r.popoverHtml || r.__popover.html` off $extractWithHover records —
       // a field that does not exist — and shipped hoverCards:[] while the

@@ -216,4 +216,41 @@ describe('139th log D — media hygiene + synthetic-required warning', () => {
     const warn2 = (panels[1].diffLines || []).find((l) => /SYNTHETIC REQUIRED FIELD/.test(l));
     assert.equal(warn2, undefined, 'no warning on a clean contract');
   });
+
+  it('the service.update staticLint mirror ALSO fires for a resumed artifact schema (the 144th-round TDZ revival — the 139th block sat before its lintSchema declaration and the catch swallowed the ReferenceError silently for two production sessions)', async () => {
+    const appliedBK = [];
+    const OUT = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object',
+      required: ['index', 'content', 'htmlSnippet'],
+      properties: { index: { type: 'number' }, content: { type: 'string' }, htmlSnippet: { type: 'string' } } } } } };
+    const toolsBK = ST.createSessionTools({
+      rail: { executeDsl: async () => ({}), pageState: async () => ({}), epoch: 0 },
+      runVerify: async () => ({ events: [], report: { ok: true, detectors: {} }, raw: {} }),
+      probeFactory: () => ({ snippet: async () => ({ ok: true }) }),
+      getDraftService: () => null,
+      applyArtifact: (a) => appliedBK.push(a),
+      getTestInput: () => ({}), getOutputSchema: () => OUT, getSteps: () => [],
+      ioConfirmBridge: { request: async () => ({ confirmed: true }) }
+    }).tools;
+    await toolsBK['io.confirm']({ inputSchema: { type: 'object', properties: {} }, outputSchema: OUT, note: 'x' });
+    const r = await toolsBK['service.update']({ steps: [{ id: 's1', name: 'one', script: 'return 1;', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }] });
+    assert.ok(Array.isArray(r.staticLint), 'staticLint present — got keys ' + Object.keys(r).join(','));
+    assert.ok(r.staticLint.some((l) => /REQUIRED bookkeeping field\(s\) \[index\]/.test(l)),
+      'the mirror names the index field — got ' + JSON.stringify(r.staticLint).slice(0, 200));
+    const appliedBK2 = [];
+    const toolsBK2 = ST.createSessionTools({
+      rail: { executeDsl: async () => ({}), pageState: async () => ({}), epoch: 0 },
+      runVerify: async () => ({ events: [], report: { ok: true, detectors: {} }, raw: {} }),
+      probeFactory: () => ({ snippet: async () => ({ ok: true }) }),
+      getDraftService: () => null,
+      applyArtifact: (a) => appliedBK2.push(a),
+      getTestInput: () => ({}),
+      getOutputSchema: () => ({ type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object', required: ['postId', 'content'], properties: { postId: { type: 'string' }, content: { type: 'string' } } } } } }),
+      getSteps: () => [],
+      ioConfirmBridge: { request: async () => ({ confirmed: true }) }
+    }).tools;
+    const CLEAN_OUT = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object', required: ['postId', 'content'], properties: { postId: { type: 'string' }, content: { type: 'string' } } } } } };
+    await toolsBK2['io.confirm']({ inputSchema: { type: 'object', properties: {} }, outputSchema: CLEAN_OUT, note: 'x' });
+    const r2 = await toolsBK2['service.update']({ steps: [{ id: 's1', name: 'one', script: 'return 1;', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }] });
+    assert.ok(!(r2.staticLint || []).some((l) => /bookkeeping/.test(l)), 'clean schema carries no bookkeeping warning');
+  });
 });
