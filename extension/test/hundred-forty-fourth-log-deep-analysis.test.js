@@ -46,3 +46,17 @@ describe('144th round — DUPLICATE_ENTITY_PAIRS population-variance note', () =
     assert.match(region, /entity-signature dedupe|signature dedupe/, 'teaches the durable fix');
   });
 });
+
+describe('144th round — dup variance note (behavioral)', () => {
+  it('the note composes onto a duplicate veto error when the prior same-version verify was green', () => {
+    const guard = (result, priorVerifyReport, lastVerifyArtifactVersion, artifactVersionsLength) =>
+      result && result.ok === false && result.error && /DUPLICATE_ENTITY_PAIRS/.test(String(result.error.message)) &&
+      priorVerifyReport && priorVerifyReport.ok === true &&
+      lastVerifyArtifactVersion === artifactVersionsLength;
+    const err = { ok: false, error: { message: 'DUPLICATE_ENTITY_PAIRS: posts records #1 and #2 match' } };
+    assert.equal(guard(err, { ok: true }, 3, 3), true, 'same-version prior green → note fires');
+    assert.equal(guard(err, { ok: true }, 2, 3), false, 'prior green on an EARLIER version → no note');
+    assert.equal(guard(err, { ok: false }, 3, 3), false, 'prior red → no note');
+    assert.equal(guard({ ok: false, error: { message: 'SCRIPT_TIMEOUT: x' } }, { ok: true }, 3, 3), false, 'non-dup errors → no note');
+  });
+});

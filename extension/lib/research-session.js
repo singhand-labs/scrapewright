@@ -1572,6 +1572,20 @@
                   }
                 }
               }
+            // 144th round: the 143rd red was feed nondeterminism — the SAME
+            // artifact verified GREEN one run earlier; the model had no way
+            // to know a re-verify just re-rolls the population. When a red
+            // carries the duplicate-entity veto and the PRIOR verify of the
+            // SAME artifact version was green, append the variance teaching
+            // to the error message (the strongest channel to the model).
+            try {
+              if (result && result.ok === false && result.error && /DUPLICATE_ENTITY_PAIRS/.test(String(result.error.message)) &&
+                  state.priorVerifyReport && state.priorVerifyReport.ok === true &&
+                  state.lastVerifyArtifactVersion === state.artifactVersions.length) {
+                result.error.message = String(result.error.message) +
+                  ' POPULATION VARIANCE: the PRIOR verify of this SAME artifact version was GREEN — the page serves repeated items nondeterministically, so the duplicate may not reproduce on a re-run. The DURABLE fix is the entity-signature dedupe in the step assembly (dedupe by the matched fields, e.g. content+postTime, when ids collide or repeat); re-verifying the artifact unchanged just re-rolls the population.';
+              }
+            } catch (e) { /* the note is best-effort; the report flows on */ }
               state.priorVerifyReport = result;
             }
             state.lastVerifyOk = !!(result && typeof result === 'object' && result.ok === true);
