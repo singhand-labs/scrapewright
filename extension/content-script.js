@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '133-zero-cert';
+  const SW_BUILD_TAG = '136-sustained-cert';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -3211,10 +3211,14 @@
       if (snap.unique >= target) { satisfied = true; break; }
       if (snap.unique === prevUnique) {
         stallRounds += 1;
-        // CERTIFIED exhaustion: the scroll machinery itself reports a stall
-        // (trusted wheel already attempted inside the incremental op) AND
-        // the unique population did not move for two consecutive rounds.
-        if (stallRounds >= 2 && (!scrollRes || scrollRes.stalled || !hasIncremental) && everPositive) {
+        // CERTIFIED exhaustion — 136th log: the bar is SUSTAINED evidence.
+        // The old stallRounds>=2 certified at the theoretical minimum
+        // (3 total rounds), and three cold tabs each "certified" 4/7 while
+        // the research tab matched 19-20 for the SAME selector after
+        // persistent scrolling — the first stall proves a pause, not
+        // exhaustion. Certification now needs the machinery stalled on 3
+        // consecutive rounds AND at least 5 total rounds.
+        if (stallRounds >= 3 && rounds >= 5 && (!scrollRes || scrollRes.stalled || !hasIncremental) && everPositive) {
           certifiedExhaustion = true;
           break;
         }
@@ -3235,7 +3239,15 @@
     if (certifiedExhaustion) {
       out.exhaustion = {
         certified: true,
-        evidence: 'scroll stalled (trusted-wheel fallback already attempted by the incremental op) and the unique population was unchanged for 2 consecutive rounds (' + snap.unique + ' unique of ' + target + ' wanted)'
+        evidence: 'scroll stalled (trusted-wheel fallback already attempted by the incremental op) and the unique population was unchanged for 3 consecutive rounds across ' + rounds + ' rounds (' + snap.unique + ' unique of ' + target + ' wanted)'
+      };
+    } else if (!satisfied && everPositive) {
+      // 136th log: the loop stopped WITHOUT the sustained bar — disclose
+      // that exhaustion is unproven rather than letting a bare
+      // satisfied:false read as a page-supply fact.
+      out.exhaustion = {
+        certified: false,
+        evidence: 'stopped after ' + rounds + ' round(s) without the sustained stall evidence (3 consecutive stalled rounds across >=5 rounds) — ' + snap.unique + ' unique of ' + target + ' wanted. Exhaustion NOT certified: the feed may yield more with further rounds; re-run to continue, or ship the shortfall with THIS caveat, not as a page fact.'
       };
     } else if (!satisfied && !everPositive) {
       out.selectorBlind = {

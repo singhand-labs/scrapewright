@@ -1522,6 +1522,30 @@
       if (!chain || chain.valid !== true) {
         return { error: 'step chain invalid: ' + String((chain && chain.error) || 'validation failed') };
       }
+      // 136th log: the 98th-round construction parse lived only in
+      // validateForExecution (wizard.js deploy paths) — the session update
+      // pipeline ran just validateChain + advisory lints, so a
+      // construction-broken script (the incident: a `[` eaten by the
+      // lenient repair of a truncated reply turned [?&]fbid= into /?&]fbid=
+      // — "Nothing to repeat") landed as the artifact and surfaced ONLY at
+      // verify, burning a 60-90s run; with the budget dead the broken
+      // script shipped. Parse every step with the same async-body shape the
+      // executor uses — covers single sends, chunk-assembled, patch, and
+      // restore (all reach here post-merge).
+      for (let si = 0; si < steps.length; si++) {
+        const st = steps[si];
+        const scriptStr = String((st && st.script) || '');
+        if (!scriptStr.trim()) continue;
+        try {
+          // eslint-disable-next-line no-new-func
+          new Function('__input__', '__stepResults__', '__lastResult__', 'return (async function(__input__) { ' + scriptStr + '\n })(__input__)');
+        } catch (e) {
+          return {
+            error: 'STEP_SCRIPT_NOT_PARSEABLE: step "' + ((st && st.name) || String(st && st.id)) + '" failed JavaScript construction at UPDATE time (' +
+              ((e && e.message) || String(e)) + '). The script was never executable — a truncated reply or repaired JSON most likely ate a character (paste the regex/expr verbatim from your evidence, or resend the step in a fresh chunk). Fix the script and resend; this artifact was NOT applied.'
+          };
+        }
+      }
       // Thirtieth log: `const n = $count(sel)` without await passes chain
       // validation and lands — then burns turns at verify with a misleading
       // POLL_EXHAUSTED (n holds a Promise, `n > 0` is false forever). Lint
