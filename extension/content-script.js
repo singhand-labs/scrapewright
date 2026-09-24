@@ -3,7 +3,7 @@
   // journal was committed but never loaded, and diagnosis burned a round
   // inferring the build from field presence). Bump on every hover-chain
   // change; the tag rides the load log and the SW-console mirror.
-  const SW_BUILD_TAG = '118-collect-until';
+  const SW_BUILD_TAG = '133-zero-cert';
   'use strict';
 
   // Forty-first log: whole-card `attr: 'outerHTML'` fields came back
@@ -3184,6 +3184,13 @@
     trace.push({ round: 0, total: snap.total, unique: snap.unique });
     let satisfied = snap.unique >= target;
     let certifiedExhaustion = false;
+    // 133rd log: certification requires the unique count to have been
+    // POSITIVE at least once. A counter that never rose above 0 is the
+    // fourth-log zero-trap class — it proves the selector matched nothing,
+    // not that the feed is exhausted (the items may render under a
+    // different shape). The incident receipts read
+    // {collected:0, certifiedExhaustion:true} (one after 110948ms).
+    let everPositive = snap.unique > 0;
     while (!satisfied && rounds < maxRounds) {
       rounds += 1;
       let scrollRes = null;
@@ -3194,6 +3201,7 @@
       }
       await new Promise(function (res) { setTimeout(res, settleMs); });
       snap = snapshot();
+      if (snap.unique > 0) everPositive = true;
       trace.push({
         round: rounds,
         total: snap.total,
@@ -3206,7 +3214,7 @@
         // CERTIFIED exhaustion: the scroll machinery itself reports a stall
         // (trusted wheel already attempted inside the incremental op) AND
         // the unique population did not move for two consecutive rounds.
-        if (stallRounds >= 2 && (!scrollRes || scrollRes.stalled || !hasIncremental)) {
+        if (stallRounds >= 2 && (!scrollRes || scrollRes.stalled || !hasIncremental) && everPositive) {
           certifiedExhaustion = true;
           break;
         }
@@ -3228,6 +3236,11 @@
       out.exhaustion = {
         certified: true,
         evidence: 'scroll stalled (trusted-wheel fallback already attempted by the incremental op) and the unique population was unchanged for 2 consecutive rounds (' + snap.unique + ' unique of ' + target + ' wanted)'
+      };
+    } else if (!satisfied && !everPositive) {
+      out.selectorBlind = {
+        note: 'the unique count never rose above 0 across ' + (rounds + 1) +
+          ' snapshot(s) — a selector that matches nothing cannot certify exhaustion (the population may render under a different shape): census the population before concluding the page is empty (count a broader parent selector, read the selector differential), then re-run with the corrected selector'
       };
     }
     try {

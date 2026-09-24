@@ -1029,6 +1029,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
   if (message.type === 'DOM_REQUEST' && message._fromOffscreen) {
+    // 133rd log: offscreen routes by its tabId stack; a stack cleaned by a
+    // timed-out execution yields tabId null, and chrome.tabs.sendMessage(null)
+    // throws a signature error the old path retried 4x with 1s sleeps before
+    // answering. A null tabId can never succeed — answer immediately and
+    // name the lost routing so the caller retries the outer call.
+    if (message.tabId == null) {
+      chrome.runtime.sendMessage({
+        type: 'DOM_RESPONSE',
+        id: message.id,
+        error: 'RELAY_FAILED: no target tab bound to this request (the execution\'s tab routing was cleaned — likely a timed-out script; retry the outer call)',
+        _fromOffscreen: true
+      }).catch(() => {});
+      return false;
+    }
     // Relay DOM_REQUEST from offscreen doc to content script in target tab
     const relayMsg = {
       type: 'DOM_REQUEST',
