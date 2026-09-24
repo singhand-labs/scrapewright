@@ -1532,18 +1532,45 @@
       // script shipped. Parse every step with the same async-body shape the
       // executor uses — covers single sends, chunk-assembled, patch, and
       // restore (all reach here post-merge).
+      //
+      // 137th log: the local `new Function` fast path is CSP-BLOCKED in the
+      // wizard page (MV3 default script-src 'self' — every script threw,
+      // 160 rejections, session dead at turn 64). On a CSP-flavored
+      // construction error, route ONE sandbox round trip (probe.snippet —
+      // the CSP-free execution surface; the incident model itself proved
+      // identical code executes there). Only when the sandbox route is ALSO
+      // unavailable do we fail OPEN with a receipt note: an infrastructure
+      // fault must never hard-block every update.
+      let parseCheckNote = null;
+      let cspBlocked = false;
+      const constructFn = (typeof d.constructStepScript === 'function') ? d.constructStepScript : constructStepScriptLocal;
       for (let si = 0; si < steps.length; si++) {
         const st = steps[si];
         const scriptStr = String((st && st.script) || '');
         if (!scriptStr.trim()) continue;
         try {
-          // eslint-disable-next-line no-new-func
-          new Function('__input__', '__stepResults__', '__lastResult__', 'return (async function(__input__) { ' + scriptStr + '\n })(__input__)');
+          constructFn(scriptStr);
         } catch (e) {
+          if (WU.isCspConstructError && WU.isCspConstructError(e)) { cspBlocked = true; break; }
           return {
             error: 'STEP_SCRIPT_NOT_PARSEABLE: step "' + ((st && st.name) || String(st && st.id)) + '" failed JavaScript construction at UPDATE time (' +
               ((e && e.message) || String(e)) + '). The script was never executable — a truncated reply or repaired JSON most likely ate a character (paste the regex/expr verbatim from your evidence, or resend the step in a fresh chunk). Fix the script and resend; this artifact was NOT applied.'
           };
+        }
+      }
+      if (cspBlocked && steps.length) {
+        try {
+          const probe = await probes.snippet({ code: syntaxProbeCode(steps), timeoutMs: 15000 });
+          if (probe && typeof probe.error === 'string') {
+            parseCheckNote = 'parse environment unavailable (page CSP blocks construction; sandbox probe failed: ' + probe.error.slice(0, 120) + ') — the syntax gate could not run for this update';
+          } else if (probe && probe && probe.ok === false) {
+            return {
+              error: 'STEP_SCRIPT_NOT_PARSEABLE: step "' + String(probe.step) + '" failed JavaScript construction at UPDATE time (' +
+                String(probe.message) + '). The script was never executable — a truncated reply or repaired JSON most likely ate a character (paste the regex/expr verbatim from your evidence, or resend the step in a fresh chunk). Fix the script and resend; this artifact was NOT applied.'
+            };
+          }
+        } catch (e) {
+          parseCheckNote = 'parse environment unavailable (page CSP blocks construction; sandbox probe unreachable) — the syntax gate could not run for this update';
         }
       }
       // Thirtieth log: `const n = $count(sel)` without await passes chain
@@ -1638,7 +1665,7 @@
         }
         d.applyArtifact(merged);
         if (lastVerify) lastVerify.staleArtifact = true;
-        if (attached || attachedTestInput) {
+        if (attached || attachedTestInput || parseCheckNote) {
           const st = ctx && ctx.session ? ctx.session.state() : null;
           const version = (st && st.session && Array.isArray(st.session.artifactVersions))
             ? st.session.artifactVersions.length + 1
@@ -1646,6 +1673,7 @@
           const parts = [];
           if (attached) parts.push('the confirmed I/O contract was attached (your update omitted schemas) — verify.run now scores against it');
           if (attachedTestInput) parts.push('the confirmed test request values were attached (your update omitted testInput) — verify.run WITHOUT an override now runs them');
+          if (parseCheckNote) parts.push(parseCheckNote);
           return Object.assign({ updated: true, version: version, schemasAttached: attached, testInputAttached: attachedTestInput, note: parts.join('; ') }, staticLint.length ? { staticLint: staticLint } : {}, endgameWarning(ctx));
         }
       } catch (e) {
@@ -1655,7 +1683,7 @@
       const version = (st && st.session && Array.isArray(st.session.artifactVersions))
         ? st.session.artifactVersions.length + 1
         : 1;
-      return Object.assign({ updated: true, version: version }, staticLint.length ? { staticLint: staticLint } : {}, endgameWarning(ctx));
+      return Object.assign({ updated: true, version: version }, parseCheckNote ? { note: parseCheckNote } : {}, staticLint.length ? { staticLint: staticLint } : {}, endgameWarning(ctx));
     }
 
     // Sixty-seventh log: the final turns wrote artifact v7 that could never
@@ -1855,7 +1883,33 @@
     };
   }
 
-  const api = { createSessionTools, buildDslContractPrompt, seedTestInputFromUrls };
+  // 137th log: construction-parse helpers shared by the update gate. The
+  // local form throws EvalError under a page CSP (script-src 'self'), which
+  // the gate detects and routes to the sandbox probe instead.
+  function constructStepScriptLocal(script) {
+    // eslint-disable-next-line no-new-func
+    new Function('__input__', '__stepResults__', '__lastResult__', 'return (async function(__input__) { ' + script + '\n })(__input__)');
+  }
+
+  // Batch construction probe executed INSIDE the sandbox (CSP-free): builds
+  // each step's Function exactly as the executor will, returns the first
+  // failure with its step label and the parser's message.
+  function syntaxProbeCode(steps) {
+    const payload = JSON.stringify((steps || []).map((s) => ({
+      id: String((s && s.id) || ''),
+      name: String((s && s.name) || (s && s.id) || ''),
+      script: String((s && s.script) || '')
+    })));
+    return 'const steps = JSON.parse(' + JSON.stringify(payload) + ');\n' +
+      'for (const s of steps) {\n' +
+      '  if (!s.script.trim()) continue;\n' +
+      '  try { new Function(\'__input__\', \'__stepResults__\', \'__lastResult__\', \'return (async function(__input__) { \' + s.script + \'\\n })(__input__)\'); }\n' +
+      '  catch (e) { return { ok: false, step: s.name || s.id, message: String((e && e.message) || e) }; }\n' +
+      '}\n' +
+      'return { ok: true };';
+  }
+
+  const api = { createSessionTools, buildDslContractPrompt, seedTestInputFromUrls, constructStepScriptLocal, syntaxProbeCode };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.SessionTools = api;
 })(typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : self));

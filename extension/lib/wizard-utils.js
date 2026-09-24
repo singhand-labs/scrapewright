@@ -4736,6 +4736,21 @@ function validateSteps(steps) {
   return warnings.length ? { valid: true, warnings } : { valid: true };
 }
 
+// 137th log: `new Function` in an extension PAGE context (wizard) is blocked
+// by MV3's default CSP (script-src 'self', no unsafe-eval) — it throws an
+// EvalError for EVERY script, valid or not. The 136th update gate shipped
+// with exactly that flaw and rejected every service.update in production;
+// this gate (the 98th deploy check) has the same latent bug because no real
+// deploy was clicked in a page context post-98 — node tests have no CSP.
+function isCspConstructError(e) {
+  const msg = String((e && e.message) || e);
+  return /unsafe-eval|Refused to evaluate a string as JavaScript|Content Security Policy.*(eval|Function)/i.test(msg);
+}
+
+// Test seam for the CSP branch: node cannot produce a CSP EvalError from
+// `new Function`, so tests inject the failure here.
+var __testConstructStepScript = null;
+
 function validateForExecution(steps) {
   const base = validateSteps(steps);
   if (!base.valid) return base;
@@ -4758,8 +4773,17 @@ function validateForExecution(steps) {
     // reject with the twentieth-log locator teaching.
     try {
       // eslint-disable-next-line no-new-func
-      new Function('__input__', '__stepResults__', '__lastResult__', 'return (async function(__input__) { ' + step.script + '\n })(__input__)');
+      if (typeof WU_EXPORT_BAG !== 'undefined' && WU_EXPORT_BAG.__testConstructStepScript) WU_EXPORT_BAG.__testConstructStepScript(step.script);
+      else new Function('__input__', '__stepResults__', '__lastResult__', 'return (async function(__input__) { ' + step.script + '\n })(__input__)');
     } catch (e) {
+      // 137th log: a CSP-blocked construction environment cannot parse
+      // ANYTHING — that is an infrastructure limitation, not a script
+      // defect; fail open with a warning (the session update gate's
+      // sandbox probe is the primary construction defense).
+      if (isCspConstructError(e)) {
+        warnings.push(`Step ${step.id}: script parse unavailable in this context (page CSP blocks construction) — the session update gate's sandbox probe is the syntax defense.`);
+        continue;
+      }
       return {
         valid: false,
         error: `Step ${i + 1} (${step.id}) script is NOT parseable JavaScript (caught at UPDATE time — paste errors and mixed-in prose are rejected before the artifact ever lands): ${(e && e.message) || String(e)}. Rewrite the step script as executable JS; evidence notes belong in think/finish, never inside the script.`
@@ -6009,7 +6033,7 @@ function syncLastVerifiedFromVerify(state, lv) {
 // direct property access keeps working. test/forty-sixth-log-followups.test.js
 // pins marker-bag keys === module.exports keys so a future export cannot
 // land on one surface only (the inline-fallback drift class, RC8/RC35).
-var WU_EXPORT_BAG = { unverifiedArtifactState, syncLastVerifiedFromVerify, explainDetectorFinding, DETECTOR_PLAIN, collectFieldSamplesFromOutput, detectDuplicateEntityPairs, detectIdenticalFieldValues, detectStepGraphGhostRefs, injectResumeChunkWarning, mineResearchSessionSamples, createParkNotifier, parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, hasYearToken, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectJunkShapeRecords, seedLedgerFromSameSite, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS };
+var WU_EXPORT_BAG = { unverifiedArtifactState, syncLastVerifiedFromVerify, explainDetectorFinding, DETECTOR_PLAIN, collectFieldSamplesFromOutput, detectDuplicateEntityPairs, detectIdenticalFieldValues, detectStepGraphGhostRefs, injectResumeChunkWarning, mineResearchSessionSamples, createParkNotifier, parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, hasYearToken, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectJunkShapeRecords, seedLedgerFromSameSite, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS, isCspConstructError, __testConstructStepScript: null };
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = WU_EXPORT_BAG;
