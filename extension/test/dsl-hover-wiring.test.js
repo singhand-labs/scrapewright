@@ -93,7 +93,9 @@ test('sandbox.js: window.$hover exposed with the expected signature', () => {
   const src = readSrc('sandbox.js');
   assert.match(src, /window\.\$hover\s*=\s*\(/, 'should expose window.$hover');
   // Signature: (anchorSel, popoverSel, opts) — sendDomRequest('hover', anchorSel, [popoverSel, opts])
-  assert.match(src, /sendDomRequest\(\s*['"]hover['"]\s*,\s*anchorSel\s*,\s*\[\s*popoverSel/);
+  // 141st log: the window bag routes via legacySend; per-execution scripts
+  // get the injected closure bag (makeExecApi) with the same shape.
+  assert.match(src, /(sendDomRequest|legacySend|send)\(\s*['"]hover['"]\s*,\s*anchorSel\s*,\s*\[\s*popoverSel/);
 });
 
 test('wizard-utils.js: SCRIPT_DSL_GUIDE includes HOVER ENRICHMENT pattern', () => {

@@ -230,7 +230,9 @@ describe('138th log B1 — deadlineAt rides the execution pipeline', () => {
     assert.equal(req.deadlineAt, deadline, 'the stored EXECUTE deadline rides the DOM_REQUEST');
     // source pins for the storage/restatement link
     assert.match(SANDBOX_SRC, /execDeadlineAt = \(typeof e\.data\.deadlineAt === 'number'/);
-    assert.match(SANDBOX_SRC, /deadlineAt: execDeadlineAt/);
+    // 141st log: requests are stamped per-execution (bound deadline), the
+    // window legacy bag still stamps the module global.
+    assert.match(SANDBOX_SRC, /deadlineAt: deadlineAt === undefined \? null : deadlineAt/);
     void p; void p2;
   });
 

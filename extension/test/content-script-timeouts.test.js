@@ -57,8 +57,8 @@ describe('B3: $click/$type element-wait default 10s + override', () => {
   });
 
   it('sandbox threads the override: $click(sel, timeoutMs) and $type(sel, text, timeoutMs)', () => {
-    assert.match(SANDBOX_SRC, /\$click\s*=\s*\(\s*sel\s*,\s*timeoutMs\s*\)\s*=>\s*sendDomRequest\('click',\s*sel,/);
-    assert.match(SANDBOX_SRC, /\$type\s*=\s*\(\s*sel\s*,\s*text\s*,\s*timeoutMs\s*\)\s*=>\s*sendDomRequest\('type',\s*sel,\s*\[text,/);
+    assert.match(SANDBOX_SRC, /\$click\s*=\s*\(\s*sel\s*,\s*timeoutMs\s*\)\s*=>\s*legacySend\('click',\s*sel,/);
+    assert.match(SANDBOX_SRC, /\$type\s*=\s*\(\s*sel\s*,\s*text\s*,\s*timeoutMs\s*\)\s*=>\s*legacySend\('type',\s*sel,\s*\[text,/);
   });
 });
 

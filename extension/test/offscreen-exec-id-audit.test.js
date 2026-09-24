@@ -58,9 +58,11 @@ describe('B5: offscreen/sandbox execId routing (source audit)', () => {
   it('sandbox EXECUTE_RESULT echoes the execId it received', () => {
     // 140th log: the executor now also threads the deadline (4th arg).
     assert.match(SANDBOX_SRC, /executeInSandbox\(e\.data\.script,\s*e\.data\.input,\s*e\.data\.execId,\s*e\.data\.deadlineAt\)/);
-    const n = (SANDBOX_SRC.match(/type: 'EXECUTE_RESULT'/g) || []).length;
-    const e = (SANDBOX_SRC.match(/execId: execId/g) || []).length;
-    assert.equal(n, e, 'every EXECUTE_RESULT post carries execId (' + n + ' sites)');
+    // 141st log: DOM_REQUESTs also carry an execId field now — count only
+    // the result posts themselves.
+    const n = (SANDBOX_SRC.match(/type: 'EXECUTE_RESULT', execId: execId/g) || []).length;
+    const e = (SANDBOX_SRC.match(/type: 'EXECUTE_RESULT'/g) || []).length;
+    assert.equal(n, e, 'every EXECUTE_RESULT post carries execId (' + e + ' sites)');
   });
 
   it('offscreen SCRIPT_RESULT payload carries the execId back to the resolver', () => {

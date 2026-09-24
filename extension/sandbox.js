@@ -26,65 +26,113 @@
     else console.log(prefix, data || '');
   }
 
-  function sendDomRequest(action, selector, args) {
+  // 141st log: sendDomRequest now carries EXECUTION IDENTITY. The 140th
+  // incident's cross-contamination both traced to requests being anonymous:
+  // the deadline was read from a module global (overwritten by the next
+  // EXECUTE — a zombie rode a stranger's budget) and routing was resolved
+  // from stack order at the offscreen hop. execId + deadlineAt are now BOUND
+  // PER EXECUTION (see makeExecApi) and ride every DOM_REQUEST; the offscreen
+  // routes by execId→tab map. The 140th sweep keeps working: the pending
+  // entry captures the same bound deadline.
+  function sendDomRequest(execId, deadlineAt, action, selector, args) {
     return new Promise((resolve, reject) => {
       const id = ++domRequestId;
-      // 140th log: capture the deadline AT SEND TIME so a deadline-loss
-      // sweep can reject this execution's stale in-flight requests by value.
-      pendingDomRequests.set(id, { resolve, reject, capturedDeadlineAt: execDeadlineAt });
-      sendDebugLog('info', 'sandbox', 'Sending DOM_REQUEST', { id, action, selector });
+      pendingDomRequests.set(id, { resolve, reject, capturedDeadlineAt: deadlineAt });
+      sendDebugLog('info', 'sandbox', 'Sending DOM_REQUEST', { id, execId, action, selector });
       parent.postMessage({
         type: 'DOM_REQUEST',
         id,
+        execId: execId === undefined ? null : execId,
         action,
         selector,
         args: args || [],
-        deadlineAt: execDeadlineAt
+        deadlineAt: deadlineAt === undefined ? null : deadlineAt
       }, '*');
     });
   }
 
-  window.$ = (sel) => sendDomRequest('querySelector', sel);
-  window.$click = (sel, timeoutMs) => sendDomRequest('click', sel, timeoutMs !== undefined ? [timeoutMs] : []);
-  window.$type = (sel, text, timeoutMs) => sendDomRequest('type', sel, [text, timeoutMs]);
-  window.$extract = (sel, attr, timeoutMs) => sendDomRequest('extract', sel, [attr, timeoutMs]);
-  window.$wait = (sel, ms) => sendDomRequest('wait', sel, [ms]);
-  window.$check = (sel, prop) => sendDomRequest('check', sel, [prop]);
-  window.$exists = (sel, timeoutMs) => sendDomRequest('exists', sel, [timeoutMs]);
-  window.$labelledby = (sel, attr, timeoutMs) => sendDomRequest('labelledby', sel, [attr, timeoutMs]);
+  // Legacy window-level bag: kept for direct callers (tests, older hosts).
+  // Reads the module-global deadline exactly as before — executed scripts get
+  // the per-execution bag instead (injected as Function parameters), so these
+  // are no longer on any execution path.
+  function legacySend(action, selector, args) {
+    return sendDomRequest(null, execDeadlineAt, action, selector, args);
+  }
+
+  // 141st log: the per-execution $ API bag. Built once per EXECUTE from the
+  // ENVELOPE's execId + deadlineAt — a concurrent execution's EXECUTE can no
+  // longer restamp this execution's requests (the 140th bug A), and every
+  // request is attributable for routing (bug B's class).
+  function makeExecApi(execId, deadlineAt) {
+    const send = (action, selector, args) => sendDomRequest(execId, deadlineAt, action, selector, args);
+    return {
+      '$': (sel) => send('querySelector', sel, []),
+      '$click': (sel, timeoutMs) => send('click', sel, timeoutMs !== undefined ? [timeoutMs] : []),
+      '$type': (sel, text, timeoutMs) => send('type', sel, [text, timeoutMs]),
+      '$extract': (sel, attr, timeoutMs) => send('extract', sel, [attr, timeoutMs]),
+      '$wait': (sel, ms) => send('wait', sel, [ms]),
+      '$check': (sel, prop) => send('check', sel, [prop]),
+      '$exists': (sel, timeoutMs) => send('exists', sel, [timeoutMs]),
+      '$labelledby': (sel, attr, timeoutMs) => send('labelledby', sel, [attr, timeoutMs]),
+      '$timestamp': (sel, opts) => send('timestamp', sel, [opts || {}]),
+      '$count': (sel) => send('count', sel, []),
+      '$list': (sel) => send('list', sel, []),
+      '$waitForStable': (sel, opts) => send('waitForStable', sel, [opts || {}]),
+      '$openTab': (url, fn) => send('openTab', null, [url, fn ? fn.toString() : '']),
+      '$extractList': (containerSel, fieldMap, opts) => send('extractList', containerSel, [fieldMap, opts || {}]),
+      '$extractListMulti': (containerSel, fieldMap, opts) => send('extractListMulti', containerSel, [fieldMap, opts || {}]),
+      '$extractWithHover': (containerSel, fieldMap, opts) => send('extractWithHover', containerSel, [fieldMap, opts || {}]),
+      '$clickInList': (containerSel, subSel, opts) => send('clickInList', containerSel, [subSel, opts || {}]),
+      '$scrollBy': (deltaY, selector) => send('scrollBy', selector || null, [deltaY]),
+      '$scrollToBottom': (selector) => send('scrollToBottom', selector || null, []),
+      '$collectUntil': (containerSel, opts) => send('collectUntil', containerSel, [opts || {}]),
+      '$scrollIntoView': (selector) => send('scrollIntoView', selector, []),
+      '$hover': (anchorSel, popoverSel, opts) => send('hover', anchorSel, [popoverSel, opts || {}])
+    };
+  }
+  const API_PARAM_NAMES = ['$','$click','$type','$extract','$wait','$check','$exists','$labelledby','$timestamp','$count','$list','$waitForStable','$openTab','$extractList','$extractListMulti','$extractWithHover','$clickInList','$scrollBy','$scrollToBottom','$collectUntil','$scrollIntoView','$hover'];
+
+  window.$ = (sel) => legacySend('querySelector', sel, []);
+  window.$click = (sel, timeoutMs) => legacySend('click', sel, timeoutMs !== undefined ? [timeoutMs] : []);
+  window.$type = (sel, text, timeoutMs) => legacySend('type', sel, [text, timeoutMs]);
+  window.$extract = (sel, attr, timeoutMs) => legacySend('extract', sel, [attr, timeoutMs]);
+  window.$wait = (sel, ms) => legacySend('wait', sel, [ms]);
+  window.$check = (sel, prop) => legacySend('check', sel, [prop]);
+  window.$exists = (sel, timeoutMs) => legacySend('exists', sel, [timeoutMs]);
+  window.$labelledby = (sel, attr, timeoutMs) => legacySend('labelledby', sel, [attr, timeoutMs]);
   // Sixty-fifth log: one-call timestamp value for a card — labelledby/aria/
   // visible-text + hover-popover text, date-shape filtered, absolute
   // preferred. postTime = (await $timestamp(cardSel)).value.
-  window.$timestamp = (sel, opts) => sendDomRequest('timestamp', sel, [opts || {}]);
-  window.$count = (sel) => sendDomRequest('count', sel);
-  window.$list = (sel) => sendDomRequest('list', sel);
-window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opts || {}]);
-  window.$openTab = (url, fn) => sendDomRequest('openTab', null, [url, fn ? fn.toString() : '']);
-  window.$extractList = (containerSel, fieldMap, opts) => sendDomRequest('extractList', containerSel, [fieldMap, opts || {}]);
+  window.$timestamp = (sel, opts) => legacySend('timestamp', sel, [opts || {}]);
+  window.$count = (sel) => legacySend('count', sel, []);
+  window.$list = (sel) => legacySend('list', sel, []);
+window.$waitForStable = (sel, opts) => legacySend('waitForStable', sel, [opts || {}]);
+  window.$openTab = (url, fn) => legacySend('openTab', null, [url, fn ? fn.toString() : '']);
+  window.$extractList = (containerSel, fieldMap, opts) => legacySend('extractList', containerSel, [fieldMap, opts || {}]);
   // Multi-match variant: each field returns Array of ALL matches (not just first).
   // Use when CSS alone can't disambiguate which match is the right one (e.g.
   // a[role=link] inside an FB post matches BOTH author and timestamp links —
   // pick by text/attribute regex in JS). Regression for console.log 2026-07-26 RC4.
-  window.$extractListMulti = (containerSel, fieldMap, opts) => sendDomRequest('extractListMulti', containerSel, [fieldMap, opts || {}]);
+  window.$extractListMulti = (containerSel, fieldMap, opts) => legacySend('extractListMulti', containerSel, [fieldMap, opts || {}]);
   // $extractWithHover: container-scoped extract-then-hover. Extracts fields
   // per container AND hovers every anchor inside each container in one call,
   // returning records with a hovercards[] array (variable length per record).
   // Eliminates the post-hovercard alignment bug that the manual
   // $hover(..., { index: i }) loop pattern has when containers hold variable
   // numbers of anchors. See $EXTRACT-WITH-HOVER in SCRIPT_DSL_GUIDE.
-  window.$extractWithHover = (containerSel, fieldMap, opts) => sendDomRequest('extractWithHover', containerSel, [fieldMap, opts || {}]);
-  window.$clickInList = (containerSel, subSel, opts) => sendDomRequest('clickInList', containerSel, [subSel, opts || {}]);
+  window.$extractWithHover = (containerSel, fieldMap, opts) => legacySend('extractWithHover', containerSel, [fieldMap, opts || {}]);
+  window.$clickInList = (containerSel, subSel, opts) => legacySend('clickInList', containerSel, [subSel, opts || {}]);
   // Scroll DSL — see SCROLLING section in SCRIPT_DSL_GUIDE. Scrolls the target
   // tab (window or a matched scrollable element), NOT the sandbox iframe.
   // Returns { scrolled, prevY, newY } so loops can terminate when the position
   // stops changing (content exhausted). bugx.log 2026-07-24: step 2 had dead
   // `if (scrollable) { /* empty */ }` code because no scroll API existed.
-  window.$scrollBy = (deltaY, selector) => sendDomRequest('scrollBy', selector || null, [deltaY]);
-  window.$scrollToBottom = (selector) => sendDomRequest('scrollToBottom', selector || null);
+  window.$scrollBy = (deltaY, selector) => legacySend('scrollBy', selector || null, [deltaY]);
+  window.$scrollToBottom = (selector) => legacySend('scrollToBottom', selector || null, []);
   // 118th round: count-reliability primitive — scroll→settle→UNIQUE-count
   // loop with certified exhaustion (see domCollectUntil in content-script).
-  window.$collectUntil = (containerSel, opts) => sendDomRequest('collectUntil', containerSel, [opts || {}]);
-  window.$scrollIntoView = (selector) => sendDomRequest('scrollIntoView', selector);
+  window.$collectUntil = (containerSel, opts) => legacySend('collectUntil', containerSel, [opts || {}]);
+  window.$scrollIntoView = (selector) => legacySend('scrollIntoView', selector, []);
   // $hover: dispatch a trusted mouseMoved at the anchor's bounding-box center
   // via CDP, wait for the popover selector to appear, return its outerHTML as
   // htmlSnippet. Use for hovercard/link-preview enrichment — fields not in the
@@ -92,7 +140,7 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
   // for hovercards: $openTab opens a new tab (slow, navigation lifecycle);
   // $hover stays in-page and reuses the already-loaded page JS. See
   // HOVER ENRICHMENT in SCRIPT_DSL_GUIDE.
-  window.$hover = (anchorSel, popoverSel, opts) => sendDomRequest('hover', anchorSel, [popoverSel, opts || {}]);
+  window.$hover = (anchorSel, popoverSel, opts) => legacySend('hover', anchorSel, [popoverSel, opts || {}]);
 
   window.addEventListener('message', (e) => {
     if (e.data.type === 'DOM_RESPONSE') {
@@ -277,7 +325,12 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
       }
       let fn;
       try {
-        fn = new Function('__input__', '__stepResults__', '__lastResult__', `return ${scriptCode};`);
+        // 141st log: the per-execution $ API bag is INJECTED AS FUNCTION
+        // PARAMETERS — the script's bare $hover/$count/etc. resolve to this
+        // execution's closures (execId + envelope deadline bound), never to
+        // the window globals, so interleaved executions cannot restamp each
+        // other's requests and every DOM_REQUEST is attributable.
+        fn = new Function('__input__', '__stepResults__', '__lastResult__', ...API_PARAM_NAMES, `return ${scriptCode};`);
       } catch (error) {
         // Twentieth log: compile failures carried no position — enrich with
         // the located offset so the model (and diag.read) can see WHERE.
@@ -292,11 +345,13 @@ window.$waitForStable = (sel, opts) => sendDomRequest('waitForStable', sel, [opt
             deadlineTimer = setTimeout(() => rej(new Error('SANDBOX_DEADLINE: the script exceeded its own execution budget and was abandoned in the sandbox (the caller already timed out) — in-flight $ calls were rejected.')), Math.max(0, deadlineAt - Date.now()));
           })
         : null;
+      const execApi = makeExecApi(execId, deadlineAt);
+      const apiValues = API_PARAM_NAMES.map((k) => execApi[k]);
       let result;
       try {
         result = deadlineRace
-          ? await Promise.race([fn(input, input._stepResults || {}, input._lastResult || null), deadlineRace])
-          : await fn(input, input._stepResults || {}, input._lastResult || null);
+          ? await Promise.race([fn(input, input._stepResults || {}, input._lastResult || null, ...apiValues), deadlineRace])
+          : await fn(input, input._stepResults || {}, input._lastResult || null, ...apiValues);
       } finally {
         if (deadlineTimer !== null) clearTimeout(deadlineTimer);
       }

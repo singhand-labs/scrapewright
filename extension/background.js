@@ -1047,6 +1047,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const relayMsg = {
       type: 'DOM_REQUEST',
       id: message.id,
+      execId: message.execId === undefined ? null : message.execId,
       action: message.action,
       selector: message.selector,
       args: message.args,

@@ -171,11 +171,25 @@
         _fromOffscreen: true
       });
     } else if (e.data.type === 'DOM_REQUEST') {
-      const tabId = tabIdStack.length > 0 ? tabIdStack[tabIdStack.length - 1] : null;
-      sendDebugLog('info', 'offscreen', 'DOM_REQUEST from sandbox', { id: e.data.id, action: e.data.action, selector: e.data.selector });
+      // 141st log: route by EXECUTION IDENTITY first. Stack-top routing was
+      // the last ambiguity: two interleaved executions on different tabs
+      // resolve mid-script requests to whichever tab was pushed last — a
+      // research probe's $count could execute on the verify tab (or vice
+      // versa) and return the WRONG TAB's data as a green result. Every
+      // sandbox request now carries its execId; the execTabMap (maintained
+      // since B5) resolves it. Stack-top remains the fallback for
+      // execId-less legacy requests only.
+      let tabId = null;
+      if (e.data.execId !== undefined && e.data.execId !== null && execTabMap.has(e.data.execId)) {
+        tabId = execTabMap.get(e.data.execId);
+      } else if (tabIdStack.length > 0) {
+        tabId = tabIdStack[tabIdStack.length - 1];
+      }
+      sendDebugLog('info', 'offscreen', 'DOM_REQUEST from sandbox', { id: e.data.id, execId: e.data.execId, action: e.data.action, selector: e.data.selector, routedTabId: tabId });
       chrome.runtime.sendMessage({
         type: 'DOM_REQUEST',
         id: e.data.id,
+        execId: e.data.execId === undefined ? null : e.data.execId,
         action: e.data.action,
         selector: e.data.selector,
         args: e.data.args,

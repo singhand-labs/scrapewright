@@ -341,7 +341,9 @@ describe('RC45 Task 5: DOM_REQUEST + sandbox wiring', () => {
     // Must send a DOM_REQUEST with action 'extractWithHover'.
     const defIdx = src.indexOf('window.$extractWithHover');
     const def = src.slice(defIdx, defIdx + 300);
-    assert.ok(/sendDomRequest\(\s*['"]extractWithHover['"]/.test(def),
+    // 141st log: the window bag routes through legacySend (per-execution
+    // scripts get the injected closure bag instead); the action is unchanged.
+    assert.ok(/(sendDomRequest|legacySend)\(\s*['"]extractWithHover['"]/.test(def),
       'window.$extractWithHover must call sendDomRequest with action "extractWithHover"');
     // Arity must be (containerSel, fieldMap, opts) — 3 args.
     assert.ok(/containerSel,\s*fieldMap,\s*opts/.test(def),

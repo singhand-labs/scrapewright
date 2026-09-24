@@ -188,7 +188,7 @@ describe('sixty-fifth log: $timestamp primitive', () => {
 describe('sixty-fifth log: wiring + universality', () => {
   it('sandbox exposes $timestamp; the DOM_REQUEST dispatch routes to domTimestamp', () => {
     const sandboxSrc = readSrc('sandbox.js');
-    assert.match(sandboxSrc, /window\.\$timestamp = \(sel, opts\) => sendDomRequest\('timestamp', sel, \[opts \|\| \{\}\]\)/);
+    assert.match(sandboxSrc, /window\.\$timestamp = \(sel, opts\) => legacySend\('timestamp', sel, \[opts \|\| \{\}\]\)/); // 141st: window bag routes via legacySend
     assert.match(CS_SRC, /case 'timestamp':[\s\S]{0,200}domTimestamp\(data\.selector/);
   });
 

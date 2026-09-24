@@ -133,11 +133,12 @@ describe('140th log B — offscreen never pops a stranger\'s routing slot', () =
   it('sandbox threads the EXECUTE deadline into the executor (source pins)', () => {
     assert.match(SANDBOX_SRC, /executeInSandbox\(e\.data\.script, e\.data\.input, e\.data\.execId, e\.data\.deadlineAt\)/);
     assert.match(SANDBOX_SRC, /rejectStalePendingRequests\(deadlineAt\)/, 'error path sweeps stale pendings');
-    assert.match(SANDBOX_SRC, /capturedDeadlineAt: execDeadlineAt/, 'requests capture the deadline at send time');
+    // 141st log: the captured deadline is the per-execution BOUND value.
+    assert.match(SANDBOX_SRC, /capturedDeadlineAt: deadlineAt/, 'requests capture the deadline at send time');
   });
 
   it('regression: the 138th deadline stamping still rides every DOM_REQUEST', () => {
-    assert.match(SANDBOX_SRC, /deadlineAt: execDeadlineAt/);
+    assert.match(SANDBOX_SRC, /deadlineAt: deadlineAt === undefined \? null : deadlineAt/);
     assert.match(SANDBOX_SRC, /execDeadlineAt = \(typeof e\.data\.deadlineAt === 'number'/);
   });
 });

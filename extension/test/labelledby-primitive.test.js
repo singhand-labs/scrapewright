@@ -90,7 +90,7 @@ describe('resolveLabelledbyText (twenty-fourth-log root fix)', () => {
 
 describe('$labelledby wiring (source audit)', () => {
   it('sandbox exposes the primitive; content-script dispatches it; domLabelledby defaults the attr safely', () => {
-    assert.match(SANDBOX_SRC, /\$labelledby = \(sel, attr, timeoutMs\) => sendDomRequest\('labelledby', sel, \[attr, timeoutMs\]\)/);
+    assert.match(SANDBOX_SRC, /\$labelledby = \(sel, attr, timeoutMs\) => legacySend\('labelledby', sel, \[attr, timeoutMs\]\)/); // 141st: window bag via legacySend
     assert.match(SRC, /case 'labelledby':/);
     assert.match(SRC, /domLabelledby\(data\.selector, data\.args && data\.args\[0\], data\.args && data\.args\[1\]\)/);
     assert.match(SRC, /const refAttr = \(attr === 'aria-describedby' \|\| attr === 'aria-labelledby'\) \? attr : 'aria-labelledby';/, 'non-reference attrs fall back to aria-labelledby instead of reading an arbitrary attribute');
