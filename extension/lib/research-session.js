@@ -783,6 +783,11 @@
       if (out && typeof out === 'object' && typeof out.error === 'string') return out;
       const version = state.artifactVersions.length + 1;
       state.artifactVersions.push({ version: version, steps: steps, at: now() });
+      // 143rd log: the finish gate exempts the artifact that IS the restored
+      // green (its steps were green-verified as version greenArtifactVersion;
+      // a restore landing them as a NEW version must not trip the gate
+      // again). Any other steps-carrying update clears the exemption.
+      state.greenRestoredCurrent = (a.restoredFrom != null && a.restoredFrom === state.greenArtifactVersion);
       rebuildStepPlan(steps); // §3.C: the persisted artifact defines the plan
       emit('artifact_version', { version: version });
       return (out && typeof out === 'object') ? out : { version: version };
@@ -1412,6 +1417,31 @@
           state.transcript.push({ kind: 'assistant', text: content });
           await persist();
           if (turn.finish) {
+            // 143rd log finish gate: the incident session finished at 79/80
+            // shipping a RED v5 as "best-effort" while GREEN v3 sat one
+            // restore turn away — every disclosure fired, the restore hint
+            // was named, and the model still shipped the red artifact
+            // (deploying an unverified service with a verified one in hand).
+            // A finish under LAST-VERIFY-RED + an existing GREEN version +
+            // current != green is now REJECTED with the exits spelled out;
+            // the model either restores, verifies its fix green, or
+            // explicitly overrides (shipRedArtifact:true) when the red
+            // version is genuinely the better ship.
+            if (state.lastVerifyOk === false &&
+                state.greenArtifactVersion &&
+                !state.greenRestoredCurrent &&
+                state.artifactVersions.length > state.greenArtifactVersion &&
+                turn.finish.shipRedArtifact !== true) {
+              state.transcript.push({ kind: 'system', text:
+                'FINISH BLOCKED: the last verify ran RED against the CURRENT artifact (v' + state.artifactVersions.length +
+                ') while a GREEN-verified version (v' + state.greenArtifactVersion + ') is one restore away — shipping now deploys the unverified artifact with a verified one in hand. ' +
+                'Either (a) service.update({restoreVersion:' + state.greenArtifactVersion + '}) — ONE turn, restores the verified steps — then finish; ' +
+                '(b) fix the current artifact and verify it GREEN before finishing; or ' +
+                '(c) finish with {"finish":{"summary":"…","shipRedArtifact":true}} to explicitly ship the red artifact with its disclosures — only when the red version is genuinely the better ship.' });
+              state.spend.finishBlocks = (state.spend.finishBlocks || 0) + 1;
+              await persist();
+              continue;
+            }
             // Thirteenth log: five consecutive RED verifies still finished as a
             // plain 'completed' — an honest ship note must not read as green.
             let detail = turn.finish.summary || null;

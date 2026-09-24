@@ -1455,7 +1455,14 @@
       // verify.run {preflight:true}); blind rewrites burned whole sessions.
       // Steps-LESS updates (testInput adoption, schema attaches) pass.
       try {
+        // 143rd log: a restoreVersion update is EXEMPT — it re-lands steps
+        // that were already VERIFIED GREEN (the engine splices them from
+        // artifactVersions before this gate runs). The finish gate sends the
+        // model here precisely after a red verify; requiring a dry-run first
+        // would deadlock the two gates (restore rejected by the snippet
+        // gate, finish rejected without the restore).
         if (args && Array.isArray(args.steps) && args.steps.length &&
+            args.restoreVersion == null &&
             lastVerify && lastVerify.report && lastVerify.report.ok === false &&
             !dryRunSinceRedVerify) {
           return {
