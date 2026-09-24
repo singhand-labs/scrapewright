@@ -188,6 +188,24 @@
   const isRawishName = (key, hints) => RAWISH_FIELD.test(key) || hints.has(key);
   const isIdishName = (key, hints) => IDISH_FIELD.test(key) || hints.has(key);
 
+  // 142nd log (round-141 user test): a green ship carried anti-scrape
+  // COMMA-STUFFED textContent (CJK prose with ASCII punctuation interleaved
+  // mid-word: "張柏,芝沒,穿內,,衣…"). The page's decoy layer stuffs ASCII
+  // commas/exclamations DIRECTLY BETWEEN CJK characters — legitimate Chinese
+  // uses fullwidth "，" and ASCII lists comma SPACE-separated between LATIN
+  // words, so >=5 ASCII punctuation marks each sandwiched by CJK on both
+  // sides is the decoy signature, zero site knowledge. Uniquely REPAIRABLE
+  // junk: the clean value is the same string minus the stuffed marks.
+  function stuffedMarkCount(v) {
+    let n = 0;
+    for (let i = 1; i < v.length - 1; i++) {
+      if (/[,!;.]/.test(v[i]) && /[\u4e00-\u9fff]/.test(v[i - 1]) && /[\u4e00-\u9fff]/.test(v[i + 1])) n += 1;
+    }
+    return n;
+  }
+  const OBFUSCATED_STUFFED_MIN = 5;
+  const isStuffedDecoyText = (v) => typeof v === 'string' && v.length >= 12 && stuffedMarkCount(v) >= OBFUSCATED_STUFFED_MIN;
+
   function scanRecords(recs, fieldPath, urlishHints, rawishHints, idishHints, fields) {
     const recKeys = [];
     const seen = {};
@@ -202,6 +220,7 @@
       let dumps = 0; let dumpSample = '';
       let opaque = 0; let opaqueSample = '';
       let labelish = 0; let labelSample = '';
+      let stuffed = 0; let stuffedSample = '';
       for (const r of recs) {
         const v = r[rk];
         if (typeof v === 'string') {
@@ -211,6 +230,7 @@
             opaque += 1; if (!opaqueSample) opaqueSample = v;
           }
           if (COUNTISH_FIELD.test(splitFieldName(rk)) && isControlLabel(v)) { labelish += 1; if (!labelSample) labelSample = v; }
+          if (!isRawishName(rk, rawishHints) && isStuffedDecoyText(v)) { stuffed += 1; if (!stuffedSample) stuffedSample = v; }
         } else if (Array.isArray(v)) {
           for (const x of v) {
             if (typeof x !== 'string') continue;
@@ -224,6 +244,7 @@
       if (dataJunk && isUrlishName(rk, urlishHints)) fields.push({ field: fieldPath + '.' + rk, kind: 'dataUri', junkCount: dataJunk, total: dataTotal });
       if (dumps) fields.push({ field: fieldPath + '.' + rk, kind: 'markupDump', count: dumps, sample: capSample(dumpSample) });
       if (labelish) fields.push({ field: fieldPath + '.' + rk, kind: 'controlLabel', count: labelish, total: recs.length, sample: capSample(labelSample) });
+      if (stuffed) fields.push({ field: fieldPath + '.' + rk, kind: 'obfuscatedText', count: stuffed, total: recs.length, sample: capSample(stuffedSample) });
     }
   }
 
@@ -259,7 +280,7 @@
     return {
       fields: fields,
       note: 'JUNK VALUES: ' + fields.map((f) => f.field + '(' + f.kind + ')').join(', ') +
-        '. Structurally green but these values are junk: bare query strings ("?a=b…") are redirect/tracking href fragments, data: URIs inside url/media arrays are inline UI icons, markup dumps are raw HTML leaking into a data field, long single-token opaque strings (random alphanumerics, no spaces, no vowel structure) are anti-scrape DECOYS leaking through a raw textContent read — the real value usually lives in the elements an ARIA reference points at, so re-read the field with the fieldMap labelledby:true option (or $labelledby) instead of textContent — and a count/quantity-typed field holding a pure-alphabetic value ("Like", "Comment", "赞") captured the control label — the interactive button\'s aria-label/title, not the number it renders: the count lives in the element (or attribute) that renders the digit — often a sibling node, an aria-label containing the count ("Liked by 12"), or a title attribute; a label-only control usually means the count is zero. Fix the selector to read the real value, filter arrays in the step script (keep http(s) entries), or renegotiate the contract with io.confirm to drop/redefine the field. A green score with junk-valued fields is NOT a finished service.'
+        '. Structurally green but these values are junk: bare query strings ("?a=b…") are redirect/tracking href fragments, data: URIs inside url/media arrays are inline UI icons, markup dumps are raw HTML leaking into a data field, COMMA-STUFFED text (ASCII punctuation interleaved between CJK characters) is an anti-scrape decoy that is MECHANICALLY REPAIRABLE — the clean value is the same string with the stuffed marks removed (strip ASCII [,!;.] marks whose neighbors are both CJK, in the step assembly) , or bind the field to an attribute/ARIA reference instead of textContent, long single-token opaque strings (random alphanumerics, no spaces, no vowel structure) are anti-scrape DECOYS leaking through a raw textContent read — the real value usually lives in the elements an ARIA reference points at, so re-read the field with the fieldMap labelledby:true option (or $labelledby) instead of textContent — and a count/quantity-typed field holding a pure-alphabetic value ("Like", "Comment", "赞") captured the control label — the interactive button\'s aria-label/title, not the number it renders: the count lives in the element (or attribute) that renders the digit — often a sibling node, an aria-label containing the count ("Liked by 12"), or a title attribute; a label-only control usually means the count is zero. Fix the selector to read the real value, filter arrays in the step script (keep http(s) entries), or renegotiate the contract with io.confirm to drop/redefine the field. A green score with junk-valued fields is NOT a finished service.'
     };
   }
 
