@@ -59,6 +59,7 @@
       findUpstreamExtractionStepId: w.findUpstreamExtractionStepId,
       detectDuplicateRecords: w.detectDuplicateRecords,
       detectDuplicateEntityPairs: w.detectDuplicateEntityPairs,
+      detectDuplicateNestedEntries: w.detectDuplicateNestedEntries,
       detectIdenticalFieldValues: w.detectIdenticalFieldValues,
       detectDuplicateEntities: w.detectDuplicateEntities,
       detectOversizedFields: w.detectOversizedFields,
@@ -527,7 +528,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, siblingCountContrast: null, implausibleTimeFields: null, positionLikeIds: null, labelPrefixedCounts: null, mediaHygiene: null, junkShapeRecords: null, unusedCaptures: null, timeSourceUnexercised: null };
+      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, nestedDuplicates: null, siblingCountContrast: null, implausibleTimeFields: null, positionLikeIds: null, labelPrefixedCounts: null, mediaHygiene: null, junkShapeRecords: null, unusedCaptures: null, timeSourceUnexercised: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -921,6 +922,9 @@
               }
               const got = detectors.countShortfall.extracted;
               const req = detectors.countShortfall.requested;
+              // 154th log: persist the census so the assembly-loss veto
+              // below can gate on it without recomputing the walk.
+              detectors.countShortfall.maxContainers = maxContainers;
               // 139th log: the unique-shortfall note (records met the ask but
               // UNIQUE items did not) must survive the provenance branches
               // below — they compare RECORD counts and would overwrite it
@@ -1015,6 +1019,31 @@
                 break;
               }
             } catch (e) { /* the veto detector must never break the report */ }
+          }
+          // 154th log: COUNT_SHORTFALL_ASSEMBLY veto. The incident session
+          // went GREEN delivering 4 of a user-confirmed 10 while the run
+          // itself matched 14 containers and $collectUntil had SATISFIED
+          // its target — the collapse happened in the extract->assemble
+          // steps (a merge keyed on a weak/positional value), a shape no
+          // gate owned: PREMATURE_EXHAUSTION covers scroll steps that exit
+          // done early, and certification doctrine only guards the
+          // EXHAUSTION claim. A severe, uncertified shortfall with the
+          // population demonstrably present is a broken run, not a
+          // green-disclosed one.
+          if (!error && detectors.countShortfall &&
+              detectors.countShortfall.severe === true &&
+              detectors.countShortfall.exhaustionCertified === false &&
+              typeof detectors.countShortfall.maxContainers === 'number' &&
+              detectors.countShortfall.maxContainers >= detectors.countShortfall.requested &&
+              typeof detectors.countShortfall.extracted === 'number' &&
+              detectors.countShortfall.extracted < detectors.countShortfall.requested) {
+            const csA = detectors.countShortfall;
+            error = new Error(
+              'COUNT_SHORTFALL_ASSEMBLY: ' + csA.field + ' delivered ' + csA.extracted + ' of ' + csA.requested +
+              ' requested while this run matched ' + csA.maxContainers + ' containers (>= the request) — the collection satisfied the ask and the loss is in the ASSEMBLY: compare the per-step counts in steps[].resultPreview (collect saw ' + csA.maxContainers + ', the final array has ' + csA.extracted + ') and fix the merge — key records by a strong per-record identity (the permalink/token id), never by a positional or shared fallback that collapses distinct records. ' +
+              'If the surplus containers are NOT records of this contract (ads, group-header cards), prove it (probe the container census on the verify tab), then either narrow the container selector or disclose the non-record ratio and renegotiate the count via io.confirm — the count input remains the user ask. ' +
+              'Exhaustion is a page fact only with $collectUntil certification; a severe shortfall without a receipt is RED, not green-disclosed.'
+            );
           }
         }
         if (typeof WU.detectRelativeTimestamps === 'function') {
@@ -1189,6 +1218,28 @@
                   ' match on every data field (' + first.matchedFields.join(', ') + ')' +
                   (first.idSurface ? ' while their id surfaces differ (' + first.idSurface.field + ' "' + first.idSurface.a + '" vs "' + first.idSurface.b + '")' : '') +
                   ' — the same entity extracted twice under two identifier surfaces. Dedupe keyed on the id alone cannot catch cross-surface duplicates: dedupe by the entity signature (the matched fields, e.g. content+postTime) in the step script, or collapse to ONE id surface during extraction. If the page legitimately repeats the entity, renegotiate via io.confirm — duplicated records may not ship green.'
+                );
+              }
+            }
+          }
+          // 154th log: nested-array duplicate entries. The incident GREEN run
+          // shipped posts[].hovercards carrying the SAME group twice and the
+          // SAME author twice per post (links differing only by tracking
+          // tokens, one of each pair enriched) — invisible to every gate
+          // that walks top-level arrays, because the hovercard ids live in
+          // link paths and kv.* objects, not id-named fields. Fully
+          // identical duplicates veto; identity-equal but
+          // enrichment-divergent pairs report as merge candidates.
+          if (typeof WU.detectDuplicateNestedEntries === 'function') {
+            const nestedDups = WU.detectDuplicateNestedEntries(finalData, outputSchema) || [];
+            if (nestedDups.length) {
+              detectors.nestedDuplicates = nestedDups;
+              const fullDup = nestedDups.find((e) => e.fullyIdentical === true);
+              if (!error && fullDup) {
+                error = new Error(
+                  'DUPLICATE_NESTED_ENTRIES: ' + fullDup.path + ' (parent record #' + fullDup.parentIndex + ') ships the same entry twice — ordinals ' + fullDup.indices.join(', ') +
+                  ' share one identity (discriminators + id-bearing values, tracking tokens stripped): ' + fullDup.identity +
+                  '. Duplicated nested entries are never legitimate data: deduplicate the assembly by the entry identity (the link without its query plus type/role). Identity-equal entries whose enrichment diverges (e.g. one carries members/followers the other lacks) are reported as MERGE candidates — keep the enriched one.'
                 );
               }
             }
@@ -1726,7 +1777,7 @@
       function adMarkerNote(hits) {
         if (!hits || !hits.length) return null;
         const lines = hits.map((h) => (h.stepId != null ? h.stepId : '?') + ': ' + h.markers.join(', ')).join('; ');
-        return 'step selector(s) reference ad/sponsored markers (' + lines + '). Check the POLARITY against the requirement: if it EXCLUDES ads/recommendations, a container or content selector built ON an ad marker selects exactly what was to be removed — the exclusion form (:not() / :has()-negation over the marker) is the correct one. And if ad-marked cards are the ONLY cards the page offers, that is thin content for this input value: say so in the finish summary and prefer a more common input value instead of relabeling ad units as the requested records.';
+        return 'step selector(s) reference ad/sponsored markers (' + lines + '). Check the POLARITY against the requirement: if it EXCLUDES ads/recommendations, a container or content selector built ON an ad marker selects exactly what was to be removed — the exclusion form (:not() / :has()-negation over the marker) is the correct one. And if ad-marked cards are the ONLY cards the page offers, that is thin content for this input value: say so in the finish summary and prefer a more common input value instead of relabeling ad units as the requested records. CAVEAT (154th log): attribute NAMES containing ad can be design-system RENDERING ROLES carried by ORGANIC posts too (the incident: every organic post carried an ad-prefixed story-message attribute in its own markup) — before flipping polarity on the name alone, check the marker against a known-organic record (the result records carry their own snippets); a rendering role present on 100% of organic records is NOT a sponsorship signal.';
       }
 
       // Twenty-fourth log: the model's own step-level instrumentation (small

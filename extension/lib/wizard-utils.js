@@ -1329,6 +1329,134 @@ function idValueShape(value) {
   return 'prefix';
 }
 
+// 154th log: link identity for nested-entry duplicate grouping. Query
+// strings carry per-render tracking tokens (the incident pairs differed
+// ONLY there), but an id-bearing param may be the identity itself — keep
+// id-ish params (id-suffixed keys or 4+ digit values), drop the rest.
+// Applies to relative links too — normalizeIdValueForIdentity only strips
+// absolute http(s) URLs.
+function normalizedLinkIdentity(v) {
+  const s = String(v);
+  const qi = s.indexOf('?');
+  if (qi === -1) return s;
+  const base = s.slice(0, qi);
+  const kept = s.slice(qi + 1).split('&').filter(function (kv) {
+    const eq = kv.indexOf('=');
+    const k = eq === -1 ? kv : kv.slice(0, eq);
+    const val = eq === -1 ? '' : kv.slice(eq + 1);
+    return /id$/i.test(k) || /^\d{4,}$/.test(val);
+  }).sort();
+  return kept.length ? base + '?' + kept.join('&') : base;
+}
+
+function looksLikeLinkValue(v) {
+  return /^(?:[a-z][a-z0-9+.-]*:)?\//i.test(v) && !/\s/.test(v);
+}
+
+// 154th log: within-parent duplicate entries in NESTED record arrays. The
+// incident GREEN run shipped posts[].hovercards carrying the same group
+// twice and the same author twice per post (links differing only by
+// tracking tokens, one of each pair enriched): every duplicate gate walks
+// TOP-LEVEL arrays, and the id lane never saw these entries — their id
+// values live in link paths and object-valued kv.* fields, not id-named
+// keys. Identity = type/role discriminators + id-bearing strings + object
+// leaf scalars, tracking tokens stripped. FULLY identical (canonical form
+// equal) duplicates never ship legitimately; identity-equal but
+// enrichment-divergent pairs are a merge the assembly forgot.
+function nestedEntryIdentityKey(entry) {
+  const disc = [];
+  const idish = [];
+  for (const k of Object.keys(entry)) {
+    const v = entry[k];
+    if (typeof v === 'string' && v) {
+      if (/^(type|role|kind|category)$/.test(k)) disc.push(k + '=' + v);
+      else if (/link|url|href|id/i.test(k)) idish.push(k + '=' + (looksLikeLinkValue(v) ? normalizedLinkIdentity(v) : v));
+    } else if (typeof v === 'number') {
+      if (/id$/i.test(k)) idish.push(k + '=' + v);
+      else disc.push(k + '=' + v);
+    } else if (v && typeof v === 'object' && !Array.isArray(v)) {
+      // Object leaves (kv.*): only id-bearing leaves join the IDENTITY —
+      // enrichment leaves (members, followers, names) belong to the
+      // canonical full-equality comparison, where their presence vs
+      // absence marks a near-dupe MERGE pair rather than two entities.
+      for (const k2 of Object.keys(v)) {
+        const v2 = v[k2];
+        if (typeof v2 === 'string' && v2) {
+          if (/id$/i.test(k2)) idish.push(k2 + '=' + (looksLikeLinkValue(v2) ? normalizedLinkIdentity(v2) : v2));
+          else if (looksLikeLinkValue(v2)) idish.push(k2 + '=' + normalizedLinkIdentity(v2));
+          else if (/^\d{4,}$/.test(v2)) idish.push(k2 + '=' + v2);
+        } else if (typeof v2 === 'number' && /id$/i.test(k2)) {
+          idish.push(k2 + '=' + v2);
+        }
+      }
+    }
+  }
+  if (!idish.length) return null;
+  return disc.sort().join('|') + '::' + idish.sort().join('|');
+}
+
+function canonicalEntryForIdentity(value) {
+  if (typeof value === 'string') return looksLikeLinkValue(value) ? normalizedLinkIdentity(value) : value;
+  if (Array.isArray(value)) return value.map(canonicalEntryForIdentity);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const k of Object.keys(value).sort()) out[k] = canonicalEntryForIdentity(value[k]);
+    return out;
+  }
+  return value;
+}
+
+function detectDuplicateNestedEntries(data, schema) {
+  const out = [];
+  if (!data || typeof data !== 'object') return out;
+  const scanRecord = (rec, path, parentIndex) => {
+    if (!rec || typeof rec !== 'object' || Array.isArray(rec)) return;
+    for (const k of Object.keys(rec)) {
+      const arr = rec[k];
+      if (!Array.isArray(arr)) continue;
+      const groups = new Map();
+      let entryCount = 0;
+      for (let i = 0; i < arr.length; i++) {
+        const e = arr[i];
+        if (!e || typeof e !== 'object' || Array.isArray(e)) continue;
+        entryCount += 1;
+        const key = nestedEntryIdentityKey(e);
+        if (!key) continue;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push({ index: i + 1, entry: e });
+      }
+      if (entryCount >= 2) {
+        for (const key of groups.keys()) {
+          const g = groups.get(key);
+          if (g.length < 2) continue;
+          const canon = g.map((x) => JSON.stringify(canonicalEntryForIdentity(x.entry)));
+          const fullyIdentical = canon.every((c) => c === canon[0]);
+          out.push({
+            path: path + '.' + k,
+            parentIndex: parentIndex,
+            count: g.length,
+            indices: g.map((x) => x.index),
+            fullyIdentical: fullyIdentical,
+            identity: String(key).slice(0, 120)
+          });
+        }
+      }
+      for (let i = 0; i < arr.length; i++) {
+        const e = arr[i];
+        if (e && typeof e === 'object' && !Array.isArray(e)) scanRecord(e, path + '.' + k + '[]', i + 1);
+      }
+    }
+  };
+  // top-level record arrays are depth 1 (other gates own their duplicates);
+  // arrays INSIDE those records are the nested class under audit.
+  for (const k of Object.keys(data)) {
+    const arr = data[k];
+    if (!Array.isArray(arr)) continue;
+    for (let i = 0; i < arr.length; i++) scanRecord(arr[i], k, i + 1);
+  }
+  return out;
+}
+
 function detectDuplicateIdValues(data, schema) {
   const out = [];
   if (!data || typeof data !== 'object') return out;
@@ -6329,7 +6457,7 @@ function syncLastVerifiedFromVerify(state, lv) {
 // direct property access keeps working. test/forty-sixth-log-followups.test.js
 // pins marker-bag keys === module.exports keys so a future export cannot
 // land on one surface only (the inline-fallback drift class, RC8/RC35).
-var WU_EXPORT_BAG = { normalizeIdValueForIdentity, idValueShape, recordContentSignature, countUniqueRecords, detectMediaArrayHygiene, unverifiedArtifactState, syncLastVerifiedFromVerify, explainDetectorFinding, DETECTOR_PLAIN, collectFieldSamplesFromOutput, detectDuplicateEntityPairs, detectIdenticalFieldValues, detectStepGraphGhostRefs, injectResumeChunkWarning, mineResearchSessionSamples, createParkNotifier, parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, hasYearToken, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectJunkShapeRecords, seedLedgerFromSameSite, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS, isCspConstructError, __testConstructStepScript: null };
+var WU_EXPORT_BAG = { normalizeIdValueForIdentity, idValueShape, detectDuplicateNestedEntries, recordContentSignature, countUniqueRecords, detectMediaArrayHygiene, unverifiedArtifactState, syncLastVerifiedFromVerify, explainDetectorFinding, DETECTOR_PLAIN, collectFieldSamplesFromOutput, detectDuplicateEntityPairs, detectIdenticalFieldValues, detectStepGraphGhostRefs, injectResumeChunkWarning, mineResearchSessionSamples, createParkNotifier, parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, hasYearToken, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectJunkShapeRecords, seedLedgerFromSameSite, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS, isCspConstructError, __testConstructStepScript: null };
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = WU_EXPORT_BAG;
