@@ -1136,10 +1136,23 @@
                 ? WU.schemaItemRequiredForPath(outputSchema, dup.path) : null;
               const isRequired = Array.isArray(reqFields) && reqFields.indexOf(dup.field) !== -1;
               if (isRequired && !error) {
+                // 150th log: render the per-record samples + the mechanical
+                // same/different verdict — the incident model burned ~40 turns
+                // answering exactly this ("same post twice, or different
+                // posts sharing one link?"). DIFFERENT samples = the shared
+                // value is album/carousel-scoped, NOT a per-record id.
+                let dupSamplesLine = '';
+                if (Array.isArray(dup.recordSamples) && dup.recordSamples.length >= 2) {
+                  const rendered = dup.recordSamples.map((x) => '#' + x.record + ' ' + JSON.stringify(x.hint.slice(0, 40))).join(', ');
+                  dupSamplesLine = ' Record samples: ' + rendered + '. ' + (dup.samplesDiffer
+                    ? 'The listed records have DIFFERENT content — they are DIFFERENT items sharing one link: the shared value is album/carousel-scoped (or otherwise container-level), NOT a per-record id. Take the id from a per-record href (a permalink /posts/ /story /permalink link on each card) instead of the shared photo link.'
+                    : 'The listed records also share their content — the SAME item extracted more than once: deduplicate by the entity signature (content + time) in the assembly instead of the id alone.');
+                }
                 error = new Error(
                   'DUPLICATE_ID_REQUIRED: ' + dup.path + ' carries the same value in ' + dup.count + '/' + dup.totalRecords +
                   ' records ("' + dup.value + '" on records ' + dup.indices.join(', ') + ') but the confirmed contract lists it as REQUIRED — a required identity field that repeats is a broken binding, not a page fact. ' +
                   'The usual cause is a fallback to a shared/author-scoped value (the list owner id, a base64 story token) instead of a per-record identifier: per-record ids live on per-record elements — a card link\'s own href often carries the numeric id right beside any token. ' +
+                  dupSamplesLine +
                   'Re-probe ONE listed record (probe.snippet over its link hrefs), bind the per-record source, and dry-run before the next service.update. If the page legitimately repeats the record itself, dedup in the step or renegotiate via io.confirm — a required id may not ship duplicated.'
                 );
                 break;

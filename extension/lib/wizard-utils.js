@@ -1281,6 +1281,32 @@ function recordContentSignature(record, fields) {
   return head ? (head + '|' + countVal) : null;
 }
 
+// 150th log: per-record content samples for duplicated-id groups. The
+// incident model burned ~40 turns answering ONE question the detector could
+// answer mechanically: are the listed records the SAME post twice (identical
+// samples → dedupe) or DIFFERENT posts sharing one link (an album/carousel-
+// scoped href posing as a per-record id → take the id from a per-record
+// href)? Samples prefer the content-ish field head, fall back to the longest
+// string field.
+function duplicateRecordSamples(records, indices, sigFields) {
+  const out = [];
+  for (const idx of indices.slice(0, 4)) {
+    const r = records[idx - 1];
+    if (!r) continue;
+    let hint = '';
+    if (sigFields.contentField && typeof r[sigFields.contentField] === 'string') hint = r[sigFields.contentField];
+    else {
+      let best = 0;
+      for (const f of sigFields.stringFields) {
+        const v = r[f];
+        if (typeof v === 'string' && v.length > best) { best = v.length; hint = v; }
+      }
+    }
+    out.push({ record: idx, hint: String(hint || '').replace(/\s+/g, ' ').trim().slice(0, 60) });
+  }
+  return out;
+}
+
 function detectDuplicateIdValues(data, schema) {
   const out = [];
   if (!data || typeof data !== 'object') return out;
@@ -1301,10 +1327,22 @@ function detectDuplicateIdValues(data, schema) {
         if (!seen.has(key)) seen.set(key, { indices: [], sample: v });
         seen.get(key).indices.push(i + 1);
       }
+      const sampleFields150 = {
+        contentField: Object.keys(itemProps).find((f) => CONTENT_FIELD_RE.test(f)) || null,
+        stringFields: Object.keys(itemProps).filter((f) => {
+          const t = itemProps[f] && itemProps[f].type;
+          return t === 'string' || t == null;
+        }),
+        countField: Object.keys(itemProps).find((f) => isCountLikeFieldName(f)) || null
+      };
       for (const key of seen.keys()) {
         const group = seen.get(key);
         if (group.indices.length < 2) continue;
         const value = group.sample;
+        // 150th log: per-record samples + the same/different verdict.
+        const recordSamples = duplicateRecordSamples(records, group.indices, sampleFields150);
+        const hints = recordSamples.map((x) => x.hint).filter(Boolean);
+        const samplesDiffer = hints.length >= 2 && hints.some((h) => h !== hints[0]);
         out.push({
           path: arrField + '.' + field,
           field: field,
@@ -1312,6 +1350,8 @@ function detectDuplicateIdValues(data, schema) {
           count: group.indices.length,
           totalRecords: records.length,
           indices: group.indices.slice(0, 6),
+          recordSamples: recordSamples,
+          samplesDiffer: samplesDiffer,
           note: 'an id-like value shared by ' + group.indices.length + ' of ' + records.length + ' records usually means the same underlying item was extracted more than once (URL ids are compared WITHOUT their query tokens — per-render tracking parameters do not make two identical permalinks different items). Deduplicate the assembly by this field, and when the count requirement is still unmet keep collecting UNIQUE items instead of shipping repeats; per-record ids live on per-record elements (links/attrs inside each card), not on the shared container'
         });
       }
