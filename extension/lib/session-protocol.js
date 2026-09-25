@@ -122,6 +122,31 @@
   // error text varies with WHERE the cut landed ("Unterminated string" vs
   // "Unexpected end" vs "Expected ',' or '}'"), so the cut-off class is
   // stated directly instead of inferred from message text.
+  // 146th log: string-aware JSON structure scan — the salvage below always
+  // had this; the cut-off MARKER used the naive brace count instead, and a
+  // truncated reply whose step scripts contain balanced internal braces
+  // ({done:false, posts:out}) offset the missing final closer exactly: the
+  // marker read "balanced", the continuation gate stayed closed, and the
+  // session died to a protocol stop on a reply missing ONE character.
+  function scanJsonStructure(src) {
+    let quote = null;
+    let escape = false;
+    const stack = [];
+    for (let i = 0; i < src.length; i++) {
+      const ch = src[i];
+      if (quote) {
+        if (escape) { escape = false; continue; }
+        if (ch === '\\') { escape = true; continue; }
+        if (ch === quote) quote = null;
+        continue;
+      }
+      if (ch === '"') { quote = ch; continue; }
+      if (ch === '{' || ch === '[') stack.push(ch);
+      else if (ch === '}' || ch === ']') stack.pop();
+    }
+    return { quote: quote, stack: stack };
+  }
+
   function bracesBalanced(text) {
     let depth = 0, quote = null;
     for (let i = 0; i < text.length; i++) {
@@ -174,23 +199,20 @@
     // dropped before closing so it cannot corrupt the last token.
     if (typeof candidate === 'string' && candidate.trim().startsWith('{')) {
       let src = candidate;
-      let quote = null;
-      let escape = false;
-      const stack = [];
-      for (let i = 0; i < src.length; i++) {
-        const ch = src[i];
-        if (quote) {
-          if (escape) { escape = false; continue; }
-          if (ch === '\\') { escape = true; continue; }
-          if (ch === quote) quote = null;
-          continue;
-        }
-        if (ch === '"') { quote = ch; continue; }
-        if (ch === '{' || ch === '[') stack.push(ch);
-        else if (ch === '}' || ch === ']') stack.pop();
-      }
+      const scan = scanJsonStructure(src);
+      const quote = scan.quote;
+      const stack = scan.stack;
       if (quote || stack.length) {
-        if (quote && escape) src = src.slice(0, -1); // drop the dangling backslash
+        if (quote && src.endsWith('\\')) src = src.slice(0, -1); // drop the dangling backslash
+        // 146th log: a completion is CLOSER-ONLY when no string is open at
+        // EOF — the appended suffix is purely closing brackets, so the
+        // salvaged object contains EVERY character of content the model
+        // sent (nothing silently truncated). This is the provider-cut-the-
+        // final-brace class (finish_reason lies "stop" at ~2.5K); the
+        // lossless salvage is strictly better than the continuation round
+        // (no LLM cost, no repeat-drift). A cut INSIDE a string stays
+        // lossy and keeps the loud path below.
+        const closerOnly = !quote && stack.length > 0;
         let closed = src + (quote ? quote : '');
         while (stack.length) closed += (stack.pop() === '{' ? '}' : ']');
         try {
@@ -200,8 +222,9 @@
           // exists precisely to recover the full payload, so reject the
           // salvage there and keep the loud cut-off path. Think-only and
           // cheap-probe recoveries are safe (a truncated probe arg shows up
-          // in the very next tool result).
-          if (salvaged && typeof salvaged === 'object' && !Array.isArray(salvaged) &&
+          // in the very next tool result). EXCEPTION (146th): the
+          // closer-only completion is lossless — allow it for payload tools.
+          if (!closerOnly && salvaged && typeof salvaged === 'object' && !Array.isArray(salvaged) &&
               (salvaged.tool === 'service.update' || salvaged.tool === 'io.confirm')) {
             return undefined;
           }
@@ -265,7 +288,10 @@
       // truncation kills the reply exactly where the preview cannot see
       // (fifth-live-log turn 21: two replies, 554/470 chars, tail unknown).
       const tail = JSON.stringify(candidate.slice(-100));
-      const cut = bracesBalanced(candidate) ? '' : ' | cut-off: braces never closed (reply truncated)';
+      // 146th log: string-aware completeness — the naive count let
+      // string-internal braces hide a genuinely unclosed structure.
+      const st146 = scanJsonStructure(candidate);
+      const cut = (st146.quote || st146.stack.length) ? ' | cut-off: braces never closed (reply truncated)' : '';
       const detail = ((parseErr ? String(parseErr).slice(0, 140) : 'parsed to null') + cut + ' | tail: ' + tail).slice(0, 300);
       return { ok: false, violation: 'not-object', detail: detail };
     }

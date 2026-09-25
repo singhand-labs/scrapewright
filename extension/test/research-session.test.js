@@ -856,7 +856,7 @@ describe('protocol violations', () => {
         // the salvage deliberately rejects in favor of the cut-off
         // repair/continuation machinery (a truncated artifact must never be
         // silently accepted).
-        reply('{"think":"write artifact","tool":"service.update","args":{"steps":[{"id":"s1","script":"return await $count(\'div.card\')"'),
+        reply('{"think":"write artifact","tool":"service.update","args":{"steps":[{"id":"s1","script":"return await $count(\'div.card'),
         reply(envelope('probe.count', { sel: 'div.card' })),
         reply(finishEnvelope())
       ], []),
@@ -897,12 +897,12 @@ describe('protocol violations', () => {
   });
 
   it('a second cut-off gets a continuation round: overlap-splice recovers the turn (eighteenth log)', async () => {
-    const cutA = '{"think":"write artifact","tool":"service.update","args":{"steps":[{"id":"s1","script":"return await $count(\'div.card\')"';
+    const cutA = '{"think":"write artifact","tool":"service.update","args":{"steps":[{"id":"s1","script":"return await $count(\'div.card';
     // Repair resend: LONGER than the original (1224→2886 in the log) and cut
     // off again — "resend SHORTER" cannot shrink an artifact write.
-    const cutB = '{"think":"again","tool":"service.update","args":{"steps":[{"id":"s1","script":"return await $count(\'div.card\')"},{"id":"s2","script":"return await $list(\'div.card\')"}]';
+    const cutB = '{"think":"again","tool":"service.update","args":{"steps":[{"id":"s1","script":"return await $count(\'div.card\')"},{"id":"s2","script":"return await $list(\'div.card';
     // Continuation repeats the last tokens of cutB (models do) then closes.
-    const cont = '"return await $list(\'div.card\')"}]}}';
+    const cont = '.card\')"}]}}';
     const calls = [];
     const session = createResearchSession({
       requirement: 'r',
@@ -935,7 +935,7 @@ describe('protocol violations', () => {
   // exactly the long sessions it targets. A seeded counter models the
   // stop→resume cycle (the 125th-run death was three cuts across turns).
   it('a seeded prior cut-off + this turn cut reply escalates mechanically, count-accurate, via the persisted counter', async () => {
-    const cut = '{"think":"write artifact","tool":"service.update","args":{"steps":[{"id":"s1","script":"return await $count(\'div.card\')"';
+    const cut = '{"think":"write artifact","tool":"service.update","args":{"steps":[{"id":"s1","script":"return await $count(\'div.card';
     const seedSession = {
       transcript: [], goals: [], hypotheses: [], digest: '', attachedUnits: [], budgetAdvisories: [],
       waivedSelectors: [], spend: { turns: 0, llmCalls: 0, promptTokens: 0, completionTokens: 0 },
