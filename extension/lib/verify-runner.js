@@ -1141,17 +1141,30 @@
                 // answering exactly this ("same post twice, or different
                 // posts sharing one link?"). DIFFERENT samples = the shared
                 // value is album/carousel-scoped, NOT a per-record id.
+                // 152nd log: three-way. A duplicated value carrying NO
+                // id-shaped segment (no id digits, no query tokens — a bare
+                // URL prefix) is not a page value the cards share at all: the
+                // extractor matched a constant prefix, and the fix is the
+                // direct per-card href binding, not hunting a per-record
+                // href "beside" a link that has none.
                 let dupSamplesLine = '';
+                const prefixShaped = dup.valueShape === 'prefix';
                 if (Array.isArray(dup.recordSamples) && dup.recordSamples.length >= 2) {
                   const rendered = dup.recordSamples.map((x) => '#' + x.record + ' ' + JSON.stringify(x.hint.slice(0, 40))).join(', ');
                   dupSamplesLine = ' Record samples: ' + rendered + '. ' + (dup.samplesDiffer
-                    ? 'The listed records have DIFFERENT content — they are DIFFERENT items sharing one link: the shared value is album/carousel-scoped (or otherwise container-level), NOT a per-record id. Take the id from a per-record href (a permalink /posts/ /story /permalink link on each card) instead of the shared photo link.'
+                    ? (prefixShaped
+                      ? 'The listed records have DIFFERENT content, and the shared value carries NO per-record identifier segment at all (no id digits, no query tokens) — it is a constant URL PREFIX, not a page value the cards share: your extraction matched a constant prefix (a regex run over container markup, or a first-match binding outside the card). Bind the per-card link directly (attr:\'href\' on the anchor INSIDE each container) instead of a match/regex capture, so the captured value varies per record.'
+                      : 'The listed records have DIFFERENT content — they are DIFFERENT items sharing one link: the shared value is album/carousel-scoped (or otherwise container-level), NOT a per-record id. Take the id from a per-record href (a permalink /posts/ /story /permalink link on each card) instead of the shared photo link.')
                     : 'The listed records also share their content — the SAME item extracted more than once: deduplicate by the entity signature (content + time) in the assembly instead of the id alone.');
+                } else if (prefixShaped) {
+                  dupSamplesLine = ' The shared value carries NO per-record identifier segment at all — it is a constant URL PREFIX your extraction matched: bind the per-card link directly (attr:\'href\' on the anchor INSIDE each container) instead of a match/regex capture.';
                 }
                 error = new Error(
                   'DUPLICATE_ID_REQUIRED: ' + dup.path + ' carries the same value in ' + dup.count + '/' + dup.totalRecords +
                   ' records ("' + dup.value + '" on records ' + dup.indices.join(', ') + ') but the confirmed contract lists it as REQUIRED — a required identity field that repeats is a broken binding, not a page fact. ' +
-                  'The usual cause is a fallback to a shared/author-scoped value (the list owner id, a base64 story token) instead of a per-record identifier: per-record ids live on per-record elements — a card link\'s own href often carries the numeric id right beside any token. ' +
+                  (prefixShaped
+                    ? 'The shared value is a CONSTANT (no per-record identifier segment) — the binding itself matched a constant, so re-binding the source is the fix, not deduplication. '
+                    : 'The usual cause is a fallback to a shared/author-scoped value (the list owner id, a base64 story token) instead of a per-record identifier: per-record ids live on per-record elements — a card link\'s own href often carries the numeric id right beside any token. ') +
                   dupSamplesLine +
                   'Re-probe ONE listed record (probe.snippet over its link hrefs), bind the per-record source, and dry-run before the next service.update. If the page legitimately repeats the record itself, dedup in the step or renegotiate via io.confirm — a required id may not ship duplicated.'
                 );

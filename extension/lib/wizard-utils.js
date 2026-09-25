@@ -1307,6 +1307,25 @@ function duplicateRecordSamples(records, indices, sigFields) {
   return out;
 }
 
+// 152nd log: does the duplicated id-shaped value carry a per-record
+// identifier AT ALL? A real shared link carries an id segment (a >=4-digit
+// run, an id-bearing query key such as any *id param or an album set param,
+// or a long base62 token) — the records genuinely share a SCOPED value and
+// the 150th teaching (take the per-record href beside it) applies. A value
+// with NO such segment ("https://host/photo/", "https://host/profile.php")
+// is a constant URL PREFIX the extractor matched (regex over container
+// markup) — no per-record href exists at that binding, and the fix is to
+// bind the per-card link attribute directly instead of the regex capture.
+// Mechanical discriminator over the raw value; no site tokens.
+function idValueShape(value) {
+  const v = String(value || '');
+  if (!v) return 'empty';
+  if (/\d{4,}/.test(v)) return 'scoped';
+  if (/[?&]([a-z0-9_]*id|set)=/i.test(v)) return 'scoped';
+  if (/[A-Za-z0-9]{12,}/.test(v)) return 'scoped';
+  return 'prefix';
+}
+
 function detectDuplicateIdValues(data, schema) {
   const out = [];
   if (!data || typeof data !== 'object') return out;
@@ -1347,6 +1366,7 @@ function detectDuplicateIdValues(data, schema) {
           path: arrField + '.' + field,
           field: field,
           value: value.length > 80 ? value.slice(0, 80) + '…' : value,
+          valueShape: idValueShape(value),
           count: group.indices.length,
           totalRecords: records.length,
           indices: group.indices.slice(0, 6),
@@ -6306,7 +6326,7 @@ function syncLastVerifiedFromVerify(state, lv) {
 // direct property access keeps working. test/forty-sixth-log-followups.test.js
 // pins marker-bag keys === module.exports keys so a future export cannot
 // land on one surface only (the inline-fallback drift class, RC8/RC35).
-var WU_EXPORT_BAG = { normalizeIdValueForIdentity, recordContentSignature, countUniqueRecords, detectMediaArrayHygiene, unverifiedArtifactState, syncLastVerifiedFromVerify, explainDetectorFinding, DETECTOR_PLAIN, collectFieldSamplesFromOutput, detectDuplicateEntityPairs, detectIdenticalFieldValues, detectStepGraphGhostRefs, injectResumeChunkWarning, mineResearchSessionSamples, createParkNotifier, parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, hasYearToken, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectJunkShapeRecords, seedLedgerFromSameSite, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS, isCspConstructError, __testConstructStepScript: null };
+var WU_EXPORT_BAG = { normalizeIdValueForIdentity, idValueShape, recordContentSignature, countUniqueRecords, detectMediaArrayHygiene, unverifiedArtifactState, syncLastVerifiedFromVerify, explainDetectorFinding, DETECTOR_PLAIN, collectFieldSamplesFromOutput, detectDuplicateEntityPairs, detectIdenticalFieldValues, detectStepGraphGhostRefs, injectResumeChunkWarning, mineResearchSessionSamples, createParkNotifier, parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, hasYearToken, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectJunkShapeRecords, seedLedgerFromSameSite, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS, isCspConstructError, __testConstructStepScript: null };
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = WU_EXPORT_BAG;
