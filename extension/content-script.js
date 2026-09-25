@@ -3827,6 +3827,18 @@
       anchor = found.element;
     }
 
+    // 153rd log: activate BEFORE the pre-dispatch segment. The activation
+    // wrap used to sit around the trusted dispatch send only, after
+    // scrollIntoView + the settle sleep — on a hidden renderer that 50ms
+    // sleep stretches to minutes under timer throttling, so the batch
+    // starved before the activation that would have restored frames (the
+    // incident: three research-tab batches starved 105s/498s/438s with ZERO
+    // activation attempts). The dispatch-time wrap below stays as a sticky
+    // re-assert for a user switching away mid-dwell.
+    try {
+      await withTabActivation('hoverEntry', async function () { return null; }, { need: 'hover' });
+    } catch (eAct) { /* entry activation best-effort: the dispatch wrap retries */ }
+
     // Scroll anchor into view so the bounding rect has viewport coordinates
     // CDP can target. Without this, an anchor below the fold has negative/
     // out-of-range y and the mouseMoved lands on the wrong pixel.
@@ -5086,9 +5098,36 @@
       processed = containers;
     }
     if (processed.length === 0) {
-      // Twenty-fifth log: when the CONTAINER selector itself matched nothing
-      // (not range filtering), attach the trailing-clause differential — same
-      // evidence duty as domExtractList.
+      // 153rd log: a range/index that lies PAST the last container is a
+      // spent cursor, not a selector failure. Pagination loops legitimately
+      // probe one batch past the known end (look-ahead for late mounts) and
+      // break on an empty result; the old throw killed the whole step on
+      // exactly that probe (two red verifies on tabs carrying 1 and 9 live
+      // containers) and the error diagnostics hard-coded containerMatches: 0
+      // while the page carried 9 — a phantom population failure. Exhaustion
+      // is data: resolve the empty envelope with the REAL match count.
+      if (containers.length > 0) {
+        var _cursorDesc = (containerIndex !== null && containerIndex !== undefined)
+          ? ('containerIndex ' + containerIndex)
+          : (containerRange
+            ? ('containerRange [' + containerRange[0] + ',' + containerRange[1] + ']')
+            : ('maxContainers ' + maxContainers));
+        return {
+          result: [],
+          _diagnostics: {
+            api: 'extractWithHover',
+            containerSelector: containerSel,
+            containerMatches: containers.length,
+            processedContainers: 0,
+            perField: [],
+            hoverSummary: { anchorsFound: 0, hovercardsCaptured: 0, hoverFailures: 0 },
+            note: _cursorDesc + ' lies past the last container (' + containers.length + ' matched) — a spent cursor for a pagination or resume loop, resolved as an empty array so the caller loop can break. Only a container selector matching ZERO containers throws (a real selector miss).'
+          }
+        };
+      }
+      // containers.length === 0 — the CONTAINER selector itself matched
+      // nothing (not range filtering): attach the trailing-clause
+      // differential, same evidence duty as domExtractList.
       var _contDiff = containers.length === 0 ? computeSelectorDifferential(containerSel) : null;
       var _contDiffNote = formatSelectorDifferentialNote(_contDiff);
       if (opts.allowEmpty) {

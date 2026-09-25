@@ -369,7 +369,10 @@ Signature: \$extractWithHover(containerSel, fieldMap, opts) → Promise<Array<Re
   - opts.containerIndex / opts.containerRange / opts.maxContainers: narrow
     which containers get processed (only one may be set). Use containerRange
     to slice a large batch across orchestrator iterations when the total
-    time would exceed the step timeout.
+    time would exceed the step timeout. A range or index that lies past the
+    last container resolves to [] — a spent cursor for a pagination or
+    resume loop (break on it, do not treat it as a selector failure); only
+    a container selector matching ZERO containers throws.
   - opts.maxWallMs: wall-clock budget for the hover batch (default 25000ms).
     Each hovered anchor burns ~5-10s even when no popover appears, so a long
     feed can outlive the step budget with ZERO results. When the budget is

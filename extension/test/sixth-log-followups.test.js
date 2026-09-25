@@ -62,7 +62,9 @@ describe('P1: domHover keeps the observed candidate (source audit)', () => {
   // window is a scoping heuristic.
   // Ninety-first round: the dynamic-DOM journal block pushed the notify
   // past 56000 — the window is a scoping heuristic, not a size contract.
-  const fnBody = CS_SRC.slice(fnStart, fnStart + 64000);
+  // Hundred-fifty-third round: the hover ENTRY activation block (+~1.5k
+  // before the result assembly) pushed observedPopover past 64000.
+  const fnBody = CS_SRC.slice(fnStart, fnStart + 66000);
 
   it('tracks the best scoring-cascade pick across auto-discover ticks', () => {
     assert.ok(/observedBest/.test(fnBody),
