@@ -1063,10 +1063,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // long after the session itself had stopped. Answering at the relay
     // skips tabs.sendMessage entirely, so no activation side effects fire.
     if (typeof message.deadlineAt === 'number' && Number.isFinite(message.deadlineAt) && Date.now() > message.deadlineAt) {
+      // 148th log: a request arriving MINUTES past its deadline (not
+      // milliseconds) is the machine-sleep signature — the step was
+      // dispatched, the system suspended, and the wake-up found the budget
+      // long gone. The step budget was never mis-sized; shrinking it would
+      // be the wrong fix. Disclose when the overshoot is large.
+      const overshootMs = Date.now() - message.deadlineAt;
+      const suspendNote = overshootMs > 60000
+        ? ' NOTE: this request arrived ' + Math.round(overshootMs / 1000) + 's AFTER the budget expired — a system suspension (machine sleep / SW suspend) likely consumed the wall clock mid-dispatch. Re-run the step as-is; do NOT shrink the step budget or settle times for this.'
+        : '';
       chrome.runtime.sendMessage({
         type: 'DOM_RESPONSE',
         id: message.id,
-        error: 'OUTER_DEADLINE_EXCEEDED: the owning script\'s execution budget ended before this DOM request could be relayed — the engine already timed the script out. Narrow the batch (containerRange/maxContainers), slice across maxIterations>1 iterations, or raise the step budget.',
+        error: 'OUTER_DEADLINE_EXCEEDED: the owning script\'s execution budget ended before this DOM request could be relayed — the engine already timed the script out. Narrow the batch (containerRange/maxContainers), slice across maxIterations>1 iterations, or raise the step budget.' + suspendNote,
         _fromOffscreen: true
       }).catch(() => {});
       return false;

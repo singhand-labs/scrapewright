@@ -271,8 +271,12 @@ describe('F3: time-budget stop suffix', () => {
       'maxTurns stop carries the suffix');
     assert.match(RS_SRC, /verifyStopSuffix\(\) \+ formatTimeBudgetSuffix\(\)\);/,
       'wallClock stop carries the suffix');
-    assert.match(RS_SRC, /recordToolTiming\(turn\.tool, Date\.now\(\) - __t0/,
+    // 148th log: the dispatch site now books wall into __dispatchWall
+    // (suspension credit) before timing — the pin follows the variable.
+    assert.match(RS_SRC, /const __dispatchWall = Date\.now\(\) - __t0;/,
       'dispatchTool timed');
+    assert.match(RS_SRC, /recordToolTiming\(turn\.tool, __dispatchWall,/,
+      'timings still recorded per dispatch');
   });
 });
 

@@ -306,6 +306,20 @@
     // discloses it, and the TIME BUDGET suffix carries it as a line item.
     let llmWaitTotal = 0;
     let llmWaitThisSegment = 0;
+    // 148th log: system-suspension credit. A machine sleep / SW suspend
+    // mid-dispatch freezes the page, the SW, and the host together; on wake
+    // the wall clock has advanced by the sleep but NO session work happened.
+    // The incident: two sleeps (25.6 + 34.7 min) consumed a 30-min wallClock
+    // whole, starving a fully-researched session of its final verify. Same
+    // exclusion class as llmWaitMs (71st log) — fed from the dispatch site
+    // for wall time beyond the no-legit-dispatch-exceeds floor.
+    let suspendCreditTotal = 0;
+    let suspendCreditThisSegment = 0;
+    // No legitimate single tool dispatch exceeds 4 minutes (verify median
+    // ~140s / max seen ~180s; the script budget is 120s; probe.snippet caps
+    // at 90s). Anything beyond is suspension, not work.
+    const TOOL_DISPATCH_SUSPEND_FLOOR_MS = (typeof cfg.toolSuspendFloorMs === 'number' && cfg.toolSuspendFloorMs > 0)
+      ? cfg.toolSuspendFloorMs : 240000;
     // Sixty-ninth review F13: WHAT the session is parked on — a resumed or
     // inspected session can see "the engine is waiting on the user via
     // io.confirm / annotate.request / user.observe" instead of a silently
@@ -331,7 +345,7 @@
     // waits MINUS parked (user) windows — clamped at 0. The math itself lives
     // in the module-level computeEffectiveElapsed (exported for unit tests).
     function netSegmentMs() {
-      let seg = computeEffectiveElapsed(now(), segmentStart, llmWaitThisSegment, parkedThisSegment);
+      let seg = computeEffectiveElapsed(now(), segmentStart, llmWaitThisSegment, parkedThisSegment, suspendCreditThisSegment);
       if (parkOpenSince != null) seg -= (now() - parkOpenSince);
       return Math.max(0, seg);
     }
@@ -370,7 +384,7 @@
         stopped: state.stopped,
         openQuestions: openQuestions(),
         turns: state.spend.turns,
-        spend: Object.assign({}, state.spend, { parkedMs: parkedTotal, llmWaitMs: llmWaitTotal }),
+        spend: Object.assign({}, state.spend, { parkedMs: parkedTotal, llmWaitMs: llmWaitTotal, suspendCreditMs: suspendCreditTotal }),
         artifactVersions: state.artifactVersions.length,
         ledgerEntries: ledger.serialize().entries.length,
         observations: observationLog.size()
@@ -1183,6 +1197,7 @@
         if (rows.length) parts.push('top consumers: ' + rows.join(', '));
       }
       if (llmWaitTotal > 0) parts.push('llm/provider waits ' + Math.round(llmWaitTotal / 1000) + 's (excluded from wallClock)');
+      if (suspendCreditTotal > 0) parts.push('system suspension credit ' + Math.round(suspendCreditTotal / 1000) + 's (machine sleep during dispatches — excluded from wallClock)');
       if (!parts.length) return '';
       const suffix = ' [TIME BUDGET — ' + parts.join('; ') + ']';
       return suffix.length <= 240 ? suffix : suffix.slice(0, 237) + '...]';
@@ -1240,7 +1255,7 @@
             break;
           }
           if (state.elapsedMs + netSegmentMs() >= budgets.wallClockMs) {
-            report = await stop('wallClock', 'time budget exhausted after ~' + Math.round((state.elapsedMs + netSegmentMs()) / 1000) + 's (parked ' + Math.round(parkedTotal / 1000) + 's excluded) [LLM/provider waits ' + Math.round(llmWaitTotal / 1000) + 's excluded] — raise the budget (wallClockMs) in the resume seed to continue' + verifyStopSuffix() + formatTimeBudgetSuffix());
+            report = await stop('wallClock', 'time budget exhausted after ~' + Math.round((state.elapsedMs + netSegmentMs()) / 1000) + 's (parked ' + Math.round(parkedTotal / 1000) + 's excluded) [LLM/provider waits ' + Math.round(llmWaitTotal / 1000) + 's excluded] [system suspension credit ' + Math.round(suspendCreditTotal / 1000) + 's excluded] — raise the budget (wallClockMs) in the resume seed to continue' + verifyStopSuffix() + formatTimeBudgetSuffix());
             break;
           }
           if (state.spend.promptTokens + state.spend.completionTokens >= budgets.tokenCap) { report = await stop('tokenCap', buildTokenCapDetail(state.spend, budgets)); break; }
@@ -1532,8 +1547,19 @@
           // count SCRIPT_TIMEOUT-class results as timeouts for the suffix.
           const __t0 = Date.now();
           let result = await dispatchTool(turn.tool, turn.args);
-          recordToolTiming(turn.tool, Date.now() - __t0,
+          const __dispatchWall = Date.now() - __t0;
+          recordToolTiming(turn.tool, __dispatchWall,
             isErrorResult(result) && /^SCRIPT_TIMEOUT\b/.test(String(result && result.error)));
+          // 148th log: book suspension-shaped dispatch wall out of the clock.
+          if (__dispatchWall > TOOL_DISPATCH_SUSPEND_FLOOR_MS) {
+            const __credit = __dispatchWall - TOOL_DISPATCH_SUSPEND_FLOOR_MS;
+            suspendCreditTotal += __credit;
+            suspendCreditThisSegment += __credit;
+            state.transcript.push({ kind: 'system', text:
+              'SYSTEM SUSPENSION CREDIT: the ' + turn.tool + ' dispatch wall was ' + Math.round(__dispatchWall / 1000) +
+              's (no legitimate dispatch exceeds ' + Math.round(TOOL_DISPATCH_SUSPEND_FLOOR_MS / 1000) +
+              's) — ' + Math.round(__credit / 1000) + 's is credited back to the wall budget (machine sleep / SW suspend during the dispatch). The wall clock did not spend it.' });
+          }
           // §3.C: receipt-driven step-plan transitions (probe grounding,
           // verify tested/failed). Best-effort — never kills the turn.
           try { updateStepPlanFromResult(turn.tool, turn.args, result); } catch (e) { /* plan is advisory */ }
@@ -1848,8 +1874,11 @@
   // Seventy-first log F2: pure wallClock accounting — raw span MINUS llm/
   // provider waits MINUS parked (user) windows, clamped at 0. Exported so the
   // exclusion semantics are unit-testable without driving the engine loop.
-  function computeEffectiveElapsed(nowMs, startMs, llmWaitMs, parkedMs) {
-    return Math.max(0, nowMs - startMs - Math.max(0, Number(llmWaitMs) || 0) - Math.max(0, Number(parkedMs) || 0));
+  function computeEffectiveElapsed(nowMs, startMs, llmWaitMs, parkedMs, suspendCreditMs) {
+    // 148th log: suspendCreditMs — wall time beyond the no-legit-dispatch
+    // floor, booked out for machine-sleep gaps inside tool dispatches (the
+    // same exclusion class as llmWaitMs).
+    return Math.max(0, nowMs - startMs - Math.max(0, Number(llmWaitMs) || 0) - Math.max(0, Number(parkedMs) || 0) - Math.max(0, Number(suspendCreditMs) || 0));
   }
 
   const api = { createResearchSession, computeEffectiveElapsed: computeEffectiveElapsed, makeInstructionStripper };
