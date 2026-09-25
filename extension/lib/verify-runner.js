@@ -965,6 +965,57 @@
               }
             } catch (e) { /* provenance is best-effort */ }
           }
+          // 145th log: PREMATURE_EXHAUSTION veto. The incident shipped a
+          // GREEN artifact delivering 1 of 10: the hand-rolled collect step
+          // ended `return {done: n2 >= count || n2 === n, n: n2}` — done
+          // after ONE no-growth round (cold-tab lazy content had not
+          // mounted within the single 900px scroll + 1500ms settle), the
+          // 39th/23rd class surviving inside hand-rolled loops that bypass
+          // every $collectUntil bar. Mechanical signature: a SEVERE
+          // record-count shortfall, exhaustion NOT certified, and a
+          // scroll-API step (no $collectUntil) whose LAST iteration
+          // preview says done:true after <=3 iterations with a numeric
+          // counter below the ask. Red with the exits spelled out —
+          // certification or the sustained-stall bar, never a single-round
+          // self-declared "done".
+          if (!error && detectors.countShortfall &&
+              detectors.countShortfall.severe === true &&
+              detectors.countShortfall.exhaustionCertified === false &&
+              typeof detectors.countShortfall.extracted === 'number' &&
+              detectors.countShortfall.extracted < detectors.countShortfall.requested) {
+            try {
+              const reqPE = detectors.countShortfall.requested;
+              const iterCountPE = new Map();
+              const lastPrevPE = new Map();
+              for (const ev of events) {
+                if (!ev || ev.type !== 'STEP_ITERATION') continue;
+                const sid = String(ev.stepId || '');
+                iterCountPE.set(sid, (iterCountPE.get(sid) || 0) + 1);
+                lastPrevPE.set(sid, String(ev.resultPreview || ''));
+              }
+              for (const st of (service && Array.isArray(service.steps) ? service.steps : [])) {
+                if (!st || typeof st.script !== 'string') continue;
+                if (/\$collectUntil/.test(st.script)) continue; // the primitive carries its own sustained bar + certification
+                if (!/\$scroll(By|ToBottom|IntoView)/.test(st.script)) continue; // only scroll-driven collectors can exit "exhausted"
+                const sid = String(st.id || '');
+                const iters = iterCountPE.get(sid) || 0;
+                if (iters < 1 || iters > 3) continue; // sustained polls (>=4 rounds) are the honest shape
+                const prevPE = previewJson(lastPrevPE.get(sid));
+                if (!prevPE || prevPE.done !== true) continue;
+                const numsPE = Object.values(prevPE).filter((v) => typeof v === 'number');
+                if (!numsPE.length) continue;
+                const counterPE = Math.max.apply(null, numsPE);
+                if (counterPE >= reqPE) continue;
+                error = new Error(
+                  'PREMATURE_EXHAUSTION: step "' + sid + '" exited done:true after ' + iters +
+                  ' iteration(s) with its counter at ' + counterPE + ' of ' + reqPE +
+                  ' requested — ONE no-growth round on a cold tab proves nothing (lazy-load mounts in bursts over scroll-settle cycles; this exact one-round self-declared "done" shipped 1 of 10 as green). ' +
+                  'Certify the exhaustion or keep polling: use $collectUntil(containerSel, {targetCount, idAttr}) — it settles between rounds, counts UNIQUE items, and returns a certified-exhaustion verdict — or hand-roll with the sustained bar (>=3 consecutive stalled rounds across >=5 total). A severe shortfall without a receipt is RED, not green-disclosed.'
+                );
+                break;
+              }
+            } catch (e) { /* the veto detector must never break the report */ }
+          }
         }
         if (typeof WU.detectRelativeTimestamps === 'function') {
           // Forty-sixth log: report-only. A time-like field whose values are
