@@ -1215,6 +1215,22 @@
           observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
         } catch (_) { /* observer is a secondary signal only */ }
         const startHeight = document.documentElement.scrollHeight;
+        // 151st log: the probe REQUIRES frames to detect laziness — lazy
+        // content cannot mount without compositor frames, so a hidden/
+        // unfocused document can never grow during the probe window. A
+        // 'static' verdict from a hidden probe is not evidence about the
+        // page (it is evidence about the starvation): cold verify tabs are
+        // probed while inactive, misprofiled 'static', cached forever, and
+        // every later frame-need op skips activation — the feed NEVER grows
+        // (three verify tabs starved at 1-2 of 10 cards this session while
+        // the activated research tab reached 12). Record the visibility the
+        // verdict was decided under; the resolution below refuses to cache
+        // starved 'static' verdicts.
+        let probeVisibility = 'visible';
+        try { probeVisibility = document.visibilityState || 'visible'; } catch (_) {}
+        let probeHasFocus = true;
+        try { probeHasFocus = typeof document.hasFocus === 'function' ? document.hasFocus() : true; } catch (_) {}
+        const probeStarved = probeVisibility !== 'visible' || !probeHasFocus;
         let maxHeight = startHeight;
         let scrolledBy = 0;
         const step = () => {
@@ -1230,6 +1246,21 @@
             let profile = 'static';
             if (startHeight > 0 && (maxHeight - startHeight) / startHeight > 0.05) profile = 'lazy';
             else if (mutations > 20) profile = 'lazy';
+            // 151st log: a starved probe returning 'static' is INVALID (see the
+            // comment above) — do NOT cache it; resolve undefined so the
+            // caller unknown tier activates conservatively, and the NEXT
+            // op re-probes under frames (getPageProfile resets the promise
+            // on undefined). A starved probe yielding 'lazy' IS valid — content
+            // grew (or mutated) despite the hidden document, which proves
+            // dynamism regardless of frame state.
+            if (profile === 'static' && probeStarved) {
+              try { notifyBackgroundDiagnostic('page_profile_starved', {
+                probeVisibility: probeVisibility, probeHasFocus: probeHasFocus,
+                note: 'static verdict from a frame-starved probe discarded — cold tabs cannot show lazy growth while inactive; the unknown tier activates and the profile re-probes under frames'
+              }); } catch (_) {}
+              resolve(undefined);
+              return;
+            }
             window.__scrapewrightPageProfile = profile;
             // 108th log: remember the height the verdict was decided on — a
             // later scroll that grows the page beyond it CONTRADICTS 'static'
@@ -1265,7 +1296,11 @@
       if (window.__scrapewrightPageProfile) return window.__scrapewrightPageProfile;
       if (!pageProfilePromise) pageProfilePromise = detectLazyLoadProfile();
       const p = await pageProfilePromise;
-      return p || undefined; // probe failure → unknown → conservative tier
+      // 151st log: a starved (or failed) probe resolved undefined — drop the
+      // cached promise so the NEXT call re-probes (the unknown tier activates
+      // in between, so the re-probe runs under frames and can see laziness).
+      if (!p) pageProfilePromise = null;
+      return p || undefined; // probe failure/starvation → unknown → conservative tier
     } catch (_) { return undefined; }
   }
 
@@ -3221,11 +3256,30 @@
       }
       rounds += 1;
       let scrollRes = null;
-      if (hasIncremental) {
-        scrollRes = await ops.scrollToBottomIncremental(root, { scrollRootLabel: 'collectUntil' });
-      } else {
+      // 151st log: wrap EVERY round of scrolling in the activation layer. The
+      // count-reliability primitive called ops.scrollToBottomIncremental
+      // DIRECTLY — no withTabActivation anywhere — so on a cold background
+      // verify tab the loop scrolled with no compositor frames: lazy-load
+      // never fired, the count stayed 1-2 of 10, and the loop certified
+      // exhaustion against a feed it had starved itself (three verify tabs
+      // this session; the activated research tab reached 12/10). The wrap
+      // runs the graduated tier per round: the first round probes (a
+      // starved 'static' verdict is discarded as invalid — see
+      // detectLazyLoadProfile) and activates conservatively; re-probes under
+      // frames settle the correct tier, and a genuinely-static page skips
+      // from then on.
+      const scrollRound = async () => {
+        if (hasIncremental) {
+          return await ops.scrollToBottomIncremental(root, { scrollRootLabel: 'collectUntil' });
+        }
         try { root && root.scrollBy && root.scrollBy(0, 900); } catch (e) { /* legacy path */ }
-      }
+        return null;
+      };
+      scrollRes = await withTabActivation('collectUntil', scrollRound, { need: 'frame' });
+      // 151st log: growth inside the loop is demotion evidence too — the
+      // tab profile must not stay 'static' past a height the loop itself
+      // outgrew.
+      try { demoteStaticProfileIfGrown(document.documentElement.scrollHeight); } catch (e) { /* best-effort */ }
       await new Promise(function (res) { setTimeout(res, settleMs); });
       snap = snapshot();
       if (snap.unique > 0) everPositive = true;

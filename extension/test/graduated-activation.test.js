@@ -328,6 +328,14 @@ describe('graduated activation: background wiring (source-text audit)', () => {
 
 describe('graduated activation: detectLazyLoadProfile probe', () => {
   function runProbe(dom, opts) {
+    // 151st log: the probe now refuses 'static' verdicts from hidden/
+    // unfocused documents (starved evidence). JSDOM pages report
+    // visibilityState 'prerender' — a TEST artifact, not page truth — so
+    // stub the probe-validity inputs to a visible focused page.
+    try {
+      Object.defineProperty(dom.window.document, 'visibilityState', { configurable: true, get: () => 'visible' });
+      Object.defineProperty(dom.window.document, 'hasFocus', { configurable: true, value: () => true });
+    } catch (e) { /* best-effort stub */ }
     const sandbox = {
       document: dom.window.document,
       window: dom.window,

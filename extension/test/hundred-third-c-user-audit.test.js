@@ -199,7 +199,9 @@ describe('105th log: too_small exemption covers ARIA-bearing zero-height strips'
 describe('108th log: page-profile probe — virtualization blindness + static lock-in', () => {
   it('the probe counts ADDED NODES (not mutation records) and records its max height', () => {
     const i = CS.indexOf('function detectLazyLoadProfile');
-    const block = CS.slice(i, i + 3000);
+    // 151st log: the probe grew (starved-verdict invalidity block) — span to
+    // the next function instead of a fixed 3000 chars.
+    const block = CS.slice(i, CS.indexOf('let pageProfilePromise', i));
     assert.match(block, /addedNodes/, 'count added nodes — a virtualized feed swaps cards in as ADDED nodes; counting records under-senses churn');
     assert.match(block, /__scrapewrightProfiledMaxHeight/, 'the height the profile was decided on is stored for later contradiction');
   });
