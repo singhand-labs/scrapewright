@@ -174,8 +174,10 @@ describe('F3: extractWithHover_done carries failure reasons (source audit)', () 
     // 5500-char lookback: the sixty-second-log hoverSummary.enhancedModeDisabled
     // aggregate + the mechanical-semantic-separation capturedPopovers block +
     // the eighty-fourth-log anchorCensus block sit between this tally and the
-    // done event.
-    const chunk = CS_SRC.slice(i - 5500, i + 700);
+    // done event. Hundred-sixtieth round: the hoverCost receipt block
+    // (~900 chars, data-driven batch sizing) pushed the tally past 5500 —
+    // window is a scoping heuristic, bumped with the round noted.
+    const chunk = CS_SRC.slice(i - 6600, i + 700);
     assert.ok(/failureReasons/.test(chunk),
       'failed hover reasons must be tallied onto the event');
     assert.ok(/observedPopoverCount/.test(chunk),

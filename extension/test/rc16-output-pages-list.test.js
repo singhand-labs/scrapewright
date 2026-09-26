@@ -696,8 +696,11 @@ describe('RC16 wizard.js — pages viewer wiring (structural, post-research-sess
   it('wizard.js renders the pages viewer from the verify-runner raw testResult', () => {
     // The wizard-time LLM sites are gone; the surviving pages consumer is
     // the human-facing viewer, fed by the verify-runner's raw.testResult.
+    // Hundred-sixtieth round: the viewer follows the panel primary
+    // (panelTestResult160 — the confirmed-testInput run, which equals
+    // out.raw.testResult when no picker override applies).
     assert.ok(
-      /renderPagesViewer\(out\.raw\.testResult\)/.test(SRC),
+      /renderPagesViewer\((out\.raw\.testResult|panelTestResult160)\)/.test(SRC),
       'wizard.js must render the pages viewer from the runner result'
     );
   });
