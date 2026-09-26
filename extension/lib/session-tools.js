@@ -26,7 +26,7 @@
   // natively and add the empty-field census. Route instead of retrying the
   // same shape (the incident session hit this twice in eight snippets while
   // probe.extract was used once).
-  const DSL_ARG_ERROR_RE = /\$extractList(Multi)? fieldMap must be|\$extractWithHover (containerSel|fieldMap|opts\.hover(\.anchorSel)?) must be|\$extractWithHover only one of containerIndex\/containerRange\/maxContainers|containerSel must be a non-empty string|fieldMap must be a non-empty object/;
+  const DSL_ARG_ERROR_RE = /\$extractList(Multi)? (containerSel|fieldMap) must be|\$extractWithHover (containerSel|fieldMap|opts\.hover(\.anchorSel)?) must be|\$extractWithHover only one of containerIndex\/containerRange\/maxContainers/;
   const DSL_ARG_ROUTE_NOTE = ' ROUTE: this is a typed-probe argument error — probe.extract({containerSel, fieldMap}) / probe.count({sel}) validate these arguments structurally and return the empty-field census; prefer the structured probe for field-binding iteration instead of hand-rolling $extractList in probe.snippet.';
 
   // Seventy-fourth log F1: mechanical testInput seed — a query key in the

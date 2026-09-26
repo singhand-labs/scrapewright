@@ -84,4 +84,8 @@ describe('160 B — DSL-argument errors route to the structured probes', () => {
     const r2 = await snippetError(async () => { throw new Error('SYNTAX_ERROR: Unexpected token'); });
     assert.ok(!/ROUTE:/.test(r2.error), 'syntax errors carry no route note');
   });
+  it('a CLICK-op containerSel argument error gets NO route note (wrong advice class)', async () => {
+    const r = await snippetError(async () => { throw new Error('$clickInList containerSel must be a non-empty string'); });
+    assert.ok(!/ROUTE:/.test(r.error), 'click-op argument errors are not extraction-route material');
+  });
 });
