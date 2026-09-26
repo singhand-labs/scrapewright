@@ -27,6 +27,7 @@ let reviewFromPhase5 = false;
 
 
 let wizardState = {
+  resultRuns: [],
   phase: 1,
   targetUrl: '',
   description: '',
@@ -1685,6 +1686,35 @@ async function testScript() {
 // the research-session completion path (presentSessionCompletion): stores the
 // outcome into wizardState, renders phase 5, and lands on it.
 async function presentTestOutcome(out) {
+  // 160th round: provenance — the panel presents the CONFIRMED-testInput
+  // green run as primary; later spot-check verifies (different inputs)
+  // ride as labeled secondaries instead of overwriting it (the incident:
+  // a count-5 spot-check replaced the count-10 contract result).
+  let panelTestResult160 = out.raw && out.raw.testResult;
+  let panelIsConfirmed160 = false;
+  let panelSpotNote160 = '';
+  try {
+    wizardState.resultRuns.push({
+      input: (out.report && out.report.executedInput) || null,
+      ok: !!(out.report && out.report.ok),
+      testResult: out.raw && out.raw.testResult,
+      executedArtifactVersion: (out.report && typeof out.report.executedArtifactVersion === 'number') ? out.report.executedArtifactVersion : null
+    });
+    if (wizardState.resultRuns.length > 10) wizardState.resultRuns.shift();
+    if (out.report && out.report.ok) {
+      const pick160 = pickPrimaryResultForPanel({ runs: wizardState.resultRuns, confirmedInput: wizardState.testInput });
+      if (pick160.primary) {
+        panelTestResult160 = pick160.primary.testResult;
+        panelIsConfirmed160 = pick160.primaryIsConfirmedInput;
+      }
+      if (pick160.spotChecks.length) {
+        const sc160 = pick160.spotChecks[pick160.spotChecks.length - 1];
+        panelSpotNote160 = 'Spot-check input ' + JSON.stringify(sc160.input) + ' also green' +
+          (sc160.executedArtifactVersion ? ' (v' + sc160.executedArtifactVersion + ')' : '') +
+          ' — the panel shows ' + (panelIsConfirmed160 ? 'the confirmed testInput run' : 'the latest green run');
+      }
+    }
+  } catch (e160) { /* provenance is best-effort; the raw outcome still renders */ }
   // Seventy-fifth log: a GREEN verify report blesses the artifact version it
   // executed (research-session stamps executedArtifactVersion onto verify.run
   // reports). Record it — the completion panel's rollback/deploy gate compares
@@ -1708,16 +1738,20 @@ async function presentTestOutcome(out) {
   wizardState.testResult = out.report.ok ? out.raw.testResult : (out.raw.error && out.raw.error.steps ? { steps: out.raw.error.steps, finalResult: null } : out.raw.testResult);
 
   if (out.report.ok) {
-    document.getElementById('testResults').textContent = JSON.stringify(out.raw.testResult, null, 2);
-    renderResultSummary(out.raw.testResult);
-    renderPagesViewer(out.raw.testResult);
+    const label160 = (wizardState.testInput && !panelIsConfirmed160)
+      ? 'RESULT OF INPUT ' + JSON.stringify((out.report && out.report.executedInput) || null) +
+        ' — the confirmed testInput ' + JSON.stringify(wizardState.testInput) + ' has NO green run yet.\n\n'
+      : '';
+    document.getElementById('testResults').textContent = label160 + JSON.stringify(panelTestResult160, null, 2);
+    renderResultSummary(panelTestResult160);
+    renderPagesViewer(panelTestResult160);
     // 90th round: clean-JSON copy — hand-selection from the panel dragged
     // the next UI heading into a live result.json export. The button copies
     // the pure finalResult JSON to the clipboard; finalResult-missing runs
     // keep the button hidden (nothing clean to copy).
     try {
       const btnCopy = document.getElementById('btnCopyResultJson');
-      const finalRes = out.raw.testResult && out.raw.testResult.finalResult;
+      const finalRes = panelTestResult160 && panelTestResult160.finalResult;
       if (btnCopy && finalRes !== undefined && finalRes !== null) {
         btnCopy.classList.remove('hidden');
         btnCopy.onclick = async () => {
@@ -1732,6 +1766,7 @@ async function presentTestOutcome(out) {
         btnCopy.classList.add('hidden');
       }
     } catch (e) { /* the copy button is best-effort */ }
+    if (panelSpotNote160) appendLog(panelSpotNote160, 'info');
     appendLog('All steps completed.', 'success');
     if (out.report.detectors.shapeDistribution) {
       appendLog(out.report.detectors.shapeDistribution, 'warn');
@@ -2903,6 +2938,7 @@ function handleSessionEvent(ev) {
     switch (ev.type) {
       case 'session_start':
         try { if (window.__scrapewrightSessionJournal) window.__scrapewrightSessionJournal.markSessionStart(ev.sessionId, !!ev.resuming); } catch (eJ) { /* best-effort */ }
+        try { wizardState.resultRuns = []; } catch (eR) { /* per-session reset */ }
         appendLog('Research session ' + ev.sessionId + (ev.resuming ? ' (resumed)' : '') + ' started.', 'success');
         setSessionBadge('running', 'starting…');
         startSessionElapsedTimer(!ev.resuming);

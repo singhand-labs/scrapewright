@@ -169,3 +169,24 @@ describe('160 E1 — executedInput + pickPrimaryResultForPanel', () => {
     assert.deepEqual(out.report.executedInput, { keyword: 'travel', count: 5 });
   });
 });
+
+describe('160 E2 — panel provenance (source audit)', () => {
+  it('presentTestOutcome routes the panel through pickPrimaryResultForPanel', () => {
+    const i = WJ.indexOf('async function presentTestOutcome(');
+    assert.ok(i > -1);
+    const body = WJ.slice(i, WJ.indexOf('async function ', i + 30));
+    assert.match(body, /pickPrimaryResultForPanel\(/, 'the picker drives the panel');
+    assert.match(body, /wizardState\.resultRuns/, 'runs accumulate in state');
+  });
+  it('the label rule: only when a confirmedInput exists and the primary differs', () => {
+    const i = WJ.indexOf('async function presentTestOutcome(');
+    const body = WJ.slice(i, WJ.indexOf('async function ', i + 30));
+    assert.match(body, /NO green run yet/, 'the mismatch label text exists');
+    assert.match(body, /primaryIsConfirmedInput/, 'the flag gates the label');
+  });
+  it('resultRuns resets per session', () => {
+    const i = WJ.indexOf("case 'session_start':");
+    const block = WJ.slice(i, i + 1200);
+    assert.match(block, /resultRuns = \[\]/, 'reset on session start');
+  });
+});
