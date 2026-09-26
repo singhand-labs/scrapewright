@@ -95,6 +95,13 @@ function logContentChunks(label, content, capOverride) {
   const cap = (typeof capOverride === 'number' && capOverride > 0) ? capOverride : CONTENT_LOG_CAP;
   const s = String(content == null ? '' : content);
   if (!s) return;
+  // 158th round: the full LLM bodies (86th-round directive) also ride the
+  // durable session journal when the host page provides a sink — manual
+  // DevTools captures amputate the middle hours of long sessions.
+  try {
+    const sink = (typeof window !== 'undefined' && window.__scrapewrightJournalSink) || null;
+    if (sink) sink(label, s);
+  } catch (e) { /* best-effort */ }
   const shown = s.length > cap ? s.slice(0, cap) : s;
   const n = Math.ceil(shown.length / CONTENT_LOG_CHUNK);
   for (let i = 0; i < n; i++) {

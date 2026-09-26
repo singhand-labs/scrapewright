@@ -196,6 +196,11 @@
            "Steps" heading). One click, clipboard gets the pure finalResult
            JSON, nothing else. -->
       <button id="btnCopyResultJson" class="btn-secondary hidden" type="button">Copy JSON</button>
+      <!-- 158th round: extension-owned session journal export — the manual
+           DevTools capture amputated the middle hours of three consecutive
+           sessions; this downloads the durable journal (page [session]
+           mirror lines + LLM bodies + the SW debug ring) merged in order. -->
+      <button id="btnDownloadSessionLog" class="btn-secondary" type="button">Download Session Log</button>
       <details id="rawOutputDetails" class="hidden">
         <summary>Raw JSON output</summary>
         <pre id="testResults"></pre>
@@ -296,6 +301,7 @@
   <script src="lib/record-shape-distribution.js"></script>
   <script src="lib/field-candidate-discovery.js"></script>
   <script src="lib/observation-log.js"></script>
+  <script src="lib/session-journal.js"></script>
   <script src="lib/findings-ledger.js"></script>
   <script src="lib/knowledge-units.js"></script>
   <script src="lib/knowledge-base.js"></script>

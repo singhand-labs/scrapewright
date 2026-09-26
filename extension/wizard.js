@@ -300,6 +300,50 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadEditMode();
   showPhase(wizardState.phase);
 
+  // 158th round: the extension-owned session journal. Manual DevTools
+  // captures amputated the middle hours of three consecutive sessions;
+  // every [session] mirror line and every LLM body now also ride this
+  // durable rolling buffer (survives page reloads; one-click export
+  // merges it with the service-worker ring).
+  try {
+    if (window.SessionJournalMod) {
+      window.__scrapewrightSessionJournal = window.SessionJournalMod.initDefaultSessionJournal();
+      window.__scrapewrightJournalSink = function (label, text) {
+        try { window.__scrapewrightSessionJournal.append('llm', label, text); } catch (e) { /* best-effort */ }
+      };
+    }
+  } catch (eJ) { /* journal init is best-effort; the console mirror stays authoritative */ }
+  const btnDownloadLog = document.getElementById('btnDownloadSessionLog');
+  if (btnDownloadLog) {
+    btnDownloadLog.classList.remove('hidden');
+    btnDownloadLog.addEventListener('click', async () => {
+      try {
+        const pageLines = (window.__scrapewrightSessionJournal ? (await window.__scrapewrightSessionJournal.all()) : []);
+        let swLines = [];
+        try {
+          const resp = await chrome.runtime.sendMessage({ type: 'GET_DEBUG_JOURNAL' });
+          if (resp && Array.isArray(resp.lines)) swLines = resp.lines;
+        } catch (eSW) { /* SW journal is best-effort */ }
+        const merged = pageLines.concat(swLines).sort((a, b) => (a.t || 0) - (b.t || 0));
+        const text = merged.map(function (e) {
+          return '[' + new Date(e.t || Date.now()).toISOString() + '] ' + String(e.label || '') + ' ' + String(e.text || '');
+        }).join('\n');
+        const blob = new Blob([text], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'scrapewright-session-log-' + new Date().toISOString().replace(/[:.]/g, '-') + '.log';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+        showToast('Session log downloaded (' + merged.length + ' lines)', 'success');
+      } catch (eDL) {
+        showToast('Session log export failed: ' + (eDL && eDL.message), 'error', 6000);
+      }
+    });
+  }
+
   if (chrome.tabs && chrome.tabs.onRemoved) {
     chrome.tabs.onRemoved.addListener((removedTabId) => {
       for (const stepId of Object.keys(wizardState.stepAnnotationTabs)) {
@@ -2784,6 +2828,11 @@ function mirrorClip(text, cap) {
 // verify report bodies, the model's own replies).
 function mirrorLines(label, text, cap) {
   const s = String(text == null ? '' : text);
+  // 158th round: the manual DevTools capture amputated the middle hours
+  // of three consecutive sessions — the console mirror alone is not a
+  // durable record. Every mirrored line also rides the session journal
+  // (chrome.storage.local rolling buffer, exported with one click).
+  try { if (window.__scrapewrightSessionJournal) window.__scrapewrightSessionJournal.append('mirror', label, s); } catch (eJ) { /* journal is best-effort */ }
   // Ninetieth-round regression: cap=Infinity made the single-line branch
   // ALWAYS win — a ~300K verify receipt went out as one console arg and
   // DevTools silently dropped it (the FULL verify.run mirror line carried
@@ -2853,6 +2902,7 @@ function handleSessionEvent(ev) {
   try {
     switch (ev.type) {
       case 'session_start':
+        try { if (window.__scrapewrightSessionJournal) window.__scrapewrightSessionJournal.markSessionStart(ev.sessionId, !!ev.resuming); } catch (eJ) { /* best-effort */ }
         appendLog('Research session ' + ev.sessionId + (ev.resuming ? ' (resumed)' : '') + ' started.', 'success');
         setSessionBadge('running', 'starting…');
         startSessionElapsedTimer(!ev.resuming);

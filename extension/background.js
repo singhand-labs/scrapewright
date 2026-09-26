@@ -16,6 +16,55 @@ importScripts(
 
 const registry = new ServiceRegistry();
 
+// 158th round: the SW debug journal. Manual DevTools captures amputated
+// the middle hours of three consecutive sessions; the SW keeps its own
+// durable ring in chrome.storage.session (memory-backed, survives SW
+// suspension, cleared on browser restart — the right lifetime for a
+// session log). debugLogger.log is wrapped in place: no call-site
+// changes; flush is debounced because the SW can suspend between lines.
+const SW_DEBUG_JOURNAL_KEY = 'swDebugJournal';
+const SW_DEBUG_JOURNAL_MAX = 6000;
+let swDebugRing = null;
+let swDebugFlushTimer = null;
+function swDebugJournalLoad() {
+  if (swDebugRing !== null) return Promise.resolve();
+  return new Promise(function (resolve) {
+    try {
+      chrome.storage.session.get([SW_DEBUG_JOURNAL_KEY], function (res) {
+        swDebugRing = Array.isArray(res && res[SW_DEBUG_JOURNAL_KEY]) ? res[SW_DEBUG_JOURNAL_KEY] : [];
+        resolve();
+      });
+    } catch (e) { swDebugRing = []; resolve(); }
+  });
+}
+function swDebugJournalFlush() {
+  swDebugFlushTimer = null;
+  if (swDebugRing === null) return;
+  try {
+    const bag = {};
+    bag[SW_DEBUG_JOURNAL_KEY] = swDebugRing.slice();
+    chrome.storage.session.set(bag, function () { /* best-effort; lastError swallowed */ });
+  } catch (e) { /* best-effort */ }
+}
+(function wrapDebugLoggerWithJournal() {
+  const origLog = debugLogger.log.bind(debugLogger);
+  debugLogger.log = function (level, component, message, data) {
+    origLog(level, component, message, data);
+    try {
+      const suffix = (data == null) ? '' : (typeof data === 'string' ? data : JSON.stringify(data));
+      const line = { t: Date.now(), kind: 'sw', label: '[' + component + '] ' + message, text: String(suffix).slice(0, 4000) };
+      swDebugJournalLoad().then(function () {
+        swDebugRing.push(line);
+        while (swDebugRing.length > SW_DEBUG_JOURNAL_MAX) swDebugRing.shift();
+        if (swDebugFlushTimer === null) {
+          swDebugFlushTimer = setTimeout(swDebugJournalFlush, 3000);
+        }
+      }).catch(function () { /* best-effort */ });
+    } catch (e) { /* journaling must never break logging */ }
+  };
+})();
+
+
 // Code-review P3: HOVER_SKIPPED_ENHANCED_MODE broadcast dedupe — one
 // forward per tabId per reason; count carried in the payload. Cleared when
 // the tab closes.
@@ -33,6 +82,16 @@ if (typeof TabActivation !== 'undefined' &&
     typeof TabActivation.initTabActivationListeners === 'function') {
   TabActivation.initTabActivationListeners();
 }
+try {
+  chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
+    if (!message || message.type !== 'GET_DEBUG_JOURNAL') return false;
+    swDebugJournalLoad().then(function () {
+      swDebugJournalFlush();
+      sendResponse({ lines: swDebugRing.slice() });
+    }).catch(function () { sendResponse({ lines: [] }); });
+    return true;
+  });
+} catch (e) { /* test sandbox */ }
 
 // Execution queue — serializes concurrent service calls to prevent offscreen document conflicts
 class ExecutionQueue {
