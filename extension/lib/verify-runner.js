@@ -60,6 +60,7 @@
       detectDuplicateRecords: w.detectDuplicateRecords,
       detectDuplicateEntityPairs: w.detectDuplicateEntityPairs,
       detectDuplicateNestedEntries: w.detectDuplicateNestedEntries,
+      detectInventedIdFallbacks: w.detectInventedIdFallbacks,
       detectIdenticalFieldValues: w.detectIdenticalFieldValues,
       detectDuplicateEntities: w.detectDuplicateEntities,
       detectOversizedFields: w.detectOversizedFields,
@@ -528,7 +529,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, nestedDuplicates: null, siblingCountContrast: null, implausibleTimeFields: null, positionLikeIds: null, labelPrefixedCounts: null, mediaHygiene: null, junkShapeRecords: null, unusedCaptures: null, timeSourceUnexercised: null };
+      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, nestedDuplicates: null, inventedIdFallbacks: null, siblingCountContrast: null, implausibleTimeFields: null, positionLikeIds: null, labelPrefixedCounts: null, mediaHygiene: null, junkShapeRecords: null, unusedCaptures: null, timeSourceUnexercised: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -1222,6 +1223,29 @@
               }
             }
           }
+          // 161st round: FABRICATED fallback ids. The incident shipped
+          // postId "card-9-<content slice>" green with zero disclosure —
+          // constructed values poison dedup and joins. Veto when the field
+          // is REQUIRED; optional fields report.
+          if (typeof WU.detectInventedIdFallbacks === 'function') {
+            const invIds = WU.detectInventedIdFallbacks(finalData, outputSchema) || [];
+            if (invIds.length) {
+              detectors.inventedIdFallbacks = invIds;
+              let itemReq161 = null;
+              try {
+                itemReq161 = (typeof WU.schemaItemRequiredForPath === 'function')
+                  ? WU.schemaItemRequiredForPath(outputSchema, String(invIds[0].path || '')) : null;
+              } catch (eReq) { itemReq161 = null; }
+              const reqInv = (itemReq161 && itemReq161.indexOf(invIds[0].field) !== -1) ? invIds[0] : null;
+              if (!error && reqInv) {
+                error = new Error(
+                  'INVENTED_ID_FALLBACK: ' + reqInv.path + ' record #' + reqInv.index +
+                  ' carries a FABRICATED fallback id ("' + String(reqInv.evidence).slice(0, 50) + '") — a synthetic prefix, the record index, or a content slice is a CONSTRUCTED value, not page data: fabricated ids poison dedup and downstream joins. ' +
+                  'A card without a permalink yields an EMPTY id plus disclosure — the fail-soft shape — never an invented one. Drop the fallback branch (ship empty + disclose) or renegotiate the field via io.confirm.'
+                );
+              }
+            }
+          }
           // 154th log: nested-array duplicate entries. The incident GREEN run
           // shipped posts[].hovercards carrying the SAME group twice and the
           // SAME author twice per post (links differing only by tracking
@@ -1661,6 +1685,38 @@
               entry.resultPreview = (typeof WU.headTailSlice === 'function')
                 ? WU.headTailSlice(lastPreview, 200)
                 : (lastPreview.length > 200 ? lastPreview.slice(0, 197) + '…' : lastPreview);
+            }
+            // 161st round: the model-facing receipt carried NO step
+            // diagnostics — the 160th hoverCost receipt (and the
+            // containerMatches census) rode STEP_ITERATION events and
+            // stopped there, so the model re-derived batch sizing by
+            // counting records and burned a red verify. Surface a compact
+            // digest from the LAST iteration that carried diagnostics.
+            let lastDiags161 = null;
+            for (let i161 = events.length - 1; i161 >= 0; i161--) {
+              const e161 = events[i161];
+              if (e161 && e161.type === 'STEP_ITERATION' && String(e161.stepId) === String(s.stepId) &&
+                  Array.isArray(e161.selectorDiagnostics) && e161.selectorDiagnostics.length) {
+                lastDiags161 = e161.selectorDiagnostics;
+                break;
+              }
+            }
+            if (lastDiags161) {
+              const dsrc161 = lastDiags161[lastDiags161.length - 1] || null;
+              const diag161 = {};
+              if (dsrc161 && typeof dsrc161.containerMatches === 'number') diag161.containerMatches = dsrc161.containerMatches;
+              const hc161 = dsrc161 && dsrc161.hoverCost;
+              if (hc161 && typeof hc161 === 'object') {
+                diag161.hoverCost = {
+                  batchWallMs: hc161.batchWallMs,
+                  perContainerMs: hc161.perContainerMs,
+                  perAnchorMs: hc161.perAnchorMs,
+                  budgetRemainingMs: hc161.budgetRemainingMs,
+                  suggestedBatchContainers: hc161.suggestedBatchContainers
+                };
+                if (hc161.note) diag161.hoverCost.note = String(hc161.note).slice(0, 220);
+              }
+              if (Object.keys(diag161).length) entry.diag = diag161;
             }
             return entry;
           })
