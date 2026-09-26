@@ -1815,12 +1815,26 @@
       // times with ZERO probe.snippet uses. Carry a short teaching note on
       // the report itself so the advisory path (non-required fields) also
       // routes snippet-first.
+      // 156th log: route by FIELD SHAPE — knowledge units attach
+      // time-field teaching only on populated-but-wrong tags, so the most
+      // common late-session state (a time-named field EMPTY across
+      // records) carried no routing and the model shipped empty with a
+      // page-absence claim. Time-named empties route to the one-call
+      // timestamp tool; id-named empties route to the per-card link
+      // binding.
+      const partialRouteLines = (Array.isArray(detectors.partialEmptyFields) ? detectors.partialEmptyFields : []).slice(0, 4).map((pe) => {
+        const f = String(pe.field || '');
+        if (/time|date|posted/i.test(f)) return pe.path + ': probe.timestamp(containerSel) is the one-call absolute-timestamp route (anchor candidates, hover, popover text, date-shape filtering) — an empty time field usually means the timestamp lives in a hover tooltip, not that the page lacks it';
+        if (/id$/i.test(f)) return pe.path + ': bind the per-card link href directly (attr) or harvest all card links (multi:true) and filter by shape — per-record ids live on per-record elements';
+        return null;
+      }).filter(Boolean);
       const partialEmptyNote = (Array.isArray(detectors.partialEmptyFields) && detectors.partialEmptyFields.length)
         ? 'PARTIAL_EMPTY_FIELDS census: ' + detectors.partialEmptyFields
             .slice(0, 4).map((pe) => String(pe.path) + ' empty in ' + pe.emptyCount + '/' + pe.totalCount).join('; ') +
           '. Read the failing records\' source values (resultPreview / emptyRecordSamples contexts / diag.read) ' +
           'and dry-run the fix with probe.snippet before re-authoring — regexes and fieldMap selectors must be ' +
-          'written against OBSERVED values, not hoped-for shapes.'
+          'written against OBSERVED values, not hoped-for shapes.' +
+          (partialRouteLines.length ? ' Field routes: ' + partialRouteLines.join('; ') + '.' : '')
         : null;
       const report = {
         ok: !error,

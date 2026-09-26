@@ -1901,6 +1901,88 @@ function detectNonStandardPseudoSelectors(steps) {
   return out.length ? out : null;
 }
 
+// 156th log: the invented-pseudo-class escape, third occurrence. The
+// enumerated lint above lost to NOVEL names twice (:textish, :textless in
+// the 57th log, :text-none now — an enumeration cannot win against
+// invention). The mechanical replacement is an ORACLE: extract
+// selector-shaped string literals from step scripts and ask the BROWSER
+// whether each parses (a document fragment querySelectorAll — same engine
+// verdict the step hits at run time, deterministic). Extraction precision:
+// pseudo-like token (colon + name + hyphen, or a colon together with a
+// selector anchor char), scheme URLs skipped, colon-value strings
+// (role:mainAuthor) and colon-space prose skipped by shape, and string
+// literals adjacent to + are concatenation FRAGMENTS, not whole selectors.
+function extractInventedPseudoCandidates(script) {
+  const out = [];
+  const s = String(script || '');
+  const re = /'([^'\n\\]{2,160})'|"([^"\n\\]{2,160})"/g;
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    const raw = m[0];
+    const str = m[1] !== undefined ? m[1] : m[2];
+    const before = m.index > 0 ? s[m.index - 1] : '';
+    const afterIdx = m.index + raw.length;
+    const after = afterIdx < s.length ? s[afterIdx] : '';
+    if (before === '+' || after === '+') continue;
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(str)) continue;
+    if (!/^[:#.[*a-zA-Z]/.test(str)) continue;
+    const pseudoish = /:[a-zA-Z]+-[a-zA-Z]/.test(str) || (/[:]/.test(str) && /[[#.]/.test(str));
+    if (!pseudoish) continue;
+    out.push({
+      sel: str,
+      near: s.slice(Math.max(0, m.index - 40), m.index + raw.length + 20).replace(/\s+/g, ' ')
+    });
+    if (out.length >= 8) break;
+  }
+  return out;
+}
+
+// Oracle probe: doc is a Document (browser page or JSDOM); when absent
+// (plain node contexts) the gate stays advisory-only (the 57th lane).
+// Two arms, because selector-parser strictness varies (Chrome throws on
+// unknown pseudo-classes; lenient engines like nwsapi accept them):
+// (a) the DOM probe — authoritative in Chrome, the production host;
+// (b) an invented-morpheme check on pseudo NAMES — the three-incident
+//     family (:textish/:textless/:text-none/:has-text/…) is covered by
+//     its text/contain/visibility/proximity morphemes, which no standard
+//     pseudo-class carries, so novel names cannot escape by spelling.
+function pseudoNamesInvented(sel) {
+  // Standard names that carry an invented-family morpheme by spelling
+  // (focus-visible / focus-within) — spec-closed exception set.
+  const STANDARD_MORPHEME_EXCEPTIONS = /^::?(focus-visible|focus-within)$/i;
+  const re = /::?[a-zA-Z-]+/g;
+  let m;
+  while ((m = re.exec(sel)) !== null) {
+    if (STANDARD_MORPHEME_EXCEPTIONS.test(m[0])) continue;
+    if (/text|contain|visible|hidden|near|above|below|within|match/i.test(m[0])) return m[0];
+  }
+  return null;
+}
+
+function detectInventedPseudoSelectors(steps, doc) {
+  if (!Array.isArray(steps) || !steps.length) return null;
+  const frag = doc ? doc.createDocumentFragment() : null;
+  const out = [];
+  for (const st of steps) {
+    const script = String((st && st.script) || '');
+    if (!script) continue;
+    for (const cand of extractInventedPseudoCandidates(script)) {
+      let err = null;
+      const inventedName = pseudoNamesInvented(cand.sel);
+      if (inventedName) {
+        err = 'pseudo-class ' + inventedName + ' is not standard CSS';
+      } else if (frag) {
+        try { frag.querySelectorAll(cand.sel); } catch (e) { err = String((e && e.message) || e); }
+      }
+      if (err) {
+        out.push({ stepId: st && st.id, selector: cand.sel, near: cand.near, error: err.slice(0, 120) });
+        if (out.length >= 8) return out;
+      }
+    }
+  }
+  return out.length ? out : null;
+}
+
 // Fifty-eighth log: likes shipped as "Like: 37 people" — the count is RIGHT
 // THERE, parseable, but the census family (36th control-label is digit-FREE;
 // 50th sibling-contrast is about EMPTY fields) never named the label-PREFIXED
@@ -6457,7 +6539,7 @@ function syncLastVerifiedFromVerify(state, lv) {
 // direct property access keeps working. test/forty-sixth-log-followups.test.js
 // pins marker-bag keys === module.exports keys so a future export cannot
 // land on one surface only (the inline-fallback drift class, RC8/RC35).
-var WU_EXPORT_BAG = { normalizeIdValueForIdentity, idValueShape, detectDuplicateNestedEntries, recordContentSignature, countUniqueRecords, detectMediaArrayHygiene, unverifiedArtifactState, syncLastVerifiedFromVerify, explainDetectorFinding, DETECTOR_PLAIN, collectFieldSamplesFromOutput, detectDuplicateEntityPairs, detectIdenticalFieldValues, detectStepGraphGhostRefs, injectResumeChunkWarning, mineResearchSessionSamples, createParkNotifier, parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, hasYearToken, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectJunkShapeRecords, seedLedgerFromSameSite, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS, isCspConstructError, __testConstructStepScript: null };
+var WU_EXPORT_BAG = { normalizeIdValueForIdentity, idValueShape, detectDuplicateNestedEntries, extractInventedPseudoCandidates, detectInventedPseudoSelectors, recordContentSignature, countUniqueRecords, detectMediaArrayHygiene, unverifiedArtifactState, syncLastVerifiedFromVerify, explainDetectorFinding, DETECTOR_PLAIN, collectFieldSamplesFromOutput, detectDuplicateEntityPairs, detectIdenticalFieldValues, detectStepGraphGhostRefs, injectResumeChunkWarning, mineResearchSessionSamples, createParkNotifier, parseSchemaFields, schemaArrayItemFieldKeys, buildTimeoutGuidance, hoverAwareTimeoutMs, detectClickInListTotalFailure, detectClickInListEmptyContainers, corroborateContainerZero, detectCountSelectorBlind, detectHoverAnchorsBlind, detectFieldMatchZero, detectContainerMatchZero, detectFrozenZeroCounter, parseCounterFields, isFrozenZeroNotReady, FROZEN_ZERO_STREAK_THRESHOLD, FROZEN_ZERO_MIN_ELAPSED_MS, detectFrozenScrollCount, FROZEN_NONZERO_STREAK_THRESHOLD, detectSiblingCountContrast, detectDuplicateIdValues, detectStrayFieldDeclarations, detectImplausibleTimeFields, detectPositionLikeIds, looksLikeDate, hasYearToken, extractDateSubstrings, detectNonStandardPseudoSelectors, detectLabelPrefixedCounts, detectJunkShapeRecords, seedLedgerFromSameSite, detectSchemaPlaceholderFields, estimateScriptTimeBudget, validateInputAgainstSchema, validateOutputAgainstSchema, findEmptyExtractionFields, findUpstreamExtractionStepId, findUpstreamProducingStepId, detectEmptyOutputFieldsByRatio, formatEmptyOutputFieldsSignal, detectDuplicateRecords, detectDuplicateEntities, detectOversizedFields, detectCountShortfall, detectRelativeTimestamps, formatDuplicateRecordsSignal, getOutputFieldOptions, truncateSnapshotForLLM, summarizeStepsGeneration, summarizeGeneratedSteps, stripSnapshotsFromTestResult, stripPagesFromLLMContext, dedupeStepIterations, elideDuplicateFinalResults, isPredecessorValue, sampleRecordsForLLMContext, formatDomActivitySummary, summarizeExecutionDiagnostics, summarizeAllStepDiagnostics, formatSelectorDiagnosticsForPrompt, scoreAttemptResult, scoreAnnotationBrittleness, scoreAnnotationChain, buildIORenderString, validateTestInput, cleanLLMResponse, parseJsonLenient, stripJSComments, validateSteps, validateForExecution, validateChain, buildStepIORenderString, getStepTemplates, applyTemplate, STEP_TEMPLATES, SCRIPT_DSL_GUIDE, appendGlobalContextBlock, buildAutoFixSystemMessage, fillEntryUrlDefaults, normalizeStepTopology, DEFAULT_POLL_MAX_ITERATIONS, appendStepWithChainLink, removeStepWithRelink, relinkChainToArray, ANNOTATION_PURPOSES, WAIT_CONDITIONS, buildAnnotationsText, checkSelectorFidelity, buildRequirementsBlock, suggestServiceName, getFirstRecordHtmlFromExecution, getFirstRecordHtmlFromAnyStep, formatElementsForPrompt, waitForPageSettle, hashString, buildRequirementRestatePrompt, normalizeRestatement, headTailSlice, detectUnawaitedDollarCalls, emptyFieldDiagnostics, detectNeverExtractedFields, detectHtmlFieldsWithoutTags, schemaItemRequiredForPath, RC54_MAX_ELEMENT_HTML_CHARS, RC54_TOTAL_ELEMENTS_BUDGET_CHARS, isCspConstructError, __testConstructStepScript: null };
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = WU_EXPORT_BAG;

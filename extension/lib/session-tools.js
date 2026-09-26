@@ -1658,6 +1658,24 @@
           parseCheckNote = 'parse environment unavailable (page CSP blocks construction; sandbox probe unreachable) — the syntax gate could not run for this update';
         }
       }
+      // 156th log: invented pseudo-classes escaped the 57th-round
+      // enumerated lint a THIRD time by a novel name (:text-none after
+      // :textish/:textless) and burned a verify round (matched 8
+      // containers, clicked 0, errored 8 — the selector cannot parse,
+      // ever). Enumeration cannot win against invention: probe every
+      // selector-shaped literal against a document fragment — the browser
+      // parse verdict is deterministic. Hard-reject when a DOM is
+      // available (the wizard page always has one); node contexts keep
+      // the 57th advisory-only lane below.
+      const inventedSel = (typeof WU.detectInventedPseudoSelectors === 'function' && typeof document !== 'undefined')
+        ? WU.detectInventedPseudoSelectors(steps, document) : null;
+      if (inventedSel && inventedSel.length) {
+        return {
+          error: 'INVENTED_PSEUDO_SELECTOR: step "' + String(inventedSel[0].stepId) + '" carries a selector the browser cannot parse ("' +
+            inventedSel[0].selector + '" — ' + inventedSel[0].error + '). querySelectorAll rejects it deterministically at run time (this class shipped :textish/:textless/:text-none across three incidents). ' +
+            'STANDARD CSS ONLY: express text-matching with attribute selectors ([aria-label*=…], [href*=…]) or structural pseudos (:has/:not/:nth-of-type). Fix every occurrence and resend; this artifact was NOT applied.'
+        };
+      }
       // Thirtieth log: `const n = $count(sel)` without await passes chain
       // validation and lands — then burns turns at verify with a misleading
       // POLL_EXHAUSTED (n holds a Promise, `n > 0` is false forever). Lint
