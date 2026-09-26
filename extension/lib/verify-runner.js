@@ -1837,6 +1837,10 @@
           (partialRouteLines.length ? ' Field routes: ' + partialRouteLines.join('; ') + '.' : '')
         : null;
       const report = {
+        // 160th round: the EFFECTIVE input this run executed (override or
+        // the confirmed testInput) — the wizard panel uses it to keep the
+        // confirmed-input run primary over spot-checks.
+        executedInput: (input && typeof input === 'object') ? input : null,
         ok: !error,
         error: error ? { message: error.message, stepId: error.stepId || null } : null,
         aborted: !!(error && /TEST_ABORTED/.test(error.message)),

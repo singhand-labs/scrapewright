@@ -118,3 +118,54 @@ describe('160 D — hoverBatchCostHint (data-driven batch sizing)', () => {
     assert.match(body, /suggestedBatchContainers/, 'the suggestion rides the receipt');
   });
 });
+
+describe('160 E1 — executedInput + pickPrimaryResultForPanel', () => {
+  it('pickPrimaryResultForPanel prefers the LAST confirmed-input green run', () => {
+    const runs = [
+      { input: { keyword: 'A', count: 10 }, ok: true, testResult: { r: 1 }, executedArtifactVersion: 6 },
+      { input: { keyword: 'B', count: 5 }, ok: true, testResult: { r: 2 }, executedArtifactVersion: 7 },
+      { input: { keyword: 'A', count: 10 }, ok: true, testResult: { r: 3 }, executedArtifactVersion: 7 }
+    ];
+    const pick = WU.pickPrimaryResultForPanel({ runs, confirmedInput: { count: 10, keyword: 'A' } });
+    assert.equal(pick.primary.testResult.r, 3, 'key order must not matter (stable compare)');
+    assert.equal(pick.primaryIsConfirmedInput, true);
+    assert.deepEqual(pick.spotChecks, [{ input: { keyword: 'B', count: 5 }, executedArtifactVersion: 7 }]);
+  });
+  it('confirmed input never green → latest green primary + flagged', () => {
+    const runs = [
+      { input: { keyword: 'A', count: 10 }, ok: false, testResult: null, executedArtifactVersion: 6 },
+      { input: { keyword: 'B', count: 5 }, ok: true, testResult: { r: 9 }, executedArtifactVersion: 7 }
+    ];
+    const pick = WU.pickPrimaryResultForPanel({ runs, confirmedInput: { keyword: 'A', count: 10 } });
+    assert.equal(pick.primary.testResult.r, 9);
+    assert.equal(pick.primaryIsConfirmedInput, false);
+  });
+  it('no confirmedInput (manual runs) → last green primary, unflagged', () => {
+    const runs = [{ input: null, ok: true, testResult: { r: 1 }, executedArtifactVersion: 1 }];
+    const pick = WU.pickPrimaryResultForPanel({ runs, confirmedInput: null });
+    assert.equal(pick.primary.testResult.r, 1);
+    assert.equal(pick.primaryIsConfirmedInput, false);
+  });
+  it('the verify report carries executedInput (behavioral)', async () => {
+    const { createVerifyRunner } = require('../lib/verify-runner');
+    const orch = async (svc, input, d, opts) => {
+      await d.createTab(svc.targetUrl);
+      opts.onEvent({ type: 'EXECUTION_START' });
+      return { finalResult: { posts: [{ postId: 'a', content: 'c', likeCount: '1' }] }, steps: [], pages: [], pagesTruncated: false };
+    };
+    const runner = createVerifyRunner({
+      ensureLock: async () => {}, releaseLock: async () => {},
+      createTab: async () => ({ id: 1 }), removeTab: async () => {},
+      waitForTabLoad: async () => {}, sendMessage: async () => ({ pong: true }),
+      executeScript: async () => ({ result: 'ok', selectorDiagnostics: [] }),
+      captureSnapshot: async () => ({ html: '<html></html>' }),
+      evaluateCondition: async () => true, orchestrate: orch
+    });
+    const SCHEMA = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object', required: ['postId', 'content', 'likeCount'], properties: { postId: { type: 'string' }, content: { type: 'string' }, likeCount: { type: 'string' } } } } } };
+    const out = await runner({
+      service: { targetUrl: 'https://e.com', steps: [{ id: 's1', name: 'x', script: 'return 1', onSuccess: 'TERMINATE' }], config: {} },
+      input: { keyword: 'travel', count: 5 }, outputSchema: SCHEMA
+    });
+    assert.deepEqual(out.report.executedInput, { keyword: 'travel', count: 5 });
+  });
+});
