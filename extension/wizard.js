@@ -1694,14 +1694,17 @@ async function presentTestOutcome(out) {
   let panelIsConfirmed160 = false;
   let panelSpotNote160 = '';
   try {
-    wizardState.resultRuns.push({
-      input: (out.report && out.report.executedInput) || null,
-      ok: !!(out.report && out.report.ok),
-      testResult: out.raw && out.raw.testResult,
-      executedArtifactVersion: (out.report && typeof out.report.executedArtifactVersion === 'number') ? out.report.executedArtifactVersion : null
-    });
-    if (wizardState.resultRuns.length > 10) wizardState.resultRuns.shift();
+    // 160th round cap hygiene: only GREEN runs enter resultRuns — the picker
+    // below consumes greens only, so reds were wasting cap-10 slots and could
+    // evict the contract green.
     if (out.report && out.report.ok) {
+      wizardState.resultRuns.push({
+        input: (out.report && out.report.executedInput) || null,
+        ok: !!(out.report && out.report.ok),
+        testResult: out.raw && out.raw.testResult,
+        executedArtifactVersion: (out.report && typeof out.report.executedArtifactVersion === 'number') ? out.report.executedArtifactVersion : null
+      });
+      if (wizardState.resultRuns.length > 10) wizardState.resultRuns.shift();
       const pick160 = pickPrimaryResultForPanel({ runs: wizardState.resultRuns, confirmedInput: wizardState.testInput });
       if (pick160.primary) {
         panelTestResult160 = pick160.primary.testResult;
@@ -1710,7 +1713,7 @@ async function presentTestOutcome(out) {
       if (pick160.spotChecks.length) {
         const sc160 = pick160.spotChecks[pick160.spotChecks.length - 1];
         panelSpotNote160 = 'Spot-check input ' + JSON.stringify(sc160.input) + ' also green' +
-          (sc160.executedArtifactVersion ? ' (v' + sc160.executedArtifactVersion + ')' : '') +
+          (sc160.executedArtifactVersion != null ? ' (v' + sc160.executedArtifactVersion + ')' : '') +
           ' — the panel shows ' + (panelIsConfirmed160 ? 'the confirmed testInput run' : 'the latest green run');
       }
     }
@@ -1735,7 +1738,9 @@ async function presentTestOutcome(out) {
   wizardState.lastExecutionEvents = out.events;
   wizardState.countShortfall = out.report.detectors.countShortfall || null;
   wizardState.shapeDistribution = out.report.detectors.shapeDistribution || null;
-  wizardState.testResult = out.report.ok ? out.raw.testResult : (out.raw.error && out.raw.error.steps ? { steps: out.raw.error.steps, finalResult: null } : out.raw.testResult);
+  // 160th round: the review panel and sample mining follow the panel primary
+  // (the confirmed-input run), not the freshest run.
+  wizardState.testResult = out.report.ok ? panelTestResult160 : (out.raw.error && out.raw.error.steps ? { steps: out.raw.error.steps, finalResult: null } : out.raw.testResult);
 
   if (out.report.ok) {
     const label160 = (wizardState.testInput && !panelIsConfirmed160)
