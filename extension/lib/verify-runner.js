@@ -1021,7 +1021,10 @@
               }
             } catch (e) { /* the veto detector must never break the report */ }
           }
-          // 154th log: COUNT_SHORTFALL_ASSEMBLY veto. The incident session
+          // 154th log: COUNT_SHORTFALL_ASSEMBLY veto (162nd round: the
+          // severe flag NO LONGER gates this branch — the census proving
+          // the supply makes any uncertified shortfall an assembly loss;
+          // the incident shipped 6/10 green at ratio 0.6). The incident session
           // went GREEN delivering 4 of a user-confirmed 10 while the run
           // itself matched 14 containers and $collectUntil had SATISFIED
           // its target — the collapse happened in the extract->assemble
@@ -1032,7 +1035,6 @@
           // population demonstrably present is a broken run, not a
           // green-disclosed one.
           if (!error && detectors.countShortfall &&
-              detectors.countShortfall.severe === true &&
               detectors.countShortfall.exhaustionCertified === false &&
               typeof detectors.countShortfall.maxContainers === 'number' &&
               detectors.countShortfall.maxContainers >= detectors.countShortfall.requested &&
@@ -1043,7 +1045,7 @@
               'COUNT_SHORTFALL_ASSEMBLY: ' + csA.field + ' delivered ' + csA.extracted + ' of ' + csA.requested +
               ' requested while this run matched ' + csA.maxContainers + ' containers (>= the request) — the collection satisfied the ask and the loss is in the ASSEMBLY: compare the per-step counts in steps[].resultPreview (collect saw ' + csA.maxContainers + ', the final array has ' + csA.extracted + ') and fix the merge — key records by a strong per-record identity (the permalink/token id), never by a positional or shared fallback that collapses distinct records. ' +
               'If the surplus containers are NOT records of this contract (ads, group-header cards), prove it (probe the container census on the verify tab), then either narrow the container selector or disclose the non-record ratio and renegotiate the count via io.confirm — the count input remains the user ask. ' +
-              'Exhaustion is a page fact only with $collectUntil certification; a severe shortfall without a receipt is RED, not green-disclosed.'
+              'Exhaustion is a page fact only with $collectUntil certification; a shortfall against a proven supply without a receipt is RED at ANY ratio (the 162nd incident shipped 6 of a confirmed 10 green at 0.6), not green-disclosed.'
             );
           }
         }

@@ -117,14 +117,21 @@ describe('154th log F1 — COUNT_SHORTFALL_ASSEMBLY veto', () => {
     assert.equal(out.report.detectors.countShortfall.exhaustionCertified, true);
   });
 
-  it('a mild shortfall (9 of 10) stays report-only', async () => {
+  it('162nd round: a mild shortfall WITH the census proving supply is RED (the 0.6 gap closed)', async () => {
+    // The 162nd incident shipped 6 of a user-confirmed 10 as GREEN at
+    // ratio 0.6 — above the old severe bar (0.5) while the run itself
+    // matched 21 containers. When the census proves the population, ANY
+    // uncertified shortfall is an assembly loss; the severe flag no
+    // longer gates this branch. Exits unchanged: certify / narrow the
+    // selector to the record population / renegotiate the count.
     const extras = [5, 6, 7, 8, 9].map((i) => ({ ...mk(i, String(i)), hovercards: [mk(i, String(i)).hovercards[0]] }));
     const posts = fourPostsClean().concat(extras);
     const out = await makeRunner(orchWith({ posts }, [
       { type: 'STEP_ITERATION', stepId: 's1', iteration: 1, resultPreview: '{"cards":14}',
         selectorDiagnostics: [{ containerMatches: 14 }] }
     ]))({ service: { targetUrl: 'https://e.com', steps: [{ id: 's1', name: 'x', script: 'return 1', onSuccess: 'TERMINATE' }], config: {} }, input: { count: 10 }, outputSchema: SCHEMA });
-    assert.equal(out.report.ok, true, '0.9 ratio is noise, not a broken assembly');
+    assert.equal(out.report.ok, false, '9/10 with 14 containers matched is an assembly loss, not noise');
+    assert.match(out.report.error.message, /COUNT_SHORTFALL_ASSEMBLY/);
   });
 
   it('containers BELOW the requested count keeps the population-divergence lane (no assembly veto)', async () => {
