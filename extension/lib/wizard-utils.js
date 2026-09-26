@@ -1414,7 +1414,7 @@ function canonicalEntryForIdentity(value) {
 // different input) ride as labeled secondaries. No confirmedInput (manual
 // runs) → last green primary, unflagged.
 function stableInputKey(v) {
-  if (v === null || v === undefined || typeof v !== 'object' || Array.isArray(v)) return JSON.stringify(v === undefined ? null : v) || 'null';
+  if (v === null || v === undefined || typeof v !== 'object' || Array.isArray(v)) return JSON.stringify(v === undefined ? null : v) || 'null'; // arrays fall back to raw stringify, so elements compare by insertion order (flat testInput is the intended shape)
   const keys = Object.keys(v).sort();
   const parts = [];
   for (const k of keys) {
