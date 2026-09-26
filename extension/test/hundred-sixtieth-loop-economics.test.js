@@ -37,3 +37,51 @@ describe('160 A — prompt_digest + usage ride the journal', () => {
     assert.match(block, /logContentChunks\('\[LLMClient\] Response usage'/, 'usage line via the chunker+sink path');
   });
 });
+
+describe('160 B — DSL-argument errors route to the structured probes', () => {
+  const { createSessionTools } = require('../lib/session-tools');
+  function makeDeps160(executeDsl) {
+    return {
+      rail: {
+        pageOpen: async () => ({ tabId: 1, url: 'https://example.com', ready: true }),
+        pageState: async () => ({ open: true, tabId: 1, url: 'https://example.com' }),
+        executeDsl,
+        ensureLock: async () => {}, releaseLock: async () => {}, dispose: async () => {}, tabId: 1
+      },
+      runVerify: async () => ({ report: { ok: true, error: null, aborted: false, score: { score: 100, isData: true, breakdown: {} }, schemaOk: true, schemaMissing: [], detectors: { emptyFields: [], duplicateFields: [], countShortfall: null }, steps: [], finalResult: {}, pages: '1', eventCount: 1, events: [] }, events: [], raw: {} }),
+      getDraftService: () => null,
+      applyArtifact: () => {},
+      getTestInput: () => null,
+      getOutputSchema: () => null,
+      getSteps: () => [],
+      annotationBridge: null,
+      ioConfirmBridge: { request: async () => ({ confirmed: true }) }
+    };
+  }
+  const ctx160 = () => ({ session: { state: () => ({ session: { artifactVersions: [] } }) } });
+
+  async function snippetError(exec, code) {
+    const t = createSessionTools(makeDeps160(exec));
+    await t.tools['io.confirm']({ inputSchema: { type: 'object' }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } });
+    return await t.tools['probe.snippet']({ code: code || 'return 1;' }, ctx160());
+  }
+
+  it('a fieldMap argument error gains the structured-probe ROUTE note', async () => {
+    const r = await snippetError(async () => { throw new Error("$extractList fieldMap must be a non-empty object"); }, 'await $extractList("div", null); return 1;');
+    assert.match(r.error, /fieldMap must be a non-empty object/);
+    assert.match(r.error, /ROUTE: this is a typed-probe argument error/);
+    assert.match(r.error, /probe\.extract/);
+  });
+  it('the hover-opts and range-arity argument errors route too', async () => {
+    const r1 = await snippetError(async () => { throw new Error("$extractWithHover opts.hover must be an object"); });
+    assert.match(r1.error, /ROUTE:/);
+    const r2 = await snippetError(async () => { throw new Error("$extractWithHover only one of containerIndex/containerRange/maxContainers may be set"); });
+    assert.match(r2.error, /ROUTE:/);
+  });
+  it('non-argument errors are unchanged (zero behavior drift)', async () => {
+    const r = await snippetError(async () => { throw new Error('snippet exceeded 60000ms — size the batch'); });
+    assert.ok(!/ROUTE:/.test(r.error), 'timeout errors carry no route note');
+    const r2 = await snippetError(async () => { throw new Error('SYNTAX_ERROR: Unexpected token'); });
+    assert.ok(!/ROUTE:/.test(r2.error), 'syntax errors carry no route note');
+  });
+});
