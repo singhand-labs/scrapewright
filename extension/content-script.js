@@ -769,6 +769,30 @@
       };
     }
 
+    // 160th round (inline mirror of lib/list-extract-ops.js): measured
+    // batch-cost receipt for $extractWithHover — per-container price the
+    // next batch size is derived from. No DOM access, pure arithmetic.
+    function hoverBatchCostHint(opts) {
+      const o = opts || {};
+      const processed = Math.max(1, Number(o.processedContainers) || 0);
+      const anchors = Math.max(1, Number(o.anchorsHovered) || 0);
+      const wall = Math.max(0, Number(o.batchWallMs) || 0);
+      const now = Number(o.now) || Date.now();
+      const perContainerMs = wall / processed;
+      const perAnchorMs = wall / anchors;
+      const budgetRemainingMs = (typeof o.deadlineAt === 'number' && Number.isFinite(o.deadlineAt) && o.deadlineAt > 0)
+        ? Math.max(0, o.deadlineAt - now) : null;
+      const suggestedBatchContainers = (budgetRemainingMs === null || perContainerMs <= 0)
+        ? null : Math.max(1, Math.floor((budgetRemainingMs * 0.8) / perContainerMs));
+      return {
+        batchWallMs: wall,
+        perContainerMs: Math.round(perContainerMs),
+        perAnchorMs: Math.round(perAnchorMs),
+        budgetRemainingMs: budgetRemainingMs,
+        suggestedBatchContainers: suggestedBatchContainers
+      };
+    }
+
     return {
       extractListRecords,
       extractListMultiRecords,
@@ -780,7 +804,8 @@
       isVisibleForDiagnostics,
       getMatchGuardSkips,
       resetMatchGuardSkips,
-      getHoverReadCapped
+      getHoverReadCapped,
+      hoverBatchCostHint
     };
   }
 
@@ -5206,6 +5231,7 @@
       var remaining = deadlineAt - Date.now();
       batchWallMs = Math.min((typeof batchWallMs === 'number' && batchWallMs > 0) ? batchWallMs : 25000, Math.max(0, remaining));
     }
+    var batchStart160 = Date.now();
     var ret = await ops.extractWithHoverRecords(
       processed,
       fieldMap,
@@ -5279,6 +5305,25 @@
       failureReasons: failureReasons,
       observedPopoverCount: observedPopoverCount
     };
+    // 160th round: measured cost receipt — data-driven batch sizing.
+    try {
+      if (processed.length > 0 && typeof ops.hoverBatchCostHint === 'function') {
+        _diagnostics.hoverCost = ops.hoverBatchCostHint({
+          processedContainers: processed.length,
+          anchorsHovered: anchorsFound,
+          batchWallMs: Date.now() - batchStart160,
+          deadlineAt: deadlineAt,
+          now: Date.now()
+        });
+        if (_diagnostics.hoverCost.suggestedBatchContainers !== null &&
+            _diagnostics.hoverCost.suggestedBatchContainers < processed.length) {
+          _diagnostics.hoverCost.note = 'this batch cost ~' + _diagnostics.hoverCost.perContainerMs +
+            'ms/container; with ~' + _diagnostics.hoverCost.budgetRemainingMs +
+            'ms of step budget left the next batch should process <= ' +
+            _diagnostics.hoverCost.suggestedBatchContainers + ' container(s) — slice with containerRange/maxContainers (approximate: batch wall includes scroll/settle overhead).';
+        }
+      }
+    } catch (e160) { /* cost receipt is best-effort */ }
     // Eighty-fourth log: a fully anchor-blind call carries the census of
     // what anchor forms DO exist inside the blind containers. The
     // verify-side HOVER_ANCHORS_BLIND error embeds it, so the next

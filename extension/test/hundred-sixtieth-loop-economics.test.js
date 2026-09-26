@@ -89,3 +89,32 @@ describe('160 B — DSL-argument errors route to the structured probes', () => {
     assert.ok(!/ROUTE:/.test(r.error), 'click-op argument errors are not extraction-route material');
   });
 });
+
+describe('160 D — hoverBatchCostHint (data-driven batch sizing)', () => {
+  const LEOm = require('../lib/list-extract-ops');
+  it('measures per-container/per-anchor price and derives the suggested batch', () => {
+    const h = LEOm.hoverBatchCostHint({ processedContainers: 4, anchorsHovered: 8, batchWallMs: 20000, deadlineAt: 100000, now: 60000 });
+    assert.equal(h.batchWallMs, 20000);
+    assert.equal(h.perContainerMs, 5000);
+    assert.equal(h.perAnchorMs, 2500);
+    assert.equal(h.budgetRemainingMs, 40000);
+    assert.equal(h.suggestedBatchContainers, 6); // floor(40000*0.8/5000)
+  });
+  it('no deadline → budget fields null (graceful)', () => {
+    const h = LEOm.hoverBatchCostHint({ processedContainers: 2, anchorsHovered: 2, batchWallMs: 4000 });
+    assert.equal(h.budgetRemainingMs, null);
+    assert.equal(h.suggestedBatchContainers, null);
+  });
+  it('zero/degenerate inputs never divide by zero', () => {
+    const h = LEOm.hoverBatchCostHint({ processedContainers: 0, anchorsHovered: 0, batchWallMs: 0, deadlineAt: 10, now: 5 });
+    assert.equal(h.perContainerMs, 0);
+    assert.equal(h.suggestedBatchContainers, null); // perContainer 0 → null, never Infinity
+  });
+  it('content-script wires hoverCost into extractWithHover diagnostics (source audit)', () => {
+    const i = CS.indexOf('async function domExtractWithHover(');
+    const body = CS.slice(i, CS.indexOf('async function domOpenTab', i));
+    assert.match(body, /hoverBatchCostHint\(/, 'the pure helper is called');
+    assert.match(body, /_diagnostics\.hoverCost/, 'diagnostics carry hoverCost');
+    assert.match(body, /suggestedBatchContainers/, 'the suggestion rides the receipt');
+  });
+});

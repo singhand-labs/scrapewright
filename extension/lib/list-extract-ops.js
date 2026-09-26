@@ -960,6 +960,36 @@ function computeSimpleSelectorDiagnostics(elements, selector, api) {
   return out;
 }
 
+// 160th round: measured batch-cost receipt for $extractWithHover. The
+// step-budget deadline rides every DOM request (138th round); dividing
+// the measured batch wall by processed containers gives a per-container
+// price the NEXT batch size can be derived from — data-driven sizing
+// instead of the ~5-10s/anchor rule of thumb (the incident: a 165s
+// OUTER_DEADLINE red verify a one-number receipt would have prevented).
+// The suggestion spends only 80% of the remaining budget and is an
+// APPROXIMATION: the batch wall includes scroll/settle overhead, so the
+// per-container price errs conservative (smaller batches, never oversized).
+function hoverBatchCostHint(opts) {
+  const o = opts || {};
+  const processed = Math.max(1, Number(o.processedContainers) || 0);
+  const anchors = Math.max(1, Number(o.anchorsHovered) || 0);
+  const wall = Math.max(0, Number(o.batchWallMs) || 0);
+  const now = Number(o.now) || Date.now();
+  const perContainerMs = wall / processed;
+  const perAnchorMs = wall / anchors;
+  const budgetRemainingMs = (typeof o.deadlineAt === 'number' && Number.isFinite(o.deadlineAt) && o.deadlineAt > 0)
+    ? Math.max(0, o.deadlineAt - now) : null;
+  const suggestedBatchContainers = (budgetRemainingMs === null || perContainerMs <= 0)
+    ? null : Math.max(1, Math.floor((budgetRemainingMs * 0.8) / perContainerMs));
+  return {
+    batchWallMs: wall,
+    perContainerMs: Math.round(perContainerMs),
+    perAnchorMs: Math.round(perAnchorMs),
+    budgetRemainingMs: budgetRemainingMs,
+    suggestedBatchContainers: suggestedBatchContainers
+  };
+}
+
 const api = {
   extractListRecords,
   extractListMultiRecords,
@@ -971,7 +1001,8 @@ const api = {
   isVisibleForDiagnostics,
   getMatchGuardSkips,
   resetMatchGuardSkips,
-  getHoverReadCapped
+  getHoverReadCapped,
+  hoverBatchCostHint
 };
 
 if (typeof module !== 'undefined' && module.exports) module.exports = api;
