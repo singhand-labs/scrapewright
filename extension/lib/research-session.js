@@ -991,7 +991,7 @@
         }
         const sysNoteEntries = state.transcript.filter((e) => e && e.kind === 'system');
         const sysNotes = sysNoteEntries.slice(-3).map((e) => String((e && e.text) || '').split('\n')[0].slice(0, 140));
-        console.log('[session] prompt_digest ' + JSON.stringify({
+        const promptDigest160 = {
           turn: state.spend.turns,
           promptChars: promptChars,
           msgCount: messages2.length,
@@ -999,7 +999,14 @@
           stepPlan: stepPlan,
           sysNotesTotal: sysNoteEntries.length,
           sysNotes: sysNotes
-        }));
+        };
+        console.log('[session] prompt_digest ' + JSON.stringify(promptDigest160));
+        // 160th round: the digest also rides the durable session journal
+        // (prompt economics observable from one exported file).
+        try {
+          const sink160 = (typeof window !== 'undefined' && window.__scrapewrightJournalSink) || null;
+          if (sink160) sink160('[session] prompt_digest', JSON.stringify(promptDigest160));
+        } catch (e160) { /* journal is best-effort */ }
       } catch (_) { /* the digest must never kill the turn */ }
       return messages2;
     }

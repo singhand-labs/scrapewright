@@ -387,7 +387,9 @@ class LLMClient {
   _finalizeContent(content, finishReason, usage, options = {}) {
     const effectiveMaxTokens = options.maxTokens ?? this.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
     console.log('[LLMClient] Response finish_reason:', finishReason);
-    console.log('[LLMClient] Response usage:', JSON.stringify(usage));
+    // 160th round: via logContentChunks so the usage line also reaches the
+    // session journal sink (86th-round full-fidelity logging stays intact).
+    logContentChunks('[LLMClient] Response usage', JSON.stringify(usage) || 'none');
     console.log('[LLMClient] Response content length:', content?.length);
     logContentChunks('[LLMClient] Response content', content);
 
