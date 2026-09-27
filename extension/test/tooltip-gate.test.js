@@ -101,7 +101,7 @@ describe('tooltip gate — required time field with partial/relative values', ()
     ));
     const outUnbound = await mk(0)({ service: SERVICE, input: {}, outputSchema: REQ_TIME_SCHEMA });
     assert.equal(outUnbound.report.ok, false, 'unbound channel + captured absolute is RED');
-    assert.match(outUnbound.report.error.message, /TIME_ABSOLUTE_CAPTURED_UNBOUND/);
+    assert.match(outUnbound.report.error.message, /CAPTURED_VALUE_UNBOUND/); // 165th consolidation: the universal gate carries the 164th incident
     const outBound = await mk(1)({ service: SERVICE, input: {}, outputSchema: REQ_TIME_SCHEMA });
     assert.equal(outBound.report.ok, true, 'tooltip receipt + bound channel exempts the run');
     assert.equal(outBound.report.events.indexOf('TIME_SOURCE_UNEXERCISED'), -1);

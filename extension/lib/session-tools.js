@@ -774,6 +774,17 @@
             + (attachedNow ? '; amended contract applied to the current artifact — verify.run scores against it now' : '')
             + (attachedTI ? '; confirmed test values applied to the current artifact' : '')
             + (resyncNote ? '; ' + resyncNote : '')
+            // 165th round: the framework understanding of the requirement,
+            // made visible — every predicate-bearing field and the semantic
+            // verify enforces for it (the universal captured-value
+            // invariant consumes this table).
+            + (function () {
+                try {
+                  const sem = (typeof WU.inferFieldSemantics === 'function') ? (WU.inferFieldSemantics(ioConfirmedSchemas && ioConfirmedSchemas.outputSchema) || []) : [];
+                  if (!sem.length) return '';
+                  return '; field semantics: ' + sem.map((r) => r.path + '=' + r.semantic).join(', ');
+                } catch (eS) { return ''; }
+              })()
         };
       }
       return {

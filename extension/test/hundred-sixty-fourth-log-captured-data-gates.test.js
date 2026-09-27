@@ -17,14 +17,12 @@
 // escalations, all keyed on the SAME root evidence — the run captured
 // popover data and the assembly never wired the read channel
 // (unusedCaptures.popoverReadFields === 0):
-//   G1. TIME_ABSOLUTE_CAPTURED_UNBOUND veto — a REQUIRED time field
-//       shipping relative/partial while captures hold a full absolute AND
-//       the hover-read channel was never bound. When the channel IS bound
-//       (popoverReadFields > 0) per-record residuals stay legal (the
-//       exercised-route disclosed-ship contract).
-//   G2. HOVERCARDS_SHELL veto — declared hovercards entries carrying no
-//       content (no non-URL string over 60 chars anywhere in the entry)
-//       while the run captured popovers and never bound the channel.
+//   [165th-round consolidation] G1/G2 below now exercise the ONE
+//   universal gate CAPTURED_VALUE_UNBOUND (the invariant: the assembly
+//   must not drop a captured value satisfying the field semantic). The
+//   164th special-case vetoes were removed; these fixtures keep their
+//   incident shapes (event-diagnostic captures, channel-bound legal
+//   lanes) and assert the universal gate covers them.
 //   G3. Nested NEAR-duplicate hovercards (same identity, enrichment
 //       divergent) now veto too — the same entity twice is wrong data at
 //       any enrichment level; the message keeps the merge teaching.
@@ -77,7 +75,7 @@ const CAPTURE_DIAGS = (extra) => {
     anchorsFound: 3, hoverSummary: { anchorsFound: 3, hovercardsCaptured: 3, hoverFailures: 0 },
     capturedPopovers: {
       captured: 3, popoverReadFields: popoverReadFields,
-      samples: ['美女 Page · Model 9.3K Followers', 'September 12, 2026 at 3:18 PM']
+      samples: ['美女 Page · Public figure 9.3K Followers Verified', 'September 12, 2026 at 3:18 PM']
     }
   };
   if (extra && extra.popoverReadFields !== undefined) delete extra.popoverReadFields;
@@ -86,9 +84,9 @@ const CAPTURE_DIAGS = (extra) => {
 
 describe('164 G1 — TIME_ABSOLUTE_CAPTURED_UNBOUND veto (channel-unwired calibration)', () => {
   const mixedPosts = () => ({ posts: [
-    { postId: 'a1', postTime: 'September 12, 2026 at 3:18 PM', content: 'c1' },
-    { postId: 'a2', postTime: '2 days ago', content: 'c2' },
-    { postId: 'a3', postTime: 'April 17', content: 'c3' }
+    { postId: '943842055397354', postTime: 'September 12, 2026 at 3:18 PM', content: 'c1' },
+    { postId: '1370476108534229', postTime: '2 days ago', content: 'c2' },
+    { postId: '28233260189699763', postTime: 'April 17', content: 'c3' }
   ] });
   const EV = { popoverSamples: ['September 12, 2026 at 3:18 PM'], probeTimestampCalls: 1, lastFullAbsolute: 'September 12, 2026 at 3:18 PM' };
 
@@ -97,8 +95,8 @@ describe('164 G1 — TIME_ABSOLUTE_CAPTURED_UNBOUND veto (channel-unwired calibr
       { type: 'STEP_ITERATION', stepId: 's1', iteration: 1, resultPreview: '{"done":true}', selectorDiagnostics: [CAPTURE_DIAGS()] }
     ]))({ service: { targetUrl: 'https://e.com', steps: [{ id: 's1', name: 'x', script: 'return 1', onSuccess: 'TERMINATE' }], config: {} }, input: { count: 3 }, outputSchema: SCHEMA, sessionEvidence: EV });
     assert.equal(out.report.ok, false);
-    assert.match(out.report.error.message, /TIME_ABSOLUTE_CAPTURED_UNBOUND/);
-    assert.match(out.report.error.message, /popoverText/);
+    assert.match(out.report.error.message, /CAPTURED_VALUE_UNBOUND/);
+    assert.match(out.report.error.message, /postTime/);
   });
 
   it('channel BOUND (popoverReadFields>0) → per-record residuals legal, ok stays', async () => {
@@ -112,20 +110,20 @@ describe('164 G1 — TIME_ABSOLUTE_CAPTURED_UNBOUND veto (channel-unwired calibr
 describe('164 G2 — HOVERCARDS_SHELL veto', () => {
   it('shell hovercards (label-only) with captures present and channel unbound → RED', async () => {
     const data = { posts: [
-      { postId: 'a1', postTime: 'September 12, 2026 at 3:18 PM', content: 'c1', hovercards: [SHELL_HC('https://www.facebook.com/profile.php?id=100063493312571')] },
-      { postId: 'a2', postTime: 'September 11, 2026 at 9:00 AM', content: 'c2', hovercards: [SHELL_HC('/groups/2957266634525773/')] }
+      { postId: '943842055397354', postTime: 'September 12, 2026 at 3:18 PM', content: 'c1', likes: '12', hovercards: [SHELL_HC('https://www.facebook.com/profile.php?id=100063493312571')] },
+      { postId: '1370476108534229', postTime: 'September 11, 2026 at 9:00 AM', content: 'c2', likes: '7', hovercards: [SHELL_HC('/groups/2957266634525773/')] }
     ] };
     const out = await makeRunner(orchWith(data, [
       { type: 'STEP_ITERATION', stepId: 's1', iteration: 1, resultPreview: '{"done":true}', selectorDiagnostics: [CAPTURE_DIAGS()] }
     ]))({ service: { targetUrl: 'https://e.com', steps: [{ id: 's1', name: 'x', script: 'return 1', onSuccess: 'TERMINATE' }], config: {} }, input: { count: 2 }, outputSchema: SCHEMA });
     assert.equal(out.report.ok, false);
-    assert.match(out.report.error.message, /HOVERCARDS_SHELL/);
-    assert.match(out.report.error.message, /popoverText/);
+    assert.match(out.report.error.message, /CAPTURED_VALUE_UNBOUND/);
+    assert.match(out.report.error.message, /hovercards/);
   });
 
   it('enriched hovercards (bio-bearing kv) pass', async () => {
     const data = { posts: [
-      { postId: 'a1', postTime: 'September 12, 2026 at 3:18 PM', content: 'c1', hovercards: [ENRICHED_HC('https://www.facebook.com/profile.php?id=100063493312571')] }
+      { postId: '943842055397354', postTime: 'September 12, 2026 at 3:18 PM', content: 'c1', likes: '12', hovercards: [ENRICHED_HC('https://www.facebook.com/profile.php?id=100063493312571')] }
     ] };
     const out = await makeRunner(orchWith(data, [
       { type: 'STEP_ITERATION', stepId: 's1', iteration: 1, resultPreview: '{"done":true}', selectorDiagnostics: [CAPTURE_DIAGS({ popoverReadFields: 1 })] }

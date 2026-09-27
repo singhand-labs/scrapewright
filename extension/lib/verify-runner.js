@@ -62,6 +62,8 @@
       detectDuplicateNestedEntries: w.detectDuplicateNestedEntries,
       detectInventedIdFallbacks: w.detectInventedIdFallbacks,
       detectShellHovercards: w.detectShellHovercards,
+      inferFieldSemantics: w.inferFieldSemantics,
+      semanticPredicatePasses: w.semanticPredicatePasses,
       detectIdenticalFieldValues: w.detectIdenticalFieldValues,
       detectDuplicateEntities: w.detectDuplicateEntities,
       detectOversizedFields: w.detectOversizedFields,
@@ -362,6 +364,62 @@
     return hits.length ? hits : null;
   }
 
+  // 165th round: per-record CANDIDATE POOLS from pipeline intermediates.
+  // The invariant consumer (CAPTURED_VALUE_UNBOUND) is channel-agnostic:
+  // hovercards[].popoverText/labelledbyText/rejectedAddedTexts are the
+  // capture sources TODAY; a click-expand or attribute capture tomorrow
+  // joins the same pool shape. Aligned per-record when the intermediate
+  // record count matches the final array; unioned (honest degradation)
+  // otherwise; empty when no intermediates carry captures.
+  function collectCapturedCandidateTexts(rawSteps, finalCount) {
+    const records = [];
+    let total = 0;
+    for (const st of (Array.isArray(rawSteps) ? rawSteps : [])) {
+      const res = st && st.result;
+      if (!res || typeof res !== 'object') continue;
+      for (const key of Object.keys(res)) {
+        const arr = res[key];
+        if (!Array.isArray(arr)) continue;
+        for (let i = 0; i < arr.length; i++) {
+          const rec = arr[i];
+          const hcs = rec && Array.isArray(rec.hovercards) ? rec.hovercards : null;
+          if (!hcs || !hcs.length) continue;
+          const texts = [];
+          for (const hc of hcs) {
+            if (!hc || typeof hc !== 'object') continue;
+            for (const k of ['popoverText', 'labelledbyText', 'anchorText']) {
+              if (typeof hc[k] === 'string' && hc[k]) texts.push(hc[k]);
+            }
+            if (Array.isArray(hc.rejectedAddedTexts)) {
+              for (const t of hc.rejectedAddedTexts) {
+                if (typeof t === 'string' && t) texts.push(t);
+              }
+            }
+          }
+          if (texts.length) {
+            records[i] = (records[i] || []).concat(texts);
+            total += texts.length;
+          }
+        }
+      }
+    }
+    if (!total) return { mode: 'empty', records: [], union: [] };
+    const union = [].concat.apply([], records.filter(Boolean));
+    const aligned = (typeof finalCount === 'number')
+      ? records.filter(Boolean).length === finalCount
+      : records.every((r) => Array.isArray(r)); // no count given: aligned unless sparse
+    if (aligned) return { mode: 'per-record', records: records, union: union };
+    return { mode: 'union', records: [], union: union };
+  }
+
+  function recordsCountFor165(finalData) {
+    if (!finalData || typeof finalData !== 'object') return undefined;
+    for (const k of Object.keys(finalData)) {
+      if (Array.isArray(finalData[k])) return finalData[k].length;
+    }
+    return undefined;
+  }
+
   function createVerifyRunner(deps) {
     const d = deps || {};
     if (typeof d.orchestrate !== 'function') throw new Error('createVerifyRunner requires an orchestrate(service, input, orchDeps, options) function');
@@ -389,7 +447,12 @@
           );
         });
 
-    return async function runVerify(opts) {
+    try {
+    const gT = (typeof globalThis !== 'undefined') ? globalThis : null;
+    if (gT) gT.__VR_TEST__ = Object.assign(gT.__VR_TEST__ || {}, { collectCapturedCandidateTexts: collectCapturedCandidateTexts });
+  } catch (eT) { /* best-effort test hook */ }
+
+  return async function runVerify(opts) {
       const o = opts || {};
       const service = o.service;
       const input = (o.input && typeof o.input === 'object') ? o.input : {};
@@ -530,7 +593,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, nestedDuplicates: null, shellHovercards: null, inventedIdFallbacks: null, siblingCountContrast: null, implausibleTimeFields: null, positionLikeIds: null, labelPrefixedCounts: null, mediaHygiene: null, junkShapeRecords: null, unusedCaptures: null, timeSourceUnexercised: null };
+      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, nestedDuplicates: null, shellHovercards: null, capturedValueUnbound: null, inventedIdFallbacks: null, siblingCountContrast: null, implausibleTimeFields: null, positionLikeIds: null, labelPrefixedCounts: null, mediaHygiene: null, junkShapeRecords: null, unusedCaptures: null, timeSourceUnexercised: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -1428,27 +1491,73 @@
           }
         }
         detectors.unusedCaptures = computeUnusedCaptures();
-          // 164th round: SHELL hovercards. The primitive attaches
-          // popoverText to every hovercard entry (2026-09-11 spec 3.B)
-          // and the run captured popovers — an assembly that ships
-          // link+label shells dropped the enrichment on the floor.
+        // 165th round: ONE universal invariant replaces the 164th
+        // incident-shaped gates (time x hover channel, hovercards x
+        // popoverText): the assembly must not DROP a captured value that
+        // satisfies a declared field's semantic requirement. Channel- and
+        // site-agnostic — any capture source feeding the per-record
+        // candidate pools rides the same rule; empty pool = the page
+        // genuinely lacks the value = the disclosed ship stays legal.
+        // Shell-hovercard census stays as a detector row for diagnostics.
+        try {
           if (typeof WU.detectShellHovercards === 'function') {
-            const shells164 = WU.detectShellHovercards(finalData, outputSchema) || [];
-            if (shells164.length) {
-              detectors.shellHovercards = shells164;
-              if (!error && detectors.unusedCaptures && detectors.unusedCaptures.totalCaptured > 0 &&
-                  detectors.unusedCaptures.popoverReadFields === 0) {
-                const sh164 = shells164[0];
-                error = new Error(
-                  'HOVERCARDS_SHELL: ' + sh164.path + ' (parent record #' + sh164.parentIndex + ') ships ' + sh164.contentless + ' of ' + sh164.total +
-                  ' entry(ies) with NO content — only a link plus a short label — while this run captured popovers and the primitive attached popoverText to every hovercard entry: the enrichment (name/followers/members — samples: ' +
-                  String((detectors.unusedCaptures.samples || [])[0] || '').slice(0, 80) +
-                  ') was captured and dropped. Map the hovercards from the entry fields (popoverText/labelledbyText/htmlSnippet carry the captured popover) or bind read:\'hoverPopover\' fields, or renegotiate hovercards out of the contract with io.confirm. Shell hovercards with captures present are RED.'
-                );
+            const shells165 = WU.detectShellHovercards(finalData, outputSchema) || [];
+            if (shells165.length) detectors.shellHovercards = shells165;
+          }
+          if (typeof WU.inferFieldSemantics === 'function' && typeof WU.semanticPredicatePasses === 'function') {
+            const semRows165 = WU.inferFieldSemantics(outputSchema) || [];
+            const pools165 = collectCapturedCandidateTexts(result && result.steps,
+              finalData ? recordsCountFor165(finalData) : undefined);
+            // Event-diagnostic capture samples join the UNION (captures
+            // that rode selectorDiagnostics without per-record hovercards
+            // still count as candidate evidence — consolidation keeps the
+            // 164th incident coverage inside the one gate).
+            if (detectors.unusedCaptures && Array.isArray(detectors.unusedCaptures.samples)) {
+              for (const sm165 of detectors.unusedCaptures.samples) {
+                if (typeof sm165 === 'string' && sm165 && pools165.union.indexOf(sm165) === -1) pools165.union.push(sm165);
               }
             }
+            for (const row165 of semRows165) {
+              const arrField165 = String(row165.path || '').split('.')[0];
+              const arr165 = finalData ? finalData[arrField165] : null;
+              if (!Array.isArray(arr165) || !arr165.length) continue;
+              const failing165 = [];
+              for (let i = 0; i < arr165.length; i++) {
+                const v = arr165[i] ? arr165[i][row165.field] : undefined;
+                if (!WU.semanticPredicatePasses(row165.semantic, v)) failing165.push({ index: i + 1, value: v });
+              }
+              if (!failing165.length) continue;
+              const pool165 = (pools165.mode === 'per-record')
+                ? (pools165.records[failing165[0].index - 1] || [])
+                : pools165.union;
+              const passInPool165 = pool165.filter((t) => WU.semanticPredicatePasses(row165.semantic, t));
+              // 164th-calibration preserved: when the pool is only a UNION
+              // (no per-record attribution) AND the read channel IS bound
+              // (popoverReadFields > 0), the exercised-route disclosed-ship
+              // contract holds — per-record attribution is unavailable, so
+              // the union cannot prove THIS record dropped anything.
+              if (pools165.mode !== 'per-record' && detectors.unusedCaptures &&
+                  detectors.unusedCaptures.popoverReadFields > 0) continue;
+              if (!passInPool165.length) continue;
+              const sample165 = String(passInPool165[0]).slice(0, 80);
+              detectors.capturedValueUnbound = detectors.capturedValueUnbound || [];
+              detectors.capturedValueUnbound.push({
+                field: row165.field, path: row165.path, semantic: row165.semantic,
+                failing: failing165.slice(0, 3).map((f) => ({ index: f.index, sample: String(f.value == null ? '' : f.value).slice(0, 40) })),
+                poolSample: sample165
+              });
+              if (!error) {
+                error = new Error(
+                  'CAPTURED_VALUE_UNBOUND: ' + row165.path + ' ships value(s) failing its ' + row165.semantic +
+                  ' semantic (record #' + failing165[0].index + ' sample "' + String(failing165[0].value == null ? '' : failing165[0].value).slice(0, 30) +
+                  '") while the pipeline already captured a satisfying value for that record ("' + sample165 +
+                  '") — the assembly dropped captured data. Bind the field to the capture channel (the fieldMap read:\'hoverPopover\' spec searches popoverText and the rejected mounts) or map it from the intermediate record fields, or renegotiate the field via io.confirm. Shipping a degraded value while the pool holds a passing one is RED.'
+                );
+              }
+              break; // one gate names one field; the detector rows carry the rest
+            }
           }
-
+        } catch (e165) { /* the invariant gate must never break the report */ }
       }
 
       // Twenty-sixth log: verifies 1-4 all returned ok:true (score 133) while
@@ -1676,23 +1785,6 @@
           }
           for (const pe of emptyTimeRequired130) pushAbsRow(pe.field, pe.path, null);
           if (absRows.length) detectors.timeAbsoluteCapturedUnbound = absRows;
-          // 164th round: the report-only tier never changed model behavior
-          // (every session since the 154th ignored it while shipping
-          // relative/partial times). Escalate to a veto with a precise
-          // calibration: the captures hold a full absolute AND the
-          // hover-read channel was never bound (popoverReadFields 0). When
-          // the channel IS bound, per-record residuals stay legal — the
-          // exercised-route disclosed-ship contract.
-          if (absRows.length && !error &&
-              detectors.unusedCaptures && detectors.unusedCaptures.totalCaptured > 0 &&
-              detectors.unusedCaptures.popoverReadFields === 0) {
-            const r164 = absRows[0];
-            error = new Error(
-              'TIME_ABSOLUTE_CAPTURED_UNBOUND: ' + r164.path + ' ships relative/partial values (sample "' + String(r164.sampleValue || '').slice(0, 30) +
-              '") while this run\'s hover captures contain a FULL absolute date and the hover-read channel was never bound (popoverReadFields 0): the data sat in hovercards[].popoverText / rejectedAddedTexts and the assembly shipped the page-visible label instead. ' +
-              "Bind the field via the fieldMap spec {read:'hoverPopover', match:<your regex>} in $extractWithHover — the channel searches the picked popover plus rejected mounts — or renegotiate the time field via io.confirm. A required time field with captured absolutes and no binding is RED."
-            );
-          }
         }
       }
 
@@ -2070,7 +2162,8 @@
     };
   }
 
-  const api = { createVerifyRunner, detectJunkValues, detectFieldRegression };
+  const api = { createVerifyRunner, detectJunkValues, detectFieldRegression,
+    __test: { collectCapturedCandidateTexts: collectCapturedCandidateTexts } };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.VerifyRunner = api;
 })(typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : self));
