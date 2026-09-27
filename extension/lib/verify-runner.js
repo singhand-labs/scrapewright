@@ -64,6 +64,7 @@
       detectShellHovercards: w.detectShellHovercards,
       inferFieldSemantics: w.inferFieldSemantics,
       semanticPredicatePasses: w.semanticPredicatePasses,
+      countPoolTextPasses: w.countPoolTextPasses,
       detectIdenticalFieldValues: w.detectIdenticalFieldValues,
       detectDuplicateEntities: w.detectDuplicateEntities,
       detectOversizedFields: w.detectOversizedFields,
@@ -1530,7 +1531,13 @@
               const pool165 = (pools165.mode === 'per-record')
                 ? (pools165.records[failing165[0].index - 1] || [])
                 : pools165.union;
-              const passInPool165 = pool165.filter((t) => WU.semanticPredicatePasses(row165.semantic, t));
+              // 166th round: the count lane requires LEXICAL anchoring for
+              // pool rescue (a followers text must not rescue comments; a
+              // video duration must not rescue likes).
+              const poolPass165 = (row165.semantic === 'count' && typeof WU.countPoolTextPasses === 'function')
+                ? (t) => WU.countPoolTextPasses(row165.field, t)
+                : (t) => WU.semanticPredicatePasses(row165.semantic, t);
+              const passInPool165 = pool165.filter(poolPass165);
               // 164th-calibration preserved: when the pool is only a UNION
               // (no per-record attribution) AND the read channel IS bound
               // (popoverReadFields > 0), the exercised-route disclosed-ship

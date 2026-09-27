@@ -190,3 +190,24 @@ describe('165 A2 — io.confirm receipt shows the framework understanding', () =
     assert.match(r.note, /posts\.hovercards=contentfulEntries/);
   });
 });
+
+describe('166 — count-lane lexical anchoring (production false positives)', () => {
+  it('duration/date-shaped texts never pass the count predicate', () => {
+    assert.equal(WU.semanticPredicatePasses('count', '0:00 / 0:10'), false, 'a video duration is not a count');
+    assert.equal(WU.semanticPredicatePasses('count', '12:34'), false);
+    assert.equal(WU.semanticPredicatePasses('count', 'September 12'), false, 'a date is not a count');
+    assert.equal(WU.semanticPredicatePasses('count', '1.3K'), true);
+    assert.equal(WU.semanticPredicatePasses('count', '147'), true);
+  });
+  it('pool count-passes require the field lexical family (or a bare short count token)', () => {
+    // The 166th incident: v5 red demanded binding comments from a
+    // FOLLOWERS text and likes from a video duration — the pool-match
+    // must be field-anchored to rescue.
+    assert.equal(WU.countPoolTextPasses('comments', 'Wu Jiaru 10K Followers Message Follow'), false);
+    assert.equal(WU.countPoolTextPasses('likes', '0:00 / 0:10'), false);
+    assert.equal(WU.countPoolTextPasses('likes', 'Like: 513 people'), true);
+    assert.equal(WU.countPoolTextPasses('comments', '12 comments · 3 replies'), true);
+    assert.equal(WU.countPoolTextPasses('shares', '1.3K'), true, 'a bare short count token needs no label');
+    assert.equal(WU.countPoolTextPasses('likes', '美女 Page · Public figure 9.3K Followers'), false, 'followers count is not likes');
+  });
+});
