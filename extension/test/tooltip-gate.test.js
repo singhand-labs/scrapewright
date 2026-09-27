@@ -89,17 +89,24 @@ describe('tooltip gate — required time field with partial/relative values', ()
     assert.match(out.report.error.message, /TIME_SOURCE_UNEXERCISED/);
   });
 
-  it('same values + ONE capturedPopovers event with samples → no gate (disclosed-ship path intact)', async () => {
-    const runner = VR_HARNESS.makeRunner(orchWithEvents(
+  it('164th round: captured FULL absolute + channel UNBOUND → TIME_ABSOLUTE_CAPTURED_UNBOUND; channel BOUND → disclosed-ship path intact', async () => {
+    // The 130th kept this shape report-only; the user overruled it (the
+    // 164th incident shipped relative/partial while captures held a full
+    // absolute and popoverReadFields was 0). Unbound → RED; bound → the
+    // exercised-route disclosed-ship contract holds.
+    const mk = (readFields) => VR_HARNESS.makeRunner(orchWithEvents(
       { posts: [{ url: '/a', postTime: 'June 3' }, { url: '/b', postTime: '4 days ago' }] },
       [{ type: 'STEP_ITERATION', stepId: 's1', resultPreview: '{"done":true}',
-         selectorDiagnostics: [{ api: 'extractWithHover', containerSelector: 'div.card', capturedPopovers: { captured: 2, samples: ['June 3, 2024 at 1:43 PM'] } }] }]
+         selectorDiagnostics: [{ api: 'extractWithHover', containerSelector: 'div.card', capturedPopovers: { captured: 2, popoverReadFields: readFields, samples: ['June 3, 2024 at 1:43 PM'] } }] }]
     ));
-    const out = await runner({ service: SERVICE, input: {}, outputSchema: REQ_TIME_SCHEMA });
-    assert.equal(out.report.ok, true, 'tooltip receipt exempts the run from the gate');
-    assert.equal(out.report.events.indexOf('TIME_SOURCE_UNEXERCISED'), -1);
-    assert.equal(out.report.detectors.timeSourceUnexercised, null);
-    assert.ok(out.report.events.indexOf('RELATIVE_TIMESTAMP') !== -1, 'the advisory census still discloses');
+    const outUnbound = await mk(0)({ service: SERVICE, input: {}, outputSchema: REQ_TIME_SCHEMA });
+    assert.equal(outUnbound.report.ok, false, 'unbound channel + captured absolute is RED');
+    assert.match(outUnbound.report.error.message, /TIME_ABSOLUTE_CAPTURED_UNBOUND/);
+    const outBound = await mk(1)({ service: SERVICE, input: {}, outputSchema: REQ_TIME_SCHEMA });
+    assert.equal(outBound.report.ok, true, 'tooltip receipt + bound channel exempts the run');
+    assert.equal(outBound.report.events.indexOf('TIME_SOURCE_UNEXERCISED'), -1);
+    assert.equal(outBound.report.detectors.timeSourceUnexercised, null);
+    assert.ok(outBound.report.events.indexOf('RELATIVE_TIMESTAMP') !== -1, 'the advisory census still discloses');
   });
 
   it('a probe.timestamp receipt marker in an event preview also counts as evidence', async () => {

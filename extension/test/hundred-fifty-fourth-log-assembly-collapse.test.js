@@ -201,7 +201,12 @@ describe('154th log F2 — nested duplicate entries', () => {
       return { finalResult: { posts: nearOnly }, steps: [], pages: [], pagesTruncated: false };
     };
     const out2 = await makeRunner(orch2)({ service: svc, input: { count: 4 }, outputSchema: SCHEMA });
-    assert.equal(out2.report.ok, true, 'near-dupes are a merge advisory, not a veto');
+    // 164th round: near-dupes (same identity, enrichment divergent) veto
+    // too — the same entity twice is wrong data at any enrichment level
+    // (the user rejected the shipped near-dupes); the message keeps the
+    // MERGE teaching.
+    assert.equal(out2.report.ok, false, 'near-dupes veto since the 164th round');
+    assert.match(out2.report.error.message, /MERGE|keep the enriched/i);
     assert.ok(out2.report.detectors.nestedDuplicates && out2.report.detectors.nestedDuplicates.length >= 1,
       'the advisory census entry is present');
   });

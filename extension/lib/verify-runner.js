@@ -61,6 +61,7 @@
       detectDuplicateEntityPairs: w.detectDuplicateEntityPairs,
       detectDuplicateNestedEntries: w.detectDuplicateNestedEntries,
       detectInventedIdFallbacks: w.detectInventedIdFallbacks,
+      detectShellHovercards: w.detectShellHovercards,
       detectIdenticalFieldValues: w.detectIdenticalFieldValues,
       detectDuplicateEntities: w.detectDuplicateEntities,
       detectOversizedFields: w.detectOversizedFields,
@@ -529,7 +530,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, nestedDuplicates: null, inventedIdFallbacks: null, siblingCountContrast: null, implausibleTimeFields: null, positionLikeIds: null, labelPrefixedCounts: null, mediaHygiene: null, junkShapeRecords: null, unusedCaptures: null, timeSourceUnexercised: null };
+      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, nestedDuplicates: null, shellHovercards: null, inventedIdFallbacks: null, siblingCountContrast: null, implausibleTimeFields: null, positionLikeIds: null, labelPrefixedCounts: null, mediaHygiene: null, junkShapeRecords: null, unusedCaptures: null, timeSourceUnexercised: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -1260,12 +1261,19 @@
             const nestedDups = WU.detectDuplicateNestedEntries(finalData, outputSchema) || [];
             if (nestedDups.length) {
               detectors.nestedDuplicates = nestedDups;
-              const fullDup = nestedDups.find((e) => e.fullyIdentical === true);
-              if (!error && fullDup) {
+              // 164th round: NEAR-duplicates (same identity, enrichment
+              // divergent) veto too — the same entity twice is wrong data
+              // at any enrichment level; the user rejected the shipped
+              // near-dupes. The message keeps the merge teaching.
+              const anyDup = nestedDups[0];
+              if (!error && anyDup) {
                 error = new Error(
-                  'DUPLICATE_NESTED_ENTRIES: ' + fullDup.path + ' (parent record #' + fullDup.parentIndex + ') ships the same entry twice — ordinals ' + fullDup.indices.join(', ') +
-                  ' share one identity (discriminators + id-bearing values, tracking tokens stripped): ' + fullDup.identity +
-                  '. Duplicated nested entries are never legitimate data: deduplicate the assembly by the entry identity (the link without its query plus type/role). Identity-equal entries whose enrichment diverges (e.g. one carries members/followers the other lacks) are reported as MERGE candidates — keep the enriched one.'
+                  'DUPLICATE_NESTED_ENTRIES: ' + anyDup.path + ' (parent record #' + anyDup.parentIndex + ') ships the same entry twice — ordinals ' + anyDup.indices.join(', ') +
+                  ' share one identity (discriminators + id-bearing values, tracking tokens stripped): ' + anyDup.identity +
+                  (anyDup.fullyIdentical
+                    ? '. Deduplicate the assembly by the entry identity (the link without its query plus type/role).'
+                    : '. The entries diverge only in enrichment — MERGE them and keep the enriched one (members/followers live on exactly one side).') +
+                  ' Duplicated nested entries are never legitimate data.'
                 );
               }
             }
@@ -1420,6 +1428,27 @@
           }
         }
         detectors.unusedCaptures = computeUnusedCaptures();
+          // 164th round: SHELL hovercards. The primitive attaches
+          // popoverText to every hovercard entry (2026-09-11 spec 3.B)
+          // and the run captured popovers — an assembly that ships
+          // link+label shells dropped the enrichment on the floor.
+          if (typeof WU.detectShellHovercards === 'function') {
+            const shells164 = WU.detectShellHovercards(finalData, outputSchema) || [];
+            if (shells164.length) {
+              detectors.shellHovercards = shells164;
+              if (!error && detectors.unusedCaptures && detectors.unusedCaptures.totalCaptured > 0 &&
+                  detectors.unusedCaptures.popoverReadFields === 0) {
+                const sh164 = shells164[0];
+                error = new Error(
+                  'HOVERCARDS_SHELL: ' + sh164.path + ' (parent record #' + sh164.parentIndex + ') ships ' + sh164.contentless + ' of ' + sh164.total +
+                  ' entry(ies) with NO content — only a link plus a short label — while this run captured popovers and the primitive attached popoverText to every hovercard entry: the enrichment (name/followers/members — samples: ' +
+                  String((detectors.unusedCaptures.samples || [])[0] || '').slice(0, 80) +
+                  ') was captured and dropped. Map the hovercards from the entry fields (popoverText/labelledbyText/htmlSnippet carry the captured popover) or bind read:\'hoverPopover\' fields, or renegotiate hovercards out of the contract with io.confirm. Shell hovercards with captures present are RED.'
+                );
+              }
+            }
+          }
+
       }
 
       // Twenty-sixth log: verifies 1-4 all returned ok:true (score 133) while
@@ -1647,6 +1676,23 @@
           }
           for (const pe of emptyTimeRequired130) pushAbsRow(pe.field, pe.path, null);
           if (absRows.length) detectors.timeAbsoluteCapturedUnbound = absRows;
+          // 164th round: the report-only tier never changed model behavior
+          // (every session since the 154th ignored it while shipping
+          // relative/partial times). Escalate to a veto with a precise
+          // calibration: the captures hold a full absolute AND the
+          // hover-read channel was never bound (popoverReadFields 0). When
+          // the channel IS bound, per-record residuals stay legal — the
+          // exercised-route disclosed-ship contract.
+          if (absRows.length && !error &&
+              detectors.unusedCaptures && detectors.unusedCaptures.totalCaptured > 0 &&
+              detectors.unusedCaptures.popoverReadFields === 0) {
+            const r164 = absRows[0];
+            error = new Error(
+              'TIME_ABSOLUTE_CAPTURED_UNBOUND: ' + r164.path + ' ships relative/partial values (sample "' + String(r164.sampleValue || '').slice(0, 30) +
+              '") while this run\'s hover captures contain a FULL absolute date and the hover-read channel was never bound (popoverReadFields 0): the data sat in hovercards[].popoverText / rejectedAddedTexts and the assembly shipped the page-visible label instead. ' +
+              "Bind the field via the fieldMap spec {read:'hoverPopover', match:<your regex>} in $extractWithHover — the channel searches the picked popover plus rejected mounts — or renegotiate the time field via io.confirm. A required time field with captured absolutes and no binding is RED."
+            );
+          }
         }
       }
 
