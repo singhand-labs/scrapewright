@@ -3324,6 +3324,12 @@ async function startResearchSession(seedOverride) {
   document.getElementById('executionLog').innerHTML = '';
   setSessionControls('running');
   sessionAbortRequested = false;
+  // 169th round: a stale manual-test AbortController poisoned every
+  // verify.run in this session with TEST_ABORTED — the controller is
+  // created in testScript and aborted by goToPhase on navigation; its
+  // signal stays aborted forever. Reset it so the session verify
+  // runner starts clean.
+  wizardState.testAbortController = null;
 
   wizardRail = makeWizardRail();
   wizardRunner = null; // rebuilt so ensureLock binds to the new rail
