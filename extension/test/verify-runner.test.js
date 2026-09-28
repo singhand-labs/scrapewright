@@ -943,7 +943,7 @@ describe('verify-runner partialEmptyFields detector (sixteenth log: green verify
     const posts = [
       { content: 'c1', time: '2h', location: '', likeCount: '1', mediaUrls: [], hoverCards: [] },
       { content: 'c2', time: '5h', location: '', likeCount: '2', mediaUrls: ['https://cdn.example.com/x.jpg'], hoverCards: [] },
-      { content: 'c3', time: '', location: '', likeCount: '3', mediaUrls: [], hoverCards: [{ html: '<div>card</div>' }] }
+      { content: 'c3', time: '', location: '', likeCount: '3', mediaUrls: [], hoverCards: [{ html: '<div>card with substantial content for the test fixture to pass validation</div>', bio: 'Verified content creator with active engagement from many followers' }] }
     ];
     const orch = async () => ({ finalResult: { posts }, steps: [], pages: [] });
     const { runner } = makeRunner(orch);
@@ -995,8 +995,8 @@ describe('verify-runner partialEmptyFields detector (sixteenth log: green verify
 
   it('fully populated output keeps the detector null and the tag absent', async () => {
     const posts = [
-      { content: 'c1', time: '2h', location: 'Berlin', likeCount: '1', mediaUrls: ['https://cdn.example.com/a.jpg'], hoverCards: [{ html: 'x' }] },
-      { content: 'c2', time: '5h', location: 'Oslo', likeCount: '2', mediaUrls: ['https://cdn.example.com/b.jpg'], hoverCards: [{ html: 'y' }] }
+      { content: 'c1', time: '2h', location: 'Berlin', likeCount: '1', mediaUrls: ['https://cdn.example.com/a.jpg'], hoverCards: [{ html: 'x', bio: 'Active content creator with many published works and engagement' }] },
+      { content: 'c2', time: '5h', location: 'Oslo', likeCount: '2', mediaUrls: ['https://cdn.example.com/b.jpg'], hoverCards: [{ html: 'y', bio: 'Verified artist sharing creative works with an engaged audience' }] }
     ];
     const orch = async () => ({ finalResult: { posts }, steps: [], pages: [] });
     const { runner } = makeRunner(orch);

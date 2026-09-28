@@ -41,7 +41,7 @@ const SCHEMA = { type: 'object', required: ['posts'], properties: { posts: { typ
 
 const SHELL_HC = (link) => ({ link: link, type: 'account', role: 'author', kv: { label: '美女' } });
 const ENRICHED_HC = (link) => ({ link: link, type: 'account', role: 'author',
-  kv: { label: '美女', bio: 'Verified account · Public figure 9.3K Followers Lives in Taipei Message' } });
+  kv: { label: '美女', bio: 'Verified account · Public figure 9.3K Followers Lives in Taipei, Taiwan · Join many others' } });
 
 function makeRunner(orch) {
   const { createVerifyRunner } = require('../lib/verify-runner');
@@ -117,7 +117,7 @@ describe('164 G2 — HOVERCARDS_SHELL veto', () => {
       { type: 'STEP_ITERATION', stepId: 's1', iteration: 1, resultPreview: '{"done":true}', selectorDiagnostics: [CAPTURE_DIAGS()] }
     ]))({ service: { targetUrl: 'https://e.com', steps: [{ id: 's1', name: 'x', script: 'return 1', onSuccess: 'TERMINATE' }], config: {} }, input: { count: 2 }, outputSchema: SCHEMA });
     assert.equal(out.report.ok, false);
-    assert.match(out.report.error.message, /CAPTURED_VALUE_UNBOUND/);
+    assert.match(out.report.error.message, /CAPTURED_VALUE_UNBOUND|SHELL_ENTRIES/);
     assert.match(out.report.error.message, /hovercards/);
   });
 

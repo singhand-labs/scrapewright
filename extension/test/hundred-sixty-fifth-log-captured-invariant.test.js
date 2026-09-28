@@ -141,8 +141,8 @@ describe('165 C — one gate CAPTURED_VALUE_UNBOUND (all fields, all channels)',
         { content: 'c1', hovercards: [{ popoverText: '美女 Page · Public figure 9.3K Followers · Lives in Taipei, Taiwan · Message Verified account' }] }
       ] } }]
     );
-    assert.equal(out.report.ok, false, 'shell hovercards hit the same universal gate');
-    assert.match(out.report.error.message, /CAPTURED_VALUE_UNBOUND/);
+    assert.equal(out.report.ok, false, 'shell hovercards hit the universal gate');
+    assert.match(out.report.error.message, /CAPTURED_VALUE_UNBOUND|SHELL_ENTRIES/);
     assert.match(out.report.error.message, /hovercards/);
   });
 
@@ -209,5 +209,44 @@ describe('166 — count-lane lexical anchoring (production false positives)', ()
     assert.equal(WU.countPoolTextPasses('comments', '12 comments · 3 replies'), true);
     assert.equal(WU.countPoolTextPasses('shares', '1.3K'), true, 'a bare short count token needs no label');
     assert.equal(WU.countPoolTextPasses('likes', '美女 Page · Public figure 9.3K Followers'), false, 'followers count is not likes');
+  });
+});
+
+describe('168 — shells are a contract violation (pool-independent)', () => {
+  const VR168 = require('../lib/verify-runner');
+  function mk168(orch) {
+    return VR168.createVerifyRunner({
+      ensureLock: async () => {}, releaseLock: async () => {},
+      createTab: async () => ({ id: 1 }), removeTab: async () => {},
+      waitForTabLoad: async () => {}, sendMessage: async () => ({ pong: true }),
+      executeScript: async () => ({ result: 'ok', selectorDiagnostics: [] }),
+      captureSnapshot: async () => ({ html: '<html></html>' }),
+      evaluateCondition: async () => true, orchestrate: orch
+    });
+  }
+  it('shells with an EMPTY pool (no captures) still go RED — declared contentful entries shipped contentless', async () => {
+    const SCHEMA168 = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object',
+      required: ['postId', 'postTime', 'content'], properties: {
+        postId: { type: 'string' }, postTime: { type: 'string' }, content: { type: 'string' },
+        hovercards: { type: 'array', items: { type: 'object', properties: { link: { type: 'string' }, kv: { type: 'object' } } } }
+      } } } } };
+    const orch = async (svc, input, d, opts) => {
+      await d.createTab(svc.targetUrl);
+      opts.onEvent({ type: 'EXECUTION_START' });
+      return { finalResult: { posts: [
+        { postId: '943842055397354', postTime: 'September 27, 2026 at 10:06 AM', content: 'c1',
+          hovercards: [{ link: '/photo/?fbid=111', type: 'account', role: 'author', kv: { label: '' } }] }
+      ] }, steps: [], pages: [], pagesTruncated: false };
+    };
+    const out = await mk168(orch)({ service: { targetUrl: 'https://e.com', steps: [{ id: 's1', name: 'x', script: 'return 1', onSuccess: 'TERMINATE' }], config: {} }, input: { count: 1 }, outputSchema: SCHEMA168 });
+    assert.equal(out.report.ok, false, 'the model stopped capturing popovers to empty the pool — shells are still RED');
+    assert.match(out.report.error.message, /SHELL_ENTRIES/);
+    assert.match(out.report.error.message, /renegotiate hovercards out|ship empty arrays/i);
+  });
+  it('bare punctuation (".") in a count field is label-junk (the shareCount incident)', () => {
+    const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'lib', 'verify-runner.js'), 'utf8');
+    const i = src.indexOf('function isControlLabel');
+    const block = src.slice(i, i + 400);
+    assert.match(block, /\[\.·/, 'bare punctuation joins the label shape');
   });
 });

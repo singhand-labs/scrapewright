@@ -36,7 +36,8 @@ const makeCards = (n, over) => Array.from({ length: n }, (_, i) => Object.assign
   type: '',
   role: 'author',
   link: 'https://example.test/u' + i,
-  htmlSnippet: '<div>card ' + i + '</div>'
+  htmlSnippet: '<div>card ' + i + '</div>',
+  bio: 'Verified content creator with many published works and active engagement from followers'
 }, over || {}));
 
 const makePosts = (n, cardOver) => Array.from({ length: n }, (_, i) => ({

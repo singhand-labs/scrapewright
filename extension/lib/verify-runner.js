@@ -128,6 +128,10 @@
     const t = v.trim();
     if (!t || t.length > 40) return false;
     if (/\d/.test(t)) return false;
+    // 168th round: bare punctuation (".", "·", "-") in a count field is
+    // the same class — a control artifact (separator glyph from the
+    // counts row) posing as the value, carrying no data.
+    if (/^[.·\-—:;|/\\]+$/.test(t)) return true;
     return /^[\p{L}][\p{L}\s·|,，、]*$/u.test(t);
   }
 
@@ -1503,7 +1507,26 @@
         try {
           if (typeof WU.detectShellHovercards === 'function') {
             const shells165 = WU.detectShellHovercards(finalData, outputSchema) || [];
-            if (shells165.length) detectors.shellHovercards = shells165;
+            if (shells165.length) {
+              detectors.shellHovercards = shells165;
+              // 168th round: shells are a CONTRACT VIOLATION independent of
+              // pool state. The 165th consolidation made this advisory-only
+              // (pool-gated) — but the model then STOPPED capturing popovers
+              // entirely, leaving the pool empty and shipping 10/10 shells
+              // green. A declared contentfulEntries field with contentless
+              // entries is wrong data at any capture level: if the page has
+              // no popovers, renegotiate hovercards out of the contract or
+              // ship empty arrays, never shells.
+              if (!error) {
+                const sh168 = shells165[0];
+                error = new Error(
+                  'SHELL_ENTRIES: ' + sh168.path + ' (parent record #' + sh168.parentIndex + ') ships ' + sh168.contentless + ' of ' + sh168.total +
+                  ' entry(ies) with NO content — link/type/role structure with empty labels is a shell, not data. ' +
+                  'If the page has no popovers for these anchors, renegotiate hovercards out of the contract via io.confirm or ship empty arrays — never shells. ' +
+                  'If popovers DO exist, bind the read channel (fieldMap read:\'hoverPopover\' or map from hovercards[].popoverText in the assembly). Declared contentful entries shipped contentless are RED.'
+                );
+              }
+            }
           }
           if (typeof WU.inferFieldSemantics === 'function' && typeof WU.semanticPredicatePasses === 'function') {
             const semRows165 = WU.inferFieldSemantics(outputSchema) || [];

@@ -56,10 +56,10 @@ const SCHEMA = { type: 'object', required: ['posts'], properties: { posts: { typ
 
 const mk = (i, pid) => ({ postId: pid, content: 'content of post ' + i, likeCount: String(i),
   hovercards: [
-    { link: '/groups/366863238003058/?__cft__[0]=TOKEN_A', htmlSnippet: '', type: 'group', role: 'group', kv: { groupId: '366863238003058' } },
-    { link: '/groups/366863238003058/user/61593749967739/?__cft__[0]=TOKEN_B', htmlSnippet: '', type: 'account', role: 'author', kv: { userId: '61593749967739' } },
-    { link: '/groups/366863238003058/?__cft__[0]=TOKEN_C', htmlSnippet: '', type: 'group', role: 'group', kv: { groupId: '366863238003058', members: '343.3K members' } },
-    { link: '/groups/366863238003058/user/61593749967739/?__cft__[0]=TOKEN_D', htmlSnippet: '', type: 'account', role: 'author', kv: { userId: '61593749967739' } }
+    { link: '/groups/366863238003058/?__cft__[0]=TOKEN_A', htmlSnippet: '', type: 'group', role: 'group', kv: { groupId: '366863238003058', bio: 'Public group for sharing beautiful photography with 343.3K members worldwide' } },
+    { link: '/groups/366863238003058/user/61593749967739/?__cft__[0]=TOKEN_B', htmlSnippet: '', type: 'account', role: 'author', kv: { userId: '61593749967739', bio: 'Verified account · Photographer with many beautiful travel photos and stories' } },
+    { link: '/groups/366863238003058/?__cft__[0]=TOKEN_C', htmlSnippet: '', type: 'group', role: 'group', kv: { groupId: '366863238003058', members: '343.3K members', bio: 'Public group for sharing beautiful photography worldwide and connecting' } },
+    { link: '/groups/366863238003058/user/61593749967739/?__cft__[0]=TOKEN_D', htmlSnippet: '', type: 'account', role: 'author', kv: { userId: '61593749967739', bio: 'Verified account · Photographer with many beautiful travel photos and stories' } }
   ] });
 
 const fourPosts = () => [mk(1, '122111955693458332'), mk(2, '1447646503897604'), mk(3, '1092322230156268'), mk(4, '29090421683897250')];
