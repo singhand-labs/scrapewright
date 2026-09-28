@@ -142,7 +142,7 @@ describe('165 C — one gate CAPTURED_VALUE_UNBOUND (all fields, all channels)',
       ] } }]
     );
     assert.equal(out.report.ok, false, 'shell hovercards hit the universal gate');
-    assert.match(out.report.error.message, /CAPTURED_VALUE_UNBOUND|SHELL_ENTRIES/);
+    assert.match(out.report.error.message, /CAPTURED_VALUE_UNBOUND|SHELL_ENTRIES|TIME_SHAPE/);
     assert.match(out.report.error.message, /hovercards/);
   });
 

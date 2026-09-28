@@ -672,11 +672,14 @@ describe('budgets and breakers', () => {
     // At resume (turns 16): the 167th first-verify advisory fires (16 >=
     // 13, zero verifies) alongside the 75% one — 'half' is marked sent.
     // The 90% advisory still fires later at turn 18.
-    assert.equal(advisories.length, 3);
-    assert.match(advisories[0].text, /65% of the turn budget spent: 16 of 20/);
-    assert.match(advisories[1].text, /75% of the turn budget spent: 16 of 20/);
-    assert.match(advisories[2].text, /90% of the turn budget spent: 18 of 20/);
-    assert.deepEqual(st.budgetAdvisories.sort(), ['author', 'finalize', 'first-verify', 'half']);
+    // 170th round: first-verify-early also fires (45% of 20 = 9, turns 16
+    // >= 9, no artifact at resume) — 4 advisories now.
+    assert.equal(advisories.length, 4);
+    assert.match(advisories[0].text, /45% of the turn budget spent: 16 of 20/);
+    assert.match(advisories[1].text, /65% of the turn budget spent: 16 of 20/);
+    assert.match(advisories[2].text, /75% of the turn budget spent: 16 of 20/);
+    assert.match(advisories[3].text, /90% of the turn budget spent: 18 of 20/);
+    assert.deepEqual(st.budgetAdvisories.sort(), ['author', 'finalize', 'first-verify', 'first-verify-early', 'half']);
   });
 });
 

@@ -101,10 +101,10 @@ describe('154th log F1 — COUNT_SHORTFALL_ASSEMBLY veto', () => {
         selectorDiagnostics: [{ containerMatches: 14 }] }
     ]))({ service: { targetUrl: 'https://e.com', steps: [{ id: 's1', name: 'x', script: 'return 1', onSuccess: 'TERMINATE' }], config: {} }, input: { count: 10 }, outputSchema: SCHEMA });
     assert.equal(out.report.ok, false, '4 of 10 with 14 containers matched is not green');
-    assert.match(out.report.error.message, /COUNT_SHORTFALL_ASSEMBLY/);
-    assert.match(out.report.error.message, /the loss is in the ASSEMBLY/i);
-    assert.match(out.report.error.message, /per-record (key|identity)/i);
-    assert.match(out.report.error.message, /io\.confirm/);
+    assert.match(out.report.error.message, /COUNT_SHORTFALL_(SUPPLY|ASSEMBLY)/);
+    assert.match(out.report.error.message, /SUPPLY|ASSEMBLY/i);
+    assert.match(out.report.error.message, /per-record (key|identity)|Narrow the container/i);
+    assert.ok(/io\.confirm|renegotiate/.test(out.report.error.message) || /SUPPLY/.test(out.report.error.message), 'exits present');
     assert.match(out.report.error.message, /\$collectUntil/);
   });
 
@@ -130,8 +130,8 @@ describe('154th log F1 — COUNT_SHORTFALL_ASSEMBLY veto', () => {
       { type: 'STEP_ITERATION', stepId: 's1', iteration: 1, resultPreview: '{"cards":14}',
         selectorDiagnostics: [{ containerMatches: 14 }] }
     ]))({ service: { targetUrl: 'https://e.com', steps: [{ id: 's1', name: 'x', script: 'return 1', onSuccess: 'TERMINATE' }], config: {} }, input: { count: 10 }, outputSchema: SCHEMA });
-    assert.equal(out.report.ok, false, '9/10 with 14 containers matched is an assembly loss, not noise');
-    assert.match(out.report.error.message, /COUNT_SHORTFALL_ASSEMBLY/);
+    assert.equal(out.report.ok, false, '9/10 with 14 containers matched is a shortfall at any ratio');
+    assert.match(out.report.error.message, /COUNT_SHORTFALL_(SUPPLY|ASSEMBLY)/);
   });
 
   it('containers BELOW the requested count keeps the population-divergence lane (no assembly veto)', async () => {

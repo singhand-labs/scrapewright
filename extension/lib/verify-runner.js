@@ -1110,11 +1110,43 @@
               typeof detectors.countShortfall.extracted === 'number' &&
               detectors.countShortfall.extracted < detectors.countShortfall.requested) {
             const csA = detectors.countShortfall;
+            // 170th round: identity census — distinct id values in the
+            // output distinguish a SUPPLY problem (fewer distinct records
+            // than requested: scroll-certify or narrow the selector) from
+            // an ASSEMBLY problem (enough distinct ids but the merge
+            // dropped some: fix the key). The 169th incident burned its
+            // last 3 verify cycles on dedup-key churn when the true
+            // supply was ~4 (12 matched containers were nested/remounted
+            // nodes + recommendation cards without permalinks).
+            let distinctIds170 = null;
+            let idField170 = null;
+            try {
+              const semRows170 = (typeof WU.inferFieldSemantics === 'function') ? (WU.inferFieldSemantics(outputSchema) || []) : [];
+              const idRow = semRows170.find((r) => r.semantic === 'identifier' && String(r.path || '').split('.')[0] === csA.field);
+              if (idRow) {
+                idField170 = idRow.field;
+                const arr170 = finalData ? finalData[csA.field] : null;
+                if (Array.isArray(arr170)) {
+                  const vals = arr170.map((r) => r ? String(r[idRow.field] || '') : '').filter(Boolean);
+                  distinctIds170 = new Set(vals).size;
+                }
+              }
+            } catch (eId) { /* census best-effort */ }
+            const supplyBranch170 = (distinctIds170 !== null && distinctIds170 < csA.requested);
+            const censusLine170 = (distinctIds170 !== null)
+              ? ' identity census: ' + csA.maxContainers + ' containers matched, ' + distinctIds170 + ' distinct ' + (idField170 || 'id') + ' value(s) in the output.'
+              : '';
             error = new Error(
-              'COUNT_SHORTFALL_ASSEMBLY: ' + csA.field + ' delivered ' + csA.extracted + ' of ' + csA.requested +
-              ' requested while this run matched ' + csA.maxContainers + ' containers (>= the request) — the collection satisfied the ask and the loss is in the ASSEMBLY: compare the per-step counts in steps[].resultPreview (collect saw ' + csA.maxContainers + ', the final array has ' + csA.extracted + ') and fix the merge — key records by a strong per-record identity (the permalink/token id), never by a positional or shared fallback that collapses distinct records. ' +
-              'If the surplus containers are NOT records of this contract (ads, group-header cards), prove it (probe the container census on the verify tab), then either narrow the container selector or disclose the non-record ratio and renegotiate the count via io.confirm — the count input remains the user ask. ' +
-              'Exhaustion is a page fact only with $collectUntil certification; a shortfall against a proven supply without a receipt is RED at ANY ratio (the 162nd incident shipped 6 of a confirmed 10 green at 0.6), not green-disclosed.'
+              'COUNT_SHORTFALL_' + (supplyBranch170 ? 'SUPPLY' : 'ASSEMBLY') + ': ' + csA.field + ' delivered ' + csA.extracted + ' of ' + csA.requested +
+              ' requested while this run matched ' + csA.maxContainers + ' containers.' + censusLine170 + ' ' +
+              (supplyBranch170
+                ? 'The SUPPLY is ' + distinctIds170 + ' distinct records, not the ' + csA.maxContainers + ' matched containers — the selector matches nested/remounted nodes or non-record cards (recommendations, headers). Narrow the container selector to the record population, or scroll-certify with $collectUntil to prove the page offers more. A merge fix cannot create records the page does not offer. '
+                : 'The collection satisfied the ask and the loss is in the ASSEMBLY: compare the per-step counts in steps[].resultPreview (collect saw ' + csA.maxContainers + ', the final array has ' + csA.extracted + ') and fix the merge — key records by a strong per-record identity (the permalink/token id), never by a positional or shared fallback that collapses distinct records. ') +
+              (supplyBranch170
+                ? ''
+                : 'If the surplus containers are NOT records of this contract, prove it (probe the container census on the verify tab), then either narrow the container selector or renegotiate the count via io.confirm. ') +
+              'Cold-tab divergence check: run verify.run {preflight:true} to dry-run on the CURRENT research tab; if it passes but the fresh-tab verify fails, the divergence is cold-tab supply. ' +
+              'Exhaustion is a page fact only with $collectUntil certification; a shortfall without a receipt is RED at ANY ratio, not green-disclosed.'
             );
           }
         }
@@ -1293,6 +1325,55 @@
                 );
               }
             }
+          }
+          // 170th round: TIME_SHAPE_VIOLATION — a REQUIRED absoluteTime
+          // field carrying a predicate-failing value ("Smileys & People",
+          // "0:02 / 0:10") passed every existing gate (relativeTimestamps
+          // only catches relative ages; the universal captured-value gate
+          // needs pool evidence). A required time field with a
+          // non-date-shaped value is a contract-shape violation
+          // independent of pool state.
+          if (typeof WU.inferFieldSemantics === 'function' && typeof WU.semanticPredicatePasses === 'function') {
+            try {
+              const semRowsT170 = WU.inferFieldSemantics(outputSchema) || [];
+              for (const rowT of semRowsT170) {
+                if (rowT.semantic !== 'absoluteTime') continue;
+                const itemReqT = (typeof WU.schemaItemRequiredForPath === 'function')
+                  ? (WU.schemaItemRequiredForPath(outputSchema, String(rowT.path || '')) || []) : [];
+                if (itemReqT.indexOf(rowT.field) === -1) continue;
+                const arrT = finalData ? finalData[String(rowT.path || '').split('.')[0]] : null;
+                if (!Array.isArray(arrT)) continue;
+                const badT = [];
+                for (let iT = 0; iT < arrT.length; iT++) {
+                  const vT = arrT[iT] ? arrT[iT][rowT.field] : undefined;
+                  if (vT && !WU.semanticPredicatePasses('absoluteTime', vT)) badT.push({ index: iT + 1, value: vT });
+                }
+                // 170th fix: partial absolutes ("June 3" — no year) are the
+                // disclosed-ship tier (76th ladder), NOT shape violations.
+                // Only fire when the value has NO recognizable date
+                // component (no month name, no year, no date pattern).
+                const noDateShapeT = badT.filter((b) => {
+                  const v = String(b.value || '');
+                  const hasDateComp = /(January|February|March|April|May|June|July|August|September|October|November|December|\d{4})|\b\d{1,2}\/\d{1,2}\b/i.test(v);
+                  // Relative ages ("2 days ago", "yesterday", "5h") are the
+                  // RELATIVE_TIMESTAMP tier (76th ladder) — NOT shape
+                  // violations. Exclude them so TIME_SHAPE only catches
+                  // clearly-not-a-date values (emoji labels, durations).
+                  const REL_AGE = /\b(?:seconds?|minutes?|hours?|hrs?|days?|weeks?|months?|years?)\s+ago\b|\byesterday\b|\btoday\b|just now|\d+\s*(?:min|sec|hr|h)\b/i;
+                  return !hasDateComp && !REL_AGE.test(v);
+                });
+                if (noDateShapeT.length && !error) {
+                  const bT = noDateShapeT[0];
+                  error = new Error(
+                    'TIME_SHAPE_VIOLATION: ' + rowT.path + ' record #' + bT.index + ' carries "' + String(bT.value).slice(0, 40) +
+                    '" — a REQUIRED absolute-time field must carry a full date (Month D, YYYY at H:MM); emoji-panel labels, video durations, and page-chrome text are anchor-selector misses. ' +
+                    'Tighten the anchor to the timestamp element itself and filter candidates by date shape (the match: regex in the fieldMap or a candidates filter in the assembly). ' +
+                    'Renegotiate via io.confirm only if the page truly has no absolute timestamp for these cards.'
+                  );
+                  break;
+                }
+              }
+            } catch (eT170) { /* shape gate is best-effort */ }
           }
           // 161st round: FABRICATED fallback ids. The incident shipped
           // postId "card-9-<content slice>" green with zero disclosure —

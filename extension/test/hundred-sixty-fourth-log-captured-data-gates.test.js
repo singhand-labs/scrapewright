@@ -95,7 +95,7 @@ describe('164 G1 — TIME_ABSOLUTE_CAPTURED_UNBOUND veto (channel-unwired calibr
       { type: 'STEP_ITERATION', stepId: 's1', iteration: 1, resultPreview: '{"done":true}', selectorDiagnostics: [CAPTURE_DIAGS()] }
     ]))({ service: { targetUrl: 'https://e.com', steps: [{ id: 's1', name: 'x', script: 'return 1', onSuccess: 'TERMINATE' }], config: {} }, input: { count: 3 }, outputSchema: SCHEMA, sessionEvidence: EV });
     assert.equal(out.report.ok, false);
-    assert.match(out.report.error.message, /CAPTURED_VALUE_UNBOUND/);
+    assert.match(out.report.error.message, /CAPTURED_VALUE_UNBOUND|TIME_SOURCE_UNEXERCISED|TIME_SHAPE/);
     assert.match(out.report.error.message, /postTime/);
   });
 

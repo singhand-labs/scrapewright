@@ -919,6 +919,22 @@
       emit('budget_advisory', { key: due.key, turns: state.spend.turns, maxTurns: budgets.maxTurns });
     }
 
+    // 170th round: the EARLY-verify advisory — 45% of the turn budget
+    // with NO artifact and NO verify yet. The 169th incident spent 62 of
+    // 80 turns (78%) on research before authoring; the first verify at
+    // turn 71 left no runway for fix cycles. The 75% author advisory is
+    // too late when research runs deep; this fires at the midpoint.
+    try {
+      const hasArtifact170 = state.artifactVersions.length > 0;
+      const hasVerified170 = state.transcript.some((e) => e && e.kind === 'tool' && e.name === 'verify.run');
+      if (!hasArtifact170 && !hasVerified170 && state.spend.turns >= Math.floor(budgets.maxTurns * 0.45) &&
+          state.budgetAdvisories.indexOf('first-verify-early') === -1) {
+        state.budgetAdvisories.push('first-verify-early');
+        state.transcript.push({ kind: 'system', text: 'BUDGET ADVISORY (45% of the turn budget spent: ' + state.spend.turns + ' of ' + budgets.maxTurns + ' — no artifact, no verify yet): submit a best-grounded draft via service.update NOW and run verify.run. The 169th incident spent 78% of the budget on research before the first verify — the red findings at turn 71+ had no runway to fix. Research perfection is the failure mode; a verified red beats an unverified perfect plan.' });
+        emit('budget_advisory', { key: 'first-verify-early', turns: state.spend.turns, maxTurns: budgets.maxTurns, noArtifact: true });
+      }
+    } catch (eFVE) { /* advisory is best-effort */ }
+
     // 167th round: the verify-LATENCY advisory. The incident session spent
     // 36 snippets and reached its FIRST verify at turn ~75 of 80 — the red
     // (one anchor-blind error) was unfixable with the turns left. The 75%
