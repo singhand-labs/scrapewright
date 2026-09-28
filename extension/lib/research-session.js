@@ -919,6 +919,23 @@
       emit('budget_advisory', { key: due.key, turns: state.spend.turns, maxTurns: budgets.maxTurns });
     }
 
+    // 167th round: the verify-LATENCY advisory. The incident session spent
+    // 36 snippets and reached its FIRST verify at turn ~75 of 80 — the red
+    // (one anchor-blind error) was unfixable with the turns left. The 75%
+    // author advisory is not enough when an artifact already exists: the
+    // model keeps perfecting via probes. At 65% of the turn budget with
+    // ZERO verify.run calls, order the switch — red findings are cheaper
+    // to fix now than never.
+    try {
+      const hasVerified = state.transcript.some((e) => e && e.kind === 'tool' && e.name === 'verify.run');
+      if (!hasVerified && state.spend.turns >= Math.floor(budgets.maxTurns * 0.65) &&
+          state.budgetAdvisories.indexOf('first-verify') === -1) {
+        state.budgetAdvisories.push('first-verify');
+        state.transcript.push({ kind: 'system', text: 'BUDGET ADVISORY (65% of the turn budget spent: ' + state.spend.turns + ' of ' + budgets.maxTurns + ' — ZERO verify.run calls): run verify.run on the current artifact THIS TURN. A first red at turn ~75 of 80 cannot be fixed before the cap — the incident session died exactly there with one anchor-blind error and no runway. Red findings early are cheap; a perfect research phase that never verifies is a failed session. If no artifact exists yet, service.update a best-grounded draft first, then verify.' });
+        emit('budget_advisory', { key: 'first-verify', turns: state.spend.turns, maxTurns: budgets.maxTurns, zeroVerifies: true });
+      }
+    } catch (eFV) { /* advisory is best-effort */ }
+
     function assembleMessages() {
       const sys = Protocol.buildSystemPrompt({
         base: cfg.systemPrompt || '',

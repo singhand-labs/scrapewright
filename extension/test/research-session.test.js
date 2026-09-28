@@ -669,13 +669,14 @@ describe('budgets and breakers', () => {
     await session.run();
     const st = session.state().session;
     const advisories = st.transcript.filter(e => e.kind === 'system' && /BUDGET ADVISORY/.test(e.text));
-    // At resume (turns 16): only the 75% advisory fires — 'half' is marked
-    // sent and 16 < 18. The 90% advisory still fires later at turn 18 as the
-    // run continues toward maxTurns.
-    assert.equal(advisories.length, 2);
-    assert.match(advisories[0].text, /75% of the turn budget spent: 16 of 20/);
-    assert.match(advisories[1].text, /90% of the turn budget spent: 18 of 20/);
-    assert.deepEqual(st.budgetAdvisories.sort(), ['author', 'finalize', 'half']);
+    // At resume (turns 16): the 167th first-verify advisory fires (16 >=
+    // 13, zero verifies) alongside the 75% one — 'half' is marked sent.
+    // The 90% advisory still fires later at turn 18.
+    assert.equal(advisories.length, 3);
+    assert.match(advisories[0].text, /65% of the turn budget spent: 16 of 20/);
+    assert.match(advisories[1].text, /75% of the turn budget spent: 16 of 20/);
+    assert.match(advisories[2].text, /90% of the turn budget spent: 18 of 20/);
+    assert.deepEqual(st.budgetAdvisories.sort(), ['author', 'finalize', 'first-verify', 'half']);
   });
 });
 

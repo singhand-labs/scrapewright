@@ -658,3 +658,16 @@ describe('128th round: ghost-step reference gate (v16 = single scroll step retur
     // the 129th-round describe above through the real createSessionTools bag.
   });
 });
+
+describe('167th: first-verify latency advisory', () => {
+  const RS167 = fs.readFileSync(path.join(__dirname, '..', 'lib', 'research-session.js'), 'utf8');
+  it('fires at 65% turns with ZERO verify.run calls, once', () => {
+    const i = RS167.indexOf("state.budgetAdvisories.indexOf('first-verify')");
+    assert.ok(i > -1, 'the advisory exists');
+    const block = RS167.slice(i - 600, i + 900);
+    assert.match(block, /0\.65/, 'threshold is 65% of the turn budget');
+    assert.match(block, /verify\.run/, 'keys on actual verify.run calls');
+    assert.match(block, /THIS TURN/i, 'imperative switch order');
+    assert.match(block, /cannot be fixed before the cap|no runway/i, 'names the failure mode from the incident');
+  });
+});
