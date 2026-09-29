@@ -1806,12 +1806,22 @@
           // strings, array counts, tight label.
           const summary = Protocol.compactToolResultForLLM(callLabel, result, toolResultCapFor(turn.tool));
           state.transcript.push({ kind: 'tool', name: turn.tool, ok: !isErrorResult(result), result: result, summary: summary });
-          // 171st round: capture verify detectors for the field-fail ledger
+          // 171st round: capture verify detectors for the field-fail
+          // ledger. The 172nd incident found the wiring dead: the marker
+          // bag is on window (wizard-utils Object.assign), not globalThis.
+          // Use a direct function reference — wizard-utils assigns all
+          // exports to the global scope in the browser, so the bare name
+          // resolves. Fallback to window for environments where the
+          // closure scope does not see the global.
           if (turn.tool === 'verify.run' && result && result.report) {
             try {
-              const WUm171 = (typeof globalThis !== 'undefined' && globalThis.__wizardUtilsModuleMarker__) || null;
-              if (WUm171 && typeof WUm171.extractFailingFieldNames === 'function') {
-                lastVerifyFailingFields171 = WUm171.extractFailingFieldNames(result.report.detectors);
+              const extractFn171 = (typeof extractFailingFieldNames === 'function')
+                ? extractFailingFieldNames
+                : (typeof window !== 'undefined' && typeof window.extractFailingFieldNames === 'function')
+                  ? window.extractFailingFieldNames
+                  : null;
+              if (extractFn171) {
+                lastVerifyFailingFields171 = extractFn171(result.report.detectors);
                 lastVerifyErrorPrefix171 = (result.report.error && result.report.error.message) ? String(result.report.error.message).split(':')[0] : '';
               }
             } catch (eEx171) { /* extractor best-effort */ }
