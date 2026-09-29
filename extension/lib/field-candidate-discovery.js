@@ -75,6 +75,11 @@
   const DEFAULT_MAX_CANDIDATES = 5;
   const DEFAULT_MAX_LEAVES = 50;
 
+  // Sort order for the strength grades. Module-level so OTHER consumers
+  // (probe.census lane sorting) resolve the SAME order through the api bag
+  // instead of re-declaring a private copy that can drift.
+  const STRENGTH_ORDER = { strong: 0, medium: 1, weak: 2 };
+
   function buildLeafSelector(el, doc) {
     // Build a minimal CSS selector for this leaf. Strategy: tag + first useful
     // attribute (id > class > data-*). Falls back to nth-of-type path.
@@ -196,7 +201,6 @@
     if (!doc || !doc.body) return [];
 
     const leaves = collectLeaves(doc.body, doc);
-    const STRENGTH_ORDER = { strong: 0, medium: 1, weak: 2 };
     const scored = [];
     let domOrder = 0;
     for (const leaf of leaves) {
@@ -308,6 +312,10 @@
     findFieldCandidates,
     discoverFieldCandidates,
     formatFieldCandidatesBlock,
+    STRENGTH_ORDER,
+    // Exported so probe.census's aria lane escapes class tokens with the
+    // SAME escaper buildLeafSelector uses (one definition, no drift).
+    CSSescape,
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

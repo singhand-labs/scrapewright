@@ -1366,3 +1366,101 @@ describe('io.confirm research-tab resync note (F2)', () => {
     assert.doesNotMatch(r.note, /research tab is still on/);
   });
 });
+
+describe('probe.census (speed track 2026-09-29)', () => {
+  // The census needs DOMParser + NodeFilter (field-candidate-discovery) —
+  // jsdom provides them; restored afterwards so no other test observes them.
+  function withJsdomGlobals(fn) {
+    const { JSDOM } = require('jsdom');
+    const __dom = new JSDOM('<!DOCTYPE html><html><body></body></html>');
+    const had = { DOMParser: global.DOMParser, NodeFilter: global.NodeFilter, Node: global.Node };
+    global.DOMParser = __dom.window.DOMParser;
+    global.NodeFilter = __dom.window.NodeFilter;
+    global.Node = __dom.window.Node;
+    return Promise.resolve().then(fn).finally(() => {
+      for (const k of Object.keys(had)) {
+        if (had[k] === undefined) delete global[k]; else global[k] = had[k];
+      }
+    });
+  }
+
+  function cardHtml(n) {
+    return '<div class="card">' +
+      '<a class="ttl" href="/post/' + n + '?story=' + (1000 + n) + '">Title ' + n + '</a>' +
+      '<span class="ts">' + n + ' days ago</span>' +
+      '</div>';
+  }
+
+  function censusDeps(runVerifyCapture) {
+    const base = makeDeps();
+    return makeDeps({
+      rail: Object.assign(base.deps.rail, {
+        executeDsl: async (snippet) => {
+          if (/return \$extractList\(/.test(snippet)) {
+            return [cardHtml(1), cardHtml(2), cardHtml(3)].map((h) => ({ __c_html: h }));
+          }
+          return 1;
+        }
+      }),
+      runVerify: async (args) => {
+        if (runVerifyCapture) runVerifyCapture(args);
+        return { events: [], report: { ok: true, detectors: {} }, raw: {} };
+      },
+      getDraftService: () => ({ targetUrl: 'https://example.com', steps: [{ id: 's1', name: 'one', script: 'return 1', onSuccess: 'TERMINATE' }], config: {} })
+    });
+  }
+
+  it('#22: the registered name dispatches through the tool bag and returns the census envelope', () => withJsdomGlobals(async () => {
+    const { deps } = censusDeps();
+    const t = createSessionTools(deps);
+    assert.equal(typeof t.tools['probe.census'], 'function', 'probe.census wired into the tool bag');
+    const r = await t.tools['probe.census']({ containerSel: 'div.card' });
+    assert.equal(r.total, 3);
+    assert.ok(r.lanes && r.lanes.time && r.lanes.time.length, 'lanes returned through the registration');
+    assert.match(r.note, /coverage k\/3/);
+    assert.ok(t.toolSpecs.some((s) => s.name === 'probe.census'), 'spec entry present');
+  }));
+
+  it('#4: census{hover:true} feeds the tooltipRoute session evidence (TIME_SOURCE_UNEXERCISED gate)', () => withJsdomGlobals(async () => {
+    // Mock probe factory: the census returns the timeHover fold exactly as
+    // the real one does after running the one-card timestamp dance.
+    function censusProbeDeps(censusImpl) {
+      const capture = { verifyArgs: null };
+      const base = makeDeps();
+      const { deps } = makeDeps({
+        rail: base.deps.rail,
+        runVerify: async (args) => { capture.verifyArgs = args; return { events: [], report: { ok: true, detectors: {} }, raw: {} }; },
+        getDraftService: () => ({ targetUrl: 'https://example.com', steps: [{ id: 's1', name: 'one', script: 'return 1', onSuccess: 'TERMINATE' }], config: {} }),
+        probeFactory: () => ({
+          census: censusImpl,
+          getLastSelectorDiagnostics: () => null,
+          getLastFetchedHtml: () => null
+        })
+      });
+      return { deps, capture };
+    }
+    const okHover = { total: 3, sampled: [0], lanes: {}, timeHover: { anchorsProbed: 2, absolute: 'September 11, 2026' } };
+    const t1 = censusProbeDeps(async () => okHover);
+    const tools1 = createSessionTools(t1.deps);
+    await tools1.tools['probe.census']({ containerSel: 'div.card', hover: true }, { session: {} });
+    await tools1.tools['verify.run']({}, { session: {} });
+    const ev1 = t1.capture.verifyArgs && t1.capture.verifyArgs.sessionEvidence;
+    assert.ok(ev1, 'sessionEvidence rides the verify call');
+    assert.equal(ev1.probeTimestampCalls, 1, 'the census-run timestamp dance counts as an exercise');
+    assert.equal(ev1.lastFullAbsolute, true, 'a year-carrying timeHover absolute satisfies the full-absolute lane');
+    // No hover requested → no exercise credit.
+    const t2 = censusProbeDeps(async () => ({ total: 3, sampled: [0], lanes: {} }));
+    const tools2 = createSessionTools(t2.deps);
+    await tools2.tools['probe.census']({ containerSel: 'div.card' }, { session: {} });
+    await tools2.tools['verify.run']({}, { session: {} });
+    const ev2 = t2.capture.verifyArgs && t2.capture.verifyArgs.sessionEvidence;
+    assert.equal(ev2.probeTimestampCalls, 0, 'a census without hover never bumps the tooltip-route counter');
+    // hover:true but the timeHover phase FAILED → no credit either.
+    const t3 = censusProbeDeps(async () => ({ total: 3, sampled: [0], lanes: {}, timeHover: { error: 'HOVER_SKIPPED_ENHANCED_MODE: …' } }));
+    const tools3 = createSessionTools(t3.deps);
+    await tools3.tools['probe.census']({ containerSel: 'div.card', hover: true }, { session: {} });
+    await tools3.tools['verify.run']({}, { session: {} });
+    const ev3 = t3.capture.verifyArgs && t3.capture.verifyArgs.sessionEvidence;
+    assert.equal(ev3.probeTimestampCalls, 0, 'a failed timeHover phase never bumps the counter');
+  }));
+});

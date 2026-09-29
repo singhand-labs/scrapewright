@@ -36,6 +36,10 @@ function makeCensusTools(records, opts) {
     executeDsl: async (snippet) => {
       calls.push(snippet);
       if (/\$extractWithHover\(/.test(snippet)) {
+        // The 62nd-log deterministic capability-gate failure: Enhanced
+        // Mode off means the trusted hover NEVER dispatches — an error
+        // object, not an empty harvest.
+        if (o.hoverError) return { error: 'HOVER_SKIPPED_ENHANCED_MODE: trusted hover dispatch is unavailable (Enhanced Mode off) — use the still-working labelledby/attr/text routes' };
         return [{
           __t_label: '',
           __t_aria: '',
@@ -43,7 +47,9 @@ function makeCensusTools(records, opts) {
           hovercards: []
         }];
       }
-      return records.map((h) => ({ __c_html: h }));
+      // Pre-wrapped record objects pass through (empty/unparseable-sample
+      // tests need control over the __c_html payload itself).
+      return records.map((h) => (h && typeof h === 'object' && !Array.isArray(h)) ? h : { __c_html: h });
     },
     observationLog
   });
@@ -127,6 +133,173 @@ describe('probe.census', () => {
   });
 });
 
+describe('probe.census failure quarantine + sampling edges', () => {
+  it('a hover-phase error (HOVER_SKIPPED_ENHANCED_MODE) still returns lanes with timeHover.error disclosed, no throw', async () => {
+    const { tools } = makeCensusTools([cardHtml(1), cardHtml(2), cardHtml(3)], { hoverError: true });
+    const r = await tools.census({ containerSel: 'div.card', hover: true });
+    assert.ok(r.lanes && r.lanes.time && r.lanes.time.length, 'lanes computed before the hover phase survive');
+    assert.ok(r.timeHover && typeof r.timeHover.error === 'string', 'timeHover.error embedded');
+    assert.match(r.timeHover.error, /HOVER_SKIPPED_ENHANCED_MODE/);
+    assert.match(r.note, /timeHover failed \(hover phase ONLY/, 'note quarantines the failure to the hover phase');
+    assert.match(r.note, /retry the timestamp separately via probe\.timestamp/, 'note routes the retry');
+  });
+
+  it('pickCensusIndices edges through census(): single record, pair, oversized samples', async () => {
+    const one = makeCensusTools([cardHtml(1)]);
+    const r1 = await one.tools.census({ containerSel: 'div.card' });
+    assert.equal(r1.total, 1);
+    assert.deepEqual(r1.sampled, [0]);
+    assert.match(r1.note, /only 1 sample\(s\) censused — coverage CANNOT certify generalization/, 'small-sample note replaces the k/n teaching');
+
+    const two = makeCensusTools([cardHtml(1), cardHtml(2)]);
+    const r2 = await two.tools.census({ containerSel: 'div.card' });
+    assert.deepEqual(r2.sampled, [0, 1]);
+
+    // samples:5 across 7 records — expected computed by the SAME formula
+    // the code uses: Math.min(total-1, Math.round((i*(total-1))/(n-1))).
+    const seven = [];
+    for (let i = 0; i < 7; i++) seven.push(cardHtml(i + 1));
+    const r7 = await makeCensusTools(seven).tools.census({ containerSel: 'div.card', samples: 5 });
+    const expected = [];
+    for (let i = 0; i < 5; i++) expected.push(Math.min(6, Math.round((i * 6) / 4)));
+    assert.deepEqual(r7.sampled, Array.from(new Set(expected)));
+
+    const three = makeCensusTools([cardHtml(1), cardHtml(2), cardHtml(3)]);
+    const r3 = await three.tools.census({ containerSel: 'div.card', samples: 9 });
+    assert.deepEqual(r3.sampled, [0, 1, 2], 'samples above the population clamps to every record');
+  });
+
+  it('skipped samples drop out of `sampled` too — indices stay aligned with the docs actually parsed (review #3)', async () => {
+    const records = [cardHtml(1), { __c_html: '' }, cardHtml(3)];
+    const { tools } = makeCensusTools(records);
+    const r = await tools.census({ containerSel: 'div.card' });
+    assert.equal(r.total, 3, 'total reflects the population, not the parseable subset');
+    assert.deepEqual(r.sampled, [0, 2], 'sampled names the SURVIVING indices only');
+    assert.equal(r.skippedSamples, 1, 'the skipped sample is disclosed');
+    assert.ok(r.lanes && r.lanes.time && r.lanes.time.length, 'lanes still computed from the parseable samples');
+    // Every lane's coverage denominator must match the sampled count — the
+    // misalignment bug fed lane scans htmls[di] of the WRONG sample.
+    for (const lane of Object.keys(r.lanes)) {
+      for (const e of r.lanes[lane]) {
+        const [k, n] = e.coverage.split('/').map(Number);
+        assert.ok(n === r.sampled.length, 'coverage denominator matches the parsed-sample count');
+        assert.ok(k <= n, 'coverage never exceeds the parsed-sample count');
+      }
+    }
+  });
+
+  it('an HTML-capped sample is disclosed via truncatedSamples + note teaching (review #9)', async () => {
+    const capped = '<div class="card"><a class="ttl" href="/post/9?story=1009">T9</a><span class="ts">9 days ago</span><span>partial ta' +
+      '<!--TRUNCATED: element HTML capped at 50000 of 120000 chars-->';
+    const r = await makeCensusTools([cardHtml(1), capped, cardHtml(3)]).tools.census({ containerSel: 'div.card' });
+    assert.equal(r.truncatedSamples, 1, 'the capped sample is counted');
+    assert.match(r.note, /1 sampled container\(s\) were HTML-capped mid-markup/, 'note names the cut');
+    assert.match(r.note, /prefer structural selectors \(tag\+class\)/, 'note teaches the structural route');
+  });
+
+  it('epoch-digit values (10-13 pure digits) are NOT identity — query:ts stays out of hrefIdentity (review #11)', async () => {
+    const tsCard = (n) => '<div class="card">' +
+      '<a class="ttl" href="/post/' + n + '?ts=' + (1760000000000 + n) + '&story=' + (1000 + n) + '">Title ' + n + '</a>' +
+      '<span class="ts">' + n + ' days ago</span>' +
+      '</div>';
+    const r = await makeCensusTools([tsCard(1), tsCard(2), tsCard(3)]).tools.census({ containerSel: 'div.card' });
+    assert.ok(r.hrefIdentity && r.hrefIdentity.some((e) => e.token === 'query:story'), 'the real identity token still diffed');
+    assert.ok(!r.hrefIdentity.some((e) => e.token === 'query:ts'), 'epoch cache-buster never reported as identity');
+    assert.match(r.note, /confirm the chosen token is constant WITHIN one card/, 'candidate-not-binding teaching rides the note');
+  });
+
+  it('aria lane escapes class tokens containing CSS-special characters (review #27)', async () => {
+    const card = (n) => '<div class="card"><a class="ttl" href="/post/' + n + '?story=' + (1000 + n) + '">T</a>' +
+      '<span class="tip:x' + n + '" aria-labelledby="tt' + n + '">' + n + ' days ago</span></div>';
+    const r = await makeCensusTools([card(1), card(2), card(3)]).tools.census({ containerSel: 'div.card' });
+    assert.ok(r.lanes.aria && r.lanes.aria.length, 'aria lane present');
+    // The selector must carry the escaped form (tip\:x…) — an unescaped
+    // ':' would make it an invalid pseudo-class-bearing selector.
+    for (const e of r.lanes.aria) {
+      if (/^span\.tip/.test(e.selector)) {
+        assert.ok(/\\:/.test(e.selector), 'class token CSS-escaped: ' + e.selector);
+      }
+    }
+  });
+
+  it('svg-noise cards do not pollute the lanes (review #28 judgment: no cleaner pre-pass needed)', async () => {
+    // The recorded call: findFieldCandidates scores leaves; svg/path leaves
+    // carry no text and no time/count/url/id attributes, so they score
+    // nothing in any lane — and wiring applyClean BEFORE the parse would
+    // STRIP the hidden/tooltip-classed aria carriers the aria lane exists
+    // to find (cleanPageHtml removes [aria-hidden] and class*=tooltip).
+    // Output is already bounded (maxPerLane entries; 50K element cap).
+    let svgNoise = '';
+    for (let i = 0; i < 40; i++) svgNoise += '<svg viewBox="0 0 24 24"><path d="M' + i + ' 0L24 ' + i + 'z"/></svg>';
+    const card = (n) => '<div class="card">' + svgNoise +
+      '<a class="ttl" href="/post/' + n + '?story=' + (1000 + n) + '">Title ' + n + '</a>' +
+      '<span class="ts">' + n + ' days ago</span></div>';
+    const r = await makeCensusTools([card(1), card(2), card(3)]).tools.census({ containerSel: 'div.card' });
+    assert.ok(r.lanes.time && r.lanes.time.some((c) => c.selector === 'span.ts'), 'time lane unaffected by the noise');
+    const allTexts = [];
+    for (const lane of Object.keys(r.lanes)) for (const e of r.lanes[lane]) allTexts.push((e.texts || []).join(' '));
+    assert.ok(!allTexts.join(' ').includes('viewBox'), 'svg markup never leaks into lane texts');
+  });
+
+  it('timeoutMs: invalid type teaches; valid value forwards to the executor (review #5)', async () => {
+    const bad = await makeCensusTools([cardHtml(1)]).tools.census({ containerSel: 'div.card', timeoutMs: 'lots' });
+    assert.match(bad.error, /timeoutMs must be a positive number of milliseconds \(default 30000, max 90000\)/);
+
+    let forwarded = null;
+    const observationLog = createObservationLog();
+    const tools = createProbeTools({
+      executeDsl: async (snippet, opts) => { forwarded = opts; return [{ __c_html: cardHtml(1) }]; },
+      observationLog
+    });
+    const r = await tools.census({ containerSel: 'div.card', timeoutMs: 123456 });
+    assert.ok(r.lanes, 'census ran');
+    assert.deepEqual(forwarded, { timeoutMs: 90000 }, 'clamped to the 90s ceiling and forwarded');
+  });
+
+  it('a snippet budget error carries the census-shaped route, not the generic hover teaching (review #5)', async () => {
+    const observationLog = createObservationLog();
+    const tools = createProbeTools({
+      executeDsl: async () => ({ error: 'snippet exceeded 30000ms — size the batch (each hovered anchor burns ~5-10s…)' }),
+      observationLog
+    });
+    const r = await tools.census({ containerSel: 'div.card' });
+    assert.match(r.error, /snippet exceeded 30000ms/);
+    assert.match(r.error, /for census: narrow containerSel to the repeating card/);
+    assert.match(r.error, /per-field probes \(probe\.sample\) remain the fallback/);
+  });
+
+  it('aria lane caps at 4 entries however many distinct carriers the card carries', async () => {
+    let carriers = '';
+    for (let i = 1; i <= 25; i++) carriers += '<i class="c' + i + '" aria-labelledby="id' + i + '">v' + i + '</i>';
+    const card = '<div class="card"><a class="ttl" href="/post/1?story=1001">T</a><span class="ts">1 day ago</span>' + carriers + '</div>';
+    const r = await makeCensusTools([card, card, card]).tools.census({ containerSel: 'div.card' });
+    assert.ok(r.lanes.aria, 'aria lane present');
+    assert.ok(r.lanes.aria.length <= 4, 'entries capped at min(4, maxPerLane) — got ' + r.lanes.aria.length);
+  });
+
+  it('hrefIdentity keeps identity query tokens but never utm_* transport decoration', async () => {
+    const utmCard = (n) => '<div class="card">' +
+      '<a class="ttl" href="/post/' + n + '?utm_source=1234567&story=' + (1000 + n) + '">Title ' + n + '</a>' +
+      '<span class="ts">' + n + ' days ago</span>' +
+      '</div>';
+    const r = await makeCensusTools([utmCard(1), utmCard(2), utmCard(3)]).tools.census({ containerSel: 'div.card' });
+    assert.ok(Array.isArray(r.hrefIdentity) && r.hrefIdentity.length, 'hrefIdentity present');
+    assert.ok(r.hrefIdentity.some((e) => e.token === 'query:story'), 'query:story diffed');
+    assert.ok(!r.hrefIdentity.some((e) => /utm/i.test(e.token)), 'utm_* never reported as identity (even with an id-shaped value)');
+  });
+
+  it('an unparseable href entry is skipped without throwing', async () => {
+    const badCard = (n) => '<div class="card">' +
+      '<a class="bad" href="http://[invalid">broken</a>' +
+      '<a class="ttl" href="/post/' + n + '?story=' + (1000 + n) + '">Title ' + n + '</a>' +
+      '<span class="ts">' + n + ' days ago</span>' +
+      '</div>';
+    const r = await makeCensusTools([badCard(1), badCard(2), badCard(3)]).tools.census({ containerSel: 'div.card' });
+    assert.ok(r.lanes && r.lanes.url, 'lanes computed');
+    assert.ok(r.hrefIdentity && r.hrefIdentity.some((e) => e.token === 'query:story'), 'valid links still diffed after the bad one is skipped');
+  });
+});
+
 describe('probe.census steering wiring (source audit)', () => {
   const fs = require('node:fs');
   const path = require('node:path');
@@ -135,15 +308,19 @@ describe('probe.census steering wiring (source audit)', () => {
   const PT = fs.readFileSync(path.join(__dirname, '../lib/probe-tools.js'), 'utf8');
 
   it('session-tools registers the tool, spec entry, and census-first methodology routing', () => {
-    assert.match(ST, /'probe\.census': wrapProbe\(probes\.census, 'probe\.census'\)/);
+    // Review #4 replaced the plain wrapProbe registration with a wrapper
+    // that mirrors the probe.timestamp tooltipRoute bookkeeping — pin the
+    // NEW shape (wrapProbe still runs inside it; hover:true feeds evidence).
+    assert.match(ST, /'probe\.census': \(async \(args, ctx\) => \{\s*\n\s*const r = await wrapProbe\(probes\.census, 'probe\.census'\)\(args, ctx\)/);
+    assert.match(ST, /args\.hover === true[\s\S]*?r\.timeHover && !r\.timeHover\.error[\s\S]*?tooltipRoute\.probeTimestampCalls \+= 1/, 'census{hover:true} bumps the tooltip-route evidence');
     assert.match(ST, /name: 'probe\.census'/);
     assert.match(ST, /PAGE-LEVEL FIELD CENSUS/);
     assert.match(ST, /run ONE probe\.census\{containerSel, hover:true\}/, 'methodology rule 2 routes census-first');
     assert.match(ST, /Do NOT walk fields serially/, 'serial walking explicitly discouraged');
   });
 
-  it('research-session gives the census receipt an 8000-char budget', () => {
-    assert.match(RS, /'probe\.census': 8000/);
+  it('research-session gives the census receipt a 12000-char budget (review #2: worst realistic census measured 10447)', () => {
+    assert.match(RS, /'probe\.census': 12000/);
   });
 
   it('census block carries no site tokens (universality)', () => {

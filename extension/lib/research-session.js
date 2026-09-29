@@ -52,8 +52,13 @@
     // fragments + identity + texts) — compactObjectForLLM divides the budget
     // EQUALLY across keys, so the 4000 default sliced every one of those to
     // ~400 chars of noise (the fragment channel would starve one layer after
-    // being fixed in the layer below).
-    toolResultCaps: { 'verify.run': 20000, 'probe.hover': 12000, 'probe.census': 8000 },
+    // being fixed in the layer below). probe.census rides the same lane at
+    // 12000: the performance review measured a worst realistic census at
+    // 10447 chars (five lanes × capped entries + aria + hrefIdentity), and a
+    // trimmed census is exactly the k/n coverage evidence the fieldMap is
+    // authored from — the texts-per-entry cap (2) keeps the common case well
+    // below the ceiling.
+    toolResultCaps: { 'verify.run': 20000, 'probe.hover': 12000, 'probe.census': 12000 },
     // tool_result EVENT summaries ride the console mirror (wizard.js slices
     // at 600), so the event budget matches it exactly.
     eventSummaryCapChars: 600,
@@ -946,27 +951,36 @@
     // 171st round: field-fail ledger. When the same FIELD fails twice
     // across verifies, the model cannot see where the value lives. The
     // request is PRECISE: field name, error history, what to mark.
-    try {
-      if (lastVerifyFailingFields171 && lastVerifyFailingFields171.length && state.fieldFailLedger) {
-        for (const fname of lastVerifyFailingFields171) {
-          const entry171 = state.fieldFailLedger[fname] || { count: 0, errors: [] };
-          entry171.count += 1;
-          if (entry171.errors.length < 3) entry171.errors.push(String(lastVerifyErrorPrefix171 || 'verify red').slice(0, 60));
-          state.fieldFailLedger[fname] = entry171;
-          if (entry171.count >= 2 && !entry171.assistRequested) {
-            entry171.assistRequested = true;
-            state.transcript.push({ kind: 'system', text:
-              'FIELD_ASSIST_REQUEST: "' + fname + '" has failed ' + entry171.count +
-              ' times across verifies/probes (errors: ' + entry171.errors.join('; ') +
-              '). Call annotate.request({fields: ["' + fname + '"], why: "the ' + fname +
-              ' extraction failed twice. Please MARK the element that holds the ' + fname +
-              ' value on the first card"}) NOW. Two failures on the same field means you cannot see where the value lives. The user can point at it in seconds.' });
-            emit('field_assist_request', { field: fname, count: entry171.count, errors: entry171.errors });
+    // Round-173c review: this tick was a stray statement in
+    // createResearchSession's body — it executed ONCE at session creation
+    // (when nothing had failed yet), so the ledger never accumulated and
+    // the human-loop assist note stayed dead behind three
+    // separately-verified wiring layers. It is a function now, called once
+    // per turn from the run loop, consuming the last verify.run's
+    // captured detectors.
+    function tickFieldFailLedger() {
+      try {
+        if (lastVerifyFailingFields171 && lastVerifyFailingFields171.length && state.fieldFailLedger) {
+          for (const fname of lastVerifyFailingFields171) {
+            const entry171 = state.fieldFailLedger[fname] || { count: 0, errors: [] };
+            entry171.count += 1;
+            if (entry171.errors.length < 3) entry171.errors.push(String(lastVerifyErrorPrefix171 || 'verify red').slice(0, 60));
+            state.fieldFailLedger[fname] = entry171;
+            if (entry171.count >= 2 && !entry171.assistRequested) {
+              entry171.assistRequested = true;
+              state.transcript.push({ kind: 'system', text:
+                'FIELD_ASSIST_REQUEST: "' + fname + '" has failed ' + entry171.count +
+                ' times across verifies/probes (errors: ' + entry171.errors.join('; ') +
+                '). Call annotate.request({fields: ["' + fname + '"], why: "the ' + fname +
+                ' extraction failed twice. Please MARK the element that holds the ' + fname +
+                ' value on the first card"}) NOW. Two failures on the same field means you cannot see where the value lives. The user can point at it in seconds.' });
+              emit('field_assist_request', { field: fname, count: entry171.count, errors: entry171.errors });
+            }
           }
+          lastVerifyFailingFields171 = null; // consume: one ledger tick per verify
         }
-        lastVerifyFailingFields171 = null; // consume: one ledger tick per verify
-      }
-    } catch (e171) { /* field-fail ledger best-effort */ }
+      } catch (e171) { /* field-fail ledger best-effort */ }
+    }
 
     // 167th round: the verify-LATENCY advisory. The incident session spent
     // 36 snippets and reached its FIRST verify at turn ~75 of 80 — the red
@@ -1339,6 +1353,7 @@
           }
           if (state.spend.promptTokens + state.spend.completionTokens >= budgets.tokenCap) { report = await stop('tokenCap', buildTokenCapDetail(state.spend, budgets)); break; }
           maybeBudgetAdvisory();
+          tickFieldFailLedger();
 
           emit('turn_start', { turn: state.spend.turns + 1 });
           const messages = assembleMessages();

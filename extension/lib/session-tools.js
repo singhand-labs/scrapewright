@@ -1991,7 +1991,27 @@
         return r;
       }, 'probe.sample'),
       'probe.hover': wrapProbe(probes.hover, 'probe.hover'),
-      'probe.census': wrapProbe(probes.census, 'probe.census'),
+      // Review #4 (87th-round channel-blindness class): census{hover:true}
+      // runs the whole timestamp dance INSIDE the census — the verify-side
+      // TIME_SOURCE_UNEXERCISED gate only sees tooltipRoute bookkeeping, so
+      // a plain wrapProbe let a session that HAD exercised the tooltip route
+      // via census still be reded by the gate. Mirror the probe.timestamp
+      // wrapper's bookkeeping (double-counting when the model also calls
+      // probe.timestamp directly is fine — the counter measures exercises).
+      'probe.census': (async (args, ctx) => {
+        const r = await wrapProbe(probes.census, 'probe.census')(args, ctx);
+        try {
+          if (args && args.hover === true && r && typeof r === 'object' &&
+              r.timeHover && !r.timeHover.error) {
+            tooltipRoute.probeTimestampCalls += 1;
+            if (typeof r.timeHover.anchorsProbed === 'number') tooltipRoute.lastAnchorsProbed = r.timeHover.anchorsProbed;
+            const abs = r.timeHover.absolute;
+            tooltipRoute.lastFullAbsolute = (typeof abs === 'string' && abs &&
+              (WU.hasYearToken ? WU.hasYearToken(abs) : /(?:19|20)\d{2}/.test(abs)));
+          }
+        } catch (_) { /* bookkeeping must never break the tool */ }
+        return r;
+      }),
       'probe.scroll': wrapProbe(probes.scroll, 'probe.scroll'),
       'probe.scrollUntil': wrapProbe(probes.scrollUntil, 'probe.scrollUntil'),
       'probe.extract': wrapProbe(probes.extract, 'probe.extract'),
@@ -2035,9 +2055,9 @@
       { name: 'probe.text', args: '{sel}', returns: '{total,items[]}' },
       { name: 'probe.attrStats', args: '{containerSel, attr}', returns: '{totalItems,values[{value,items,pct}],absentPct,note?} — attr is read on the matched ELEMENTS; note appears at absentPct 100 telling you to census the descendant form containerSel + " [attr]" (what a :not()/:has() clause actually filters)' },
       { name: 'probe.labelledby', args: '{sel, attr?}', returns: '{text,attr,refCount,missingIds?,note?,viaDescendant?} — ARIA-reference text (default aria-labelledby); descendant fallback disclosed via viaDescendant. Use when a tooltip value never renders visually' },
-      { name: 'probe.sample', args: '{sel, opts:{index,wantHtml,clean,samples}}', returns: '{match,total,element,html?,diversityTip?} — clean:true strips noise; samples:3 shows first/middle/last diversity (pass it before writing selectors fitted to one shape)' },
+      { name: 'probe.sample', args: '{sel, opts:{index,wantHtml,clean,samples}}', returns: '{match,total,element,html?,samples?[{index,text}],diversityTip?} — clean:true strips noise; samples:3 returns first/middle/last TEXT previews as samples[] (pass it before writing selectors fitted to one shape)' },
       { name: 'probe.hover', args: '{anchorSel, popoverSel?, opts:{index,timeoutMs}}', returns: '{hovered,htmlSnippet,popoverSelector,reason,observedPopover?,rejectedAddedTexts?,rejectedAddedHtml?,budgetNote?,timeoutMs?} — rejectedAddedHtml/Texts carry hover-mounted nodes the visual filter rejected (often the payload; read:hoverPopover fields search them). On reason:popover_timeout, retry with a bigger opts.timeoutMs before concluding the popover never renders' },
-      { name: 'probe.census', args: '{containerSel, samples?, maxPerLane?, hover?, anchorSel?}', returns: '{total, sampled[indices], lanes{time,count,url,id,text,aria}[[{selector,tag,strength,coverage,getTexts}]], hrefIdentity[{token,coverage,samples}], timeHover?, note} — PAGE-LEVEL FIELD CENSUS, one call: reads evenly spaced sample containers (first/middle/last), classifies every leaf into lanes, reports each candidate selector WITH cross-sample coverage (k/n generalized, 1/n positional). hover:true additionally runs the one-card timestamp dance (popover capture included) as timeHover. Author the WHOLE fieldMap from the lanes, then ONE probe.extract dry-run — per-field probes are the fallback for empty/ambiguous lanes only' },
+      { name: 'probe.census', args: '{containerSel, samples?, maxPerLane?, hover?, anchorSel?, timeoutMs?}', returns: '{total, sampled[indices], lanes{time,count,url,id,text,aria}[[{selector,tag,strength,coverage,texts}]], hrefIdentity[{token,coverage,samples}], timeHover?, truncatedSamples?, note} — PAGE-LEVEL FIELD CENSUS, one call: reads evenly spaced sample containers (first/middle/last), classifies every leaf into lanes, reports each candidate selector WITH cross-sample coverage (k/n generalized, 1/n positional). hover:true additionally runs the one-card timestamp dance (popover capture included) as timeHover. timeoutMs extends the container-read budget (default 30000, max 90000). Author the WHOLE fieldMap from the lanes, then ONE probe.extract dry-run — per-field probes are the fallback for empty/ambiguous lanes only' },
       { name: 'probe.scroll', args: "{mode?:'bottom'|'by', sel?, by?}", returns: '{scrolled,prevY,newY} — mode:"by" takes a SIGNED pixel count (negative scrolls UP)' },
       { name: 'probe.scrollUntil', args: '{sel, targetCount, maxRounds?, settleMs?, by?, scrollSel?}', returns: '{satisfied,finalCount,rounds,trace,reason,note?} — scroll→settle→count loop stopping the MOMENT sel reaches targetCount. reason=count_frozen: sel matches static chrome, re-target it; reason=at_bottom: the SCROLL ROOT tested is exhausted — retry with scrollSel at the feed\'s inner scrollable container; reason=max_rounds: still growing, re-run' },
       { name: 'probe.extract', args: '{containerSel, fieldMap, multi?, allowEmpty?}', returns: '{total,records[3],emptyFields{field:emptyCount}}' },

@@ -1644,6 +1644,9 @@ async function testScript() {
   wizardState.lastErrorStepId = null;
   wizardState.lastErrorSnapshot = null;
   wizardState.lastExecutionEvents = [];
+  // Review #6: reset the fresh-run failure banner — every run starts clean,
+  // so a successful re-run never shows the previous run's stale error.
+  wizardState.lastCompletionError = null;
   wizardState.testAbortController = new AbortController();
   wizardState.testAborted = false;
   sessionAbortRequested = false; // A1: an aborted session must not poison manual tests
@@ -3502,6 +3505,20 @@ function sessionStopResumable(st) {
   return false;
 }
 
+// Shared blessing rule (107th/173c rounds): a green end-to-end run of the
+// CURRENT steps blesses the current artifact version for the unverified
+// banner / deploy gate. Returns whether the blessing landed. Call sites keep
+// their own guards — presentSessionCompletion additionally requires
+// !freshRunError (its try/catch keeps executing after a thrown run), while
+// the reverify handler's try/catch never reaches this call on a throw.
+function blessCurrentVersionIfGreen(fr) {
+  if (fr && fr.finalResult != null && wizardState.currentArtifactVersion > 0 && Array.isArray(wizardState.steps)) {
+    wizardState.lastVerified = { version: wizardState.currentArtifactVersion, steps: JSON.parse(JSON.stringify(wizardState.steps)) };
+    return true;
+  }
+  return false;
+}
+
 // Ninth-log L2: a completed session must land on a PRESENTED phase 5 —
 // result confirmation, feedback-driven repair continuation, name edit,
 // deploy — not a blank page. Presentation source, in order of trust:
@@ -3546,14 +3563,28 @@ async function presentSessionCompletion() {
       await testScript();
     } catch (eTS) {
       freshRunError = eTS;
+      // Review #6: the fresh-run error previously reached ONLY appendLog —
+      // the panel kept presenting the STALE previous testResult. Record it
+      // on wizardState so renderResultReview can surface an action-level
+      // red row (cleared at every testScript() start, so a later successful
+      // run never shows the stale banner).
+      wizardState.lastCompletionError = (eTS && eTS.message) || String(eTS);
       appendLog('Fresh end-to-end run failed: ' + (eTS && eTS.message || String(eTS)) + ' — showing the review with the error; the steps below may need fixing before deploy.', 'error');
+      // Review #1: on the happy path testScript navigates to phase 5 itself
+      // (presentTestOutcome) — but a THROWN run never reaches that call, so
+      // the review rendered below would sit in a HIDDEN phase 5. Navigate
+      // HERE, catch-only (branch 2's happy path relies on testScript's
+      // internal navigation; a goToPhase outside the catch would
+      // double-navigate). Null the abort controller FIRST: goToPhase's
+      // abort branch fires on any live controller, and a thrown run can
+      // leave one — the navigation would log a spurious "Test aborted".
+      wizardState.testAbortController = null;
+      goToPhase(5);
     }
     // The fresh end-to-end run executed the CURRENT draft steps — a green
-    // outcome blesses the current version for the banner/deploy gate.
-    const fr = wizardState.testResult;
-    if (!freshRunError && fr && fr.finalResult != null && wizardState.currentArtifactVersion > 0 && Array.isArray(wizardState.steps)) {
-      wizardState.lastVerified = { version: wizardState.currentArtifactVersion, steps: JSON.parse(JSON.stringify(wizardState.steps)) };
-    }
+    // outcome blesses the current version for the banner/deploy gate
+    // (the !freshRunError gate stays here: a thrown run must not bless).
+    if (!freshRunError) blessCurrentVersionIfGreen(wizardState.testResult);
     renderResultReview();
   } else {
     appendLog('Session complete. Review the steps and deploy.', 'success');
@@ -3603,11 +3634,9 @@ function renderResultReview() {
             await testScript();
             // A green manual run of the CURRENT steps blesses the current
             // version for the banner/deploy gate (same rule as the
-            // presentSessionCompletion fresh-run branch).
-            const fr = wizardState.testResult;
-            if (fr && fr.finalResult != null && wizardState.currentArtifactVersion > 0 && Array.isArray(wizardState.steps)) {
-              wizardState.lastVerified = { version: wizardState.currentArtifactVersion, steps: JSON.parse(JSON.stringify(wizardState.steps)) };
-            }
+            // presentSessionCompletion fresh-run branch; a throw jumps to
+            // the catch below and never reaches the blessing).
+            blessCurrentVersionIfGreen(wizardState.testResult);
             renderResultReview();
           } catch (e) {
             showToast('Verify run failed: ' + (e && e.message || e), 'error');
@@ -3640,7 +3669,11 @@ function renderResultReview() {
   const lv = (wizardToolsBag && typeof wizardToolsBag.getLastVerify === 'function')
     ? wizardToolsBag.getLastVerify() : null;
   const report = lv && lv.report;
-  if (!report) return;
+  // Review #6: a fresh-run completion error must reach the panel even when
+  // NO verify report exists at all — the error row is then the only content.
+  const completionError = (typeof wizardState !== 'undefined' && wizardState && wizardState.lastCompletionError)
+    ? String(wizardState.lastCompletionError) : '';
+  if (!report && !completionError) return;
   // Hundred-seventh log (user review feedback): the self-check rendered raw
   // detector keys ("检测器 oversizedFields 有发现 (1 项)") — undecipherable.
   // Every finding now carries a plain-language verdict and a level:
@@ -3648,9 +3681,16 @@ function renderResultReview() {
   //   advisory — informational, often by-design; explicitly marked 无需处理
   // per the user's rule: do not invent problems; real ones must read clearly.
   const findings = [];
-  const errMsg = report.error && report.error.message ? String(report.error.message) : '';
+  // Review #6: the catch path of presentSessionCompletion recorded a thrown
+  // fresh end-to-end run — prepend it as an action-level red row so the
+  // user fixes the CURRENT steps before deploy instead of reading the STALE
+  // previous testResult as if it were this artifact's outcome.
+  if (completionError) {
+    findings.push({ level: 'action', text: 'fresh end-to-end run of the current steps failed: ' + completionError.slice(0, 300) + ' — fix the steps below before deploy' });
+  }
+  const errMsg = (report && report.error && report.error.message) ? String(report.error.message) : '';
   if (errMsg) findings.push({ level: 'action', text: 'verify failed: ' + errMsg.slice(0, 300) });
-  const det = report.detectors || {};
+  const det = (report && report.detectors) || {};
   for (const k of Object.keys(det)) {
     const v = det[k];
     if (!v || (Array.isArray(v) && !v.length)) continue;
@@ -3664,7 +3704,7 @@ function renderResultReview() {
       findings.push({ level: 'advisory', text: k + ': ' + JSON.stringify(v).slice(0, 120) });
     }
   }
-  if (report.scoreNote) {
+  if (report && report.scoreNote) {
     findings.push({ level: 'advisory', text: 'Score note (incl. ad-slot polarity check hint): ' + String(report.scoreNote).slice(0, 200) });
   }
   const items = findings.filter((f) => f.level === 'action').map((f) => f.text);

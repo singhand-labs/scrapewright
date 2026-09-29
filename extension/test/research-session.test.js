@@ -512,6 +512,49 @@ describe('budgets and breakers', () => {
     assert.match(report2.stopped.detail, /location 4\/4 empty/);
   });
 
+  it('verify.run detectors at TOP LEVEL feed the field-fail ledger (173b: report-object-direct shape)', async () => {
+    // The 172nd/173rd incidents: the ledger consumer originally looked for
+    // the detectors on a wrapper object, while session-tools verifyRun
+    // returns the REPORT object directly — so the wiring was dead and
+    // FIELD_ASSIST_REQUEST never fired. Production reads result.detectors
+    // and resolves extractFailingFieldNames as a bare global reference
+    // (wizard-utils assigns its export bag onto the global scope in the
+    // browser); mirror that assignment here so the Node test exercises
+    // the real consumer path.
+    global.extractFailingFieldNames = require('../lib/wizard-utils').extractFailingFieldNames;
+    try {
+      const events = [];
+      const failingVerify = () => ({
+        ok: false,
+        error: { stepId: 'x', message: 'REQUIRED_FIELD_EMPTY: posts.postId 4/4' },
+        detectors: { partialEmptyFields: [{ field: 'postId', emptyRatio: 1 }] }
+      });
+      const session = createResearchSession({
+        requirement: 'r',
+        llm: scriptedLlm([
+          reply(envelope('verify.run', {})),
+          reply(envelope('verify.run', {})),
+          reply(finishEnvelope('done'))
+        ], []),
+        tools: { 'verify.run': failingVerify },
+        onEvent: (e) => events.push(e)
+      });
+      const report = await session.run();
+      assert.equal(report.stopped.reason, 'completed');
+      const st = session.state();
+      const ledger = (st.session && st.session.fieldFailLedger) || {};
+      assert.ok(ledger.postId, 'postId reached the field-fail ledger from top-level detectors');
+      assert.equal(ledger.postId.count, 2, 'both failing verifies counted');
+      assert.match(ledger.postId.errors[0], /REQUIRED_FIELD_EMPTY/, 'error prefix recorded from result.error.message');
+      assert.ok(events.some((e) => e.type === 'field_assist_request' && e.field === 'postId'),
+        'the second failure fires the FIELD_ASSIST_REQUEST event');
+      const assist = st.session.transcript.find((e) => e && e.kind === 'system' && /FIELD_ASSIST_REQUEST/.test(e.text || ''));
+      assert.ok(assist && /postId/.test(assist.text), 'the assist system note names postId');
+    } finally {
+      delete global.extractFailingFieldNames;
+    }
+  });
+
   it('maxTurns after updates landed post-verify discloses CURRENT ARTIFACT UNVERIFIED too (twenty-eighth log)', async () => {
     // Production shape 2026-09-06: verify3 red against v3 → v4 (turn 59) →
     // v5 (turn 60) → budget stop. The stop detail carried only

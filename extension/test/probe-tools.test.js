@@ -98,6 +98,22 @@ describe('probe.sample', () => {
     assert.ok(r.element.textContent.length <= 300);
   });
 
+  it('opts.samples:N returns first/middle/last text previews via samples[] (review #16: was advertised, unread)', async () => {
+    const list = [];
+    for (let i = 0; i < 7; i++) list.push({ tagName: 'DIV', id: 'c' + i, className: '', textContent: 'card text ' + i, href: '', src: '' });
+    const { tools } = makeTools(async () => list);
+    const r = await tools.sample('div.card', { samples: 3 });
+    assert.ok(Array.isArray(r.samples) && r.samples.length === 3, '3 previews');
+    assert.deepEqual(r.samples.map((s) => s.index), [0, 3, 6], 'evenly spaced first/middle/last');
+    assert.match(r.samples[0].text, /^card text 0$/, 'text preview carried');
+    assert.equal(r.match, 0, 'primary element behavior unchanged');
+    // <2 or non-number leaves samples absent (the tip still steers there).
+    const r1 = await tools.sample('div.card', { samples: 1 });
+    assert.equal(r1.samples, undefined, 'samples <2 is a no-op');
+    const r2 = await tools.sample('div.card', {});
+    assert.equal(r2.samples, undefined, 'default carries no samples array');
+  });
+
   it('attaches outerHTML for ANY index via the $extractList self-read path, when asked', async () => {
     const list = [
       { tagName: 'DIV', id: 'c0', className: '', textContent: '' },
