@@ -3767,25 +3767,6 @@
     // anchor's activation) with no way to attribute it from the log —
     // scrollIntoView-triggered virtualized reflow and a deep popoverSel
     // query over a huge DOM are indistinguishable without timestamps.
-    // [HOVER-DEBUG-TEMP] debug flag cache — master switch for the temporary
-    // hover-relay inspection pause (chrome.storage.local 'hoverDebugInspect',
-    // default off). Off = one storage read per hover call, zero behavior
-    // change. REMOVE THIS BLOCK + its listeners when the relay problem is
-    // solved (removal checklist in test/hover-debug-temp.test.js).
-    if (!('__hoverDebugInspect' in domHover)) {
-      domHover.__hoverDebugInspect = false;
-      try {
-        chrome.storage.local.get('hoverDebugInspect', function (st) {
-          domHover.__hoverDebugInspect = !!(st && st.hoverDebugInspect);
-        });
-        chrome.storage.onChanged.addListener(function (ch, area) {
-          if (area === 'local' && ch && 'hoverDebugInspect' in ch) {
-            domHover.__hoverDebugInspect = !!ch.hoverDebugInspect.newValue;
-          }
-        });
-      } catch (_) { /* debug instrumentation is best-effort */ }
-    }
-    var hoverDebugInspect = domHover.__hoverDebugInspect === true;
     var hoverT0 = Date.now();
     opts = opts || {};
     var timeoutMs = (typeof opts.timeoutMs === 'number' && opts.timeoutMs > 0) ? opts.timeoutMs : 4500;
@@ -4823,9 +4804,6 @@
     // Forty-fifth log F1: also skip entirely on dispatch failure — the mouse
     // never moved, so there is nothing to dismiss, and the extra activation +
     // CDP roundtrip only burns the caller's budget.
-    // [HOVER-DEBUG-TEMP] MOVED below result assembly: the debug pause must
-    // hold the popover OPEN (dismiss not yet sent) while the user inspects
-    // the relay details — the dismiss block originally sat here.
 
     var result = {
       hovered: !!(hoverResp && hoverResp.ok),
@@ -4947,57 +4925,7 @@
       autoDiscovered: autoDiscovered,
       reason: result.reason || null
     });
-    // [HOVER-DEBUG-TEMP] debug inspection pause — popover stays MOUNTED (the
-    // dismiss has not been sent yet); relay the capture details to the user,
-    // wait unlimited for their observation, log it on the wizard console,
-    // then dismiss and return. REMOVE with the checklist in
-    // test/hover-debug-temp.test.js when the relay problem is solved.
-    var postPauseAt = 0;
-    if (hoverDebugInspect) {
-      try {
-        var __dbgAddedTexts = [];
-        try {
-          __dbgAddedTexts = [...new Set((addedNodesHtml || [])
-            .map(function (h2) { return String(h2 || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100); })
-            .filter(Boolean))].slice(0, 5);
-        } catch (_) {}
-        var __dbgResp = await new Promise(function (resolve) {
-          try {
-            chrome.runtime.sendMessage({
-              type: 'HOVER_DEBUG_INSPECT',
-              payload: {
-                action: 'hover @ ' + selectorForLog + ' (' + x + ',' + y + ')',
-                pageUrl: (typeof location !== 'undefined') ? location.href : '',
-                html: htmlSnippet || null,
-                texts: {
-                  labelledbyText: (anchorLabel && anchorLabel.text) || null,
-                  observedPopover: result.observedPopover || null,
-                  addedTexts: __dbgAddedTexts,
-                  rejectedAddedTexts: rejectedAddedTexts || [],
-                  rejectedAddedHtml: rejectedAddedHtml || []
-                },
-                note: 'popover held open — compare what YOU see on screen, then submit your observation. rejectedAdded* = filter-rejected + scoring-runner-up mounted fragments (possibly parts of the SAME popover as the picked one — kept as fallback extraction evidence, not discarded); picked is the popover body the scorer selected'
-              }
-            }, function (resp) { resolve(resp || { observation: null, reason: 'no receiver' }); });
-          } catch (e) { resolve({ observation: null, reason: 'sendMessage error' }); }
-        });
-        result.debugObservation = (__dbgResp && __dbgResp.observation) || null;
-        sendDebugLog('info', 'content-script', '[hover-debug-relay] pause resolved', {
-          action: selectorForLog, observation: result.debugObservation,
-          reason: (__dbgResp && __dbgResp.reason) || null
-        });
-        notifyBackgroundDiagnostic('hover_debug_pause_resolved', {
-          selector: selectorForLog,
-          observation: result.debugObservation,
-          reason: (__dbgResp && __dbgResp.reason) || null
-        });
-      } catch (_) { /* the debug pause must never break the hover */ }
-      postPauseAt = Date.now();
-    }
-
-    // [HOVER-DEBUG-TEMP] dismiss block MOVED here (was before result assembly)
-    // so the inspection pause above can hold the popover open. RC50/RC20
-    // rationale still applies: the dismiss is the same CDP
+    // RC50/RC20 rationale: the dismiss is the same CDP
     // Input.dispatchMouseEvent on the same tab — a background tab hangs
     // (compositor frames only for the active tab), hence withTabActivation.
     if (dismiss && !dispatchFailed) {
@@ -5013,11 +4941,6 @@
         });
       }
     }
-    // Hundred-third-round audit B: the notify sits AFTER the dismiss — the
-    // 101st-round relocation of the dismiss block (to hold the popover open
-    // during the debug pause) left this notify firing BEFORE it, so dismissMs
-    // logged 0/1 all session and measured nothing. pauseMs separates the
-    // debug-pause duration from the real dismiss duration.
     var dismissDoneAt = Date.now();
     notifyBackgroundDiagnostic('hover_anchor_timing', {
       selector: selectorForLog,
@@ -5025,8 +4948,7 @@
       preDispatchMs: preDispatchDoneAt - scrollDoneAt,
       dispatchMs: dispatchDoneAt - preDispatchDoneAt,
       dwellMs: dwellDoneAt - dispatchDoneAt,
-      pauseMs: postPauseAt ? (postPauseAt - dwellDoneAt) : 0,
-      dismissMs: dismissDoneAt - (postPauseAt || dwellDoneAt)
+      dismissMs: dismissDoneAt - dwellDoneAt
     });
     return result;
   }

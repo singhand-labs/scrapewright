@@ -1048,22 +1048,6 @@ async function logExecution(service, input, output, error, retryCount) {
 }
 
 // Internal message handlers
-// [HOVER-DEBUG-TEMP] pending map for the hover-relay inspection pause
-// (HOVER_DEBUG_INSPECT <-> HOVER_DEBUG_INSPECT_PANEL/RESPONSE). REMOVE with
-// the checklist in test/hover-debug-temp.test.js.
-const hoverDebugPending = new Map();
-(function initHoverDebugCleanup() {
-  if (chrome.tabs && chrome.tabs.onRemoved) {
-    chrome.tabs.onRemoved.addListener((tabId) => {
-      for (const [reqId, p] of hoverDebugPending) {
-        if (p.tabId === tabId) {
-          hoverDebugPending.delete(reqId);
-          try { p.sendResponse({ observation: null, reason: 'tab closed' }); } catch (_) {}
-        }
-      }
-    });
-  }
-})();
 
 // Hundred-third-round C (user-adjudicated): per-tab DOM_REQUEST
 // serialization at the relay. Concurrent DOM_REQUESTs to the SAME tab
@@ -1190,64 +1174,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message.type === 'GET_CURRENT_TAB_ID') {
     sendResponse({ tabId: sender.tab?.id });
-    return false;
-  }
-  // [HOVER-DEBUG-TEMP] relay for the temporary hover-relay inspection pause:
-  // content script asks to pause with the popover held open → broadcast a
-  // panel request to extension pages (the wizard answers) → route the user's
-  // observation back. Unlimited wait; tab close resolves with cancelled.
-  // REMOVE with the checklist in test/hover-debug-temp.test.js.
-  if (message.type === 'HOVER_DEBUG_INSPECT') {
-    const reqId = 'hd-' + Date.now() + '-' + Math.floor(Math.random() * 1e6);
-    hoverDebugPending.set(reqId, { sendResponse, tabId: sender.tab?.id });
-    try {
-      chrome.runtime.sendMessage({ type: 'HOVER_DEBUG_INSPECT_PANEL', reqId, payload: message.payload }, () => {
-        // [HOVER-DEBUG-TEMP] 101st-round live bug: this callback fires when
-        // all listeners have RETURNED (synchronously) — delivery alone also
-        // lands here, so resolving unconditionally made EVERY pause a no-op
-        // (cards dismissed per hover; only the overwritten panel survived,
-        // showing the LAST empty payload after the batch — the user's exact
-        // observation). Resolve-as-no-receiver ONLY when lastError is set
-        // (nobody received); otherwise keep the pending alive until the
-        // panel's HOVER_DEBUG_INSPECT_RESPONSE arrives.
-        // [HOVER-DEBUG-TEMP] 102nd-round live bug: lastError is set in TWO
-        // distinct cases — (a) "Receiving end does not exist" (NOBODY
-        // received) and (b) "The message port closed before a response was
-        // received" (the page RECEIVED the panel, returned undefined, and
-        // the port closed — the user's answer rides a SEPARATE
-        // HOVER_DEBUG_INSPECT_RESPONSE message, so port-close is EXPECTED).
-        // Treating both as no-receiver (the 101b assumption) resolved every
-        // pause in ~50ms — the user's exact observation "script still
-        // executing". Resolve ONLY on the nobody-received error.
-        const dbgErr = (chrome.runtime && chrome.runtime.lastError) ? String(chrome.runtime.lastError.message || '') : '';
-        if (dbgErr && /Receiving end does not exist/i.test(dbgErr)) {
-          const p = hoverDebugPending.get(reqId);
-          if (p) {
-            hoverDebugPending.delete(reqId);
-            p.sendResponse({ observation: null, reason: 'no receiver' });
-          }
-        } else if (dbgErr) {
-          debugLogger.log('info', 'background', '[hover-debug-relay] panel delivered, port closed (answer rides the separate response)', { reqId, portErr: dbgErr.slice(0, 80) });
-        }
-      });
-    } catch (e) {
-      const p = hoverDebugPending.get(reqId);
-      if (p) {
-        hoverDebugPending.delete(reqId);
-        p.sendResponse({ observation: null, reason: 'broadcast error' });
-      }
-    }
-    return true;
-  }
-  if (message.type === 'HOVER_DEBUG_INSPECT_RESPONSE') {
-    const p = hoverDebugPending.get(message.reqId);
-    if (p) {
-      hoverDebugPending.delete(message.reqId);
-      if (message.stopAsking) {
-        try { chrome.storage.local.set({ hoverDebugInspect: false }); } catch (_) {}
-      }
-      p.sendResponse({ observation: message.observation || null });
-    }
     return false;
   }
   if (message.type === 'OPEN_TAB_EXECUTE') {

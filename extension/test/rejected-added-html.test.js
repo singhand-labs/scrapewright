@@ -117,9 +117,9 @@ describe('hundred-third log: domHover attaches rejected evidence UNGATED (source
     assert.match(body, /if \(!htmlSnippet && rejectedAddedTexts\.length\) \{[\s\S]*?rejectedAddedNote/,
       'the note text is about the NO-POPOVER path; it stays there');
   });
-  it('debug panel payload carries rejectedAddedHtml so the user can compare', () => {
+  it('rejectedAddedHtml stays on the result payload (panel removed with [HOVER-DEBUG-TEMP])', () => {
     const body = sliceDomHover();
-    assert.match(body, /rejectedAddedHtml: rejectedAddedHtml \|\| \[\]/, 'panel texts include the fragments');
+    assert.match(body, /rejectedAddedHtml/, 'the fragments still flow through the hover result');
   });
 });
 

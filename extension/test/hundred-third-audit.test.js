@@ -115,7 +115,9 @@ describe('audit B: hover_anchor_timing dismissMs measures the real dismiss again
       'the 101st-round move put the dismiss after result assembly; the timing notify must follow it or dismissMs logs 0/1 forever');
     const chunk = CS.slice(notifyIdx, notifyIdx + 700);
     assert.match(chunk, /dismissMs:/, 'dismissMs kept');
-    assert.match(chunk, /pauseMs:/, 'the debug-pause duration is separated from the dismiss duration');
+    // pauseMs removed with the [HOVER-DEBUG-TEMP] panel (round 172) —
+    // dismissMs now measures from dwellDoneAt directly.
+    assert.match(chunk, /dismissMs: dismissDoneAt - dwellDoneAt/, 'dismissMs measures from dwell (no pause offset)');
   });
 });
 
