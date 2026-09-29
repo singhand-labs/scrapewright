@@ -72,7 +72,7 @@ describe('110th-A: collectFieldSamplesFromOutput mines prior-execution field sam
 describe('110th-B: wizard wiring (source audit)', () => {
   it('the same-site ledger seed mines executionLogs field samples into a contradiction entry', () => {
     const i = WJ_SRC.indexOf('seedLedgerFromSameSite(registry');
-    const block = WJ_SRC.slice(i, i + 3200);
+    const block = WJ_SRC.slice(i, i + 4000); // 170th round: prior-service-evidence insertion widened the span
     assert.match(block, /executionLogs/, 'prior service execution history read');
     assert.match(block, /collectFieldSamplesFromOutput/, 'the sampler is used');
     assert.match(block, /SAME-SITE FIELD SAMPLES/, 'ledger entry names the contradiction');

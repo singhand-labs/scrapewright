@@ -1119,6 +1119,7 @@
             // supply was ~4 (12 matched containers were nested/remounted
             // nodes + recommendation cards without permalinks).
             let distinctIds170 = null;
+            let upstreamDistinct170 = null;
             let idField170 = null;
             try {
               const semRows170 = (typeof WU.inferFieldSemantics === 'function') ? (WU.inferFieldSemantics(outputSchema) || []) : [];
@@ -1130,11 +1131,39 @@
                   const vals = arr170.map((r) => r ? String(r[idRow.field] || '') : '').filter(Boolean);
                   distinctIds170 = new Set(vals).size;
                 }
+                // 170th review fix #1: the census was ambiguous — distinct
+                // ids from the FINAL output cannot distinguish a true
+                // supply shortage from an assembly collapse (upstream had
+                // >= requested distinct ids, the merge dropped some). The
+                // upstream producing step's result carries the
+                // pre-assembly records — census those too and prefer the
+                // upstream count for the supply verdict.
+                if (Array.isArray(result && result.steps)) {
+                  for (const stUp of result.steps) {
+                    const resUp = stUp && stUp.result;
+                    if (!resUp || typeof resUp !== 'object') continue;
+                    const arrUp = resUp[csA.field];
+                    if (!Array.isArray(arrUp) || arrUp.length <= (distinctIds170 || 0)) continue;
+                    const valsUp = arrUp.map((r) => r ? String(r[idRow.field] || '') : '').filter(Boolean);
+                    const dUp = new Set(valsUp).size;
+                    if (dUp > (upstreamDistinct170 || 0)) upstreamDistinct170 = dUp;
+                  }
+                }
               }
             } catch (eId) { /* census best-effort */ }
-            const supplyBranch170 = (distinctIds170 !== null && distinctIds170 < csA.requested);
+            // Supply verdict: only when the BEST distinct-id evidence
+            // (upstream if available, else final) is still below the
+            // request. An upstream count >= requested with a final count
+            // below it is an ASSEMBLY collapse by definition.
+            const bestDistinct170 = Math.max(distinctIds170 || 0, upstreamDistinct170 || 0);
+            // An all-empty id column (distinctIds === 0) is the empty-
+            // extraction gate's domain — the census is uninformative.
+            const supplyBranch170 = (bestDistinct170 > 0 && bestDistinct170 < csA.requested);
             const censusLine170 = (distinctIds170 !== null)
-              ? ' identity census: ' + csA.maxContainers + ' containers matched, ' + distinctIds170 + ' distinct ' + (idField170 || 'id') + ' value(s) in the output.'
+              ? ' identity census: ' + csA.maxContainers + ' containers matched, ' + distinctIds170 + ' distinct ' + (idField170 || 'id') + ' value(s) in the output' +
+                (upstreamDistinct170 !== null && upstreamDistinct170 > distinctIds170
+                  ? ', but the extract step produced ' + upstreamDistinct170 + ' distinct value(s) BEFORE the merge — the loss is in the ASSEMBLY.'
+                  : '.')
               : '';
             error = new Error(
               'COUNT_SHORTFALL_' + (supplyBranch170 ? 'SUPPLY' : 'ASSEMBLY') + ': ' + csA.field + ' delivered ' + csA.extracted + ' of ' + csA.requested +
@@ -1354,7 +1383,7 @@
                 // component (no month name, no year, no date pattern).
                 const noDateShapeT = badT.filter((b) => {
                   const v = String(b.value || '');
-                  const hasDateComp = /(January|February|March|April|May|June|July|August|September|October|November|December|\d{4})|\b\d{1,2}\/\d{1,2}\b/i.test(v);
+                  const hasDateComp = /\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\b|\d{4}|\b\d{1,2}\/\d{1,2}\b/i.test(v);
                   // Relative ages ("2 days ago", "yesterday", "5h") are the
                   // RELATIVE_TIMESTAMP tier (76th ladder) — NOT shape
                   // violations. Exclude them so TIME_SHAPE only catches

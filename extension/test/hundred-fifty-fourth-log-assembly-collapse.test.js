@@ -103,7 +103,7 @@ describe('154th log F1 — COUNT_SHORTFALL_ASSEMBLY veto', () => {
     assert.equal(out.report.ok, false, '4 of 10 with 14 containers matched is not green');
     assert.match(out.report.error.message, /COUNT_SHORTFALL_(SUPPLY|ASSEMBLY)/);
     assert.match(out.report.error.message, /SUPPLY|ASSEMBLY/i);
-    assert.match(out.report.error.message, /per-record (key|identity)|Narrow the container/i);
+    assert.match(out.report.error.message, /Narrow the container selector|distinct/i);
     assert.ok(/io\.confirm|renegotiate/.test(out.report.error.message) || /SUPPLY/.test(out.report.error.message), 'exits present');
     assert.match(out.report.error.message, /\$collectUntil/);
   });

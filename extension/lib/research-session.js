@@ -944,7 +944,13 @@
     // to fix now than never.
     try {
       const hasVerified = state.transcript.some((e) => e && e.kind === 'tool' && e.name === 'verify.run');
-      if (!hasVerified && state.spend.turns >= Math.floor(budgets.maxTurns * 0.65) &&
+      // 170th review fix #7: when the 45% advisory already fired and there
+      // is still no artifact, the 65% one adds only noise — the early one
+      // is the better-scoped instruction for that state.
+      const earlyAlreadyFired = state.budgetAdvisories.indexOf('first-verify-early') !== -1;
+      const hasArtifactByNow = state.artifactVersions.length > 0;
+      if (!hasVerified && !(earlyAlreadyFired && !hasArtifactByNow) &&
+          state.spend.turns >= Math.floor(budgets.maxTurns * 0.65) &&
           state.budgetAdvisories.indexOf('first-verify') === -1) {
         state.budgetAdvisories.push('first-verify');
         state.transcript.push({ kind: 'system', text: 'BUDGET ADVISORY (65% of the turn budget spent: ' + state.spend.turns + ' of ' + budgets.maxTurns + ' — ZERO verify.run calls): run verify.run on the current artifact THIS TURN. A first red at turn ~75 of 80 cannot be fixed before the cap — the incident session died exactly there with one anchor-blind error and no runway. Red findings early are cheap; a perfect research phase that never verifies is a failed session. If no artifact exists yet, service.update a best-grounded draft first, then verify.' });

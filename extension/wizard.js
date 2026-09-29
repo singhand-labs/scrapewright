@@ -3380,6 +3380,18 @@ async function startResearchSession(seedOverride) {
       if (svc) {
         seed = { ledger: svc.findingsLedger };
         appendLog('Ledger seeded from service ' + svc.name + ' (same target site) — prior findings carry forward');
+        // 170th round (review fix #2): the prior service's step scripts
+        // carry measured evidence (container selectors, hover anchors,
+        // API families) — summarize them as a ledger note so a fresh
+        // session reuses the measurements instead of re-deriving from
+        // zero (the 169th incident spent 78% of its budget re-probing).
+        try {
+          const priorNote = summarizePriorServiceEvidence(svc);
+          if (priorNote && seed.ledger) {
+            seed.ledger.entries = seed.ledger.entries || [];
+            seed.ledger.entries.push({ id: 'prior-service-evidence', title: 'Prior session measurements', body: priorNote, confidence: 'high', provenance: 'prior-service' });
+          }
+        } catch (ePS) { /* prior-evidence seed is best-effort */ }
         // Hundred-tenth log (user: "comments shares 都是空，反馈了也没修复"):
         // a rebuilt service concluded "the page never renders X" from one
         // cold-tab sweep while the PRIOR same-site service's execution
