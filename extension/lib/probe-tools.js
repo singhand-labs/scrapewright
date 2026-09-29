@@ -1463,6 +1463,16 @@
       if (out.timeHover && out.timeHover.error) {
         out.note += ' timeHover failed (hover phase ONLY — the lanes above are unaffected; retry the timestamp separately via probe.timestamp).';
       }
+      // 175th round (live: first census hit 4 recommendation cards, the
+      // model spent 35 turns serial-hunting the real population, and the
+      // contract landed at turn 43). Two census-shaped guards: a small
+      // population is itself evidence the container may be the wrong
+      // repeating item; and after ANY retarget the census is the cheap
+      // re-grounding — one call, fresh lanes, never a per-field fallback.
+      if (recs.length <= 5) {
+        out.note += ' only ' + recs.length + ' container(s) matched — a population this small is suspicious for a repeating-item requirement: check the lane TEXTS against what the requirement describes (a recommendation or chrome strip often matches the same container shape), and if this is the wrong population, re-target containerSel and RE-CENSUS.';
+      }
+      out.note += ' Changing containerSel? re-run the census on the new selector — one call returns fresh lanes; do NOT fall back to serial per-field probes.';
       if (observationLog) {
         observationLog.record({ tool: 'probe.census', selectors: [containerSel], summary: 'census total=' + recs.length + ' lanes=' + Object.keys(lanes).join('+') + (hrefIdentity.length ? ' hrefIdentity=' + hrefIdentity.length : '') + (a.hover === true ? ' +hover' : '') });
       }

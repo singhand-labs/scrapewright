@@ -331,3 +331,23 @@ describe('probe.census steering wiring (source audit)', () => {
     assert.ok(!/facebook|twitter|linkedin|tiktok|reddit|\bfb\b/i.test(block), 'site-agnostic');
   });
 });
+
+describe('probe.census population-suspicion + retarget teaching (175th round)', () => {
+  it('a small population flags the wrong-container suspicion in the note', async () => {
+    const { tools } = makeCensusTools([cardHtml(1), cardHtml(2)]);
+    const r = await tools.census({ containerSel: 'div.card' });
+    assert.match(r.note, /only 2 container\(s\) matched — a population this small is suspicious/,
+      'the live 175th incident: the first census matched 4 recommendation cards and the model burned 35 turns serial-hunting before the contract');
+    assert.match(r.note, /re-target containerSel and RE-CENSUS/);
+  });
+
+  it('a healthy population skips the suspicion clause but keeps the retarget teaching', async () => {
+    const records = [];
+    for (let i = 0; i < 7; i++) records.push(cardHtml(i + 1));
+    const { tools } = makeCensusTools(records);
+    const r = await tools.census({ containerSel: 'div.card' });
+    assert.doesNotMatch(r.note, /population this small is suspicious/);
+    assert.match(r.note, /Changing containerSel\? re-run the census on the new selector/,
+      'after ANY retarget the census is the cheap re-grounding — never a serial per-field fallback');
+  });
+});

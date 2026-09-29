@@ -937,16 +937,56 @@
     // 80 turns (78%) on research before authoring; the first verify at
     // turn 71 left no runway for fix cycles. The 75% author advisory is
     // too late when research runs deep; this fires at the midpoint.
-    try {
-      const hasArtifact170 = state.artifactVersions.length > 0;
-      const hasVerified170 = state.transcript.some((e) => e && e.kind === 'tool' && e.name === 'verify.run');
-      if (!hasArtifact170 && !hasVerified170 && state.spend.turns >= Math.floor(budgets.maxTurns * 0.45) &&
-          state.budgetAdvisories.indexOf('first-verify-early') === -1) {
-        state.budgetAdvisories.push('first-verify-early');
-        state.transcript.push({ kind: 'system', text: 'BUDGET ADVISORY (45% of the turn budget spent: ' + state.spend.turns + ' of ' + budgets.maxTurns + ' — no artifact, no verify yet): submit a best-grounded draft via service.update NOW and run verify.run. The 169th incident spent 78% of the budget on research before the first verify — the red findings at turn 71+ had no runway to fix. Research perfection is the failure mode; a verified red beats an unverified perfect plan.' });
-        emit('budget_advisory', { key: 'first-verify-early', turns: state.spend.turns, maxTurns: budgets.maxTurns, noArtifact: true });
-      }
-    } catch (eFVE) { /* advisory is best-effort */ }
+    // Round-175 revival: like the field-fail ledger before it, this was a
+    // stray createResearchSession-body statement — it ran ONCE at turn 0
+    // (when 0 < 45% of any budget) and never again. The 174th live log
+    // confirmed it across SEVEN sessions: author/finalize/half advisories
+    // fired 6-7x each while first-verify-early and first-verify fired
+    // ZERO times — including two maxTurns deaths that were exactly this
+    // advisory's shape. Both are per-turn ticks now.
+    function tickEarlyVerifyAdvisory() {
+      try {
+        const hasArtifact170 = state.artifactVersions.length > 0;
+        const hasVerified170 = state.transcript.some((e) => e && e.kind === 'tool' && e.name === 'verify.run');
+        if (!hasArtifact170 && !hasVerified170 && state.spend.turns >= Math.floor(budgets.maxTurns * 0.45) &&
+            state.budgetAdvisories.indexOf('first-verify-early') === -1) {
+          state.budgetAdvisories.push('first-verify-early');
+          state.transcript.push({ kind: 'system', text: 'BUDGET ADVISORY (45% of the turn budget spent: ' + state.spend.turns + ' of ' + budgets.maxTurns + ' — no artifact, no verify yet): submit a best-grounded draft via service.update NOW and run verify.run. The 169th incident spent 78% of the budget on research before the first verify — the red findings at turn 71+ had no runway to fix. Research perfection is the failure mode; a verified red beats an unverified perfect plan.' });
+          emit('budget_advisory', { key: 'first-verify-early', turns: state.spend.turns, maxTurns: budgets.maxTurns, noArtifact: true });
+        }
+      } catch (eFVE) { /* advisory is best-effort */ }
+    }
+
+    // 175th round (user observation: io.confirm landed at turn 43 of 80).
+    // The census build made the field inventory available at turn ~3, yet
+    // the first census hit the WRONG population (recommendation cards) and
+    // the model fell back to 35 turns of serial hunting before proposing
+    // the contract. Rule 9 teaches census-is-the-coarse-look, but prompt
+    // text does not enforce pacing — this tick does for the contract what
+    // the budget advisories do for authoring: at turn 12 with no confirmed
+    // io.confirm (and no artifact — service.update is contract-gated),
+    // order the proposal; escalate once at turn 24.
+    function tickContractDelayAdvisory() {
+      try {
+        if (state.artifactVersions.length > 0) return;
+        const ioConfirmed = state.transcript.some((e) => e && e.kind === 'tool' && e.name === 'io.confirm' && e.ok !== false);
+        if (ioConfirmed) return;
+        const key = state.spend.turns >= 24 ? 'contract-delay-escalated' : 'contract-delay';
+        if (state.budgetAdvisories.indexOf('contract-delay-escalated') !== -1) return;
+        if (key === 'contract-delay' && state.budgetAdvisories.indexOf('contract-delay') !== -1) return;
+        if (key === 'contract-delay' && state.spend.turns < 12) return;
+        if (key === 'contract-delay-escalated' && state.spend.turns < 24) return;
+        state.budgetAdvisories.push(key);
+        const base = 'CONTRACT DELAY: turn ' + state.spend.turns + ' of ' + budgets.maxTurns + ' and the I/O contract is still unconfirmed. ';
+        if (key === 'contract-delay') {
+          state.transcript.push({ kind: 'system', text: base + 'The requirement wording plus the census lanes (or one fresh probe.census on the repeating container) are ENOUGH to propose io.confirm NOW — renegotiation is cheap (the user edits the panel), deep research before the contract is the expensive path; a live session burned 43 of 80 turns pre-contract exactly this way. If a field existence is genuinely unknown, propose it OPTIONAL and let the user strike it.' });
+        } else {
+          state.transcript.push({ kind: 'system', text: base + 'This is the second and FINAL nudge. Propose io.confirm in your NEXT turn with your best-grounded schemas — an unconfirmed contract blocks service.update AND annotate.request, so every further probe is budget spent on a shape the user has not seen. Unknown fields go in as optional.' });
+        }
+        emit('budget_advisory', { key: key, turns: state.spend.turns, maxTurns: budgets.maxTurns });
+      } catch (eCD) { /* advisory is best-effort */ }
+    }
+
 
     // 171st round: field-fail ledger. When the same FIELD fails twice
     // across verifies, the model cannot see where the value lives. The
@@ -988,8 +1028,10 @@
     // author advisory is not enough when an artifact already exists: the
     // model keeps perfecting via probes. At 65% of the turn budget with
     // ZERO verify.run calls, order the switch — red findings are cheaper
-    // to fix now than never.
-    try {
+    // to fix now than never. (Round-175 revival: per-turn tick, see the
+    // 170th block above for the dead-statement history.)
+    function tickVerifyLatencyAdvisory() {
+      try {
       const hasVerified = state.transcript.some((e) => e && e.kind === 'tool' && e.name === 'verify.run');
       // 170th review fix #7: when the 45% advisory already fired and there
       // is still no artifact, the 65% one adds only noise — the early one
@@ -1003,7 +1045,8 @@
         state.transcript.push({ kind: 'system', text: 'BUDGET ADVISORY (65% of the turn budget spent: ' + state.spend.turns + ' of ' + budgets.maxTurns + ' — ZERO verify.run calls): run verify.run on the current artifact THIS TURN. A first red at turn ~75 of 80 cannot be fixed before the cap — the incident session died exactly there with one anchor-blind error and no runway. Red findings early are cheap; a perfect research phase that never verifies is a failed session. If no artifact exists yet, service.update a best-grounded draft first, then verify.' });
         emit('budget_advisory', { key: 'first-verify', turns: state.spend.turns, maxTurns: budgets.maxTurns, zeroVerifies: true });
       }
-    } catch (eFV) { /* advisory is best-effort */ }
+      } catch (eFV) { /* advisory is best-effort */ }
+    }
 
     function assembleMessages() {
       const sys = Protocol.buildSystemPrompt({
@@ -1352,6 +1395,12 @@
             break;
           }
           if (state.spend.promptTokens + state.spend.completionTokens >= budgets.tokenCap) { report = await stop('tokenCap', buildTokenCapDetail(state.spend, budgets)); break; }
+          // Pacing ticks run BEFORE the bucket family so same-turn
+          // coincidences keep the natural escalation order (45% early →
+          // 65% latency → contract-delay → 50/75/90 buckets).
+          tickEarlyVerifyAdvisory();
+          tickVerifyLatencyAdvisory();
+          tickContractDelayAdvisory();
           maybeBudgetAdvisory();
           tickFieldFailLedger();
 

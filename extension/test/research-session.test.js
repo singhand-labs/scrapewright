@@ -659,14 +659,23 @@ describe('budgets and breakers', () => {
     await session.run();
     const st = session.state().session;
     const advisories = st.transcript.filter(e => e.kind === 'system' && /BUDGET ADVISORY/.test(e.text));
-    assert.equal(advisories.length, 3, 'exactly one advisory per bucket');
-    assert.match(advisories[0].text, /half the turn budget spent: 10 of 20/);
-    assert.match(advisories[1].text, /75% of the turn budget spent: 15 of 20/);
-    assert.match(advisories[1].text, /NO ARTIFACT YET/,
+    // 175th round: first-verify-early is a per-turn tick now — it fires at
+    // turn 9 (45% of 20) in a FRESH session too, which the dead-statement
+    // era could never do (the stray body statement only executed at
+    // creation, turns=0). The contract-delay note (turn 12) says CONTRACT
+    // DELAY, not BUDGET ADVISORY, so it stays outside this filter but
+    // joins budgetAdvisories.
+    assert.equal(advisories.length, 4, 'one advisory per bucket plus the revived 45% early-verify');
+    assert.match(advisories[0].text, /45% of the turn budget spent: 9 of 20/);
+    assert.match(advisories[1].text, /half the turn budget spent: 10 of 20/);
+    assert.match(advisories[2].text, /75% of the turn budget spent: 15 of 20/);
+    assert.match(advisories[2].text, /NO ARTIFACT YET/,
       'nineteenth log: artifact v1 landed at 55/60 — the no-artifact 75% advisory escalates to a direct order');
-    assert.match(advisories[2].text, /90% of the turn budget spent: 18 of 20/);
-    assert.match(advisories[2].text, /FINALIZE/);
-    assert.deepEqual(st.budgetAdvisories.sort(), ['author', 'finalize', 'half']);
+    assert.match(advisories[3].text, /90% of the turn budget spent: 18 of 20/);
+    assert.match(advisories[3].text, /FINALIZE/);
+    assert.deepEqual(st.budgetAdvisories.sort(), ['author', 'contract-delay', 'finalize', 'first-verify-early', 'half']);
+    const cd175 = st.transcript.find(e => e.kind === 'system' && /CONTRACT DELAY: turn 12 of 20/.test(e.text || ''));
+    assert.ok(cd175, 'contract-delay fired at turn 12 alongside the bucket family');
   });
 
   it('75% advisory reverts to pacing advice once an artifact exists (nineteenth log)', async () => {
@@ -719,11 +728,14 @@ describe('budgets and breakers', () => {
     // >= 9, no artifact at resume) — 4 advisories now.
     // 170th review fix #7: the 65% advisory is suppressed when the 45%
     // one already fired and there is still no artifact — 3 advisories.
+    // 175th round: contract-delay also fires at 16 (>= 12, unconfirmed)
+    // but its note text reads CONTRACT DELAY — outside this filter; it
+    // joins budgetAdvisories below.
     assert.equal(advisories.length, 3);
     assert.match(advisories[0].text, /45% of the turn budget spent: 16 of 20/);
     assert.match(advisories[1].text, /75% of the turn budget spent: 16 of 20/);
     assert.match(advisories[2].text, /90% of the turn budget spent: 18 of 20/);
-    assert.deepEqual(st.budgetAdvisories.sort(), ['author', 'finalize', 'first-verify-early', 'half']);
+    assert.deepEqual(st.budgetAdvisories.sort(), ['author', 'contract-delay', 'finalize', 'first-verify-early', 'half']);
   });
 });
 
@@ -2067,5 +2079,94 @@ describe('twenty-first log: protocol-violation nudges teach strict JSON quoting'
     const sys = session.state().session.transcript.filter(e => e.kind === 'system');
     assert.ok(sys.some(e => /single quotes/i.test(e.text)), 'nudge names the single-quote failure class');
     assert.ok(sys.some(e => /double quotes/i.test(e.text)), 'nudge demands double quotes');
+  });
+});
+
+// 175th round (user observations on the census build's live log): the
+// contract landed at turn 43 of 80, and the 167th/170th pacing advisories
+// had NEVER fired across seven sessions — both were stray
+// createResearchSession-body statements executing once at turn 0 (the same
+// dead class the 173c review found in the field-fail ledger). These tests
+// pin the revived per-turn ticks and the new contract-delay advisory.
+describe('175th round: pacing advisories actually fire per turn', () => {
+  const probeTurn = envelope('probe.count', { sel: 'div.card' });
+
+  it('first-verify-early fires at 45% turns with no artifact and no verify (was dead code)', async () => {
+    const events = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([reply(probeTurn)], []),
+      tools: { 'probe.count': async () => ({ count: 1 }) },
+      budgets: { maxTurns: 10 },
+      onEvent: (e) => events.push(e)
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'maxTurns');
+    assert.ok(events.some((e) => e.type === 'budget_advisory' && e.key === 'first-verify-early'),
+      'the 45% advisory fired (it never fired once across seven live sessions while dead)');
+    const note = session.state().session.transcript.find((e) => e && e.kind === 'system' && /45% of the turn budget spent/.test(e.text || ''));
+    assert.ok(note, 'the advisory note reached the transcript');
+  });
+
+  it('first-verify (65%, zero verifies) fires when an artifact exists but no verify ran', async () => {
+    const events = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(JSON.stringify({ think: 't', tool: 'service.update', args: { steps: [{ id: 's1', name: 'one', script: 'return 1', onSuccess: 'TERMINATE' }] } })),
+        reply(probeTurn)
+      ], []),
+      tools: {
+        'service.update': async () => ({ version: 1 }),
+        'probe.count': async () => ({ count: 1 })
+      },
+      budgets: { maxTurns: 20 },
+      onEvent: (e) => events.push(e)
+    });
+    await session.run();
+    assert.ok(events.some((e) => e.type === 'budget_advisory' && e.key === 'first-verify'),
+      'the 65% latency advisory fired (was a stray creation-time statement — fresh sessions never saw it)');
+    assert.ok(!events.some((e) => e.type === 'budget_advisory' && e.key === 'first-verify-early'),
+      'the 45% advisory stays silent when an artifact exists (review fix #7 scoping)');
+    assert.ok(!events.some((e) => e.type === 'budget_advisory' && e.key === 'contract-delay'),
+      'contract-delay stays silent too — an artifact implies the contract was confirmed');
+  });
+
+  it('contract-delay nudges at turn 12, escalates at 24, and stays silent once io.confirm succeeded', async () => {
+    const events = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([reply(probeTurn)], []),
+      tools: { 'probe.count': async () => ({ count: 1 }) },
+      budgets: { maxTurns: 26 },
+      onEvent: (e) => events.push(e)
+    });
+    await session.run();
+    const keys = events.filter((e) => e.type === 'budget_advisory').map((e) => e.key);
+    assert.ok(keys.indexOf('contract-delay') !== -1, 'first nudge at turn 12');
+    assert.ok(keys.indexOf('contract-delay-escalated') !== -1, 'escalation at turn 24');
+    assert.ok(keys.indexOf('contract-delay') < keys.indexOf('contract-delay-escalated'), 'ordering: nudge before escalation');
+    const note = session.state().session.transcript.find((e) => e && e.kind === 'system' && /CONTRACT DELAY/.test(e.text || ''));
+    assert.ok(note && /io\.confirm/.test(note.text), 'the note orders the io.confirm proposal');
+
+    // Negative: a successful io.confirm early in the session disarms both.
+    const events2 = [];
+    const session2 = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('io.confirm', { inputSchema: { type: 'object' }, outputSchema: { type: 'object' } })),
+        reply(probeTurn)
+      ], []),
+      tools: {
+        'io.confirm': async () => ({ confirmed: true }),
+        'probe.count': async () => ({ count: 1 })
+      },
+      budgets: { maxTurns: 14 },
+      onEvent: (e) => events2.push(e)
+    });
+    await session2.run();
+    const keys2 = events2.filter((e) => e.type === 'budget_advisory').map((e) => e.key);
+    assert.ok(keys2.indexOf('contract-delay') === -1 && keys2.indexOf('contract-delay-escalated') === -1,
+      'a confirmed io.confirm disarms the contract-delay advisory');
   });
 });
