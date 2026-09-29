@@ -340,7 +340,7 @@ describe('audit plan1: wizard lifecycle state machine (A1/A2/A3/A5/A6/A17/A18 + 
   });
 
   it('A5: manual test from phase 4/5 parks the session controls and hides bridge panels', () => {
-    const m = SRC.match(/async function runTestFromStep5\(\) \{[\s\S]{0,2000}?await testScript\(\);/);
+    const m = SRC.match(/async function runTestFromStep5\(\) \{[\s\S]{0,2000}?await runTestScriptUserFacing\(\);/);
     assert.ok(m);
     assert.match(m[0], /setSessionControls\('idle'\)/);
     assert.match(m[0], /annPanel\) annPanel\.classList\.add\('hidden'\)/);

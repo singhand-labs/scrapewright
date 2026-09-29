@@ -118,3 +118,68 @@ describe('FIX-C: end-to-end — domExtractList success path carries the differen
     assert.match(out._diagnostics.note || '', /removed 1 of 3/);
   });
 });
+
+// 175th round (#35): $extractList range opts — containerIndex /
+// containerRange [start,end) / maxContainers narrow the read BEFORE field
+// evaluation; diagnostics restore the population truth; a past-the-end
+// range is a spent cursor, not a selector miss.
+describe('175th round: $extractList range opts', () => {
+  const fs175 = require('fs');
+  const SRC175 = fs175.readFileSync(require('path').join(__dirname, '../content-script.js'), 'utf8');
+  function slice175(name) {
+    const start = SRC175.indexOf('function ' + name + '(');
+    assert.ok(start > -1, name + ' defined');
+    let depth = 0, i = start;
+    for (; i < SRC175.length; i++) {
+      if (SRC175[i] === '{') depth += 1;
+      else if (SRC175[i] === '}') { depth -= 1; if (depth === 0) break; }
+    }
+    return SRC175.slice(start, i + 1);
+  }
+  function build175(n) {
+    const containers = [];
+    for (let i = 0; i < n; i++) containers.push({ i: i });
+    const factory = eval('(function (querySelectorAllDeep, sendDebugLog, notifyBackgroundDiagnostic, getListExtractOps, computeSelectorDifferential, formatSelectorDifferentialNote, attachClauseCostCensus) { return (' + slice175('domExtractList') + '); })');
+    return factory(
+      () => containers,
+      () => {},
+      () => {},
+      () => ({
+        extractListRecords: (cs) => cs.map((c) => ({ i: c.i })),
+        computeExtractListDiagnostics: (cs) => ({ api: 'extractList', containerSelector: '.c', containerMatches: cs.length, perField: [] })
+      }),
+      () => null,
+      () => null,
+      (d) => d
+    );
+  }
+
+  it('containerRange [1,3) reads 2 of 5; diagnostics carry the population truth', () => {
+    const fn = build175(5);
+    const out = fn('.c', { i: {} }, { containerRange: [1, 3] });
+    assert.deepEqual(out.result, [{ i: 1 }, { i: 2 }]);
+    assert.equal(out._diagnostics.containerMatches, 5, 'population truth restored over the slice');
+    assert.equal(out._diagnostics.totalMatches, 5);
+    assert.equal(out._diagnostics.processedContainers, 2);
+    assert.match(out._diagnostics.rangeNote, /containerRange \[1,3\) of 5/);
+  });
+
+  it('containerIndex and maxContainers narrow the same way', () => {
+    const fn = build175(5);
+    assert.deepEqual(fn('.c', { i: {} }, { containerIndex: 2 }).result, [{ i: 2 }]);
+    assert.deepEqual(fn('.c', { i: {} }, { maxContainers: 2 }).result, [{ i: 0 }, { i: 1 }]);
+  });
+
+  it('more than one range opt set is a hard error', () => {
+    const fn = build175(5);
+    assert.throws(() => fn('.c', { i: {} }, { containerIndex: 0, maxContainers: 2 }), /only one of containerIndex\/containerRange\/maxContainers/);
+  });
+
+  it('a past-the-end range resolves the spent-cursor envelope with the real count', () => {
+    const fn = build175(5);
+    const out = fn('.c', { i: {} }, { containerRange: [9, 12] });
+    assert.deepEqual(out.result, []);
+    assert.equal(out._diagnostics.containerMatches, 5);
+    assert.match(out._diagnostics.note, /selected no containers — the population is smaller than the range/);
+  });
+});

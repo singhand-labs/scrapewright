@@ -316,6 +316,13 @@
     // Exported so probe.census's aria lane escapes class tokens with the
     // SAME escaper buildLeafSelector uses (one definition, no drift).
     CSSescape,
+    // 175th round (#34 parse amplification): census walks each sampled
+    // container's leaves ONCE, scoring every lane per leaf — these three
+    // primitives (previously findFieldCandidates internals) let the caller
+    // reuse one parsed doc instead of re-parsing per lane.
+    collectLeaves,
+    scoreLeaf,
+    buildLeafSelector,
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

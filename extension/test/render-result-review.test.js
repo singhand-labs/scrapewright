@@ -160,3 +160,48 @@ describe('presentSessionCompletion STALE LIST (source audit)', () => {
     assert.match(tsFn, /wizardState\.lastCompletionError = null;/, 'each fresh run starts clean');
   });
 });
+
+// 175th round (review #36): the three USER-TRIGGERED testScript call sites
+// (Retry Test button, runTestFromStep5, custom-input run) route through
+// runTestScriptUserFacing — a thrown run surfaces in the log, a toast, and
+// the review panel red row instead of dying as an unhandled rejection.
+describe('175th round: user-triggered test runs surface failures', () => {
+  const fs175 = require('fs');
+  const SRC = fs175.readFileSync(require('path').join(__dirname, '../wizard.js'), 'utf8');
+  const testScriptCallSites = () => {
+    const sites = [];
+    let idx = SRC.indexOf('await testScript()');
+    while (idx !== -1) { sites.push(idx); idx = SRC.indexOf('await testScript()', idx + 1); }
+    return sites;
+  };
+
+  it('runTestScriptUserFacing is defined and catches into log + toast + review row', () => {
+    assert.match(SRC, /async function runTestScriptUserFacing\(\)/);
+    const helperStart = SRC.indexOf('async function runTestScriptUserFacing()');
+    const helperEnd = SRC.indexOf('\n}', helperStart);
+    const body = SRC.slice(helperStart, helperEnd);
+    assert.match(body, /lastCompletionError = /, 'records the failure for the review red row');
+    assert.match(body, /appendLog\('Test run failed/, 'logs the failure');
+    assert.match(body, /showToast\('Test run failed/, 'toasts the failure');
+    assert.match(body, /renderResultReview\(\)/, 're-renders the review with the error');
+  });
+
+  it('every await testScript() site is one of the three sanctioned ones (helper, session completion, reverify)', () => {
+    const sites = testScriptCallSites();
+    assert.equal(sites.length, 3, 'exactly three bare awaits remain: inside runTestScriptUserFacing, presentSessionCompletion, and the reverify handler — got ' + sites.length);
+    const helperIdx = SRC.indexOf('async function runTestScriptUserFacing()');
+    const completionIdx = SRC.indexOf('async function presentSessionCompletion()');
+    const reverifyIdx = SRC.indexOf("rvBtn.id = 'btnReverifyCurrent'");
+    for (const s of sites) {
+      const inHelper = s > helperIdx && s < SRC.indexOf('\n}', helperIdx);
+      const inCompletion = s > completionIdx && s < SRC.indexOf('\nasync function ', completionIdx + 10);
+      const inReverify = s > reverifyIdx && s < SRC.indexOf("});", reverifyIdx);
+      assert.ok(inHelper || inCompletion || inReverify, 'bare await at offset ' + s + ' outside the sanctioned sites');
+    }
+  });
+
+  it('the three user-triggered sites route through the wrapper', () => {
+    const wrapped = SRC.split('await runTestScriptUserFacing();').length - 1;
+    assert.equal(wrapped, 3, 'Retry Test, runTestFromStep5, and the custom-input run each call the wrapper');
+  });
+});

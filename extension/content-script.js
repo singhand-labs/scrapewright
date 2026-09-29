@@ -2967,11 +2967,67 @@
         }
       };
     }
+    // 175th round (review #35): range opts mirror $extractWithHover —
+    // containerIndex / containerRange [start,end) / maxContainers narrow
+    // which containers get read BEFORE any field evaluation, so a caller
+    // sampling a big population (probe.census reads 3 evenly spaced
+    // containers) does not relay every container is HTML through the
+    // offscreen->background->wizard chain. At most one may be set.
+    var rlIdx = opts && opts.containerIndex;
+    var rlRange = opts && opts.containerRange;
+    var rlMax = opts && opts.maxContainers;
+    var rlSet = (rlIdx != null ? 1 : 0) + (rlRange ? 1 : 0) + (rlMax != null ? 1 : 0);
+    if (rlSet > 1) {
+      throw new Error('$extractList only one of containerIndex/containerRange/maxContainers may be set');
+    }
+    var rlNote = null;
+    var totalPopulation = containers.length;
+    if (rlSet === 1) {
+      var before = containers.length;
+      if (rlIdx != null) {
+        if (rlIdx < 0) throw new Error('$extractList containerIndex must be >= 0, got ' + rlIdx);
+        containers = (rlIdx < containers.length) ? [containers[rlIdx]] : [];
+        rlNote = 'containerIndex ' + rlIdx + ' of ' + before;
+      } else if (rlRange) {
+        var rlStart = typeof rlRange[0] === 'number' ? Math.max(0, rlRange[0]) : 0;
+        var rlEnd = typeof rlRange[1] === 'number' ? Math.min(containers.length, rlRange[1]) : containers.length;
+        containers = containers.slice(rlStart, rlEnd);
+        rlNote = 'containerRange [' + rlStart + ',' + rlEnd + ') of ' + before;
+      } else {
+        containers = containers.slice(0, Math.max(0, rlMax));
+        rlNote = 'maxContainers ' + rlMax + ' of ' + before;
+      }
+      if (containers.length === 0) {
+        // A range that lies past the end is a spent cursor, not a selector
+        // failure (153rd-log parity with $extractWithHover): resolve the
+        // empty envelope with the REAL match count so the caller can tell
+        // exhaustion from a wrong selector.
+        return {
+          result: [],
+          _diagnostics: {
+            api: 'extractList',
+            containerSelector: containerSel,
+            containerMatches: before,
+            processedContainers: 0,
+            rangeNote: rlNote,
+            note: rlNote + ' selected no containers — the population is smaller than the range (exhaustion, not a selector miss)'
+          }
+        };
+      }
+    }
     if (typeof ops.resetMatchGuardSkips === 'function') ops.resetMatchGuardSkips();
     const records = ops.extractListRecords(containers, fieldMap, opts || {});
     const _diagnostics = ops && ops.computeExtractListDiagnostics
       ? ops.computeExtractListDiagnostics(containers, fieldMap, containerSel)
       : { api: 'extractList', containerSelector: containerSel, containerMatches: containers.length, perField: [] };
+    if (rlNote) {
+      // Diagnostics were computed over the SLICE — restore the population
+      // truth so a sampled read cannot masquerade as a small population.
+      _diagnostics.totalMatches = totalPopulation;
+      _diagnostics.processedContainers = containers.length;
+      _diagnostics.rangeNote = rlNote;
+      _diagnostics.containerMatches = totalPopulation;
+    }
     if (_diagnostics && typeof ops.getMatchGuardSkips === 'function') {
       const _mgSkips = ops.getMatchGuardSkips();
       if (_mgSkips > 0) _diagnostics.matchGuardSkips = _mgSkips;
@@ -2979,7 +3035,8 @@
     attachClauseCostCensus(_diagnostics, containerSel);
     notifyBackgroundDiagnostic('extractList_entry', {
       containerSelector: containerSel,
-      containerMatches: containers.length,
+      containerMatches: (typeof totalPopulation === 'number') ? totalPopulation : containers.length,
+      processedContainers: containers.length,
       fields: Object.keys(fieldMap || {})
     });
     return { result: records, _diagnostics };

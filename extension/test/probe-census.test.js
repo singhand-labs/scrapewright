@@ -316,7 +316,7 @@ describe('probe.census steering wiring (source audit)', () => {
     assert.match(ST, /name: 'probe\.census'/);
     assert.match(ST, /PAGE-LEVEL FIELD CENSUS/);
     assert.match(ST, /run ONE probe\.census\{containerSel, hover:true\}/, 'methodology rule 2 routes census-first');
-    assert.match(ST, /Do NOT walk fields serially/, 'serial walking explicitly discouraged');
+    assert.match(ST, /NEVER walk fields serially/, 'serial walking explicitly discouraged');
   });
 
   it('research-session gives the census receipt a 12000-char budget (review #2: worst realistic census measured 10447)', () => {
@@ -349,5 +349,100 @@ describe('probe.census population-suspicion + retarget teaching (175th round)', 
     assert.doesNotMatch(r.note, /population this small is suspicious/);
     assert.match(r.note, /Changing containerSel\? re-run the census on the new selector/,
       'after ANY retarget the census is the cheap re-grounding — never a serial per-field fallback');
+  });
+});
+
+describe('probe.census A+B batch (175th round): bounded reads, coverage fidelity, within-card variance', () => {
+  function makeBoundedTools(n, opts) {
+    const o = opts || {};
+    const records = [];
+    for (let i = 0; i < n; i++) records.push(cardHtml(i + 1));
+    const observationLog = createObservationLog();
+    const calls = [];
+    const tools = createProbeTools({
+      executeDsl: async (snippet) => {
+        calls.push(snippet);
+        if (/\$extractWithHover\(/.test(snippet)) {
+          return [{ __t_label: '', __t_aria: '', __t_text: 'September 11, 2026', hovercards: [] }];
+        }
+        if (/\$count\(/.test(snippet)) return o.count != null ? o.count : records.length;
+        if (/containerRange/.test(snippet)) {
+          const m = snippet.match(/"containerRange":\[(\d+)/);
+          const i = m ? Number(m[1]) : 0;
+          const h = records[i];
+          return [{ __c_html: (h && typeof h === 'object') ? h.__c_html : h }];
+        }
+        return records.map((h) => ({ __c_html: h }));
+      },
+      observationLog
+    });
+    return { tools, calls, observationLog };
+  }
+
+  it('#35: populations above the full-read bound sample through bounded range reads', async () => {
+    const { tools, calls } = makeBoundedTools(50);
+    const r = await tools.census({ containerSel: 'div.card' });
+    assert.equal(r.total, 50);
+    assert.deepEqual(r.sampled, [0, 25, 49], 'even sampling over the live count');
+    assert.equal(r.boundedRead, true);
+    assert.match(r.note, /bounded range reads/);
+    const rangeCalls = calls.filter((s) => /containerRange/.test(s));
+    assert.equal(rangeCalls.length, 3, 'three per-index reads — the relay never carries all 50');
+    assert.ok(r.lanes.time && r.lanes.time.length, 'lanes still built from the sampled containers');
+  });
+
+  it('#32: zero population reaches the honest receipt via the pre-count (production shape)', async () => {
+    const { tools } = makeBoundedTools(3, { count: 0 });
+    const r = await tools.census({ containerSel: 'div.nope' });
+    assert.equal(r.total, 0);
+    assert.match(r.note, /0 containers matched/);
+  });
+
+  it('#30: lane texts come from the FIRST match production reads, not the scored leaf', async () => {
+    // Two leaves share tag+first-class: the first carries chrome text (never
+    // scores as time-like), the second carries the date (scores). Production
+    // $extractList reads the FIRST — the receipt must show that value, or a
+    // class collision silently binds the wrong element.
+    const dupCard = (n) => '<div class="card">' +
+      '<span class="ts">Sponsored</span>' +
+      '<span class="ts">' + n + ' days ago</span>' +
+      '</div>';
+    const records = [dupCard(1), dupCard(2), dupCard(3)];
+    const observationLog = createObservationLog();
+    const tools = createProbeTools({
+      executeDsl: async (snippet) => {
+        if (/\$count\(/.test(snippet)) return records.length;
+        return records.map((h) => ({ __c_html: h }));
+      },
+      observationLog
+    });
+    const r = await tools.census({ containerSel: 'div.card' });
+    const ts = r.lanes.time.find((c) => c.selector === 'span.ts');
+    assert.ok(ts, 'span.ts in the time lane (from the scored leaf)');
+    assert.equal(ts.texts[0], 'Sponsored', 'texts show the FIRST-match value production would bind');
+    assert.equal(ts.coverage, '3/3');
+  });
+
+  it('#33: a token varying WITHIN one card is per-link decoration, excluded from hrefIdentity', async () => {
+    const card = (n) => '<div class="card">' +
+      '<a class="l1" href="/x?sid=s10001' + n + '&pid=p100000' + n + '">a</a>' +
+      '<a class="l2" href="/y?sid=s20001' + n + '">b</a>' +
+      '</div>';
+    const records = [card(1), card(2), card(3)];
+    const observationLog = createObservationLog();
+    const tools = createProbeTools({
+      executeDsl: async (snippet) => {
+        if (/\$count\(/.test(snippet)) return records.length;
+        return records.map((h) => ({ __c_html: h }));
+      },
+      observationLog
+    });
+    const r = await tools.census({ containerSel: 'div.card' });
+    assert.ok(Array.isArray(r.hrefIdentity), 'hrefIdentity present');
+    assert.ok(!r.hrefIdentity.some((e) => e.token === 'query:sid'),
+      'sid differs between links INSIDE each card — per-link decoration, not identity');
+    const pid = r.hrefIdentity.find((e) => e.token === 'query:pid');
+    assert.ok(pid, 'pid is single-per-card and varies across cards — the identity candidate');
+    assert.deepEqual(pid.samples, ['p1000001', 'p1000002', 'p1000003']);
   });
 });

@@ -1396,6 +1396,7 @@ describe('probe.census (speed track 2026-09-29)', () => {
     return makeDeps({
       rail: Object.assign(base.deps.rail, {
         executeDsl: async (snippet) => {
+          if (/return \$count\(/.test(snippet)) return 3;
           if (/return \$extractList\(/.test(snippet)) {
             return [cardHtml(1), cardHtml(2), cardHtml(3)].map((h) => ({ __c_html: h }));
           }

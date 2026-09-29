@@ -416,7 +416,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // hidden phase4) — surface the overlay for the whole retry run.
     showLoading('Running test…');
     try {
-      await testScript();
+      await runTestScriptUserFacing();
     } finally {
       hideLoading();
     }
@@ -1509,7 +1509,7 @@ async function runTestFromStep5() {
   if (ioPanel) ioPanel.classList.add('hidden');
   document.getElementById('executionLog').innerHTML = '';
   appendLog('Starting test...');
-  await testScript();
+  await runTestScriptUserFacing();
 }
 
 function withTimeout(promise, ms, message) {
@@ -1616,7 +1616,7 @@ async function runCustomTest() {
   showLoading('Running test with custom input…');
   try {
     wizardState.testInput = custom;
-    await testScript();
+    await runTestScriptUserFacing();
   } finally {
     wizardState.testInput = saved;
     hideLoading();
@@ -1678,6 +1678,28 @@ async function testScript() {
   }
 
   await presentTestOutcome(out);
+}
+
+// 175th round (review #36 live follow-up): user-triggered test runs. A
+// thrown run previously propagated out of the click handler — the loading
+// overlay collapsed and NOTHING told the user the run died (the 173c
+// incident's silent-failure class on the manual paths: Retry Test,
+// runTestFromStep5, and the custom-input run). One wrapper surfaces every
+// failure three ways: the execution log, a toast, and the review panel's
+// action-level red row (wizardState.lastCompletionError — the same surface
+// presentSessionCompletion's catch uses). Returns true on success.
+async function runTestScriptUserFacing() {
+  try {
+    await testScript();
+    return true;
+  } catch (eUT) {
+    const msg = (eUT && eUT.message) || String(eUT);
+    wizardState.lastCompletionError = msg;
+    appendLog('Test run failed: ' + msg + ' — the steps below may need fixing before deploy.', 'error');
+    showToast('Test run failed: ' + String(msg).slice(0, 160), 'error', 7000);
+    try { renderResultReview(); } catch (_) { /* best-effort surface */ }
+    return false;
+  }
 }
 
 // Shared post-run presentation for BOTH the manual test run (testScript) and

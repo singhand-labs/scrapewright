@@ -66,7 +66,7 @@ describe('custom test panel: wizard.js wiring (source audit)', () => {
     assert.match(body, /const saved = wizardState\.testInput/);
     const ov = body.match(/wizardState\.testInput = custom/);
     assert.ok(ov, 'overrides testInput with the collected custom input');
-    assert.match(body, /await testScript\(\)/);
+    assert.match(body, /await runTestScriptUserFacing\(\)/, 'routes through the failure-surfacing wrapper (175th round: a thrown run must not die as an unhandled rejection)');
     assert.match(body, /finally\s*\{[\s\S]*?wizardState\.testInput = saved/, 'finally restores the default test input');
   });
 

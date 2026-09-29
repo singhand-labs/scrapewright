@@ -17,7 +17,7 @@ describe('Plan 3: wizard polish', () => {
     assert.ok(start !== -1, 'btnRetryTest handler exists');
     const region = SRC.slice(start, SRC.indexOf('});', start) + 3);
     assert.ok(/showLoading\('Running test/.test(region), 'shows the loading overlay');
-    assert.ok(region.includes('await testScript()'), 'still awaits testScript');
+    assert.ok(region.includes('await runTestScriptUserFacing()'), 'routes through the failure-surfacing wrapper (175th round)');
     assert.ok(/finally\s*\{\s*hideLoading\(\)/.test(region), 'hides the overlay on success AND failure');
   });
 

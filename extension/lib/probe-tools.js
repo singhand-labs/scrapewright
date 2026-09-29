@@ -10,8 +10,10 @@
 // Result contracts are deliberately small (context diet is structural):
 // numbers, capped strings, distributions — never raw pages.
 //
-// IIFE-wrapped per RC30. No DOM access here (the executor owns the DOM);
-// Node tests inject a mock executor.
+// IIFE-wrapped per RC30. This module owns NO page-DOM access (the executor
+// owns the page); the census's lane engine (lib/census-lanes.js) parses
+// OFFLINE copies of already-extracted HTML through a DOMParser — extracted
+// markup only, never the live page. Node tests inject a mock executor.
 
 (function (global) {
 
@@ -355,7 +357,11 @@
       // the census uses; the primary out.element/out.html behavior is
       // unchanged (every picked index, the requested one included).
       if (typeof o.samples === 'number' && o.samples >= 2) {
-        out.samples = pickCensusIndices(arr.length, Math.min(5, o.samples)).map((i) => ({
+        const engineForSamples = censusEngineRef();
+        const picks = (engineForSamples && typeof engineForSamples.pickIndices === 'function')
+          ? engineForSamples.pickIndices(arr.length, Math.min(5, o.samples))
+          : [0];
+        out.samples = picks.map((i) => ({
           index: i,
           text: String((arr[i] && arr[i].textContent) || '').replace(/\s+/g, ' ').trim().slice(0, 120)
         }));
@@ -1146,175 +1152,40 @@
     // authors the FULL fieldMap from the lanes in one turn, then dry-runs it
     // with probe.extract. Per-field probes remain the fallback for lanes that
     // come back empty or ambiguous — universality first, speed second.
-    let __fcdBag = null;
-    function fcdRef() {
-      if (__fcdBag === null) {
-        __fcdBag = false;
+    // 175th round (#10/#34): the lane engine lives in lib/census-lanes.js —
+    // single-pass leaf walk, coverage texts from the first-match element,
+    // within-card href variance exclusion. probe-tools keeps the
+    // orchestration: rail reads, receipt assembly, hover phase, teaching.
+    const CENSUS_FULL_READ_MAX = 40;
+
+    let __censusEngine = null;
+    function censusEngineRef() {
+      if (__censusEngine === null) {
+        __censusEngine = false;
         if (typeof require !== 'undefined') {
-          try { __fcdBag = require('./field-candidate-discovery'); } catch (eFcd) { __fcdBag = false; }
+          try {
+            const m = require('./census-lanes');
+            if (m && typeof m.createCensusLaneEngine === 'function') __censusEngine = m.createCensusLaneEngine();
+          } catch (eEng) { __censusEngine = false; }
         }
-        if (!__fcdBag) {
+        if (!__censusEngine) {
           const g = (typeof global !== 'undefined') ? global : globalThis;
-          if (g && g.FieldCandidateDiscovery) __fcdBag = g.FieldCandidateDiscovery;
+          const w = (typeof window !== 'undefined') ? window : globalThis;
+          const bag = (g && g.CensusLanes) || (w && w.CensusLanes) || null;
+          if (bag && typeof bag.createCensusLaneEngine === 'function') __censusEngine = bag.createCensusLaneEngine();
         }
       }
-      return __fcdBag || null;
+      return __censusEngine || null;
     }
 
-    function censusParser() {
-      if (typeof DOMParser !== 'undefined') return DOMParser;
-      const w = (typeof window !== 'undefined') ? window : globalThis;
-      return (w && w.DOMParser) || null;
-    }
-
-    function pickCensusIndices(total, want) {
-      if (total <= 0) return [];
-      const n = Math.max(1, Math.min(want, total));
-      if (n === 1) return [0];
-      const set = [];
-      for (let i = 0; i < n; i++) {
-        set.push(Math.min(total - 1, Math.round((i * (total - 1)) / (n - 1))));
+    // Budget-error wrapping shared by the count and read legs: the generic
+    // snippet teaching ("narrow the anchor union") does not fit an
+    // extractList over containers.
+    function censusBudgetRoute(errText) {
+      if (/^snippet exceeded/.test(errText) || errText.indexOf('SCRIPT_TIMEOUT') !== -1) {
+        return errText + ' — for census: narrow containerSel to the repeating card (not a page-wide selector), or pass a larger timeoutMs; per-field probes (probe.sample) remain the fallback for pathological feeds.';
       }
-      return Array.from(new Set(set));
-    }
-
-    // Derived, not spelled out: the lane key is the type minus its '-like'
-    // suffix, so adding a lane is a one-word change with no second literal
-    // to keep in sync.
-    const CENSUS_LANES = ['time-like', 'count-like', 'url-like', 'id-like', 'text-like'].map((t) => ({ key: t.replace(/-like$/, ''), type: t }));
-
-    function censusCoverage(sel, docs) {
-      let k = 0;
-      for (const doc of docs) {
-        try {
-          if (doc && doc.body && doc.body.querySelector(sel)) k += 1;
-        } catch (eQ) { /* invalid selector for this parser — counts as absent */ }
-      }
-      return k;
-    }
-
-    function censusGroupLane(perSampleCandidates, docs, maxEntries, strengthOrder) {
-      const order = [];
-      const bySel = new Map();
-      docs.forEach((doc, di) => {
-        for (const c of (perSampleCandidates[di] || [])) {
-          if (!c || !c.selector) continue;
-          let g = bySel.get(c.selector);
-          if (!g) {
-            g = { selector: c.selector, tag: c.tag, strength: c.strength, texts: [] };
-            bySel.set(c.selector, g);
-            order.push(g);
-          }
-          const t = String(c.text || '').trim();
-          // Receipt-budget cap: TWO distinct sample texts per entry is enough
-          // to read value diversity (the receipt cap rose to 12000 for the
-          // worst realistic lane shape, and this keeps the common case far
-          // below it without hiding whether values vary).
-          if (t && g.texts.length < 2 && g.texts.indexOf(t) === -1) g.texts.push(t);
-        }
-      });
-      for (const g of order) g._coverageN = censusCoverage(g.selector, docs);
-      order.sort((x, y) => (y._coverageN - x._coverageN) ||
-        (strengthOrder[x.strength] - strengthOrder[y.strength]));
-      // No extra text cap here: findFieldCandidates already caps each text
-      // at 40 chars, so a second slice only hides evidence.
-      return order.slice(0, maxEntries).map((g) => ({
-        selector: g.selector,
-        tag: g.tag,
-        strength: g.strength,
-        coverage: g._coverageN + '/' + docs.length,
-        texts: g.texts
-      }));
-    }
-
-    // The hidden-value lane: aria reference carriers. Rounds 42/43/90/105 all
-    // had fields whose clean value lived ONLY in the elements an
-    // aria-labelledby reference points at — a lane the leaf-type scorer has
-    // no concept of. Reported as carriers; resolution stays with
-    // probe.labelledby (references can point OUTSIDE the container, so the
-    // census must not pretend to resolve them).
-    function censusAriaLane(docs, maxEntries, cssEscape) {
-      const order = [];
-      const byKey = new Map();
-      for (const doc of docs) {
-        if (!doc || !doc.body) continue;
-        let carriers = [];
-        try { carriers = Array.from(doc.body.querySelectorAll('[aria-labelledby], [aria-describedby]')); } catch (eQ) { carriers = []; }
-        for (const el of carriers.slice(0, 20)) {
-          const tag = el.tagName.toLowerCase();
-          const cls = (el.getAttribute('class') || '').split(/\s+/).filter(Boolean)[0] || '';
-          const attrName = (el.getAttribute('aria-labelledby') != null) ? 'aria-labelledby' : 'aria-describedby';
-          // The class token must be CSS-escaped — design-system classes carry
-          // ':'/'/' characters that would otherwise produce a selector no
-          // querySelector accepts (same escaping buildLeafSelector applies).
-          const sel = tag + (cls ? '.' + cssEscape(cls) : '') + '[' + attrName + ']';
-          let g = byKey.get(sel);
-          if (!g) {
-            g = { selector: sel, refAttr: attrName, texts: [] };
-            byKey.set(sel, g);
-            order.push(g);
-          }
-          const t = (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 60);
-          if (t && g.texts.length < 3 && g.texts.indexOf(t) === -1) g.texts.push(t);
-        }
-      }
-      for (const g of order) g._coverageN = censusCoverage(g.selector, docs);
-      order.sort((x, y) => y._coverageN - x._coverageN);
-      return order.slice(0, maxEntries).map((g) => ({
-        selector: g.selector,
-        refAttr: g.refAttr,
-        coverage: g._coverageN + '/' + docs.length,
-        texts: g.texts
-      }));
-    }
-
-    function censusIdishValue(v) {
-      const s = String(v == null ? '' : v);
-      if (!s || s.length > 64) return false;
-      // Pure digits of 10-13 chars are epoch seconds/milliseconds — a
-      // cache-buster/per-request decoration (?ts=1760000000123) that differs
-      // on EVERY link and therefore diffs like an id without being one.
-      if (/^\d{10,13}$/.test(s)) return false;
-      return /^\d{2,}$/.test(s) || (/^[a-z0-9]+$/i.test(s) && s.length >= 6 && /\d/.test(s));
-    }
-
-    // 139th/150th/152nd rounds: the per-record identity usually lives in an
-    // href TOKEN — a query param whose NAME persists across cards while its
-    // VALUE differs, or a numeric terminal path segment. Diff the sampled
-    // containers links: stable name + varying value = the id binding.
-    // utm_* params are transport decoration, never identity.
-    function censusHrefIdentity(docs) {
-      const perDoc = docs.map((doc) => {
-        const vals = new Map();
-        if (!doc || !doc.body) return vals;
-        let links = [];
-        try { links = Array.from(doc.body.querySelectorAll('a[href]')); } catch (eQ) { links = []; }
-        for (const a of links.slice(0, 30)) {
-          let u;
-          try { u = new URL(a.getAttribute('href') || '', 'https://census.invalid/'); } catch (eU) { continue; }
-          u.searchParams.forEach((v, k) => {
-            if (/^utm_/i.test(k)) return;
-            if (censusIdishValue(v)) {
-              const key = 'query:' + k;
-              if (!vals.has(key)) vals.set(key, v);
-            }
-          });
-          const segs = u.pathname.split('/').filter(Boolean);
-          const last = segs[segs.length - 1] || '';
-          if (censusIdishValue(last) && !vals.has('path:last')) vals.set('path:last', decodeURIComponent(last));
-        }
-        return vals;
-      });
-      if (perDoc.length < 2) return [];
-      const common = [];
-      const firstKeys = Array.from(perDoc[0].keys());
-      for (const key of firstKeys) {
-        if (!perDoc.every((m) => m.has(key))) continue;
-        const vals = perDoc.map((m) => m.get(key));
-        const distinct = new Set(vals.map((v) => String(v))).size === vals.length;
-        if (distinct) common.push({ token: key, coverage: perDoc.length + '/' + perDoc.length, samples: vals.map((v) => String(v).slice(0, 48)) });
-      }
-      return common.slice(0, 4);
+      return null;
     }
 
     async function census(args0) {
@@ -1323,10 +1194,10 @@
       if (!containerSel) {
         return { error: 'containerSel (required) — the repeating card selector. ONE census returns every lane (time/count/url/id/text/aria/href-token) with cross-sample coverage; author the whole fieldMap from it, then dry-run with probe.extract' };
       }
-      const Parser = censusParser();
-      const fcd = fcdRef();
-      if (!Parser || !fcd || typeof fcd.findFieldCandidates !== 'function') {
-        return { error: 'census unavailable in this context (DOMParser or field-candidate-discovery not wired) — fall back to probe.sample opts.samples:3 plus per-lane probes' };
+      const engine = censusEngineRef();
+      const ParserProbe = (typeof DOMParser !== 'undefined') ? DOMParser : ((typeof window !== 'undefined' && window.DOMParser) || null);
+      if (!engine || typeof engine.buildLanes !== 'function' || !ParserProbe) {
+        return { error: 'census unavailable in this context (DOMParser or census-lanes not wired) — fall back to probe.sample opts.samples:3 plus per-lane probes' };
       }
       const samples = (typeof a.samples === 'number' && a.samples >= 1) ? Math.min(5, Math.floor(a.samples)) : 3;
       const maxPerLane = (typeof a.maxPerLane === 'number' && a.maxPerLane >= 1) ? Math.min(12, Math.floor(a.maxPerLane)) : 6;
@@ -1341,79 +1212,85 @@
         timeoutMs = Math.min(Math.floor(a.timeoutMs), SNIPPET_MAX_TIMEOUT_MS);
       }
       const fieldMap = { __c_html: { attr: 'outerHTML' } };
-      const r = await runSnippet('return $extractList(' + JSON.stringify(containerSel) + ', ' + JSON.stringify(fieldMap) + ');', timeoutMs);
-      if (r && typeof r.error === 'string') {
-        // Budget errors carry a census-shaped route: the generic snippet
-        // teaching ("narrow the anchor union") does not fit an extractList
-        // over containers.
-        if (/^snippet exceeded/.test(r.error) || r.error.indexOf('SCRIPT_TIMEOUT') !== -1) {
-          return { error: r.error + ' — for census: narrow containerSel to the repeating card (not a page-wide selector), or pass a larger timeoutMs; per-field probes (probe.sample) remain the fallback for pathological feeds.' };
-        }
-        return r;
+      // Count first (#35/#32): decides the bounded-read strategy, and makes
+      // the honest zero-population receipt reachable WITHOUT catching the
+      // raw $extractList throw (which carries the selector differential —
+      // that shape still flows through the error passthroughs below).
+      const cnt = await runSnippet('return $count(' + JSON.stringify(containerSel) + ');', timeoutMs);
+      if (cnt && typeof cnt.error === 'string') {
+        const routed = censusBudgetRoute(cnt.error);
+        return { error: routed || cnt.error };
       }
-      const recs = Array.isArray(r) ? r : (r && Array.isArray(r.records) ? r.records : []);
-      if (!recs.length) {
+      const total = (typeof cnt === 'number') ? cnt : (Array.isArray(cnt) ? cnt.length : 0);
+      if (!total) {
         return { total: 0, note: '0 containers matched — nothing to census. Fix the container selector first (probe.sample the card, or read the selector differential)' };
       }
-      const indices = pickCensusIndices(recs.length, samples);
+      const indices = engine.pickIndices(total, samples);
+      const recs = [];
+      let boundedRead = false;
+      if (total <= CENSUS_FULL_READ_MAX) {
+        const r = await runSnippet('return $extractList(' + JSON.stringify(containerSel) + ', ' + JSON.stringify(fieldMap) + ');', timeoutMs);
+        if (r && typeof r.error === 'string') {
+          const routed = censusBudgetRoute(r.error);
+          return { error: routed || r.error };
+        }
+        const all = Array.isArray(r) ? r : (r && Array.isArray(r.records) ? r.records : []);
+        for (const i of indices) recs.push(all[i]);
+      } else {
+        // #35: sample through per-index range reads — the relay carries the
+        // sampled containers' HTML only, never all N.
+        boundedRead = true;
+        for (const i of indices) {
+          const r = await runSnippet('return $extractList(' + JSON.stringify(containerSel) + ', ' + JSON.stringify(fieldMap) + ', ' +
+            JSON.stringify({ containerRange: [i, i + 1] }) + ');', timeoutMs);
+          if (r && typeof r.error === 'string') {
+            const routed = censusBudgetRoute(r.error);
+            return { error: routed || r.error };
+          }
+          const one = Array.isArray(r) ? r : (r && Array.isArray(r.records) ? r.records : []);
+          recs.push(one[0]);
+        }
+      }
       const docs = [];
-      const htmls = [];
       // The surviving sample indices (empty AND unparseable samples drop
       // out) — out.sampled reports what was actually censused, so k/n
       // coverage denominators and the sampled list never disagree.
       const sampledActual = [];
       let truncatedCount = 0;
-      for (const i of indices) {
-        const h = (recs[i] && typeof recs[i].__c_html === 'string') ? recs[i].__c_html : '';
-        if (!h) continue;
+      indices.forEach((idx, k) => {
+        const h = (recs[k] && typeof recs[k].__c_html === 'string') ? recs[k].__c_html : '';
+        if (!h) return;
         // Element-HTML caps land MID-MARKUP — a lane derived from a cut card
         // can carry selectors the real cards do not have past the cut.
         if (/<!--TRUNCATED: element HTML capped/.test(h)) truncatedCount += 1;
-        // Parse into a local FIRST: pushing the html before a throwing parse
-        // misaligned htmls[di] with docs[di] and fed each lane scan the
-        // WRONG sample's markup.
-        let doc = null;
-        try { doc = new Parser().parseFromString('<html><body>' + h + '</body></html>', 'text/html'); } catch (eP) { doc = null; }
-        if (!doc) continue;
-        htmls.push(h);
+        const doc = engine.parseSample(h);
+        if (!doc) return;
         docs.push(doc);
-        sampledActual.push(i);
-      }
-      if (!docs.length) return { total: recs.length, error: 'no sample container produced parseable HTML' };
+        sampledActual.push(idx);
+      });
+      if (!docs.length) return { total: total, error: 'no sample container produced parseable HTML' };
       // Dossier feed parity with probe.sample/skeleton: the census just
       // fetched real container HTML — keep it reachable for the per-turn
       // evidence dossier (skeleton view) instead of re-extracting later.
-      stashHtml(htmls[0]);
-      const lanes = {};
-      let laneErrors = 0;
-      // Resolve the strength order through the fcd bag so lane sorting and
-      // findFieldCandidates share ONE ordering (a private copy could drift).
-      const strengthOrder = (fcd && fcd.STRENGTH_ORDER) || { strong: 0, medium: 1, weak: 2 };
-      // Same for the class-token escaper the aria lane needs — resolved from
-      // the fcd bag (exported there beside buildLeafSelector's use of it),
-      // with the identical inline fallback for unwired contexts.
-      const cssEscape = (fcd && typeof fcd.CSSescape === 'function')
-        ? fcd.CSSescape
-        : (s) => String(s).replace(/[^a-zA-Z0-9_-]/g, '\\$&');
-      for (const lane of CENSUS_LANES) {
-        const perSample = docs.map((doc, di) => {
-          try { return fcd.findFieldCandidates(htmls[di], lane.type, { maxCandidates: 16 }); } catch (eL) { laneErrors += 1; return []; }
-        });
-        const entries = censusGroupLane(perSample, docs, maxPerLane, strengthOrder);
-        if (entries.length) lanes[lane.key] = entries;
+      // (stashHtml takes the RAW string; the parsed doc is not serializable,
+      // so re-read the first surviving sample's HTML from the aligned recs.)
+      try {
+        const k0 = sampledActual.length ? indices.indexOf(sampledActual[0]) : -1;
+        if (k0 > -1 && recs[k0] && typeof recs[k0].__c_html === 'string' && recs[k0].__c_html) stashHtml(recs[k0].__c_html);
+      } catch (eStash) { /* dossier feed is best-effort */ }
+      const built = engine.buildLanes(docs, maxPerLane);
+      const lanes = built.lanes;
+      if (!Object.keys(lanes).length && built.laneErrors > 0) {
+        return { total: total, error: 'lane classification failed (' + built.laneErrors + ' lane scan error(s)) — the DOM context is degraded; fall back to probe.sample opts.samples:3 plus per-field probes' };
       }
-      if (!Object.keys(lanes).length && laneErrors > 0) {
-        return { total: recs.length, error: 'lane classification failed (' + laneErrors + ' lane scan error(s)) — the DOM context is degraded; fall back to probe.sample opts.samples:3 plus per-field probes' };
-      }
-      const aria = censusAriaLane(docs, Math.min(4, maxPerLane), cssEscape);
-      if (aria.length) lanes.aria = aria;
-      const hrefIdentity = censusHrefIdentity(docs);
+      const hrefIdentity = engine.hrefIdentity(docs);
       const out = {
         containerSel: containerSel,
-        total: recs.length,
+        total: total,
         sampled: sampledActual,
         lanes: lanes
       };
+      if (boundedRead) out.boundedRead = true;
       if (hrefIdentity.length) out.hrefIdentity = hrefIdentity;
       // Empty or unparseable samples were skipped above — disclose the gap
       // so k/n coverage is never misread as k/total.
@@ -1436,7 +1313,12 @@
         ? 'only ' + n + ' sample(s) censused — coverage CANNOT certify generalization; re-run with samples:3 once more containers exist.'
         : 'author the FULL fieldMap from the lanes (coverage k/' + n + ' = selector generalized across samples; 1/' + n + ' = positional, fragile — prefer stable-class selectors).') +
         ' aria carriers usually hide the clean value in the REFERENCED elements: resolve with probe.labelledby before binding textContent.' +
-        ' hrefIdentity tokens are the per-record id candidates (bind with an attribute read + regex, not textContent).' +
+        // #33: the href diff needs >=2 samples — a single sample cannot
+        // diff, and the old static sentence taught a section that was
+        // silently absent in exactly that case.
+        (n >= 2
+          ? ' hrefIdentity tokens are the per-record id candidates (bind with an attribute read + regex, not textContent).'
+          : ' hrefIdentity needs >=2 samples — re-run with samples:3 to diff per-record identity tokens.') +
         ' Follow with ONE probe.extract dry-run of the draft fieldMap.';
       // 150th-round parity teaching: the diff proves a token varies ACROSS
       // cards, not that it is constant WITHIN one — per-link decoration
@@ -1453,9 +1335,9 @@
       // produced entries. A missing lane was never scanned — NOT proven
       // absent — so name the error count and route those lanes to per-field
       // probes instead of letting silence read as "no candidates".
-      if (laneErrors > 0 && Object.keys(lanes).length) {
-        out.laneErrors = laneErrors;
-        out.note += ' ' + laneErrors + ' lane scan(s) errored — missing lanes were NOT scanned (not proven absent); probe those per-field.';
+      if (built.laneErrors > 0 && Object.keys(lanes).length) {
+        out.laneErrors = built.laneErrors;
+        out.note += ' ' + built.laneErrors + ' lane scan(s) errored — missing lanes were NOT scanned (not proven absent); probe those per-field.';
       }
       // Hover-phase failure is quarantined: the lanes above were computed
       // BEFORE the hover ran and are unaffected — teach the separate retry,
@@ -1469,12 +1351,15 @@
       // population is itself evidence the container may be the wrong
       // repeating item; and after ANY retarget the census is the cheap
       // re-grounding — one call, fresh lanes, never a per-field fallback.
-      if (recs.length <= 5) {
-        out.note += ' only ' + recs.length + ' container(s) matched — a population this small is suspicious for a repeating-item requirement: check the lane TEXTS against what the requirement describes (a recommendation or chrome strip often matches the same container shape), and if this is the wrong population, re-target containerSel and RE-CENSUS.';
+      if (total <= 5) {
+        out.note += ' only ' + total + ' container(s) matched — a population this small is suspicious for a repeating-item requirement: check the lane TEXTS against what the requirement describes (a recommendation or chrome strip often matches the same container shape), and if this is the wrong population, re-target containerSel and RE-CENSUS.';
+      }
+      if (boundedRead) {
+        out.note += ' population ' + total + ' exceeded the full-read bound (' + CENSUS_FULL_READ_MAX + ') — sampled through bounded range reads: only the sampled containers were relayed, total is the live count.';
       }
       out.note += ' Changing containerSel? re-run the census on the new selector — one call returns fresh lanes; do NOT fall back to serial per-field probes.';
       if (observationLog) {
-        observationLog.record({ tool: 'probe.census', selectors: [containerSel], summary: 'census total=' + recs.length + ' lanes=' + Object.keys(lanes).join('+') + (hrefIdentity.length ? ' hrefIdentity=' + hrefIdentity.length : '') + (a.hover === true ? ' +hover' : '') });
+        observationLog.record({ tool: 'probe.census', selectors: [containerSel], summary: 'census total=' + total + ' lanes=' + Object.keys(lanes).join('+') + (hrefIdentity.length ? ' hrefIdentity=' + hrefIdentity.length : '') + (a.hover === true ? ' +hover' : '') });
       }
       return out;
     }
