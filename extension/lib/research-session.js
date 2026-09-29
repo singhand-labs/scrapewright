@@ -1818,16 +1818,19 @@
           // exports to the global scope in the browser, so the bare name
           // resolves. Fallback to window for environments where the
           // closure scope does not see the global.
-          if (turn.tool === 'verify.run' && result && result.report) {
+          if (turn.tool === 'verify.run' && result) {
             try {
+              // 173rd live fix: verifyRun returns the REPORT object
+              // directly (not { report, events, raw }) — read detectors
+              // off result itself.
               const extractFn171 = (typeof extractFailingFieldNames === 'function')
                 ? extractFailingFieldNames
                 : (typeof window !== 'undefined' && typeof window.extractFailingFieldNames === 'function')
                   ? window.extractFailingFieldNames
                   : null;
-              if (extractFn171) {
-                lastVerifyFailingFields171 = extractFn171(result.report.detectors);
-                lastVerifyErrorPrefix171 = (result.report.error && result.report.error.message) ? String(result.report.error.message).split(':')[0] : '';
+              if (extractFn171 && result.detectors) {
+                lastVerifyFailingFields171 = extractFn171(result.detectors);
+                lastVerifyErrorPrefix171 = (result.error && result.error.message) ? String(result.error.message).split(':')[0] : '';
               }
             } catch (eEx171) { /* extractor best-effort */ }
           }
