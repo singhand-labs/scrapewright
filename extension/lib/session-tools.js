@@ -1713,6 +1713,37 @@
           }
         }
       }
+      // 171st round: SELECTOR_PARTIAL_FIT. Each container selector in
+      // the steps is sampled at first/middle/last; a selector matching
+      // only some positions is over-fitted to one card shape. Advisory
+      // (staticLint), not blocking — but names WHICH selector and at
+      // WHICH positions it diverges.
+      try {
+        const containerSels171 = new Set();
+        for (const st of steps) {
+          const script171 = String((st && st.script) || '');
+          const selMatches171 = script171.match(/['"]([^'"]{8,180})['"]/g) || [];
+          for (const raw171 of selMatches171) {
+            const sel171 = raw171.replace(/^./, '').replace(/.$/, '');
+            if (/\[role=|div\[|\[data-|:has\(/.test(sel171)) containerSels171.add(sel171);
+          }
+        }
+        for (const sel171 of Array.from(containerSels171).slice(0, 5)) {
+          try {
+            const positions171 = [0, 1, 2];
+            const results171 = [];
+            for (const pos171 of positions171) {
+              const probe171 = await probes.sample({ sel: sel171, opts: { index: pos171 } }, {});
+              results171.push(!!(probe171 && probe171.element));
+            }
+            const matched171 = results171.filter(Boolean).length;
+            if (matched171 > 0 && matched171 < 3) {
+              staticLint.push('SELECTOR_PARTIAL_FIT: selector "' + sel171.slice(0, 80) + '" matches ' + matched171 + ' of 3 sampled positions (first/middle/last). It may be over-fitted to one card shape. Pass opts.samples:3 on probe.sample to see the divergent samples before committing');
+            }
+          } catch (eSel171) { /* per-selector best-effort */ }
+        }
+      } catch (eGen171) { /* generalization check best-effort */ }
+
       // Fifty-seventh log: invented Playwright-style pseudo-classes
       // (:textless — the fifty-first log had :textish) inside service
       // selectors; browsers reject them at querySelectorAll time. Same
@@ -1946,7 +1977,19 @@
       'probe.text': wrapProbe(probes.text, 'probe.text'),
       'probe.attrStats': wrapProbe(probes.attrStats, 'probe.attrStats'),
       'probe.labelledby': wrapProbe(probes.labelledby, 'probe.labelledby'),
-      'probe.sample': wrapProbe(probes.sample, 'probe.sample'),
+      'probe.sample': wrapProbe(async function (args, ctx) {
+        const r = await probes.sample(args, ctx);
+        // 171st round: sample-diversity TIP. When >=3 containers match and
+        // the caller did not request samples, nudge them to look at
+        // variety before writing a selector fitted to one shape.
+        try {
+          if (r && typeof r === 'object' && typeof r.total === 'number' && r.total >= 3 &&
+              !(args && args.opts && args.opts.samples)) {
+            r.diversityTip = 'TIP: ' + r.total + ' containers matched. Pass opts.samples:3 to see first/middle/last diversity before writing the selector (one sample can over-fit)';
+          }
+        } catch (eTip171) { /* TIP best-effort */ }
+        return r;
+      }, 'probe.sample'),
       'probe.hover': wrapProbe(probes.hover, 'probe.hover'),
       'probe.scroll': wrapProbe(probes.scroll, 'probe.scroll'),
       'probe.scrollUntil': wrapProbe(probes.scrollUntil, 'probe.scrollUntil'),
@@ -1991,7 +2034,7 @@
       { name: 'probe.text', args: '{sel}', returns: '{total,items[]}' },
       { name: 'probe.attrStats', args: '{containerSel, attr}', returns: '{totalItems,values[{value,items,pct}],absentPct,note?} — attr is read on the matched ELEMENTS; note appears at absentPct 100 telling you to census the descendant form containerSel + " [attr]" (what a :not()/:has() clause actually filters)' },
       { name: 'probe.labelledby', args: '{sel, attr?}', returns: '{text,attr,refCount,missingIds?,note?,viaDescendant?} — ARIA-reference text (default aria-labelledby); descendant fallback disclosed via viaDescendant. Use when a tooltip value never renders visually' },
-      { name: 'probe.sample', args: '{sel, opts:{index,wantHtml,clean}}', returns: '{match,total,element,html?} — clean:true strips noise from the HTML (prefer when reading structure)' },
+      { name: 'probe.sample', args: '{sel, opts:{index,wantHtml,clean,samples}}', returns: '{match,total,element,html?,diversityTip?} — clean:true strips noise; samples:3 shows first/middle/last diversity (pass it before writing selectors fitted to one shape)' },
       { name: 'probe.hover', args: '{anchorSel, popoverSel?, opts:{index,timeoutMs}}', returns: '{hovered,htmlSnippet,popoverSelector,reason,observedPopover?,rejectedAddedTexts?,rejectedAddedHtml?,budgetNote?,timeoutMs?} — rejectedAddedHtml/Texts carry hover-mounted nodes the visual filter rejected (often the payload; read:hoverPopover fields search them). On reason:popover_timeout, retry with a bigger opts.timeoutMs before concluding the popover never renders' },
       { name: 'probe.scroll', args: "{mode?:'bottom'|'by', sel?, by?}", returns: '{scrolled,prevY,newY} — mode:"by" takes a SIGNED pixel count (negative scrolls UP)' },
       { name: 'probe.scrollUntil', args: '{sel, targetCount, maxRounds?, settleMs?, by?, scrollSel?}', returns: '{satisfied,finalCount,rounds,trace,reason,note?} — scroll→settle→count loop stopping the MOMENT sel reaches targetCount. reason=count_frozen: sel matches static chrome, re-target it; reason=at_bottom: the SCROLL ROOT tested is exhausted — retry with scrollSel at the feed\'s inner scrollable container; reason=max_rounds: still growing, re-run' },

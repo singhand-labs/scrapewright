@@ -235,6 +235,8 @@
 
     const observationLog = Obs.createObservationLog(cfg.seed && cfg.seed.observation);
     const ledger = LedgerLib.createFindingsLedger(cfg.seed && cfg.seed.ledger);
+    let lastVerifyFailingFields171 = null;
+    let lastVerifyErrorPrefix171 = '';
 
     let SEQ = 0;
     let state = {
@@ -265,6 +267,7 @@
     };
     if (cfg.seed && cfg.seed.session) {
       state = JSON.parse(JSON.stringify(cfg.seed.session));
+      if (!state.fieldFailLedger) state.fieldFailLedger = {};
       state.status = 'idle';
       state.stopped = null;
       if (!Array.isArray(state.waivedSelectors)) state.waivedSelectors = []; // legacy seeds predate sticky waivers
@@ -934,6 +937,31 @@
         emit('budget_advisory', { key: 'first-verify-early', turns: state.spend.turns, maxTurns: budgets.maxTurns, noArtifact: true });
       }
     } catch (eFVE) { /* advisory is best-effort */ }
+
+    // 171st round: field-fail ledger. When the same FIELD fails twice
+    // across verifies, the model cannot see where the value lives. The
+    // request is PRECISE: field name, error history, what to mark.
+    try {
+      if (lastVerifyFailingFields171 && lastVerifyFailingFields171.length && state.fieldFailLedger) {
+        for (const fname of lastVerifyFailingFields171) {
+          const entry171 = state.fieldFailLedger[fname] || { count: 0, errors: [] };
+          entry171.count += 1;
+          if (entry171.errors.length < 3) entry171.errors.push(String(lastVerifyErrorPrefix171 || 'verify red').slice(0, 60));
+          state.fieldFailLedger[fname] = entry171;
+          if (entry171.count >= 2 && !entry171.assistRequested) {
+            entry171.assistRequested = true;
+            state.transcript.push({ kind: 'system', text:
+              'FIELD_ASSIST_REQUEST: "' + fname + '" has failed ' + entry171.count +
+              ' times across verifies/probes (errors: ' + entry171.errors.join('; ') +
+              '). Call annotate.request({fields: ["' + fname + '"], why: "the ' + fname +
+              ' extraction failed twice. Please MARK the element that holds the ' + fname +
+              ' value on the first card"}) NOW. Two failures on the same field means you cannot see where the value lives. The user can point at it in seconds.' });
+            emit('field_assist_request', { field: fname, count: entry171.count, errors: entry171.errors });
+          }
+        }
+        lastVerifyFailingFields171 = null; // consume: one ledger tick per verify
+      }
+    } catch (e171) { /* field-fail ledger best-effort */ }
 
     // 167th round: the verify-LATENCY advisory. The incident session spent
     // 36 snippets and reached its FIRST verify at turn ~75 of 80 — the red
@@ -1778,6 +1806,16 @@
           // strings, array counts, tight label.
           const summary = Protocol.compactToolResultForLLM(callLabel, result, toolResultCapFor(turn.tool));
           state.transcript.push({ kind: 'tool', name: turn.tool, ok: !isErrorResult(result), result: result, summary: summary });
+          // 171st round: capture verify detectors for the field-fail ledger
+          if (turn.tool === 'verify.run' && result && result.report) {
+            try {
+              const WUm171 = (typeof globalThis !== 'undefined' && globalThis.__wizardUtilsModuleMarker__) || null;
+              if (WUm171 && typeof WUm171.extractFailingFieldNames === 'function') {
+                lastVerifyFailingFields171 = WUm171.extractFailingFieldNames(result.report.detectors);
+                lastVerifyErrorPrefix171 = (result.report.error && result.report.error.message) ? String(result.report.error.message).split(':')[0] : '';
+              }
+            } catch (eEx171) { /* extractor best-effort */ }
+          }
           // Sixty-eighth log F2: nudge on the 2nd consecutive identical
           // failure (same tool + same args + same error prefix). See the
           // tracker declaration at loop start for the incident.
