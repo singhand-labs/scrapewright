@@ -263,7 +263,12 @@
       // can mine research evidence executionLogs never sees (those only
       // record background service runs). priorVerifyReport rides every
       // verify including reds; this snapshot is green-only.
-      lastVerifyFinalResult: null
+      lastVerifyFinalResult: null,
+      // 171st round: per-field verify-failure ledger (the FIELD_ASSIST
+      // trigger). The 172nd live bug: this key was only initialized in
+      // the resume branch — fresh sessions ran with undefined and the
+      // ledger check silently skipped forever.
+      fieldFailLedger: {}
     };
     if (cfg.seed && cfg.seed.session) {
       state = JSON.parse(JSON.stringify(cfg.seed.session));
