@@ -1123,7 +1123,248 @@
       return { total: recs.length, match: index, skeleton: sk };
     }
 
-    return { count, text, attrStats, labelledby, sample, hover, scroll, scrollUntil, extract, timestamp, loginState, snippet, skeleton, getLastSelectorDiagnostics: () => lastSelectorDiagnostics, getLastFetchedHtml: () => lastFetchedHtml };
+    // Speed track (user directive 2026-09-29): page-level field census. The
+    // per-field serial loop (sample a card, guess a selector, probe.extract,
+    // adjust) burned 2-3 turns PER FIELD — a whole fieldMap cost 20-30 turns.
+    // ONE census call reads the outerHTML of evenly spaced sample containers
+    // (first/middle/last — the 171st-round diversity rule baked in), walks
+    // every leaf, classifies it into generic lanes via FieldCandidateDiscovery
+    // (the same scoring the autoFix path uses), and reports each candidate
+    // WITH cross-sample coverage: a selector matching k/n samples is
+    // generalized; a single-sample hit is positional and fragile. The model
+    // authors the FULL fieldMap from the lanes in one turn, then dry-runs it
+    // with probe.extract. Per-field probes remain the fallback for lanes that
+    // come back empty or ambiguous — universality first, speed second.
+    let __fcdBag = null;
+    function fcdRef() {
+      if (__fcdBag === null) {
+        __fcdBag = false;
+        if (typeof require !== 'undefined') {
+          try { __fcdBag = require('./field-candidate-discovery'); } catch (eFcd) { __fcdBag = false; }
+        }
+        if (!__fcdBag) {
+          const g = (typeof global !== 'undefined') ? global : globalThis;
+          if (g && g.FieldCandidateDiscovery) __fcdBag = g.FieldCandidateDiscovery;
+        }
+      }
+      return __fcdBag || null;
+    }
+
+    function censusParser() {
+      if (typeof DOMParser !== 'undefined') return DOMParser;
+      const w = (typeof window !== 'undefined') ? window : globalThis;
+      return (w && w.DOMParser) || null;
+    }
+
+    function pickCensusIndices(total, want) {
+      if (total <= 0) return [];
+      const n = Math.max(1, Math.min(want, total));
+      if (n === 1) return [0];
+      const set = [];
+      for (let i = 0; i < n; i++) {
+        set.push(Math.min(total - 1, Math.round((i * (total - 1)) / (n - 1))));
+      }
+      return Array.from(new Set(set));
+    }
+
+    const CENSUS_LANES = [
+      { key: 'time', type: 'time-like' },
+      { key: 'count', type: 'count-like' },
+      { key: 'url', type: 'url-like' },
+      { key: 'id', type: 'id-like' },
+      { key: 'text', type: 'text-like' }
+    ];
+
+    function censusCoverage(sel, docs) {
+      let k = 0;
+      for (const doc of docs) {
+        try {
+          if (doc && doc.body && doc.body.querySelector(sel)) k += 1;
+        } catch (eQ) { /* invalid selector for this parser — counts as absent */ }
+      }
+      return k;
+    }
+
+    function censusGroupLane(perSampleCandidates, docs, maxEntries) {
+      const order = [];
+      const bySel = new Map();
+      docs.forEach((doc, di) => {
+        for (const c of (perSampleCandidates[di] || [])) {
+          if (!c || !c.selector) continue;
+          let g = bySel.get(c.selector);
+          if (!g) {
+            g = { selector: c.selector, tag: c.tag, strength: c.strength, texts: [] };
+            bySel.set(c.selector, g);
+            order.push(g);
+          }
+          const t = String(c.text || '').trim();
+          if (t && g.texts.length < 3 && g.texts.indexOf(t) === -1) g.texts.push(t);
+        }
+      });
+      for (const g of order) g._coverageN = censusCoverage(g.selector, docs);
+      const STRENGTH_ORDER = { strong: 0, medium: 1, weak: 2 };
+      order.sort((x, y) => (y._coverageN - x._coverageN) ||
+        ((STRENGTH_ORDER[x.strength] ?? 9) - (STRENGTH_ORDER[y.strength] ?? 9)));
+      return order.slice(0, maxEntries).map((g) => ({
+        selector: g.selector,
+        tag: g.tag,
+        strength: g.strength,
+        coverage: g._coverageN + '/' + docs.length,
+        texts: g.texts.map((t) => t.slice(0, 60))
+      }));
+    }
+
+    // The hidden-value lane: aria reference carriers. Rounds 42/43/90/105 all
+    // had fields whose clean value lived ONLY in the elements an
+    // aria-labelledby reference points at — a lane the leaf-type scorer has
+    // no concept of. Reported as carriers; resolution stays with
+    // probe.labelledby (references can point OUTSIDE the container, so the
+    // census must not pretend to resolve them).
+    function censusAriaLane(docs, maxEntries) {
+      const order = [];
+      const byKey = new Map();
+      for (const doc of docs) {
+        if (!doc || !doc.body) continue;
+        let carriers = [];
+        try { carriers = Array.from(doc.body.querySelectorAll('[aria-labelledby], [aria-describedby]')); } catch (eQ) { carriers = []; }
+        for (const el of carriers.slice(0, 20)) {
+          const tag = el.tagName.toLowerCase();
+          const cls = (el.getAttribute('class') || '').split(/\s+/).filter(Boolean)[0] || '';
+          const attrName = (el.getAttribute('aria-labelledby') != null) ? 'aria-labelledby' : 'aria-describedby';
+          const sel = tag + (cls ? '.' + cls : '') + '[' + attrName + ']';
+          let g = byKey.get(sel);
+          if (!g) {
+            g = { selector: sel, refAttr: attrName, texts: [] };
+            byKey.set(sel, g);
+            order.push(g);
+          }
+          const t = (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+          if (t && g.texts.length < 3 && g.texts.indexOf(t) === -1) g.texts.push(t);
+        }
+      }
+      for (const g of order) g._coverageN = censusCoverage(g.selector, docs);
+      order.sort((x, y) => y._coverageN - x._coverageN);
+      return order.slice(0, maxEntries).map((g) => ({
+        selector: g.selector,
+        refAttr: g.refAttr,
+        coverage: g._coverageN + '/' + docs.length,
+        texts: g.texts
+      }));
+    }
+
+    function censusIdishValue(v) {
+      const s = String(v == null ? '' : v);
+      if (!s || s.length > 64) return false;
+      return /^\d{2,}$/.test(s) || (/^[a-z0-9]+$/i.test(s) && s.length >= 6 && /\d/.test(s));
+    }
+
+    // 139th/150th/152nd rounds: the per-record identity usually lives in an
+    // href TOKEN — a query param whose NAME persists across cards while its
+    // VALUE differs, or a numeric terminal path segment. Diff the sampled
+    // containers links: stable name + varying value = the id binding.
+    // utm_* params are transport decoration, never identity.
+    function censusHrefIdentity(docs) {
+      const perDoc = docs.map((doc) => {
+        const vals = new Map();
+        if (!doc || !doc.body) return vals;
+        let links = [];
+        try { links = Array.from(doc.body.querySelectorAll('a[href]')); } catch (eQ) { links = []; }
+        for (const a of links.slice(0, 30)) {
+          let u;
+          try { u = new URL(a.getAttribute('href') || '', 'https://census.invalid/'); } catch (eU) { continue; }
+          u.searchParams.forEach((v, k) => {
+            if (/^utm_/i.test(k)) return;
+            if (censusIdishValue(v)) {
+              const key = 'query:' + k;
+              if (!vals.has(key)) vals.set(key, v);
+            }
+          });
+          const segs = u.pathname.split('/').filter(Boolean);
+          const last = segs[segs.length - 1] || '';
+          if (censusIdishValue(last) && !vals.has('path:last')) vals.set('path:last', decodeURIComponent(last));
+        }
+        return vals;
+      });
+      if (perDoc.length < 2) return [];
+      const common = [];
+      const firstKeys = Array.from(perDoc[0].keys());
+      for (const key of firstKeys) {
+        if (!perDoc.every((m) => m.has(key))) continue;
+        const vals = perDoc.map((m) => m.get(key));
+        const distinct = new Set(vals.map((v) => String(v))).size === vals.length;
+        if (distinct) common.push({ token: key, coverage: perDoc.length + '/' + perDoc.length, samples: vals.map((v) => String(v).slice(0, 48)) });
+      }
+      return common.slice(0, 4);
+    }
+
+    async function census(args0) {
+      const a = args0 && typeof args0 === 'object' ? args0 : {};
+      const containerSel = (typeof a.containerSel === 'string' && a.containerSel.trim()) ? a.containerSel.trim() : '';
+      if (!containerSel) {
+        return { error: 'containerSel (required) — the repeating card selector. ONE census returns every lane (time/count/url/id/text/aria/href-token) with cross-sample coverage; author the whole fieldMap from it, then dry-run with probe.extract' };
+      }
+      const Parser = censusParser();
+      const fcd = fcdRef();
+      if (!Parser || !fcd || typeof fcd.findFieldCandidates !== 'function') {
+        return { error: 'census unavailable in this context (DOMParser or field-candidate-discovery not wired) — fall back to probe.sample opts.samples:3 plus per-lane probes' };
+      }
+      const samples = (typeof a.samples === 'number' && a.samples >= 1) ? Math.min(5, Math.floor(a.samples)) : 3;
+      const maxPerLane = (typeof a.maxPerLane === 'number' && a.maxPerLane >= 1) ? Math.min(12, Math.floor(a.maxPerLane)) : 6;
+      const fieldMap = { __c_html: { attr: 'outerHTML' } };
+      const r = await runSnippet('return $extractList(' + JSON.stringify(containerSel) + ', ' + JSON.stringify(fieldMap) + ');');
+      if (r && typeof r.error === 'string') return r;
+      const recs = Array.isArray(r) ? r : (r && Array.isArray(r.records) ? r.records : []);
+      if (!recs.length) {
+        return { total: 0, note: '0 containers matched — nothing to census. Fix the container selector first (probe.sample the card, or read the selector differential)' };
+      }
+      const indices = pickCensusIndices(recs.length, samples);
+      const docs = [];
+      const htmls = [];
+      for (const i of indices) {
+        const h = (recs[i] && typeof recs[i].__c_html === 'string') ? recs[i].__c_html : '';
+        if (!h) continue;
+        htmls.push(h);
+        try { docs.push(new Parser().parseFromString('<html><body>' + h + '</body></html>', 'text/html')); } catch (eP) { /* skip unparseable sample */ }
+      }
+      if (!docs.length) return { total: recs.length, error: 'no sample container produced parseable HTML' };
+      const lanes = {};
+      let laneErrors = 0;
+      for (const lane of CENSUS_LANES) {
+        const perSample = docs.map((doc, di) => {
+          try { return fcd.findFieldCandidates(htmls[di], lane.type, { maxCandidates: 16 }); } catch (eL) { laneErrors += 1; return []; }
+        });
+        const entries = censusGroupLane(perSample, docs, maxPerLane);
+        if (entries.length) lanes[lane.key] = entries;
+      }
+      if (!Object.keys(lanes).length && laneErrors > 0) {
+        return { total: recs.length, error: 'lane classification failed (' + laneErrors + ' lane scan error(s)) — the DOM context is degraded; fall back to probe.sample opts.samples:3 plus per-field probes' };
+      }
+      const aria = censusAriaLane(docs, Math.min(4, maxPerLane));
+      if (aria.length) lanes.aria = aria;
+      const hrefIdentity = censusHrefIdentity(docs);
+      const out = {
+        containerSel: containerSel,
+        total: recs.length,
+        sampled: indices,
+        lanes: lanes
+      };
+      if (hrefIdentity.length) out.hrefIdentity = hrefIdentity;
+      if (a.hover === true) {
+        try {
+          const tsArgs = { containerSel: containerSel, index: indices[0] || 0 };
+          if (typeof a.anchorSel === 'string' && a.anchorSel.trim()) tsArgs.anchorSel = a.anchorSel.trim();
+          const ts = await timestamp(tsArgs);
+          out.timeHover = (ts && typeof ts.error === 'string') ? { error: ts.error } : ts;
+        } catch (eTs) { out.timeHover = { error: String((eTs && eTs.message) || eTs) }; }
+      }
+      out.note = 'author the FULL fieldMap from the lanes (coverage k/' + docs.length + ' = selector generalized across samples; 1/' + docs.length + ' = positional, fragile — prefer stable-class selectors). aria carriers usually hide the clean value in the REFERENCED elements: resolve with probe.labelledby before binding textContent. hrefIdentity tokens are the per-record id candidates (bind with an attribute read + regex, not textContent). Follow with ONE probe.extract dry-run of the draft fieldMap.';
+      if (observationLog) {
+        observationLog.record({ tool: 'probe.census', selectors: [containerSel], summary: 'census total=' + recs.length + ' lanes=' + Object.keys(lanes).join('+') + (hrefIdentity.length ? ' hrefIdentity=' + hrefIdentity.length : '') + (a.hover === true ? ' +hover' : '') });
+      }
+      return out;
+    }
+
+    return { count, text, attrStats, labelledby, sample, hover, scroll, scrollUntil, extract, timestamp, loginState, snippet, skeleton, census, getLastSelectorDiagnostics: () => lastSelectorDiagnostics, getLastFetchedHtml: () => lastFetchedHtml };
   }
 
   const api = { createProbeTools };

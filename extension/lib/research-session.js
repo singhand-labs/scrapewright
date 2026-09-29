@@ -53,7 +53,7 @@
     // EQUALLY across keys, so the 4000 default sliced every one of those to
     // ~400 chars of noise (the fragment channel would starve one layer after
     // being fixed in the layer below).
-    toolResultCaps: { 'verify.run': 20000, 'probe.hover': 12000 },
+    toolResultCaps: { 'verify.run': 20000, 'probe.hover': 12000, 'probe.census': 8000 },
     // tool_result EVENT summaries ride the console mirror (wizard.js slices
     // at 600), so the event budget matches it exactly.
     eventSummaryCapChars: 600,
