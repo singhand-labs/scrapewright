@@ -3534,11 +3534,24 @@ async function presentSessionCompletion() {
     // showed the STALE last-verify report (this branch exists precisely
     // because a service.update landed after it), and the fresh run's problems
     // never reached the user's review panel.
-    await testScript();
+    // 173c fix: testScript CAN throw (the shipped artifact was updated after
+    // the last verify and was never end-to-end tested — the 173rd incident:
+    // the model shipped v7 on the second-to-last turn, testScript ran v7's
+    // unverified scripts, threw, and the ENTIRE presentSessionCompletion
+    // aborted — the user saw an empty review stage with no status, no
+    // result, no fix opportunity, and no service name). Wrap in try-catch;
+    // ALWAYS render the review (with the error if the fresh run failed).
+    let freshRunError = null;
+    try {
+      await testScript();
+    } catch (eTS) {
+      freshRunError = eTS;
+      appendLog('Fresh end-to-end run failed: ' + (eTS && eTS.message || String(eTS)) + ' — showing the review with the error; the steps below may need fixing before deploy.', 'error');
+    }
     // The fresh end-to-end run executed the CURRENT draft steps — a green
     // outcome blesses the current version for the banner/deploy gate.
     const fr = wizardState.testResult;
-    if (fr && fr.finalResult != null && wizardState.currentArtifactVersion > 0 && Array.isArray(wizardState.steps)) {
+    if (!freshRunError && fr && fr.finalResult != null && wizardState.currentArtifactVersion > 0 && Array.isArray(wizardState.steps)) {
       wizardState.lastVerified = { version: wizardState.currentArtifactVersion, steps: JSON.parse(JSON.stringify(wizardState.steps)) };
     }
     renderResultReview();
