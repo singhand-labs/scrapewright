@@ -2323,12 +2323,38 @@ function applySessionArtifact(a) {
 function createWizardAnnotationBridge(getRail) {
   let pending = null;
   const panel = () => document.getElementById('annotationRequestPanel');
+  // 176th round (user report: "clicked the button, never entered annotation
+  // state, research just continued"): tabs.update({active:true}) activates a
+  // tab WITHIN its window only — when the wizard and the research page live
+  // in different windows (or the page window lost OS focus), the user never
+  // SEES the page enter annotation mode, clicks Submit with nothing marked,
+  // and the old finish() resolved that as a CANCEL — a false cancellation
+  // the model read as "user declined, keep researching". Raising the window
+  // mirrors the forty-ninth-log focus class; the zero-annotation Submit is
+  // now a re-arm, never a cancel.
+  const focusTabAndWindow = async (tabId) => {
+    try { await chrome.tabs.update(tabId, { active: true }); } catch (e) { /* tab may be gone */ }
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab && typeof tab.windowId === 'number') {
+        await chrome.windows.update(tab.windowId, { focused: true });
+      }
+    } catch (e) { /* window raise is best-effort */ }
+  };
+  const armAnnotationMode = async (tabId) => {
+    await sendMessageWithRetry(tabId, {
+      type: 'START_ANNOTATION',
+      inputSchema: wizardState.inputSchema,
+      outputSchema: wizardState.outputSchema,
+      outputFieldOptions: getOutputFieldOptions(wizardState.outputSchema)
+    });
+  };
   const show = (req) => {
     document.getElementById('annotationRequestWhy').textContent = req.why || 'The AI could not determine this from the page alone.';
     document.getElementById('annotationRequestScope').textContent =
       (req.containerSel ? 'Annotate inside: ' + req.containerSel + '. ' : '') +
       (req.fields && req.fields.length ? 'Fields: ' + req.fields.join(', ') + '. ' : '') +
-      'The page tab was brought to the front — click elements to mark them, then come back and press Submit Annotations.';
+      'The PAGE tab was brought forward — on it, hovering highlights elements and clicking marks one (a counter pill tracks your picks). Come back and press Submit Annotations when done. If the page shows no highlights, press Submit Annotations once — it re-arms annotation mode and brings the page forward again.';
     panel().classList.remove('hidden');
     setSessionBadge('waiting', 'waiting for your annotations');
   };
@@ -2338,14 +2364,9 @@ function createWizardAnnotationBridge(getRail) {
       const rail = getRail();
       const tabId = rail ? rail.tabId : null;
       if (tabId == null) return { cancelled: true, error: 'no page open — the AI should call page.open first' };
-      try { await chrome.tabs.update(tabId, { active: true }); } catch (e) { /* tab may be gone */ }
+      await focusTabAndWindow(tabId);
       try {
-        await sendMessageWithRetry(tabId, {
-          type: 'START_ANNOTATION',
-          inputSchema: wizardState.inputSchema,
-          outputSchema: wizardState.outputSchema,
-          outputFieldOptions: getOutputFieldOptions(wizardState.outputSchema)
-        });
+        await armAnnotationMode(tabId);
       } catch (e) {
         return { cancelled: true, error: 'annotation mode failed to start: ' + String(e.message || e) };
       }
@@ -2362,17 +2383,41 @@ function createWizardAnnotationBridge(getRail) {
       } catch (e) {
         captured = { error: String(e.message || e) };
       }
+      // A capture ERROR is a real failure — resolve so the model can fall
+      // back to probes. ZERO annotations is NOT: the user pressing Submit
+      // with nothing marked is the "annotation mode never visibly engaged"
+      // shape (page reload cleared it, window never raised). Re-arm instead
+      // of resolving a false cancellation the model would read as "user
+      // declined, keep researching" (the 176th live incident).
+      if (!captured || captured.error) {
+        hide();
+        const done = pending;
+        pending = null;
+        done({ cancelled: true, error: (captured && captured.error) || 'annotation capture failed' });
+        return;
+      }
+      const picks = Array.isArray(captured.annotations) ? captured.annotations : [];
+      if (!picks.length) {
+        try {
+          await armAnnotationMode(tabId);
+          await focusTabAndWindow(tabId);
+          showToast('No elements marked yet — the page tab is forward again: hover highlights an element, click marks it. Submit after marking (Cancel to give up).', 'info', 8000);
+        } catch (e) {
+          // The page tab died underneath us — THAT is a real failure.
+          hide();
+          const done = pending;
+          pending = null;
+          done({ cancelled: true, error: 'annotation mode failed to re-arm: ' + String(e.message || e) });
+        }
+        return; // still pending: the session stays parked on the user
+      }
       hide();
       const done = pending;
       pending = null;
-      if (!captured || captured.error || !Array.isArray(captured.annotations) || !captured.annotations.length) {
-        done({ cancelled: true, error: (captured && captured.error) || 'no annotations captured' });
-        return;
-      }
       // Tag every pick provenance 'user' — these are direct human selections,
       // the highest-trust evidence the findings ledger keeps on compaction.
       done({
-        annotations: captured.annotations.map((p) => Object.assign({}, p, { provenance: 'user' })),
+        annotations: picks.map((p) => Object.assign({}, p, { provenance: 'user' })),
         url: captured.url || ''
       });
     },
