@@ -753,6 +753,27 @@ describe('annotation gate — user collaboration requires a confirmed I/O contra
     assert.equal(called, 0, 'the user is never asked to annotate before the contract is settled');
   });
 
+  it('177th round: a broad ask (4+ fields) is rejected with prioritization teaching — the user marks one at a time', async () => {
+    let called = 0;
+    const { deps } = makeDeps({
+      annotationBridge: { request: async () => { called += 1; return { annotations: [] }; } }
+    });
+    const t = createSessionTools(deps);
+    await t.tools['io.confirm']({ inputSchema: { type: 'object', required: ['keyword'], properties: { keyword: { type: 'string' } } }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } });
+    const r = await t.tools['annotate.request']({
+      why: 'postId/content/postTime/mediaUrls/shareCount/htmlSnippet/hoverInfos/location extraction failed',
+      fields: ['postId', 'content', 'postTime', 'mediaUrls', 'shareCount', 'htmlSnippet', 'hoverInfos', 'location']
+    });
+    assert.match(r.error, /ANNOTATE_TOO_BROAD: 8 fields/);
+    assert.match(r.error, /AT MOST 3 fields/);
+    assert.match(r.error, /dead-run\/population problem/);
+    assert.equal(called, 0, 'the user is never shown the broad panel');
+    // Three fields still flows to the bridge.
+    const r2 = await t.tools['annotate.request']({ why: 'mark these', fields: ['postTime', 'likeCount', 'postId'] });
+    assert.equal(called, 1);
+    assert.ok(!r2.error);
+  });
+
   it('after a confirmed io.confirm the annotation bridge flows again', async () => {
     let called = 0;
     const { deps } = makeDeps({

@@ -1224,6 +1224,17 @@
           error: 'I/O CONTRACT UNCONFIRMED — annotate.request is rejected until the user confirms the input/output contract. Annotation asks the user to pick elements for output fields, so the field list must be settled first: call io.confirm({inputSchema, outputSchema, note}) EARLY (right after the coarse page look), apply any revision the user returns, then annotate to ground selectors for the confirmed fields.'
         };
       }
+      // 177th round (user directive, round 171, now mechanical): assistance
+      // requests must name their target PRECISELY — the live incident asked
+      // the user to mark NINE fields in one request and the user marked none.
+      // The user marks elements one at a time; cap the ask at three and
+      // teach prioritization.
+      const fieldsRequested = Array.isArray(a.fields) ? a.fields.filter((f) => typeof f === 'string') : [];
+      if (fieldsRequested.length > 3) {
+        return {
+          error: 'ANNOTATE_TOO_BROAD: ' + fieldsRequested.length + ' fields in one request — the user marks elements one at a time, and a broad ask gets none of them marked (live incident). Re-send with AT MOST 3 fields, prioritized: the blocking required field(s) first. If many fields fail together, that is a dead-run/population problem (diag.read + container census), not per-field blindness.'
+        };
+      }
       const bridge = d.annotationBridge;
       if (!bridge || typeof bridge.request !== 'function') {
         return { error: 'annotation bridge not wired in this host' };

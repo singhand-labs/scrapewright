@@ -1001,12 +1001,33 @@
     function tickFieldFailLedger() {
       try {
         if (lastVerifyFailingFields171 && lastVerifyFailingFields171.length && state.fieldFailLedger) {
+          // 177th round (live: NINE field_assist_request events fired in one
+          // millisecond — a single red verify whose CLICK_TARGET_NOT_FOUND
+          // dead click emptied EVERY field, and the ledger read the whole-run
+          // failure as nine independent per-field blindnesses; the model then
+          // asked the user to mark 9 fields in one annotate.request). Two
+          // suppression gates, both population/step-shaped:
+          //   (a) a failing set of 4+ fields is a DEAD RUN (wrong click
+          //       target, zero population, cold-tab supply), not per-field
+          //       binding blindness — the fixes live in diag.read and the
+          //       population teaching, not in the human loop;
+          //   (b) error classes that name the step/population (click target
+          //       missing, container zero, count shortfall) are self-fixable
+          //       from diagnostics — asking the user to mark elements for
+          //       them wastes the human loop.
+          // Counting continues either way: when a LATER verify fails on a
+          // SMALL set (<=3 fields, binding-shaped errors), the precise
+          // assist still fires.
+          const prefix171 = String(lastVerifyErrorPrefix171 || '');
+          const runClass171 = /CLICK_TARGET_NOT_FOUND|FIELD_MATCH_ZERO|COUNT_SHORTFALL|ZERO_CONTAINER|POPULATION/.test(prefix171);
+          const wholesale171 = lastVerifyFailingFields171.length >= 4;
+          const suppressAssist171 = runClass171 || wholesale171;
           for (const fname of lastVerifyFailingFields171) {
             const entry171 = state.fieldFailLedger[fname] || { count: 0, errors: [] };
             entry171.count += 1;
             if (entry171.errors.length < 3) entry171.errors.push(String(lastVerifyErrorPrefix171 || 'verify red').slice(0, 60));
             state.fieldFailLedger[fname] = entry171;
-            if (entry171.count >= 2 && !entry171.assistRequested) {
+            if (entry171.count >= 2 && !entry171.assistRequested && !suppressAssist171) {
               entry171.assistRequested = true;
               state.transcript.push({ kind: 'system', text:
                 'FIELD_ASSIST_REQUEST: "' + fname + '" has failed ' + entry171.count +

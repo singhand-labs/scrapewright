@@ -2170,3 +2170,90 @@ describe('175th round: pacing advisories actually fire per turn', () => {
       'a confirmed io.confirm disarms the contract-delay advisory');
   });
 });
+
+// 177th round (live: NINE field_assist_request events in one millisecond —
+// a CLICK_TARGET_NOT_FOUND verify emptied every field and the ledger read
+// the dead run as nine per-field blindnesses; the model then asked the user
+// to annotate 9 fields at once and the user marked none). Two gates:
+// wholesale/run-class suppression in the ledger tick, and a >3-field
+// ANNOTATE_TOO_BROAD rejection in the tool.
+describe('177th round: field-assist precision gates', () => {
+  // Same Node-test bridge as the 173c-review fieldFailLedger case: the
+  // engine resolves extractFailingFieldNames as a bare global reference.
+  // Each test sets it in try/finally — the earlier suite's finally deletes
+  // the shared global, so a suite-level assignment would not survive to
+  // these tests' execution time.
+  const bridgeFailingFields = () => { global.extractFailingFieldNames = require('../lib/wizard-utils').extractFailingFieldNames; };
+  const unbridgeFailingFields = () => { delete global.extractFailingFieldNames; };
+  const makeFailingVerify = (fields, message) => () => ({
+    ok: false,
+    error: { stepId: 'x', message },
+    detectors: { partialEmptyFields: fields.map((f) => ({ field: f, path: 'posts.' + f, emptyRatio: 1 })) }
+  });
+
+  it('a wholesale failure (4+ fields) counts but NEVER requests assist', async () => {
+    bridgeFailingFields();
+    try {
+    const events = [];
+    const fields9 = ['postId', 'content', 'postTime', 'mediaUrls', 'shareCount', 'htmlSnippet', 'hoverInfos', 'location', 'author'];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('verify.run', {})),
+        reply(envelope('verify.run', {})),
+        reply(finishEnvelope('done'))
+      ], []),
+      tools: { 'verify.run': makeFailingVerify(fields9, 'REQUIRED_FIELD_EMPTY: posts.postId 10/10') },
+      onEvent: (e) => events.push(e)
+    });
+    await session.run();
+    assert.equal(events.filter((e) => e.type === 'field_assist_request').length, 0,
+      'nine simultaneous assist requests were the live incident — none may fire for a wholesale failure');
+    const st = session.state().session;
+    const ledger = st.fieldFailLedger || {};
+    assert.equal(ledger.postId.count, 2, 'counting continues (a later precise failure can still fire)');
+    assert.ok(!ledger.postId.assistRequested, 'assist not consumed by the wholesale tick');
+    } finally { unbridgeFailingFields(); }
+  });
+
+  it('a run-class error (CLICK_TARGET_NOT_FOUND) suppresses assist even for few fields', async () => {
+    bridgeFailingFields();
+    try {
+    const events = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('verify.run', {})),
+        reply(envelope('verify.run', {})),
+        reply(finishEnvelope('done'))
+      ], []),
+      tools: { 'verify.run': makeFailingVerify(['postId'], 'CLICK_TARGET_NOT_FOUND: step "extract" called $clickInList with sub-selector ...') },
+      onEvent: (e) => events.push(e)
+    });
+    await session.run();
+    assert.equal(events.filter((e) => e.type === 'field_assist_request').length, 0,
+      'a dead click target is a step-script bug the model fixes from diagnostics — not user-markable blindness');
+    } finally { unbridgeFailingFields(); }
+  });
+
+  it('a precise binding-shaped failure (2 fields, REQUIRED_FIELD_EMPTY) still fires the assist', async () => {
+    bridgeFailingFields();
+    try {
+    const events = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('verify.run', {})),
+        reply(envelope('verify.run', {})),
+        reply(finishEnvelope('done'))
+      ], []),
+      tools: { 'verify.run': makeFailingVerify(['postTime', 'likeCount'], 'REQUIRED_FIELD_EMPTY: posts.postTime 3/3') },
+      onEvent: (e) => events.push(e)
+    });
+    await session.run();
+    const assists = events.filter((e) => e.type === 'field_assist_request');
+    assert.equal(assists.length, 2, 'the precise per-field human loop is intact');
+    assert.equal(assists[0].field, 'postTime');
+    } finally { unbridgeFailingFields(); }
+  });
+});
