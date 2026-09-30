@@ -213,13 +213,14 @@ describe('182nd round: artifact-less completion keeps the feedback door open', (
   const fs182 = require('node:fs');
   const SRC182 = fs182.readFileSync(require('path').join(__dirname, '../wizard.js'), 'utf8');
   it('the else branch shows the feedback panel, renders the review, and navigates', () => {
-    const idx = SRC182.indexOf('const budgetDeath');
+    // 184th: budgetDeath inverted to stopReason184/cleanFinish184 — pin the new shape.
+    const idx = SRC182.indexOf('const stopReason184');
     assert.ok(idx > -1, 'the budget-death aware landing exists');
     const branch = SRC182.slice(idx, SRC182.indexOf('}', SRC182.indexOf('goToPhase(5);', idx)));
     assert.match(branch, /showSessionFeedbackPanel\(\)/, 'the feedback continuation is offered');
     assert.match(branch, /renderResultReview\(\)/);
     assert.match(branch, /goToPhase\(5\)/);
-    assert.match(branch, /maxTurns|wallClock|tokenCap/, 'budget-death reasons recognized');
+    assert.match(branch, /stopReason184|completed/, 'stop-reason aware copy (184th: non-completed stops get the warn/resume line)');
   });
 });
 
@@ -239,5 +240,20 @@ describe('183rd round: Edit Steps Next verifies, never walks the 0.1 chain', () 
     assert.ok(/blessCurrentVersionIfGreen/.test(region), 'a green hand-edit run blesses the version');
     assert.ok(/renderResultReview\(\)/.test(region), 'lands back on the review');
     assert.ok(!/goToPhase\(3\)[^}]*$/.test(region.replace('if (!reviewFromPhase5) { goToPhase(3); return; }', '')), 'no other phase-3 walk');
+  });
+});
+
+// 184th review: the 182nd getAppliedSteps fix was unwired in production —
+// it landed on the session-tools deps bag (never read) while the engine cfg
+// lacked it; unit tests injected cfg directly and stayed green.
+describe('184th review: production wiring of getAppliedSteps', () => {
+  const fs184 = require('node:fs');
+  const SRC184 = fs184.readFileSync(require('path').join(__dirname, '../wizard.js'), 'utf8');
+  it('createResearchSession receives getAppliedSteps (the engine cfg, not the session-tools deps)', () => {
+    const callIdx = SRC184.indexOf('ResearchSessionLib.createResearchSession({');
+    assert.ok(callIdx > -1, 'engine call found');
+    const callEnd = SRC184.indexOf('});', callIdx);
+    const callBody = SRC184.slice(callIdx, callEnd);
+    assert.match(callBody, /getAppliedSteps:/, 'the engine cfg carries the getter');
   });
 });

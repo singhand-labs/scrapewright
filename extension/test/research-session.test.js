@@ -2443,3 +2443,56 @@ describe('182nd round: chunk protocol honored at the engine layer', () => {
       'the version records the MERGED artifact, not the patch payload — restoreVersion round-trips whole');
   });
 });
+
+// 184th review findings: waiver absorption must precede the chunk
+// passthroughs; the ledger markup router narrows to canonical names.
+describe('184th review: waiver + markup parity', () => {
+  const fs184 = require('node:fs');
+  const RS184 = fs184.readFileSync(require('path').join(__dirname, '../lib/research-session.js'), 'utf8');
+  it('overrides absorption precedes both passthroughs (source order)', () => {
+    const absorbIdx = RS184.indexOf('184th review: absorb overrides BEFORE any passthrough');
+    const chunkIdx = RS184.indexOf("if (a.more === true || a.abortChunk === true) {");
+    assert.ok(absorbIdx > -1 && chunkIdx > absorbIdx, 'waivers land for chunk/abort sends');
+  });
+  it('markup routing no longer skips markable htmlContent/markupPrice fields', async () => {
+    global.extractFailingFieldNames = require('../lib/wizard-utils').extractFailingFieldNames;
+    try {
+      const events = [];
+      const mk = (fields, msg) => () => ({
+        ok: false,
+        error: { stepId: 'x', message: msg },
+        detectors: { partialEmptyFields: fields.map((f) => ({ field: f, path: 'items.' + f, emptyRatio: 1 })) }
+      });
+      const session = createResearchSession({
+        requirement: 'r',
+        llm: scriptedLlm([
+          reply(envelope('verify.run', {})),
+          reply(envelope('verify.run', {})),
+          reply(finishEnvelope('done'))
+        ], []),
+        tools: { 'verify.run': mk(['htmlContent', 'markupPrice'], 'REQUIRED_FIELD_EMPTY: items.htmlContent 3/3') },
+        onEvent: (e) => events.push(e)
+      });
+      await session.run();
+      assert.equal(events.filter((e) => e.type === 'field_assist_skipped').length, 0,
+        'markable text fields stay in the human loop');
+      assert.equal(events.filter((e) => e.type === 'field_assist_request').length, 2,
+        'both markable fields get the precise assist');
+      // and a canonical markup name still routes away
+      const events2 = [];
+      const s2 = createResearchSession({
+        requirement: 'r',
+        llm: scriptedLlm([
+          reply(envelope('verify.run', {})),
+          reply(envelope('verify.run', {})),
+          reply(finishEnvelope('done'))
+        ], []),
+        tools: { 'verify.run': mk(['htmlSnippet'], 'REQUIRED_FIELD_EMPTY: items.htmlSnippet 3/3') },
+        onEvent: (e) => events2.push(e)
+      });
+      await s2.run();
+      assert.ok(events2.some((e) => e.type === 'field_assist_skipped' && e.field === 'htmlSnippet'),
+        'the canonical markup name still routes to binding teaching');
+    } finally { delete global.extractFailingFieldNames; }
+  });
+});

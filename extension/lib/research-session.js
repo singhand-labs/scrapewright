@@ -782,6 +782,13 @@
       // never ran for a buffer; the wizard snapshotted stale steps and the
       // editor showed nothing). Chunk and abort sends route STRAIGHT
       // THROUGH to the handler.
+      // 184th review: absorb overrides BEFORE any passthrough — a chunk or
+      // abort send carrying a waiver must land it (pure state accumulation,
+      // safe for every send shape), or the final assembly re-rejects a
+      // selector the model already waived.
+      for (const sW of normalizeOverrides(a.overrides)) {
+        if (state.waivedSelectors.indexOf(sW) === -1) state.waivedSelectors.push(sW);
+      }
       if (a.more === true || a.abortChunk === true) {
         const chunkHandler = tools['service.update'];
         if (typeof chunkHandler !== 'function') return { error: 'no service.update handler wired' };
@@ -792,9 +799,6 @@
       // waived the popover selector with artifact v1, then had to remember
       // to re-send the waiver with EVERY subsequent update — dropping it
       // re-rejected an already-waived selector and burned turns.
-      for (const s of normalizeOverrides(a.overrides)) {
-        if (state.waivedSelectors.indexOf(s) === -1) state.waivedSelectors.push(s);
-      }
       if (stepsLessAmendment) {
         const amendHandler = tools['service.update'];
         if (typeof amendHandler !== 'function') return { error: 'no service.update handler wired' };
@@ -852,7 +856,7 @@
       // a restore landing them as a NEW version must not trip the gate
       // again). Any other steps-carrying update clears the exemption.
       state.greenRestoredCurrent = (a.restoredFrom != null && a.restoredFrom === state.greenArtifactVersion);
-      rebuildStepPlan(steps); // §3.C: the persisted artifact defines the plan
+      rebuildStepPlan(versionSteps); // §3.C: the persisted artifact defines the plan (184th: post-apply draft, not the request payload)
       emit('artifact_version', { version: version });
       return (out && typeof out === 'object') ? out : { version: version };
     }
@@ -1070,7 +1074,10 @@
           // point at — the value IS the markup of a container, so asking
           // the user to mark it is unanswerable. Route those to binding
           // teaching instead of the human loop; counting continues.
-          const markupField171 = (f) => /html|markup/i.test(String(f || ''));
+          // 184th review: parity with the 178th-narrowed annotate gate — the
+          // broad /html|markup/i skipped markable text fields named
+          // htmlContent / markupPrice from the human loop.
+          const markupField171 = (f) => /(^|\.)(html|markup)$|html_?snippet|outer_?html|inner_?html/i.test(String(f || ''));
           for (const fname of lastVerifyFailingFields171) {
             const entry171 = state.fieldFailLedger[fname] || { count: 0, errors: [] };
             entry171.count += 1;

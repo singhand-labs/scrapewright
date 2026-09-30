@@ -3486,6 +3486,13 @@ async function startResearchSession(seedOverride) {
   appendLog(resumeNote || 'Starting research session — the AI will open the page, probe it, author the steps, and verify.');
   wizardSession = ResearchSessionLib.createResearchSession({
     requirement: wizardState.description,
+    // 184th review P1: the 182nd getAppliedSteps fix landed on the
+    // session-tools deps bag (never read there) — the engine cfg lacked it,
+    // so artifact versions still recorded REQUEST payloads and
+    // restoreVersion could resurrect a patch fragment. Unit tests injected
+    // cfg directly and stayed green while production was unwired.
+    getAppliedSteps: () => (Array.isArray(wizardState.steps) && wizardState.steps.length)
+      ? JSON.parse(JSON.stringify(wizardState.steps)) : null,
     llm: makeLlmAdapter(new LLMClient(config.config)),
     epochOf: () => (wizardRail && typeof wizardRail.epoch === 'number') ? wizardRail.epoch : undefined,
     tools: wizardToolsBag.tools,
@@ -3616,6 +3623,12 @@ function sessionStopResumable(st) {
 function blessCurrentVersionIfGreen(fr) {
   if (fr && fr.finalResult != null && wizardState.currentArtifactVersion > 0 && Array.isArray(wizardState.steps)) {
     wizardState.lastVerified = { version: wizardState.currentArtifactVersion, steps: JSON.parse(JSON.stringify(wizardState.steps)) };
+    // 184th review: hand edits do not bump the version, so the version
+    // snapshot store still holds the PRE-edit steps — the live
+    // syncLastVerifiedFromVerify reads that store and would silently revert
+    // the user's verified edits on the next tool result. Keep both writers
+    // coherent at the same version.
+    wizardState.artifactsByVersion[wizardState.currentArtifactVersion] = JSON.parse(JSON.stringify(wizardState.steps));
     return true;
   }
   return false;
@@ -3693,13 +3706,18 @@ async function presentSessionCompletion() {
     // showed NO error, NO result, and NO feedback entry — a dead end). An
     // artifact-less completion still has the feedback continuation (send
     // a fix request; the engine resumes with the budget hint) and says so.
-    const budgetDeath = wizardSession && wizardSession.state().session.stopped
-      && (wizardSession.state().session.stopped.reason === 'maxTurns'
-        || wizardSession.state().session.stopped.reason === 'wallClock'
-        || wizardSession.state().session.stopped.reason === 'tokenCap');
-    appendLog(budgetDeath
-      ? 'Session stopped at the budget with no artifact yet. Send feedback below to resume with the fix (or raise Max turns and resume) — the research so far carries forward.'
-      : 'Session complete. Review the steps and deploy.', budgetDeath ? 'warn' : 'success');
+    // 184th review: success copy ONLY for a genuine finish — an aborted /
+    // protocol / provider-failure stop with no artifact is a warn+resume
+    // shape, and "review the steps and deploy" describes steps that do not
+    // exist.
+    const stopReason184 = wizardSession && wizardSession.state().session.stopped
+      ? wizardSession.state().session.stopped.reason : null;
+    const cleanFinish184 = stopReason184 === 'completed';
+    appendLog(cleanFinish184
+      ? 'Session complete. Review the steps and deploy.'
+      : 'Session stopped (' + (stopReason184 || 'unknown') + ') with no artifact yet. Send feedback below to resume with the fix' +
+        (stopReason184 === 'maxTurns' ? ' (or raise Max turns and resume)' : '') +
+        ' — the research so far carries forward.', cleanFinish184 ? 'success' : 'warn');
     showSessionFeedbackPanel();
     renderResultReview();
     goToPhase(5);
