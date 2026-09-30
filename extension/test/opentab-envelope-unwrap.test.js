@@ -48,3 +48,45 @@ describe('$openTab envelope unwrap (seventeenth log: day-one wrapper leak)', () 
     assert.match(body, /TAB_RESULT[\s\S]{0,400}subTabSnapshot/);
   });
 });
+
+// 181st round (live recurrence across two sites: $openTab resolved
+// null/undefined with 9-15ms sub-tab "completions" — the fn body contains
+// multi-second waits, so it never ran). glm-5.2 emits MINIFIED arrows with
+// no space after async: async()=>{...}. The 97th-round shape regex required
+// async\s+ (one-plus whitespace), so exactly that shape fell through to the
+// never-invoked body wrap. The table pins every real fn.toString() shape.
+describe('181st round: full-fn-source detection covers minified arrows', () => {
+  const fs181 = require('node:fs');
+  const path181 = require('node:path');
+  const BG181 = fs181.readFileSync(path181.join(__dirname, '../background.js'), 'utf8');
+  const m181 = BG181.match(/const isFullFnSource = (\/.+\/)\.test\(fnSource\)/);
+  assert.ok(m181, 'detection regex found in background.js');
+  const re181 = eval(m181[1]);
+
+  it('the live failing shape async()=>{...} is detected as a full source', () => {
+    assert.equal(re181.test('async()=>{await $wait("body",3000);return 1}'), true,
+      'the 181st incident: no space after async fell to the never-invoked wrap');
+  });
+
+  it('every real fn.toString() shape is detected', () => {
+    for (const src of [
+      'async () => {return 1}',
+      'async(a)=>{return 1}',
+      '()=>{return 1}',
+      '(a)=>{return 1}',
+      'async url=>{return 1}',
+      'url=>{return 1}',
+      'function(){return 1}',
+      'async function(){return 1}',
+      'async function named(){return 1}'
+    ]) {
+      assert.equal(re181.test(src), true, 'shape must be detected: ' + src);
+    }
+  });
+
+  it('legacy bare-body sources still take the body wrap', () => {
+    for (const src of ['const x = await $(sel); return x;', 'return 1;', 'await $wait("body"); return {};']) {
+      assert.equal(re181.test(src), false, 'body-shaped source must NOT be detected: ' + src);
+    }
+  });
+});

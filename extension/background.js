@@ -1662,7 +1662,13 @@ async function handleOpenTabExecute(url, scriptStr, parentTabId, reqId) {
     // 4s sleep and $openTab resolved to a stub. Detect the shape and invoke
     // full sources directly.
     const fnSource = String(scriptStr || '').trim();
-    const isFullFnSource = /^(async\s+)?(\([^)]*\)\s*=>|function\s*\w*\s*\()/.test(fnSource);
+    // 181st round (live recurrence: 9-15ms sub-tab "completions" across two
+    // sites, $openTab resolving null/undefined): glm-5.2 emits minified
+    // arrows with NO space after async (async()=>{...}) — the old
+    // (async\s+)? required one-plus whitespace, so exactly that shape fell
+    // through to the never-invoked body wrap. async\s* (zero+) plus the
+    // bare single-param arrow form.
+    const isFullFnSource = /^(async\s*)?(\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>|function\s*\w*\s*\()/.test(fnSource);
     const script = isFullFnSource
       ? `return await (${fnSource})();`
       : `return await (async () => { ${scriptStr} })();`;
