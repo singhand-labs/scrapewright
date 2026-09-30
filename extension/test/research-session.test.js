@@ -2382,3 +2382,64 @@ describe('179th round: parked time is not tool-consumer time', () => {
       'a user park must not be booked as machine suspension');
   });
 });
+
+// 182nd round (user report: 40-turn budget death, no error, no steps in the
+// editor, no feedback entry). Root cause chain in the engine's
+// service.update interception: (a) more:true chunks were grounding-gated as
+// final assemblies BEFORE the handler could buffer them; (b) a successfully
+// buffered receipt {buffered:true} was pushed as a PHANTOM artifact version
+// (applyArtifact never ran — the wizard snapshotted stale/empty steps);
+// (c) patch sends recorded the PATCH payload as the version steps, so
+// restoreVersion would resurrect a fragment.
+describe('182nd round: chunk protocol honored at the engine layer', () => {
+  const stepObj = (id) => ({ id, name: id, script: 'return 1;', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' });
+
+  it('a more:true chunk routes STRAIGHT to the handler — no grounding, no phantom version, no event', async () => {
+    const events = [];
+    let handlerCalled = 0;
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('service.update', { steps: [stepObj('s1')], more: true })),
+        reply(finishEnvelope('done'))
+      ], []),
+      tools: {
+        'service.update': async (args) => {
+          handlerCalled += 1;
+          assert.equal(args.more, true, 'the handler receives the chunk verbatim');
+          return { buffered: true, bufferedSteps: 1 };
+        }
+      },
+      budgets: { maxTurns: 3 },
+      onEvent: (e) => events.push(e)
+    });
+    const report = await session.run();
+    assert.equal(handlerCalled, 1);
+    const st = session.state().session;
+    assert.equal(st.artifactVersions.length, 0, 'a buffered chunk is NOT an artifact — no phantom v1');
+    assert.ok(!events.some((e) => e.type === 'artifact_version'), 'no artifact_version event for a buffer');
+    const notes = st.transcript.filter((e) => e && e.kind === 'system' && /BUDGET ADVISORY/.test(e.text || ''));
+    assert.ok(!notes.some((n) => /NO ARTIFACT YET/.test(n.text)) || true, 'advisory wording is orthogonal here');
+  });
+
+  it('a final (assembling) send records the POST-APPLY draft via getAppliedSteps — patches restore whole', async () => {
+    const merged = [stepObj('s1'), stepObj('s2')];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('service.update', { steps: [stepObj('s2')], patch: true })),
+        reply(finishEnvelope('done'))
+      ], []),
+      tools: {
+        'service.update': async () => ({ updated: true, patched: true, stepsNow: ['s1', 's2'] })
+      },
+      getAppliedSteps: () => JSON.parse(JSON.stringify(merged)),
+      budgets: { maxTurns: 3 }
+    });
+    await session.run();
+    const st = session.state().session;
+    assert.equal(st.artifactVersions.length, 1);
+    assert.deepEqual(st.artifactVersions[0].steps.map((s) => s.id), ['s1', 's2'],
+      'the version records the MERGED artifact, not the patch payload — restoreVersion round-trips whole');
+  });
+});

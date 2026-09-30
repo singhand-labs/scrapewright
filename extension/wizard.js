@@ -3353,6 +3353,11 @@ async function startResearchSession(seedOverride) {
       config: { timeoutMs: hoverAwareTimeoutMs(wizardState.steps, DEPLOY_TIMEOUT_MS), maxRetries: 0, autoCloseTab: true, maxStepIterations: 50, tabLoadTimeoutMs: 120000 }
     }),
     applyArtifact: applySessionArtifact,
+    // 182nd round: the engine records artifact versions from the POST-APPLY
+    // draft (a patch applies a MERGED artifact; recording the patch payload
+    // alone made restoreVersion resurrect a fragment).
+    getAppliedSteps: () => (Array.isArray(wizardState.steps) && wizardState.steps.length)
+      ? JSON.parse(JSON.stringify(wizardState.steps)) : null,
     getTestInput: () => wizardState.testInput || {},
     getOutputSchema: () => wizardState.outputSchema,
     getInputSchema: () => wizardState.inputSchema,
@@ -3664,7 +3669,19 @@ async function presentSessionCompletion() {
     if (!freshRunError) blessCurrentVersionIfGreen(wizardState.testResult);
     renderResultReview();
   } else {
-    appendLog('Session complete. Review the steps and deploy.', 'success');
+    // 182nd round (user report: a 40-turn budget death with no artifact
+    // showed NO error, NO result, and NO feedback entry — a dead end). An
+    // artifact-less completion still has the feedback continuation (send
+    // a fix request; the engine resumes with the budget hint) and says so.
+    const budgetDeath = wizardSession && wizardSession.state().session.stopped
+      && (wizardSession.state().session.stopped.reason === 'maxTurns'
+        || wizardSession.state().session.stopped.reason === 'wallClock'
+        || wizardSession.state().session.stopped.reason === 'tokenCap');
+    appendLog(budgetDeath
+      ? 'Session stopped at the budget with no artifact yet. Send feedback below to resume with the fix (or raise Max turns and resume) — the research so far carries forward.'
+      : 'Session complete. Review the steps and deploy.', budgetDeath ? 'warn' : 'success');
+    showSessionFeedbackPanel();
+    renderResultReview();
     goToPhase(5);
   }
 }

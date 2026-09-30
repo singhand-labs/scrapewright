@@ -205,3 +205,20 @@ describe('175th round: user-triggered test runs surface failures', () => {
     assert.equal(wrapped, 3, 'Retry Test, runTestFromStep5, and the custom-input run each call the wrapper');
   });
 });
+
+// 182nd round (user report): an artifact-less budget death showed no error,
+// no result, and NO feedback entry — a dead end. Branch 3 now shows the
+// feedback panel and lands on phase 5 with a budget-death teaching line.
+describe('182nd round: artifact-less completion keeps the feedback door open', () => {
+  const fs182 = require('node:fs');
+  const SRC182 = fs182.readFileSync(require('path').join(__dirname, '../wizard.js'), 'utf8');
+  it('the else branch shows the feedback panel, renders the review, and navigates', () => {
+    const idx = SRC182.indexOf('const budgetDeath');
+    assert.ok(idx > -1, 'the budget-death aware landing exists');
+    const branch = SRC182.slice(idx, SRC182.indexOf('}', SRC182.indexOf('goToPhase(5);', idx)));
+    assert.match(branch, /showSessionFeedbackPanel\(\)/, 'the feedback continuation is offered');
+    assert.match(branch, /renderResultReview\(\)/);
+    assert.match(branch, /goToPhase\(5\)/);
+    assert.match(branch, /maxTurns|wallClock|tokenCap/, 'budget-death reasons recognized');
+  });
+});

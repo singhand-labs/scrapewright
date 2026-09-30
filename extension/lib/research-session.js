@@ -772,6 +772,21 @@
         for (const st of a.steps) steps.push(st);
       }
       if (!steps.length && !stepsLessAmendment) return { error: 'steps (non-empty array) required' };
+      // 182nd round (live: a 40-turn session died with NOTHING — no error,
+      // no steps in the editor, no feedback entry). The 125th-round chunk
+      // protocol (more:true buffers + defers every gate; the final chunk
+      // assembles) lives INSIDE the handler — this wrapper grounded chunk
+      // #2/#5 as if they were final assemblies (rejected), and a
+      // successfully buffered chunk returned {buffered:true} which this
+      // wrapper then pushed as a PHANTOM artifact version (applyArtifact
+      // never ran for a buffer; the wizard snapshotted stale steps and the
+      // editor showed nothing). Chunk and abort sends route STRAIGHT
+      // THROUGH to the handler.
+      if (a.more === true || a.abortChunk === true) {
+        const chunkHandler = tools['service.update'];
+        if (typeof chunkHandler !== 'function') return { error: 'no service.update handler wired' };
+        return await chunkHandler(a, { observationLog: observationLog, ledger: ledger, session: publicApi });
+      }
       // Sticky waivers (twentieth log): a waiver recorded once applies to
       // every later grounding check for the rest of the session. The model
       // waived the popover selector with artifact v1, then had to remember
@@ -816,9 +831,22 @@
       // created (chain/schema validation, apply). A handler error means NO
       // version exists — announcing one anyway (fourth-log turn 19) sent the
       // session and the UI off to verify a phantom artifact.
+      // 182nd round: a BUFFERED/ABORTED chunk receipt is not an error but
+      // also not an artifact — no version, no event (the phantom-v1
+      // incident: the wizard snapshotted stale steps and the editor showed
+      // nothing while the engine claimed v1 existed).
       if (out && typeof out === 'object' && typeof out.error === 'string') return out;
+      if (out && typeof out === 'object' && (out.buffered === true || out.aborted === true)) return out;
       const version = state.artifactVersions.length + 1;
-      state.artifactVersions.push({ version: version, steps: steps, at: now() });
+      // 182nd round: record the POST-APPLY draft, not the request payload —
+      // a patch:true send applies a MERGED artifact, and recording the
+      // patch's single step made restoreVersion resurrect a fragment.
+      let versionSteps = steps;
+      try {
+        const applied = (typeof cfg.getAppliedSteps === 'function') ? cfg.getAppliedSteps() : null;
+        if (Array.isArray(applied) && applied.length) versionSteps = applied;
+      } catch (eVS) { /* fall back to the request steps */ }
+      state.artifactVersions.push({ version: version, steps: versionSteps, at: now() });
       // 143rd log: the finish gate exempts the artifact that IS the restored
       // green (its steps were green-verified as version greenArtifactVersion;
       // a restore landing them as a NEW version must not trip the gate
