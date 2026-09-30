@@ -1066,6 +1066,19 @@
       const out = await d.runVerify({ service: service, input: input, outputSchema: outputSchema, sessionEvidence: sessionEvidence });
       if (preflight) out.report.preflight = preflight;
       const wallCostMs = Date.now() - __verifyT0;
+      // 183rd round (user report: an all-green session showed "v3 has NEVER
+      // passed any verification"): the engine used to stamp the version on a
+      // CLONE for the transcript, so THIS report — the one getLastVerify()
+      // hands the wizard's live lastVerified sync — never carried it and the
+      // sync never fired. Stamp HERE, FIRST key, on the object we keep: same
+      // identity for the transcript, the summary window, and the sync.
+      try {
+        const vNum183 = (ctx && ctx.session && typeof ctx.session.artifactVersion === 'function')
+          ? ctx.session.artifactVersion() : undefined;
+        if (typeof vNum183 === 'number' && out.report && typeof out.report === 'object') {
+          out.report = Object.assign({ executedArtifactVersion: vNum183 }, out.report);
+        }
+      } catch (e183) { /* version stamp is best-effort; the engine stamps in place too */ }
       lastVerify = { events: out.events || [], report: out.report, raw: out.raw, at: Date.now() };
       captureRouteEpoch += 1; // route re-proving is legitimate after a verify (page state changed)
       const report = out.report || {};

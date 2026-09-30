@@ -394,7 +394,27 @@ document.addEventListener('DOMContentLoaded', async () => {
     await startResearchSession();
   });
   document.getElementById('btnRestateRetry').addEventListener('click', () => { showRequirementRestatePanel(); });
-  document.getElementById('btnPhase2Next').addEventListener('click', () => goToPhase(3));
+  // 183rd round (user report: from the review stage, Edit Steps → Next
+  // dropped into the 0.1-era "Edit I/O & Test Input" screen — a dead legacy
+  // chain in the three-stage model). Hand-edited steps from the review
+  // verify DIRECTLY: sync the editor, run the current verify machinery
+  // (same runner the session uses), bless on green, and land back on the
+  // review. The legacy 2→3 chain stays only for non-review entries.
+  document.getElementById('btnPhase2Next').addEventListener('click', async () => {
+    if (!reviewFromPhase5) { goToPhase(3); return; }
+    const btn = document.getElementById('btnPhase2Next');
+    btn.disabled = true;
+    showLoading('Verifying your edited steps…');
+    try {
+      if (typeof syncStepsFromEditor === 'function') syncStepsFromEditor();
+      await runTestScriptUserFacing();
+      blessCurrentVersionIfGreen(wizardState.testResult);
+      renderResultReview();
+    } finally {
+      hideLoading();
+      btn.disabled = false;
+    }
+  });
   // Back targets follow the stage model (PHASE_LABELS): mainline 1→4→5,
   // phases 2/3 are post-hoc edit sub-screens under the Review & Deploy
   // umbrella. From a sub-screen, Back returns to the review (phase 5) when

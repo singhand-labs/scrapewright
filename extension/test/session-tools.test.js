@@ -1506,3 +1506,21 @@ describe('177b round: markup-read fields are rejected from annotation', () => {
     assert.ok(!r2.error);
   });
 });
+
+// 183rd round (user report: an all-green session still showed "v3 has NEVER
+// passed any verification"). The engine stamped the version on a CLONE for
+// the transcript; THIS layer's lastVerify.report — the object the wizard's
+// 107th-round live sync reads — never carried it. The stamp now lands HERE,
+// first key, on the kept object (ctx.session.artifactVersion).
+describe('183rd round: verify reports carry a first-key version stamp on the kept object', () => {
+  it('a green verify stamps getLastVerify().report with executedArtifactVersion, serialized first', async () => {
+    const { deps, state } = makeDeps();
+    state.draft = { targetUrl: 'https://example.com', steps: GOOD_STEPS };
+    const t = createSessionTools(deps);
+    await t.tools['verify.run']({}, { session: { artifactVersion: () => 1, parkBegin: () => {}, parkEnd: () => {} } });
+    const lv = t.getLastVerify();
+    assert.ok(lv && lv.report && lv.report.ok === true);
+    assert.equal(lv.report.executedArtifactVersion, 1, 'the KEPT report carries the stamp (the 107th sync reads exactly this)');
+    assert.equal(JSON.stringify(lv.report).indexOf('executedArtifactVersion'), 2, 'first key — the 28th head-slice window keeps it');
+  });
+});

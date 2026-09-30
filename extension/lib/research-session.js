@@ -1817,7 +1817,24 @@
             // carry an `error` key by shape); plain dispatch failures look
             // like {error:'no artifact yet'} and get no stamp.
             if (result && typeof result === 'object' && !Array.isArray(result) && 'ok' in result) {
-              result = Object.assign({ executedArtifactVersion: state.artifactVersions.length }, result);
+              // 183rd round (user report: an all-green session showed "v3
+              // has NEVER passed any verification"): the stamp used to ride
+              // an Object.assign CLONE for the transcript, while the tool
+              // layer's internal lastVerify held the ORIGINAL unstamped
+              // report — so the 107th-round lastVerified live-sync (which
+              // reads getLastVerify().report.executedArtifactVersion) never
+              // fired in production. Stamp IN PLACE: the same object the
+              // tool layer stores is the one the transcript shows.
+              if (!('executedArtifactVersion' in result)) {
+                // Mocked-tool path (no session-tools stamp): stamp-first clone
+                // keeps the 28th-log head-slice guarantee.
+                result = Object.assign({ executedArtifactVersion: state.artifactVersions.length }, result);
+              } else {
+                // Production path: the tool layer stamped FIRST-KEY on the
+                // object it keeps — refresh the value in place, preserving
+                // both the key position and the object identity.
+                result.executedArtifactVersion = state.artifactVersions.length;
+              }
               // Thirty-third log D3: cross-verify memory. A field a PRIOR
               // verify populated that this one empties completely is a
               // regression the step changes between the runs likely explain
@@ -2120,6 +2137,11 @@
       pause: pause,
       parkBegin: parkBegin,
       parkEnd: parkEnd,
+      // 183rd round: the tool layer stamps verify reports with the CURRENT
+      // artifact version at report-construction time (first key — the 28th
+      // head-slice window) on the SAME object it keeps in lastVerify (the
+      // 107th live sync reads it there).
+      artifactVersion: () => state.artifactVersions.length,
       state: () => JSON.parse(JSON.stringify(stateForPersist())),
       report: buildReport,
       // Sixty-seventh log: tool handlers (service.update endgame warning)

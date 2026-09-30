@@ -200,9 +200,9 @@ describe('175th round: user-triggered test runs surface failures', () => {
     }
   });
 
-  it('the three user-triggered sites route through the wrapper', () => {
+  it('the user-triggered sites route through the wrapper (183rd: Edit-Steps Next joins)', () => {
     const wrapped = SRC.split('await runTestScriptUserFacing();').length - 1;
-    assert.equal(wrapped, 3, 'Retry Test, runTestFromStep5, and the custom-input run each call the wrapper');
+    assert.equal(wrapped, 4, 'Retry Test, runTestFromStep5, custom-input run, and the review-stage Edit-Steps Next each call the wrapper');
   });
 });
 
@@ -220,5 +220,24 @@ describe('182nd round: artifact-less completion keeps the feedback door open', (
     assert.match(branch, /renderResultReview\(\)/);
     assert.match(branch, /goToPhase\(5\)/);
     assert.match(branch, /maxTurns|wallClock|tokenCap/, 'budget-death reasons recognized');
+  });
+});
+
+// 183rd round (user report: from the review stage, Edit Steps → Next
+// dropped into the 0.1-era phase-3 screen). Hand-edited steps from the
+// review verify directly through the current machinery and land back on
+// the review stage.
+describe('183rd round: Edit Steps Next verifies, never walks the 0.1 chain', () => {
+  const fs183 = require('node:fs');
+  const SRC183 = fs183.readFileSync(require('path').join(__dirname, '../wizard.js'), 'utf8');
+  it('btnPhase2Next routes reviewFromPhase5 through sync + verify + bless + review', () => {
+    const idx = SRC183.indexOf("getElementById('btnPhase2Next')");
+    const region = SRC183.slice(idx, SRC183.indexOf('});', SRC183.indexOf('finally', idx)));
+    assert.ok(/!reviewFromPhase5/.test(region), 'the legacy chain stays only for non-review entries');
+    assert.ok(/syncStepsFromEditor/.test(region), 'editor state syncs before the run');
+    assert.ok(/runTestScriptUserFacing\(\)/.test(region), 'the CURRENT verify machinery runs');
+    assert.ok(/blessCurrentVersionIfGreen/.test(region), 'a green hand-edit run blesses the version');
+    assert.ok(/renderResultReview\(\)/.test(region), 'lands back on the review');
+    assert.ok(!/goToPhase\(3\)[^}]*$/.test(region.replace('if (!reviewFromPhase5) { goToPhase(3); return; }', '')), 'no other phase-3 walk');
   });
 });
