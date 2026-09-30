@@ -446,3 +446,64 @@ describe('probe.census A+B batch (175th round): bounded reads, coverage fidelity
     assert.deepEqual(pid.samples, ['p1000001', 'p1000002', 'p1000003']);
   });
 });
+
+// 177c round (live: the default timestamp union matched ZERO anchors inside
+// search-post containers — their anchors are plain links, not
+// labelledby-carrying feed-card spans — while the census's own lanes held
+// the real anchor shapes). A vacuous timeHover self-heals ONCE with the
+// lanes' top-coverage time/aria/url selectors as the anchor union.
+describe('177c round: vacuous timeHover self-heals from the census lanes', () => {
+  function vacuousTools() {
+    const records = [cardHtml(1), cardHtml(2), cardHtml(3)];
+    const hoverCalls = [];
+    const observationLog = createObservationLog();
+    const tools = createProbeTools({
+      executeDsl: async (snippet) => {
+        if (/\$extractWithHover\(/.test(snippet)) {
+          // Default union in the anchorSel: anchorLog EMPTY (vacuous shape).
+          // Lane-derived retry (snippet carries the lane selector union):
+          // the one-card dance captures a full absolute.
+          const isRetry = /span\.ts/.test(snippet);
+          hoverCalls.push(isRetry ? 'retry' : 'default');
+          if (!isRetry) {
+            return [{ __t_label: '', __t_aria: '', __t_text: '', hovercards: [], anchorLog: [] }];
+          }
+          return [{ __t_label: '', __t_aria: '', __t_text: 'September 11, 2026', hovercards: [] }];
+        }
+        if (/\$count\(/.test(snippet)) return records.length;
+        return records.map((h) => ({ __c_html: h }));
+      },
+      observationLog
+    });
+    return { tools, hoverCalls };
+  }
+
+  it('a zero-anchor timeHover retries once with the lane selectors and discloses censusRetry', async () => {
+    const { tools, hoverCalls } = vacuousTools();
+    const r = await tools.census({ containerSel: 'div.card', hover: true });
+    assert.deepEqual(hoverCalls, ['default', 'retry'], 'exactly one self-heal retry');
+    assert.equal(r.timeHover.absolute, 'September 11, 2026');
+    assert.ok(r.timeHover.censusRetry, 'the retry is disclosed');
+    assert.match(r.timeHover.censusRetry.to, /span\.ts/);
+    assert.match(r.timeHover.censusRetry.from, /default union/);
+  });
+
+  it('no retry when the default dance already captured something', async () => {
+    const records = [cardHtml(1), cardHtml(2)];
+    const hoverCalls = [];
+    const tools = createProbeTools({
+      executeDsl: async (snippet) => {
+        if (/\$extractWithHover\(/.test(snippet)) {
+          hoverCalls.push('called');
+          return [{ __t_label: '', __t_aria: '', __t_text: 'September 11, 2026', hovercards: [] }];
+        }
+        if (/\$count\(/.test(snippet)) return records.length;
+        return records.map((h) => ({ __c_html: h }));
+      },
+      observationLog: createObservationLog()
+    });
+    const r = await tools.census({ containerSel: 'div.card', hover: true });
+    assert.equal(hoverCalls.length, 1, 'no retry on a productive dance');
+    assert.ok(!r.timeHover.censusRetry);
+  });
+});

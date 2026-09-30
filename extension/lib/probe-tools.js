@@ -1300,7 +1300,31 @@
         try {
           const tsArgs = { containerSel: containerSel, index: indices[0] || 0 };
           if (typeof a.anchorSel === 'string' && a.anchorSel.trim()) tsArgs.anchorSel = a.anchorSel.trim();
-          const ts = await timestamp(tsArgs);
+          let ts = await timestamp(tsArgs);
+          // 177c self-heal (live: the default timestamp union — built for
+          // labelledby-carrying feed cards — matched ZERO anchors inside
+          // search-post containers whose anchors are plain links; the
+          // receipt was a VACUOUS NEGATIVE while the census's OWN lanes
+          // already held the real anchor shapes). When the dance came back
+          // with no anchors and no value, retry ONCE with the lanes'
+          // top-coverage time/aria selectors as the anchor union — the
+          // census never ships a vacuous time channel it can derive itself.
+          const vacuousTs = (t) => t && typeof t === 'object' && !t.error && !t.absolute &&
+            Array.isArray(t.anchorLog) && t.anchorLog.length === 0;
+          if (vacuousTs(ts)) {
+            const laneAnchors = [];
+            if (Array.isArray(lanes.time) && lanes.time[0] && lanes.time[0].selector) laneAnchors.push(lanes.time[0].selector);
+            if (Array.isArray(lanes.aria) && lanes.aria[0] && lanes.aria[0].selector) laneAnchors.push(lanes.aria[0].selector);
+            if (Array.isArray(lanes.url) && lanes.url[0] && lanes.url[0].selector) laneAnchors.push(lanes.url[0].selector);
+            if (laneAnchors.length) {
+              const retryAnchorSel = (typeof tsArgs.anchorSel === 'string' ? tsArgs.anchorSel + ', ' : '') + laneAnchors.join(', ');
+              const retry = await timestamp({ containerSel: containerSel, index: tsArgs.index, anchorSel: retryAnchorSel });
+              if (!vacuousTs(retry)) {
+                retry.censusRetry = { from: 'default union (0 anchors)', to: laneAnchors.join(', ') };
+                ts = retry;
+              }
+            }
+          }
           out.timeHover = (ts && typeof ts.error === 'string') ? { error: ts.error } : ts;
         } catch (eTs) { out.timeHover = { error: String((eTs && eTs.message) || eTs) }; }
       }
