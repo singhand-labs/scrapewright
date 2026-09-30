@@ -1486,3 +1486,23 @@ describe('probe.census (speed track 2026-09-29)', () => {
     assert.equal(ev3.probeTimestampCalls, 0, 'a failed timeHover phase never bumps the counter');
   }));
 });
+
+describe('177b round: markup-read fields are rejected from annotation', () => {
+  it('a fields ask naming htmlSnippet is rejected with the binding route and the container alternative', async () => {
+    let called = 0;
+    const { deps } = makeDeps({
+      annotationBridge: { request: async () => { called += 1; return { annotations: [] }; } }
+    });
+    const t = createSessionTools(deps);
+    await t.tools['io.confirm']({ inputSchema: { type: 'object', required: ['keyword'], properties: { keyword: { type: 'string' } } }, outputSchema: { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } } });
+    const r = await t.tools['annotate.request']({ why: 'htmlSnippet empty', fields: ['htmlSnippet'] });
+    assert.match(r.error, /ANNOTATE_NOT_MARKABLE/);
+    assert.match(r.error, /no element for the user to point at/);
+    assert.match(r.error, /container/);
+    assert.equal(called, 0, 'the panel never opens for a non-markable ask');
+    // A container-confirm ask WITHOUT fields still flows to the bridge.
+    const r2 = await t.tools['annotate.request']({ why: 'confirm the post container', containerSel: 'div[role=feed] > div' });
+    assert.equal(called, 1);
+    assert.ok(!r2.error);
+  });
+});

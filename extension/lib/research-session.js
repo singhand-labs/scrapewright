@@ -1022,11 +1022,27 @@
           const runClass171 = /CLICK_TARGET_NOT_FOUND|FIELD_MATCH_ZERO|COUNT_SHORTFALL|ZERO_CONTAINER|POPULATION/.test(prefix171);
           const wholesale171 = lastVerifyFailingFields171.length >= 4;
           const suppressAssist171 = runClass171 || wholesale171;
+          // 177th-round follow-up (user report): markup-read fields
+          // (htmlSnippet / outerHTML / markup dumps) have NO element to
+          // point at — the value IS the markup of a container, so asking
+          // the user to mark it is unanswerable. Route those to binding
+          // teaching instead of the human loop; counting continues.
+          const markupField171 = (f) => /html|markup/i.test(String(f || ''));
           for (const fname of lastVerifyFailingFields171) {
             const entry171 = state.fieldFailLedger[fname] || { count: 0, errors: [] };
             entry171.count += 1;
             if (entry171.errors.length < 3) entry171.errors.push(String(lastVerifyErrorPrefix171 || 'verify red').slice(0, 60));
             state.fieldFailLedger[fname] = entry171;
+            if (markupField171(fname)) {
+              if (entry171.count === 2 && !entry171.markupRouted) {
+                entry171.markupRouted = true;
+                state.fieldFailLedger[fname] = entry171;
+                state.transcript.push({ kind: 'system', text:
+                  'FIELD_ASSIST_SKIPPED (not markable): "' + fname + '" is a markup-read field — its value IS the markup of a container, so the user cannot point at it with a mouse. Bind its selector to the semantic container or sub-element (attr outerHTML/innerHTML) — re-ground it from the census lanes or the dossier skeleton, not from the human loop.' });
+                emit('field_assist_skipped', { field: fname, reason: 'markup-read field' });
+              }
+              continue;
+            }
             if (entry171.count >= 2 && !entry171.assistRequested && !suppressAssist171) {
               entry171.assistRequested = true;
               state.transcript.push({ kind: 'system', text:

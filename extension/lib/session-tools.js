@@ -1235,6 +1235,17 @@
           error: 'ANNOTATE_TOO_BROAD: ' + fieldsRequested.length + ' fields in one request — the user marks elements one at a time, and a broad ask gets none of them marked (live incident). Re-send with AT MOST 3 fields, prioritized: the blocking required field(s) first. If many fields fail together, that is a dead-run/population problem (diag.read + container census), not per-field blindness.'
         };
       }
+      // 177th-round follow-up (user report): markup-read and other
+      // not-element-pointable fields cannot be annotated — the value IS the
+      // markup of a container. Reject with the binding route; a CONTAINER
+      // confirm (fields omitted, containerSel in doubt) is the supported
+      // alternative and now has a dedicated menu type on the page.
+      const markupRequested = fieldsRequested.filter((f) => /html|markup/i.test(f));
+      if (markupRequested.length) {
+        return {
+          error: 'ANNOTATE_NOT_MARKABLE: field(s) ' + JSON.stringify(markupRequested) + ' read markup (outerHTML/innerHTML) — there is no element for the user to point at. Bind those from the census lanes / dossier skeleton (selector on the semantic container or sub-element). To confirm the CONTAINER itself, send annotate.request WITHOUT fields (the page menu has a "container" type for repeating-item/exclude/scope picks).'
+        };
+      }
       const bridge = d.annotationBridge;
       if (!bridge || typeof bridge.request !== 'function') {
         return { error: 'annotation bridge not wired in this host' };

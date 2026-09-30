@@ -121,3 +121,28 @@ describe('176th round: zero-annotation Submit re-arms, never false-cancels', () 
     assert.match(r.error, /CAPTURE_SNAPSHOT_FAILED/);
   });
 });
+
+// 177b round (user report): a container-confirm ask had no menu entry — the
+// user clicked the post div and had no way to say "this is the container"
+// because every pick demanded an output field. The page menu now carries a
+// dedicated container type with role options (repeating item / exclude /
+// scope) and NO output-field select.
+describe('177b round: annotation menu container type (source audit)', () => {
+  const CS = fs.readFileSync(path.join(__dirname, '../content-script.js'), 'utf8');
+  it('step 1 offers the container type, labeled as NOT an output field', () => {
+    assert.match(CS, /data-type="container"[^>]*>container — repeating item \/ scope \(NOT an output field\)/);
+  });
+  it('step 2 gives container picks role options instead of a field select', () => {
+    const idx = CS.indexOf("type === 'click' || type === 'check' || type === 'input' || type === 'container'");
+    assert.ok(idx > -1, 'the intent branch covers container');
+    const branch = CS.slice(idx, idx + 1400);
+    assert.match(branch, /repeating item \(post\/card\)/);
+    assert.match(branch, /exclude — not an item/);
+    assert.match(branch, /page region \/ scope/);
+    assert.match(branch, /What is this container\?/);
+  });
+  it('commit reads the container purpose (no outputField expected)', () => {
+    const idx = CS.indexOf("if (type === 'click' || type === 'check' || type === 'input' || type === 'container') {");
+    assert.ok(idx > -1, 'commit covers container');
+  });
+});

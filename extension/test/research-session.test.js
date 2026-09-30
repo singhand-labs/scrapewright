@@ -2257,3 +2257,40 @@ describe('177th round: field-assist precision gates', () => {
     } finally { unbridgeFailingFields(); }
   });
 });
+
+// 177th-round follow-up (user report): markup-read fields (htmlSnippet,
+// outerHTML) have no element to point at — the value IS the markup of a
+// container. The ledger must route them to binding teaching, never to the
+// human loop.
+describe('177b round: markup-read fields are not markable', () => {
+  const makeFailingVerify177b = (fields, message) => () => ({
+    ok: false,
+    error: { stepId: 'x', message },
+    detectors: { partialEmptyFields: fields.map((f) => ({ field: f, path: 'posts.' + f, emptyRatio: 1 })) }
+  });
+
+  it('htmlSnippet failing twice routes to FIELD_ASSIST_SKIPPED teaching, no assist event', async () => {
+    global.extractFailingFieldNames = require('../lib/wizard-utils').extractFailingFieldNames;
+    try {
+      const events = [];
+      const session = createResearchSession({
+        requirement: 'r',
+        llm: scriptedLlm([
+          reply(envelope('verify.run', {})),
+          reply(envelope('verify.run', {})),
+          reply(finishEnvelope('done'))
+        ], []),
+        tools: { 'verify.run': makeFailingVerify177b(['htmlSnippet'], 'REQUIRED_FIELD_EMPTY: posts.htmlSnippet 3/3') },
+        onEvent: (e) => events.push(e)
+      });
+      await session.run();
+      assert.equal(events.filter((e) => e.type === 'field_assist_request').length, 0,
+        'the user is never asked to point at markup');
+      assert.ok(events.some((e) => e.type === 'field_assist_skipped' && e.field === 'htmlSnippet'),
+        'the skip is disclosed as an event');
+      const note = session.state().session.transcript.find((e) => e && e.kind === 'system' && /FIELD_ASSIST_SKIPPED/.test(e.text || ''));
+      assert.ok(note && /census lanes/.test(note.text), 'the note routes to binding from evidence');
+      assert.equal(session.state().session.fieldFailLedger.htmlSnippet.count, 2, 'counting continues');
+    } finally { delete global.extractFailingFieldNames; }
+  });
+});

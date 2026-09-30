@@ -5829,6 +5829,7 @@
         <button data-type="click" style="display:block; width:100%; margin:2px 0; padding:6px 8px; text-align:left; cursor:pointer; border:1px solid #e5e7eb; background:white; border-radius:3px;">click — click element</button>
         <button data-type="input" style="display:block; width:100%; margin:2px 0; padding:6px 8px; text-align:left; cursor:pointer; border:1px solid #e5e7eb; background:white; border-radius:3px;">input — input field</button>
         <button data-type="extract" style="display:block; width:100%; margin:2px 0; padding:6px 8px; text-align:left; cursor:pointer; border:1px solid #e5e7eb; background:white; border-radius:3px;">extract — extract text/attribute</button>
+        <button data-type="container" style="display:block; width:100%; margin:2px 0; padding:6px 8px; text-align:left; cursor:pointer; border:1px solid #e5e7eb; background:white; border-radius:3px;">container — repeating item / scope (NOT an output field)</button>
         <button data-type="check" style="display:block; width:100%; margin:2px 0; padding:6px 8px; text-align:left; cursor:pointer; border:1px solid #e5e7eb; background:white; border-radius:3px;">check — read attribute</button>
         <button data-type="wait" style="display:block; width:100%; margin:2px 0; padding:6px 8px; text-align:left; cursor:pointer; border:1px solid #e5e7eb; background:white; border-radius:3px;">wait — wait for element</button>
         <hr style="margin:8px 0; border:none; border-top:1px solid #e5e7eb;">
@@ -5876,8 +5877,21 @@
 
       // key/value types have no intent dropdowns — straight confirm.
       if (type !== 'key' && type !== 'value') {
-        if (type === 'click' || type === 'check' || type === 'input') {
-          menu.appendChild(buildSelect('cc-purpose', 'Intent (purpose)', PURPOSES, '— Select —'));
+        if (type === 'click' || type === 'check' || type === 'input' || type === 'container') {
+          // 177th-round follow-up (user report): a container confirm ask has
+          // no output field to map — the pick IS the scope. The container
+          // branch gets role options instead of a field select; the pick
+          // records purpose only, and downstream consumers (annotate.request
+          // receipts, ledger) read it as container grounding.
+          const purposeOpts = type === 'container'
+            ? [
+                { value: 'repeating item (post/card)', label: 'repeating item (post/card)' },
+                { value: 'exclude — not an item', label: 'exclude — not an item' },
+                { value: 'page region / scope', label: 'page region / scope' },
+                { value: 'other', label: 'other…' }
+              ]
+            : PURPOSES;
+          menu.appendChild(buildSelect('cc-purpose', type === 'container' ? 'What is this container?' : 'Intent (purpose)', purposeOpts, '— Select —'));
           const otherWrap = document.createElement('div');
           otherWrap.id = 'cc-purpose-other-wrap';
           otherWrap.style.cssText = 'margin:4px 0; display:none;';
@@ -5946,7 +5960,7 @@
 
     function commit(type) {
       let purpose, waitCondition, outputField, inputField;
-      if (type === 'click' || type === 'check' || type === 'input') {
+      if (type === 'click' || type === 'check' || type === 'input' || type === 'container') {
         const sel = menu.querySelector('#cc-purpose');
         const chosen = sel ? sel.value : '';
         purpose = chosen === 'other'
