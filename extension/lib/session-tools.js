@@ -1695,13 +1695,28 @@
       if (cspBlocked && steps.length) {
         try {
           const probe = await probes.snippet({ code: syntaxProbeCode(steps), timeoutMs: 15000 });
+          // 179th round (live: v12 shipped an Invalid-regular-expression
+          // script through this gate): probes.snippet resolves the SANDBOX
+          // result as a JSON STRING in .result ({result: '{"ok":false,...}'}),
+          // so the old `probe.ok === false` branch matched NOTHING — in the
+          // CSP-blocked wizard page every update took this probe route, and
+          // the construction gate never rejected a script since the 137th.
+          // Parse the envelope; only a transport-level error fails open.
+          let probeParsed = null;
+          if (probe && typeof probe.result === 'string') {
+            try { probeParsed = JSON.parse(probe.result); } catch (ePP) { probeParsed = null; }
+          } else if (probe && typeof probe === 'object' && probe.ok !== undefined) {
+            probeParsed = probe;
+          }
           if (probe && typeof probe.error === 'string') {
             parseCheckNote = 'parse environment unavailable (page CSP blocks construction; sandbox probe failed: ' + probe.error.slice(0, 120) + ') — the syntax gate could not run for this update';
-          } else if (probe && probe && probe.ok === false) {
+          } else if (probeParsed && probeParsed.ok === false) {
             return {
-              error: 'STEP_SCRIPT_NOT_PARSEABLE: step "' + String(probe.step) + '" failed JavaScript construction at UPDATE time (' +
-                String(probe.message) + '). The script was never executable — a truncated reply or repaired JSON most likely ate a character (paste the regex/expr verbatim from your evidence, or resend the step in a fresh chunk). Fix the script and resend; this artifact was NOT applied.'
+              error: 'STEP_SCRIPT_NOT_PARSEABLE: step "' + String(probeParsed.step) + '" failed JavaScript construction at UPDATE time (' +
+                String(probeParsed.message) + '). The script was never executable — a truncated reply or repaired JSON most likely ate a character (paste the regex/expr verbatim from your evidence, or resend the step in a fresh chunk). Fix the script and resend; this artifact was NOT applied.'
             };
+          } else if (probeParsed && probeParsed.ok !== true) {
+            parseCheckNote = 'parse environment unavailable (page CSP blocks construction; sandbox probe returned an unrecognized payload) — the syntax gate could not verify this update';
           }
         } catch (e) {
           parseCheckNote = 'parse environment unavailable (page CSP blocks construction; sandbox probe unreachable) — the syntax gate could not run for this update';

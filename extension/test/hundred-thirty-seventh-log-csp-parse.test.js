@@ -47,7 +47,12 @@ function sandboxSnippet(args) {
   try {
     // eslint-disable-next-line no-new-func
     const fn = new Function(code);
-    return fn();
+    // 179th round (live: the syntax gate was DEAD since the 137th): the
+    // REAL probes.snippet resolves the sandbox result as a JSON STRING in
+    // .result — the old mock returned the raw payload, matched the gate's
+    // `probe.ok === false` branch, went green, and hid that the branch
+    // matched nothing in production. Mock the REAL envelope.
+    return { result: JSON.stringify(fn()), truncated: false };
   } catch (e) {
     return { error: String((e && e.message) || e) };
   }
@@ -91,14 +96,16 @@ describe('137th log — isCspConstructError + syntaxProbeCode', () => {
 
   it('syntaxProbeCode, executed as the sandbox would, rejects the broken script with step + message', () => {
     const code = ST.syntaxProbeCode(step(BAD_SCRIPT));
-    const r = sandboxSnippet({ code });
+    const env = sandboxSnippet({ code });
+    assert.equal(env.truncated, false);
+    const r = JSON.parse(env.result);
     assert.deepEqual(r, { ok: false, step: 'one', message: r.message }, 'probe names the step and the parse failure');
     assert.match(String(r.message), /Nothing to repeat|Invalid regular expression/);
   });
 
   it('syntaxProbeCode passes the good script', () => {
-    const r = sandboxSnippet({ code: ST.syntaxProbeCode(step(GOOD_SCRIPT)) });
-    assert.deepEqual(r, { ok: true });
+    const env = sandboxSnippet({ code: ST.syntaxProbeCode(step(GOOD_SCRIPT)) });
+    assert.deepEqual(JSON.parse(env.result), { ok: true });
   });
 });
 

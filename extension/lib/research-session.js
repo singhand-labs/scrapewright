@@ -353,6 +353,15 @@
       awaitingUser = null;
       parkedTotal += d;
       parkedThisSegment += d;
+      // 179th round (live: annotate.request parked 454s of user time and
+      // surfaced as the top TIME BUDGET consumer while ALSO being partially
+      // booked as machine suspension): attribute parked time to the tool
+      // whose dispatch is open, so recordToolTiming and the suspend floor
+      // see the NET dispatch wall and the suffix discloses the park
+      // separately.
+      if (__currentDispatchTool) {
+        parkedByTool.set(__currentDispatchTool, (parkedByTool.get(__currentDispatchTool) || 0) + d);
+      }
     }
     // Seventy-first log F2: netSegmentMs = raw segment time MINUS llm/provider
     // waits MINUS parked (user) windows — clamped at 0. The math itself lives
@@ -1355,6 +1364,9 @@
     // Session-closure scope: loop() records, the stop path and the public
     // timing API read the same accumulator.
     const toolTimings = new Map();
+    // 179th round: per-tool parked (user-wait) attribution — see parkEnd.
+    const parkedByTool = new Map();
+    let __currentDispatchTool = null;
     function recordToolTiming(tool, ms, timedOut) {
       const k = String(tool || 'unknown');
       const e = toolTimings.get(k) || { ms: 0, calls: 0, timeouts: 0 };
@@ -1372,7 +1384,13 @@
         const rows = Array.from(toolTimings.entries())
           .sort((a, b) => b[1].ms - a[1].ms).slice(0, 3)
           .map(([t, d]) => t + ' ' + Math.round(d.ms / 1000) + 's/' + d.calls + ' call' + (d.calls === 1 ? '' : 's') +
-            (d.timeouts ? ' (' + d.timeouts + ' timed out)' : ''));
+            (d.timeouts ? ' (' + d.timeouts + ' timed out)' : '') +
+            // 179th round: a parked (user-wait) window inside a dispatch is
+            // excluded from the consumer tally — name it or a long
+            // annotation park reads as the session's biggest cost.
+            ((parkedByTool.get(t) || 0) > 500
+              ? ' (+' + Math.round(parkedByTool.get(t) / 1000) + 's user-parked, excluded)'
+              : ''));
         if (rows.length) parts.push('top consumers: ' + rows.join(', '));
       }
       if (llmWaitTotal > 0) parts.push('llm/provider waits ' + Math.round(llmWaitTotal / 1000) + 's (excluded from wallClock)');
@@ -1732,17 +1750,26 @@
           // Seventieth log F3: time the dispatch (failures included) and
           // count SCRIPT_TIMEOUT-class results as timeouts for the suffix.
           const __t0 = Date.now();
+          __currentDispatchTool = turn.tool;
+          const __parkedBeforeDispatch = parkedByTool.get(turn.tool) || 0;
           let result = await dispatchTool(turn.tool, turn.args);
+          __currentDispatchTool = null;
           const __dispatchWall = Date.now() - __t0;
-          recordToolTiming(turn.tool, __dispatchWall,
+          // 179th round: parked (user-wait) time inside this dispatch is NOT
+          // tool work — subtract it before the consumer tally and the
+          // suspend floor, or a 454s annotation park tops the TIME BUDGET
+          // and gets double-booked as machine suspension.
+          const __parkedInDispatch = (parkedByTool.get(turn.tool) || 0) - __parkedBeforeDispatch;
+          const __netDispatchWall = Math.max(0, __dispatchWall - __parkedInDispatch);
+          recordToolTiming(turn.tool, __netDispatchWall,
             isErrorResult(result) && /^SCRIPT_TIMEOUT\b/.test(String(result && result.error)));
           // 148th log: book suspension-shaped dispatch wall out of the clock.
-          if (__dispatchWall > TOOL_DISPATCH_SUSPEND_FLOOR_MS) {
-            const __credit = __dispatchWall - TOOL_DISPATCH_SUSPEND_FLOOR_MS;
+          if (__netDispatchWall > TOOL_DISPATCH_SUSPEND_FLOOR_MS) {
+            const __credit = __netDispatchWall - TOOL_DISPATCH_SUSPEND_FLOOR_MS;
             suspendCreditTotal += __credit;
             suspendCreditThisSegment += __credit;
             state.transcript.push({ kind: 'system', text:
-              'SYSTEM SUSPENSION CREDIT: the ' + turn.tool + ' dispatch wall was ' + Math.round(__dispatchWall / 1000) +
+              'SYSTEM SUSPENSION CREDIT: the ' + turn.tool + ' dispatch wall was ' + Math.round(__netDispatchWall / 1000) +
               's (no legitimate dispatch exceeds ' + Math.round(TOOL_DISPATCH_SUSPEND_FLOOR_MS / 1000) +
               's) — ' + Math.round(__credit / 1000) + 's is credited back to the wall budget (machine sleep / SW suspend during the dispatch). The wall clock did not spend it.' });
           }

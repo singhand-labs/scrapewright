@@ -2348,3 +2348,37 @@ describe('178th review: contract-delay disarm semantics', () => {
     } finally { delete global.extractFailingFieldNames; }
   });
 });
+
+// 179th round (live: annotate.request parked 454s of user time and surfaced
+// as the top TIME BUDGET consumer while ALSO being partially booked as
+// machine suspension credit). Parked windows inside a dispatch are excluded
+// from the per-tool consumer tally and disclosed as user-parked instead.
+describe('179th round: parked time is not tool-consumer time', () => {
+  it('a parked annotate dispatch reports user-parked, not top-consumer/suspension', async () => {
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('annotate.request', { fields: ['postTime'], why: 'mark the time' })),
+        reply(envelope('probe.count', { sel: 'div.card' }))
+      ], []),
+      tools: {
+        'probe.count': async () => ({ count: 1 }),
+        'annotate.request': async (args, ctx) => {
+          // Simulate the user taking ~600ms to answer: park the session
+          // clock, wait, unpark — exactly what the real bridge does.
+          if (ctx && ctx.session && typeof ctx.session.parkBegin === 'function') ctx.session.parkBegin('annotate.request', 'annotation window');
+          await new Promise(r => setTimeout(r, 600));
+          if (ctx && ctx.session && typeof ctx.session.parkEnd === 'function') ctx.session.parkEnd();
+          return { annotations: [{ selector: 'span.ts', purpose: 'extract' }], url: 'https://example.com' };
+        }
+      },
+      budgets: { maxTurns: 3 }
+    });
+    const report = await session.run();
+    assert.equal(report.stopped.reason, 'maxTurns');
+    const detail = String(report.stopped.detail || '');
+    assert.match(detail, /user-parked, excluded/, 'the park is disclosed as user time — got: ' + detail.slice(-400));
+    assert.ok(!/SYSTEM SUSPENSION CREDIT: the annotate/.test(JSON.stringify(session.state().session.transcript.map(e => e && e.text || ''))),
+      'a user park must not be booked as machine suspension');
+  });
+});
