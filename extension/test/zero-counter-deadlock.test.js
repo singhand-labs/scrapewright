@@ -195,8 +195,9 @@ describe('DSL guide: zero-counter deadlock removed from taught examples', () => 
     assert.ok(/RAW fallback counter/.test(WIZARD_UTILS_SRC));
     assert.ok(/never guard the exhausted exit/.test(WIZARD_UTILS_SRC));
     // Permalink shape list — teach variance, not one assumed shape.
+    // 182b: story.php (one vendor's legacy shape) replaced by article/<id>/.
     assert.ok(/share\/p\//.test(WIZARD_UTILS_SRC));
-    assert.ok(/story\.php/.test(WIZARD_UTILS_SRC));
+    assert.ok(/article\/<id>\//.test(WIZARD_UTILS_SRC));
     assert.ok(/watch\?v=/.test(WIZARD_UTILS_SRC));
     // Cross-reference to the card-type rule.
     assert.match(WIZARD_UTILS_SRC, /ZERO-TRAP COUNTER[\s\S]*?CARD-TYPE HETEROGENEITY|CARD-TYPE HETEROGENEITY[\s\S]*?ZERO-TRAP COUNTER/);
