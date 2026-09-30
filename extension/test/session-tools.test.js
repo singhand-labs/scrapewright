@@ -1524,3 +1524,31 @@ describe('183rd round: verify reports carry a first-key version stamp on the kep
     assert.equal(JSON.stringify(lv.report).indexOf('executedArtifactVersion'), 2, 'first key — the 28th head-slice window keeps it');
   });
 });
+
+// 184th residual #7: buffered chunks' selectors never met the grounding
+// gate (the engine grounds the final chunk's payload only). The assembling
+// send grounds the ASSEMBLED set through the engine's session.groundSteps.
+describe('184th residual: assembled-set grounding + restore/chunk exclusion', () => {
+  it('a final chunk over a buffer whose ASSEMBLED set fails grounding rejects the whole send, no apply', async () => {
+    const { deps, state } = makeDeps();
+    const t = createSessionTools(deps);
+    // Chunk 1: buffer a step carrying an UNGROUNDED selector.
+    const r1 = await t.tools['service.update']({
+      more: true,
+      steps: [{ id: 's1', name: 'one', script: "return $extractList('.ghost-sel', {});", onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }]
+    }, { session: { groundSteps: async () => ({ ok: false, rejections: [{ selector: '.ghost-sel', missing: 'observation' }] }) } });
+    assert.equal(r1.buffered, true);
+    // Final chunk: grounded steps — but the assembled set (buffer included) fails.
+    const r2 = await t.tools['service.update']({
+      steps: [{ id: 's2', name: 'two', script: 'return 1;', onSuccess: 'TERMINATE', onFailure: 'TERMINATE' }]
+    }, { session: { groundSteps: async (steps) => {
+      const bad = steps.some((s) => String(s.script || '').indexOf('.ghost-sel') !== -1);
+      return bad ? { ok: false, rejections: [{ selector: '.ghost-sel', missing: 'observation' }] } : { ok: true };
+    } } });
+    assert.equal(r2.grounding, 'rejected', 'the assembled set is gated as a whole');
+    assert.match(r2.note, /ASSEMBLED chunk set/);
+    assert.ok(!state.applied.length, 'nothing applied');
+    // Buffer consumed — the receipt says so.
+    assert.match(r2.note, /buffer was consumed/);
+  });
+});

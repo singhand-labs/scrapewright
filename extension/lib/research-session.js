@@ -789,6 +789,12 @@
       for (const sW of normalizeOverrides(a.overrides)) {
         if (state.waivedSelectors.indexOf(sW) === -1) state.waivedSelectors.push(sW);
       }
+      // 184th residual #8: a restore combined with chunking silently
+      // buffered the restored steps — no version, no finish-gate exemption.
+      // The restore carries complete steps; chunking it is always a mistake.
+      if (a.restoreVersion != null && (a.more === true || a.abortChunk === true)) {
+        return { error: 'restoreVersion cannot be chunked — a restore carries complete steps; resend without more:true/abortChunk:' };
+      }
       if (a.more === true || a.abortChunk === true) {
         const chunkHandler = tools['service.update'];
         if (typeof chunkHandler !== 'function') return { error: 'no service.update handler wired' };
@@ -840,7 +846,7 @@
       // incident: the wizard snapshotted stale steps and the editor showed
       // nothing while the engine claimed v1 existed).
       if (out && typeof out === 'object' && typeof out.error === 'string') return out;
-      if (out && typeof out === 'object' && (out.buffered === true || out.aborted === true)) return out;
+      if (out && typeof out === 'object' && (out.buffered === true || out.aborted === true || out.grounding === 'rejected')) return out;
       const version = state.artifactVersions.length + 1;
       // 182nd round: record the POST-APPLY draft, not the request payload —
       // a patch:true send applies a MERGED artifact, and recording the
@@ -2149,6 +2155,29 @@
       // head-slice window) on the SAME object it keeps in lastVerify (the
       // 107th live sync reads it there).
       artifactVersion: () => state.artifactVersions.length,
+      // 184th residual #7: the chunk protocol assembles buffer+final-chunk
+      // INSIDE the handler; the engine's pre-handler grounding only sees the
+      // final chunk's steps, so buffered selectors rode unverified. The
+      // handler calls this on the ASSEMBLED set before applying.
+      groundSteps: async (stepsArr) => {
+        try {
+          const autoVerifyFn = typeof tools['probe.count'] === 'function'
+            ? async (sel) => {
+                const r = await tools['probe.count'](sel);
+                return (r && typeof r.count === 'number') ? r.count : null;
+              }
+            : null;
+          const epRaw = epochOf ? epochOf() : undefined;
+          return await Gate.validateGrounding({
+            steps: Array.isArray(stepsArr) ? stepsArr : [],
+            observationLog: observationLog,
+            ledger: ledger,
+            autoVerify: autoVerifyFn,
+            epoch: (typeof epRaw === 'number') ? epRaw : undefined,
+            overrides: state.waivedSelectors.slice()
+          });
+        } catch (eGS) { return { ok: true, degraded: true }; }
+      },
       state: () => JSON.parse(JSON.stringify(stateForPersist())),
       report: buildReport,
       // Sixty-seventh log: tool handlers (service.update endgame warning)

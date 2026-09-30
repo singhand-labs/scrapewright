@@ -1474,6 +1474,23 @@
           a0.steps.length = 0;
           for (const st of assembledSteps) a0.steps.push(st);
           pendingUpdateSteps = null;
+          // 184th residual #7: the buffered chunks' selectors never met the
+          // grounding gate (the engine grounds the final chunk's payload
+          // only). Ground the ASSEMBLED set through the engine's own gate
+          // before the apply; a rejection rejects the whole send (the buffer
+          // is consumed either way — re-ground or re-send).
+          const gs184 = (ctx && ctx.session && typeof ctx.session.groundSteps === 'function')
+            ? ctx.session.groundSteps : null;
+          if (gs184) {
+            const g184 = await gs184(assembledSteps);
+            if (g184 && g184.ok === false) {
+              return {
+                grounding: 'rejected',
+                rejections: g184.rejections || [],
+                note: 'the ASSEMBLED chunk set (buffer + final chunk) failed grounding — buffered selectors never passed the gate. Fix or waive the named selectors and resend the COMPLETE steps (the buffer was consumed).'
+              };
+            }
+          }
           // fall through: the assembled payload runs the normal pipeline
         }
         // 138th log: assembly/REPLACES dedupe-by-id. The incident: an

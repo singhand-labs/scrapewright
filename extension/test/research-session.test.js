@@ -2496,3 +2496,25 @@ describe('184th review: waiver + markup parity', () => {
     } finally { delete global.extractFailingFieldNames; }
   });
 });
+
+// 184th residual #8: restoreVersion + chunking silently buffered the
+// restore (no version, no finish-gate exemption) — now an explicit error.
+describe('184th residual: restoreVersion cannot be chunked', () => {
+  it('restoreVersion + more:true is rejected without touching the buffer or versions', async () => {
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('service.update', { steps: [{ id: 's1', name: 'one', script: 'return 1', onSuccess: 'TERMINATE' }] })),
+        reply(envelope('service.update', { restoreVersion: 1, more: true })),
+        reply(finishEnvelope('done'))
+      ], []),
+      tools: { 'service.update': async () => ({ updated: true }) },
+      budgets: { maxTurns: 4 }
+    });
+    const report = await session.run();
+    const st = session.state().session;
+    assert.equal(st.artifactVersions.length, 1, 'v1 from the real send; the combo created nothing');
+    const combo = st.transcript.filter((e) => e && e.kind === 'tool' && e.name === 'service.update')[1];
+    assert.match(String(combo && combo.result && combo.result.error || ''), /restoreVersion cannot be chunked/);
+  });
+});
