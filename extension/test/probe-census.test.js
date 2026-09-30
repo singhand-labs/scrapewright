@@ -530,3 +530,31 @@ describe('178th review: timeHover retry failure keeps the first receipt', () => 
     assert.match(r.timeHover.censusRetry.error, /HOVER_SKIPPED/);
   });
 });
+
+// 180th round (live: a GREEN ship carried a top-level debug:{err,raw}
+// vestige the confirmed schema never declared). Result-side stray-key
+// census — the dual of the 52nd-round SCHEMA_STRAY_FIELD_DECLS gate.
+describe('180th round: detectResultStrayKeys', () => {
+  const WU180 = require('../lib/wizard-utils');
+  const schema180 = { type: 'object', required: ['posts'], properties: { posts: { type: 'array', items: { type: 'object' } } } };
+  it('flags undeclared top-level keys with samples and teaching', () => {
+    const r = WU180.detectResultStrayKeys({ posts: [], debug: { err: null, raw: 7 } }, schema180);
+    assert.ok(r, 'the debug vestige is detected');
+    assert.deepEqual(r.keys, ['debug']);
+    assert.match(r.samples[0], /raw/);
+    assert.match(r.note, /io\.confirm/);
+  });
+  it('whitelists the fail-soft note lane and clean results', () => {
+    assert.equal(WU180.detectResultStrayKeys({ posts: [], note: 'honest empty' }, schema180), null);
+    assert.equal(WU180.detectResultStrayKeys({ posts: [{}] }, schema180), null);
+  });
+  it('no declared properties means no diff (schema-blind stays silent)', () => {
+    assert.equal(WU180.detectResultStrayKeys({ posts: [], debug: 1 }, { type: 'object' }), null);
+  });
+  it('verify-runner wires the census (source audit)', () => {
+    const fs180 = require('fs');
+    const VR = fs180.readFileSync(require('path').join(__dirname, '../lib/verify-runner.js'), 'utf8');
+    assert.match(VR, /detectResultStrayKeys/);
+    assert.match(VR, /resultStrayKeys: null/, 'detector slot declared');
+  });
+});

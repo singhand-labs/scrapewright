@@ -69,6 +69,7 @@
       detectDuplicateEntities: w.detectDuplicateEntities,
       detectOversizedFields: w.detectOversizedFields,
       detectCountShortfall: w.detectCountShortfall,
+      detectResultStrayKeys: w.detectResultStrayKeys,
       detectRelativeTimestamps: w.detectRelativeTimestamps,
       extractDateSubstrings: w.extractDateSubstrings,
       hasYearToken: w.hasYearToken,
@@ -598,7 +599,7 @@
 
       // ---- Post-run analysis (moved verbatim from wizard.js testScript) ----
       const stepsDefs = (service && Array.isArray(service.steps)) ? service.steps : [];
-      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, nestedDuplicates: null, shellHovercards: null, capturedValueUnbound: null, inventedIdFallbacks: null, siblingCountContrast: null, implausibleTimeFields: null, positionLikeIds: null, labelPrefixedCounts: null, mediaHygiene: null, junkShapeRecords: null, unusedCaptures: null, timeSourceUnexercised: null };
+      const detectors = { emptyFields: [], duplicateFields: [], duplicateEntities: null, countShortfall: null, relativeTimestamps: null, shapeDistribution: null, stepNoReturn: null, junkValues: null, oversizedFields: null, zeroMatchFields: null, containerZero: null, clickContainersTransient: null, partialEmptyFields: null, emptyFieldDiagnostics: null, adMarkerSelectors: null, htmlNoMarkup: null, scrollCountFrozen: null, duplicateIdValues: null, nestedDuplicates: null, shellHovercards: null, capturedValueUnbound: null, inventedIdFallbacks: null, siblingCountContrast: null, implausibleTimeFields: null, positionLikeIds: null, labelPrefixedCounts: null, mediaHygiene: null, junkShapeRecords: null, unusedCaptures: null, timeSourceUnexercised: null, resultStrayKeys: null };
       let error = null;
       if (orchestrationError) {
         try {
@@ -973,6 +974,13 @@
           // Report-only: forcing retries toward an unreachable count is the
           // ZERO-TRAP deadlock; surface it and let the human/LLM judge.
           detectors.countShortfall = WU.detectCountShortfall(finalData, input, outputSchema) || null;
+          // 180th round (live: GREEN ship carried an undeclared top-level
+          // debug vestige to API consumers) — the result-side dual of
+          // SCHEMA_STRAY_FIELD_DECLS. Report-only: name the keys, teach the
+          // two exits; the fail-soft note lane is whitelisted inside.
+          if (typeof WU.detectResultStrayKeys === 'function') {
+            detectors.resultStrayKeys = WU.detectResultStrayKeys(finalData, outputSchema) || null;
+          }
           // 121st round (user: scrolling satisfied N but extraction came up
           // short — selector? filter?): name WHERE the count was lost. The
           // extraction diagnostics carry the run's own container-match
