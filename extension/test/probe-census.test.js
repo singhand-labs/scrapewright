@@ -507,3 +507,26 @@ describe('177c round: vacuous timeHover self-heals from the census lanes', () =>
     assert.ok(!r.timeHover.censusRetry);
   });
 });
+
+// 178th review: an ERRORED self-heal retry must not replace the first
+// vacuous receipt — its anchorCensus is the evidence the model needs.
+describe('178th review: timeHover retry failure keeps the first receipt', () => {
+  it('an errored retry attaches censusRetry.error and keeps the vacuous anchorCensus', async () => {
+    const records = [cardHtml(1), cardHtml(2), cardHtml(3)];
+    const tools = createProbeTools({
+      executeDsl: async (snippet) => {
+        if (/\$extractWithHover\(/.test(snippet)) {
+          if (/span\.ts/.test(snippet)) return { error: 'HOVER_SKIPPED_ENHANCED_MODE: off' };
+          return [{ __t_label: '', __t_aria: '', __t_text: '', hovercards: [], anchorLog: [], anchorCensus: { families: { a: 10 }, hrefSamples: [] }, note: 'VACUOUS NEGATIVE — anchorSel matched 0 anchors inside the container' }];
+        }
+        if (/\$count\(/.test(snippet)) return records.length;
+        return records.map((h) => ({ __c_html: h }));
+      },
+      observationLog: createObservationLog()
+    });
+    const r = await tools.census({ containerSel: 'div.card', hover: true });
+    assert.ok(r.timeHover && /VACUOUS/.test(r.timeHover.note || ''), 'the first receipt survives (vacuous note intact)');
+    assert.ok(r.timeHover.censusRetry && r.timeHover.censusRetry.error, 'the retry error is disclosed, not adopted');
+    assert.match(r.timeHover.censusRetry.error, /HOVER_SKIPPED/);
+  });
+});

@@ -1319,9 +1319,14 @@
             if (laneAnchors.length) {
               const retryAnchorSel = (typeof tsArgs.anchorSel === 'string' ? tsArgs.anchorSel + ', ' : '') + laneAnchors.join(', ');
               const retry = await timestamp({ containerSel: containerSel, index: tsArgs.index, anchorSel: retryAnchorSel });
-              if (!vacuousTs(retry)) {
+              // 178th review: adopt the retry ONLY when it is productive —
+              // an errored or still-vacuous retry must not replace the first
+              // receipt, whose anchorCensus is the evidence the model needs.
+              if (retry && typeof retry === 'object' && !retry.error && !vacuousTs(retry)) {
                 retry.censusRetry = { from: 'default union (0 anchors)', to: laneAnchors.join(', ') };
                 ts = retry;
+              } else if (retry && typeof retry.error === 'string') {
+                ts.censusRetry = { from: 'default union (0 anchors)', to: laneAnchors.join(', '), error: retry.error.slice(0, 200) };
               }
             }
           }
@@ -1379,7 +1384,7 @@
         out.note += ' only ' + total + ' container(s) matched — a population this small is suspicious for a repeating-item requirement: check the lane TEXTS against what the requirement describes (a recommendation or chrome strip often matches the same container shape), and if this is the wrong population, re-target containerSel and RE-CENSUS.';
       }
       if (boundedRead) {
-        out.note += ' population ' + total + ' exceeded the full-read bound (' + CENSUS_FULL_READ_MAX + ') — sampled through bounded range reads: only the sampled containers were relayed, total is the live count.';
+        out.note += ' population ' + total + ' exceeded the full-read bound (' + CENSUS_FULL_READ_MAX + ') — sampled through bounded range reads: only the sampled containers were relayed, total is the live count. The reads are SEPARATE snapshots — a virtualizing feed can shift cards between them; treat cross-sample coverage as indicative, not exact.';
       }
       out.note += ' Changing containerSel? re-run the census on the new selector — one call returns fresh lanes; do NOT fall back to serial per-field probes.';
       if (observationLog) {

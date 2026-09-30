@@ -2294,3 +2294,57 @@ describe('177b round: markup-read fields are not markable', () => {
     } finally { delete global.extractFailingFieldNames; }
   });
 });
+
+// 178th review (adversarial, code-verified): a REJECTED io.confirm returns
+// {confirmed:false, feedback} — not an error shape, so ok stays true and the
+// old `e.ok !== false` read a rejection as a confirmation, disarming the
+// contract-delay nudge forever.
+describe('178th review: contract-delay disarm semantics', () => {
+  const probeTurn178 = envelope('probe.count', { sel: 'div.card' });
+  it('a REJECTED io.confirm does not disarm the contract-delay advisory', async () => {
+    const events = [];
+    const session = createResearchSession({
+      requirement: 'r',
+      llm: scriptedLlm([
+        reply(envelope('io.confirm', { inputSchema: { type: 'object' }, outputSchema: { type: 'object' } })),
+        reply(probeTurn178)
+      ], []),
+      tools: {
+        'io.confirm': async () => ({ confirmed: false, feedback: 'drop the html field' }),
+        'probe.count': async () => ({ count: 1 })
+      },
+      budgets: { maxTurns: 26 },
+      onEvent: (e) => events.push(e)
+    });
+    await session.run();
+    const keys = events.filter((e) => e.type === 'budget_advisory').map((e) => e.key);
+    assert.ok(keys.indexOf('contract-delay') !== -1,
+      'a rejected proposal means the contract is NOT settled — the nudge must fire (got ' + JSON.stringify(keys) + ')');
+  });
+
+  it('FIELD_MATCH_ZERO (containers matched, sub-selector empty) is per-field blindness — assist FIRES', async () => {
+    global.extractFailingFieldNames = require('../lib/wizard-utils').extractFailingFieldNames;
+    try {
+      const events = [];
+      const failing = () => ({
+        ok: false,
+        error: { stepId: 'x', message: 'FIELD_MATCH_ZERO / EMPTY_EXTRACTION: required field(s) [postTime] are present but every extracted item has only empty values...' },
+        detectors: { partialEmptyFields: [{ field: 'postTime', path: 'posts.postTime', emptyRatio: 1 }] }
+      });
+      const session = createResearchSession({
+        requirement: 'r',
+        llm: scriptedLlm([
+          reply(envelope('verify.run', {})),
+          reply(envelope('verify.run', {})),
+          reply(finishEnvelope('done'))
+        ], []),
+        tools: { 'verify.run': failing },
+        onEvent: (e) => events.push(e)
+      });
+      await session.run();
+      const assists = events.filter((e) => e.type === 'field_assist_request');
+      assert.equal(assists.length, 1, 'FIELD_MATCH_ZERO was wrongly in the run-class suppression (178th review correction)');
+      assert.equal(assists[0].field, 'postTime');
+    } finally { delete global.extractFailingFieldNames; }
+  });
+});

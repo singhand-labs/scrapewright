@@ -146,3 +146,23 @@ describe('177b round: annotation menu container type (source audit)', () => {
     assert.ok(idx > -1, 'commit covers container');
   });
 });
+
+// 178th review: a second request while one is pending supersedes honestly —
+// the first promise resolves cancelled instead of leaking forever.
+describe('178th review: pending request supersede guard', () => {
+  it('a second request() resolves the first as superseded, not leaked', async () => {
+    const { bridge } = makeHarness();
+    const p1 = bridge.request({ why: 'first', fields: ['a'] });
+    await new Promise(r => setTimeout(r, 10));
+    const p2 = bridge.request({ why: 'second', fields: ['b'] });
+    const r1 = await p1;
+    assert.equal(r1.cancelled, true);
+    assert.match(r1.error, /superseded/);
+    // Wait for request#2 to actually PARK (its body awaits focus/arm before
+    // setting pending) — a synchronous cancel would race the microtasks and
+    // no-op on a null pending, leaking p2 forever.
+    await new Promise(r => setTimeout(r, 10));
+    bridge.cancel();
+    await p2;
+  });
+});

@@ -183,3 +183,27 @@ describe('175th round: $extractList range opts', () => {
     assert.match(out._diagnostics.note, /selected no containers — the population is smaller than the range/);
   });
 });
+
+// 178th review: non-integer range opts threw misleading downstream errors
+// (undefined container injection) or silently coerced — now teaching errors.
+describe('178th review: range opts reject non-integer input', () => {
+  it('containerIndex 1.5, containerRange [a,1], maxContainers "5" all throw teaching errors', () => {
+    const SRC178 = require('fs').readFileSync(require('path').join(__dirname, '../content-script.js'), 'utf8');
+    const start178 = SRC178.indexOf('function domExtractList(');
+    let depth178 = 0, i178 = SRC178.indexOf('{', start178);
+    for (; i178 < SRC178.length; i178++) {
+      if (SRC178[i178] === '{') depth178 += 1;
+      else if (SRC178[i178] === '}') { depth178 -= 1; if (depth178 === 0) break; }
+    }
+    const fn178 = eval('(function (querySelectorAllDeep, sendDebugLog, notifyBackgroundDiagnostic, getListExtractOps, computeSelectorDifferential, formatSelectorDifferentialNote, attachClauseCostCensus) { return (' + SRC178.slice(start178, i178 + 1) + '); })')(
+      () => [{}], () => {}, () => {},
+      () => ({ extractListRecords: (cs) => cs.map(() => ({})), computeExtractListDiagnostics: (cs) => ({ api: 'extractList', containerMatches: cs.length, perField: [] }) }),
+      () => null, () => null, (d) => d
+    );
+    assert.throws(() => fn178('.c', { f: {} }, { containerIndex: 1.5 }), /containerIndex must be an integer/);
+    assert.throws(() => fn178('.c', { f: {} }, { containerRange: ['a', 1] }), /containerRange members must be integers/);
+    // [0] with an open end stays legal (documented to-length semantics).
+    assert.deepEqual(fn178('.c', { f: {} }, { containerRange: [0, 1] }).result.length, 1);
+    assert.throws(() => fn178('.c', { f: {} }, { maxContainers: '5' }), /maxContainers must be an integer/);
+  });
+});

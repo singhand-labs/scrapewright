@@ -2361,6 +2361,16 @@ function createWizardAnnotationBridge(getRail) {
   const hide = () => { panel().classList.add('hidden'); badgeAfterPanelClose(); };
   return {
     async request(req) {
+      // 178th review: a second request while one is pending must not leak
+      // the first promise (its engine turn would hang until session stop).
+      // Supersede with an honest cancel, mirroring the observe-bridge
+      // pattern — the engine serializes tools today, but abort/resume and
+      // future callers do not.
+      if (pending) {
+        const prev = pending;
+        pending = null;
+        prev({ cancelled: true, error: 'superseded by a new annotation request' });
+      }
       const rail = getRail();
       const tabId = rail ? rail.tabId : null;
       if (tabId == null) return { cancelled: true, error: 'no page open — the AI should call page.open first' };

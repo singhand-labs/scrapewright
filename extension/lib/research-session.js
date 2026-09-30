@@ -969,7 +969,12 @@
     function tickContractDelayAdvisory() {
       try {
         if (state.artifactVersions.length > 0) return;
-        const ioConfirmed = state.transcript.some((e) => e && e.kind === 'tool' && e.name === 'io.confirm' && e.ok !== false);
+        const ioConfirmed = state.transcript.some((e) => e && e.kind === 'tool' && e.name === 'io.confirm' &&
+          // 178th review: ok is !isErrorResult — a REJECTED proposal returns
+          // {confirmed:false, feedback} (not an error shape), so the old
+          // `e.ok !== false` read a rejection as a confirmation and disarmed
+          // the nudge forever. Only an explicit confirmed:true counts.
+          e.result && e.result.confirmed === true);
         if (ioConfirmed) return;
         const key = state.spend.turns >= 24 ? 'contract-delay-escalated' : 'contract-delay';
         if (state.budgetAdvisories.indexOf('contract-delay-escalated') !== -1) return;
@@ -1011,15 +1016,16 @@
           //       target, zero population, cold-tab supply), not per-field
           //       binding blindness — the fixes live in diag.read and the
           //       population teaching, not in the human loop;
-          //   (b) error classes that name the step/population (click target
-          //       missing, container zero, count shortfall) are self-fixable
-          //       from diagnostics — asking the user to mark elements for
-          //       them wastes the human loop.
-          // Counting continues either way: when a LATER verify fails on a
-          // SMALL set (<=3 fields, binding-shaped errors), the precise
-          // assist still fires.
+          //   (b) step/run-class error prefixes (a dead click target, a
+          //       count shortfall) are self-fixable from diagnostics.
+          // 178th review correction: FIELD_MATCH_ZERO was removed — its own
+          // message says "the containers themselves DID match ... this
+          // field's sub-selector found nothing", which is per-field binding
+          // blindness, the exact class the 171st assist exists for; ZERO
+          // values never appear in the colon-prefix and POPULATION never
+          // rides the prefix either (both dead tokens).
           const prefix171 = String(lastVerifyErrorPrefix171 || '');
-          const runClass171 = /CLICK_TARGET_NOT_FOUND|FIELD_MATCH_ZERO|COUNT_SHORTFALL|ZERO_CONTAINER|POPULATION/.test(prefix171);
+          const runClass171 = /CLICK_TARGET_NOT_FOUND|COUNT_SHORTFALL/.test(prefix171);
           const wholesale171 = lastVerifyFailingFields171.length >= 4;
           const suppressAssist171 = runClass171 || wholesale171;
           // 177th-round follow-up (user report): markup-read fields

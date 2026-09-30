@@ -2986,14 +2986,22 @@
       var before = containers.length;
       if (rlIdx != null) {
         if (rlIdx < 0) throw new Error('$extractList containerIndex must be >= 0, got ' + rlIdx);
+        if (!Number.isInteger(rlIdx)) throw new Error('$extractList containerIndex must be an integer, got ' + JSON.stringify(rlIdx));
         containers = (rlIdx < containers.length) ? [containers[rlIdx]] : [];
         rlNote = 'containerIndex ' + rlIdx + ' of ' + before;
       } else if (rlRange) {
+        var rlBad178 = rlRange.some(function (m) { return m !== undefined && (typeof m !== 'number' || !Number.isInteger(m)); });
+        if (rlBad178) {
+          throw new Error('$extractList containerRange members must be integers (or undefined for the open end), got ' + JSON.stringify(rlRange) + ' — a non-numeric member silently reads from 0 (178th review: silent coercion hides caller bugs)');
+        }
         var rlStart = typeof rlRange[0] === 'number' ? Math.max(0, rlRange[0]) : 0;
         var rlEnd = typeof rlRange[1] === 'number' ? Math.min(containers.length, rlRange[1]) : containers.length;
         containers = containers.slice(rlStart, rlEnd);
         rlNote = 'containerRange [' + rlStart + ',' + rlEnd + ') of ' + before;
       } else {
+        if (!Number.isInteger(rlMax)) {
+          throw new Error('$extractList maxContainers must be an integer, got ' + JSON.stringify(rlMax));
+        }
         containers = containers.slice(0, Math.max(0, rlMax));
         rlNote = 'maxContainers ' + rlMax + ' of ' + before;
       }
@@ -5891,7 +5899,13 @@
                 { value: 'other', label: 'other…' }
               ]
             : PURPOSES;
-          menu.appendChild(buildSelect('cc-purpose', type === 'container' ? 'What is this container?' : 'Intent (purpose)', purposeOpts, '— Select —'));
+          // 178th review: the purpose IS the container pick is entire
+          // semantic payload — default to the repeating-item role instead of
+          // a placeholder, so a quick Confirm can never land a role-less
+          // pick ('repeating item' vs 'exclude' are opposite semantics).
+          const purposeSel = buildSelect('cc-purpose', type === 'container' ? 'What is this container?' : 'Intent (purpose)', purposeOpts, type === 'container' ? null : '— Select —');
+          if (type === 'container') { purposeSel.querySelector('select').value = 'repeating item (post/card)'; }
+          menu.appendChild(purposeSel);
           const otherWrap = document.createElement('div');
           otherWrap.id = 'cc-purpose-other-wrap';
           otherWrap.style.cssText = 'margin:4px 0; display:none;';
